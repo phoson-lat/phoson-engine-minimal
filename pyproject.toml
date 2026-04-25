@@ -1,0 +1,45 @@
+[project]
+name = "phoson-engine-minimal"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.97.0",
+    "openai>=2.32.0",
+    "pydantic>=2.13.3",
+]
+
+[tool.ruff]
+# Target version for Python
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+# Enable specific rules
+select = [
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade
+]
+ignore = []
+
+[tool.ruff.lint.isort]
+# Order imports by length within each group
+length-sort = true
+# Ensure we recognize the local package
+known-first-party = ["phoson_agent", "phoson_llm"]
+# Standard order: standard-library, third-party, first-party, local-folder
+section-order = ["standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
