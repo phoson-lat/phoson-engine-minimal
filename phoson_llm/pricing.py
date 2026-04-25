@@ -20,6 +20,7 @@ def _per_million(n: float) -> float:
 
 # ─── Tabla de precios (por millón de tokens, USD) ─────────────────────────────
 # Verificados abril 2026. Actualizar cuando cambien los providers.
+# Convención de nombres: provider/modelo, sin sufijos de versión (ver _ALIASES).
 
 PRICES: dict[str, PriceEntry] = {
     # ── Anthropic ────────────────────────────────────────────────────────────
@@ -54,14 +55,14 @@ PRICES: dict[str, PriceEntry] = {
 
 # Aliases — el SDK puede mandar strings con sufijos de versión
 _ALIASES: dict[str, str] = {
-    "claude-sonnet-4-6-20250514": "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001": "claude-haiku-4-5",
-    "claude-opus-4-6-20250514": "claude-opus-4-6",
-    "claude-opus-4-7-20250514": "claude-opus-4-7",
-    "gpt-4o-2024-11-20": "gpt-4o",
-    "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
-    "gemini-2.5-pro-preview": "gemini-2.5-pro",
-    "gemini-2.5-flash-preview": "gemini-2.5-flash",
+    "anthropic/claude-sonnet-4-6-20250514": "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5-20251001": "anthropic/claude-haiku-4-5",
+    "anthropic/claude-opus-4-6-20250514": "anthropic/claude-opus-4-6",
+    "anthropic/claude-opus-4-7-20250514": "anthropic/claude-opus-4-7",
+    "openai/gpt-4o-2024-11-20": "openai/gpt-4o",
+    "openai/gpt-4o-mini-2024-07-18": "openai/gpt-4o-mini",
+    "google/gemini-2.5-pro-preview": "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash-preview": "google/gemini-2.5-flash",
 }
 
 
