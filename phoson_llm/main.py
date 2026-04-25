@@ -1,6 +1,6 @@
 import asyncio
 
-from phoson_llm.types import (
+from phoson_llm.schemas import (
     Message,
     ErrorEvent,
     TokenEvent,
@@ -163,9 +163,9 @@ async def test_ollama_basic():
 async def main():
     # Cambia a True los tests que quieras correr
     tests = {
-        "anthropic_basic": True,
+        "anthropic_basic": False,
         "anthropic_thinking": False,  # cuesta más, actívalo cuando quieras
-        "anthropic_tools": True,
+        "anthropic_tools": False,
         "openai_basic": True,
         "openai_tools": True,
         "ollama_basic": False,  # requiere Ollama local

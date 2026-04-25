@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 
-from phoson_llm.types import (
+from phoson_llm.pricing import calculate_cost
+from phoson_llm.schemas import (
     # inputs
     Message,
     # outputs
@@ -26,7 +27,6 @@ from phoson_llm.types import (
     ReasoningStartEvent,
     ReasoningTokenEvent,
 )
-from phoson_llm.pricing import calculate_cost
 from phoson_llm.chats.base import BaseLLMChat
 
 # ─── Conversión de mensajes Phoson → OpenAI ───────────────────────────────────

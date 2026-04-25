@@ -2,7 +2,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, AsyncIterator
 
-from phoson_llm.types import (
+from phoson_llm.schemas import (
     Message,
     LLMEvent,
     ErrorEvent,
