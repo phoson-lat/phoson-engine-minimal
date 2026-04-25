@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-format
+        args: [--check]
+      - id: ruff-check
+
+  - repo: local
+    hooks:
+      - id: pre-push-quality
+        name: pre-push-quality
+        entry: uv run sh -c 'ruff check . && python -m compileall phoson_llm'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.13.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]

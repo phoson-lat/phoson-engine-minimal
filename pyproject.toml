@@ -39,7 +39,18 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+tag_format = "v$version"
+version_files = [
+    "pyproject.toml:version",
+]
+
 [dependency-groups]
 dev = [
+    "commitizen>=3.29.0",
+    "pre-commit>=3.8.0",
+    "pytest>=8.3.0",
     "ruff>=0.15.12",
 ]
