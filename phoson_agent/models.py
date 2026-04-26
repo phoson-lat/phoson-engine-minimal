@@ -1,12 +1,18 @@
 import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from dataclasses import field, dataclass
 from collections.abc import Callable, Awaitable
 
 from phoson_llm.schemas import Message, TokenUsage
 
+if TYPE_CHECKING:
+    from phoson_agent.context import AgentContext
+
 ToolReturn = str | dict[str, Any]
-ToolHandler = Callable[[dict[str, Any]], ToolReturn | Awaitable[ToolReturn]]
+ToolHandler = (
+    Callable[[dict[str, Any]], ToolReturn | Awaitable[ToolReturn]]
+    | Callable[[dict[str, Any], "AgentContext"], ToolReturn | Awaitable[ToolReturn]]
+)
 
 
 @dataclass
