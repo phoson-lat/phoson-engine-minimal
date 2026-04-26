@@ -1,10 +1,11 @@
 import json
 
+from rich import box
+from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
-from rich.syntax import Syntax
+from rich.table import Table
 from rich.console import Console
-from rich.spinner import Spinner
 from rich.markdown import Markdown
 
 from phoson_agent import (
@@ -19,96 +20,331 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 
+# ── Palette ────────────────────────────────────────────────────────────────────
+_ACCENT = "medium_purple1"
+_ACCENT2 = "plum3"
+_MUTED = "grey50"
+_MUTED2 = "grey35"
+_TEXT = "white"
+_PANEL_BG = "on #120d1d"
+_TOOL_OK = "medium_spring_green"
+_TOOL_ERR = "indian_red1"
+_REASONING = "grey42"
+_WARN = "gold3"
+_ERR_BORDER = "indian_red1"
+
 
 class Renderer:
     def __init__(self, console: Console | None = None) -> None:
-        self.console = console or Console()
+        self.console = console or Console(highlight=False)
         self.session_id: str | None = None
-        self._streaming_line = False
-        self._spinner = Spinner("dots", text="")
+        self._streaming = False
+        self._token_buf: list[str] = []
+        self._reasoning_active = False
+        self._stream_had_tokens = False
 
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
 
+    # ── Called after all streaming is done for a turn ─────────────────────────
     def flush_line(self) -> None:
-        if self._streaming_line:
+        """Ensure we're on a fresh line after any raw-streamed tokens."""
+        if self._streaming:
             self.console.print()
-            self._streaming_line = False
+            self._streaming = False
+        self._reasoning_active = False
 
+    def finish_turn(self) -> None:
+        """Re-render buffered tokens as Markdown, then clear the buffer."""
+        self.flush_line()
+        content = "".join(self._token_buf).strip()
+        self._token_buf.clear()
+        if content and not self._stream_had_tokens:
+            body = Markdown(content, code_theme="monokai")
+            self.console.print(
+                Panel(
+                    body,
+                    box=box.SQUARE,
+                    border_style=_MUTED2,
+                    padding=(0, 1),
+                    style=_PANEL_BG,
+                )
+            )
+
+    # ── Event dispatch ────────────────────────────────────────────────────────
     def on_event(self, event: AgentEvent) -> None:
         match event:
             case AgentStartEvent():
-                session = self.session_id or "(none)"
-                self.console.print(
-                    Panel(
-                        f"Model: [bold]{event.model}[/bold]\n"
-                        f"Session: [bold]{session}[/bold]\n"
-                        "Messages: "
-                        f"{event.message_count}"
-                        f" | Max iterations: {event.max_iterations}",
-                        title="phoson_cli",
-                    )
-                )
+                self._on_start(event)
 
             case AgentTokenEvent():
+                self._token_buf.append(event.content)
                 self.console.print(event.content, end="", soft_wrap=True)
-                self._streaming_line = True
+                self._streaming = True
+                self._stream_had_tokens = True
 
             case AgentReasoningEvent():
+                if not self._reasoning_active:
+                    self.console.print(Text("  thinking", style=f"italic {_REASONING}"))
+                    self._reasoning_active = True
                 self.console.print(
-                    Text(event.content, style="dim italic"),
+                    Text(event.content, style=_REASONING),
                     end="",
                     soft_wrap=True,
                 )
-                self._streaming_line = True
+                self._streaming = True
 
             case AgentToolStartEvent():
                 self.flush_line()
-                args_json = json.dumps(event.args, indent=2, ensure_ascii=True)
-                syntax = Syntax(args_json, "json", theme="monokai", word_wrap=True)
-                self.console.print(
-                    Panel(
-                        syntax,
-                        title=f"Tool start: {event.tool_name}",
-                        subtitle=f"id={event.tool_call_id}",
-                    )
-                )
+                self._on_tool_start(event)
 
             case AgentToolDoneEvent():
-                self.flush_line()
-                color = "red" if event.error else "green"
-                status = "error" if event.error else "ok"
-                self.console.print(
-                    f"[{color}]✓ {event.tool_name} "
-                    f"({event.duration_ms}ms) [{status}][/{color}]"
-                )
+                self._on_tool_done(event)
 
             case AgentStepDoneEvent():
-                return
+                return  # silent
 
             case AgentDoneEvent():
-                self.flush_line()
-                if event.result.total_cost_usd > 0:
-                    self.console.print(
-                        Text(
-                            (
-                                f"Cost: ${event.result.total_cost_usd:.6f} | "
-                                f"Credits: {event.result.total_credits:.6f}"
-                            ),
-                            style="dim",
-                        )
-                    )
+                self.finish_turn()
+                self._on_done(event)
+                self._stream_had_tokens = False
 
             case AgentErrorEvent():
                 self.flush_line()
-                detail = (
-                    f"{event.message}\ncode={event.code} retryable={event.retryable}"
-                    if event.code
-                    else event.message
-                )
-                self.console.print(Panel(detail, title="Agent Error", style="red"))
+                self._on_error(event)
+                self._stream_had_tokens = False
 
-            case _:
-                self.console.print(
-                    Markdown(f"Unhandled event: `{type(event).__name__}`")
-                )
+    # ── Sub-renderers ─────────────────────────────────────────────────────────
+    def _on_start(self, event: AgentStartEvent) -> None:
+        session = (self.session_id or "")[:8] or "—"
+        badge = Text(" assistant ", style=f"bold {_TEXT} on #3a255e")
+        meta = Text.assemble(
+            badge,
+            Text("  ", style=_MUTED),
+            Text(event.model, style=f"bold {_ACCENT}"),
+            Text(f"  session {session}  ·  {event.message_count} msgs", style=_MUTED),
+        )
+        self.console.print(meta)
+
+    def _on_tool_start(self, event: AgentToolStartEvent) -> None:
+        args_preview = _args_preview(event.tool_name, event.args)
+        line = Text()
+        line.append("  │ ", style=_ACCENT2)
+        line.append("⚙ ", style=_ACCENT2)
+        line.append(event.tool_name, style=f"bold {_ACCENT}")
+        if args_preview:
+            line.append(f"  {args_preview}", style=_MUTED)
+        self.console.print(line)
+
+    def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
+        line = Text()
+        if event.error:
+            line.append("  │ ", style=_ACCENT2)
+            line.append("✗ ", style=_TOOL_ERR)
+            line.append(event.tool_name, style=f"bold {_TOOL_ERR}")
+            line.append(f"  {event.duration_ms}ms", style=_MUTED)
+            err_short = event.error.splitlines()[0][:72]
+            line.append(f"  {err_short}", style=_TOOL_ERR)
+        else:
+            line.append("  │ ", style=_ACCENT2)
+            line.append("✓ ", style=_TOOL_OK)
+            line.append(event.tool_name, style=_TOOL_OK)
+            line.append(f"  {event.duration_ms}ms", style=_MUTED)
+        self.console.print(line)
+
+    def _on_done(self, event: AgentDoneEvent) -> None:
+        r = event.result
+        parts: list[str] = []
+        if r.total_cost_usd > 0:
+            parts.append(f"${r.total_cost_usd:.5f}")
+        steps = len(r.steps)
+        parts.append(f"{steps} step{'s' if steps != 1 else ''}")
+        if parts:
+            self.console.print(Text(f"  {chr(183)} ".join(["", *parts]), style=_MUTED))
+
+    def _on_error(self, event: AgentErrorEvent) -> None:
+        body = Text()
+        body.append(event.message, style="bold")
+        if event.code:
+            body.append(f"\ncode={event.code}", style=_MUTED)
+        if event.retryable:
+            body.append("  retryable", style=_WARN)
+        self.console.print(
+            Panel(
+                body,
+                title="error",
+                border_style=_ERR_BORDER,
+                padding=(0, 1),
+                box=box.SQUARE,
+                style=_PANEL_BG,
+            )
+        )
+
+    # ── Utility ───────────────────────────────────────────────────────────────
+    def print_user_turn(self, text: str) -> None:
+        badge = Text(" user ", style=f"bold {_TEXT} on #23192f")
+        self.console.print(badge)
+        self.console.print(
+            Panel(
+                Text(text, style=_TEXT),
+                border_style=_MUTED2,
+                box=box.SQUARE,
+                padding=(0, 1),
+                style="on #0f0c14",
+            )
+        )
+
+    def print_info(self, message: str) -> None:
+        self.console.print(Text(f"  {message}", style=_MUTED))
+
+    def print_warn(self, message: str) -> None:
+        self.console.print(Text(f"  ⚠ {message}", style=_WARN))
+
+    def print_error(self, message: str) -> None:
+        self.console.print(Text(f"  ✗ {message}", style=_TOOL_ERR))
+
+    def print_history(self, messages: list) -> None:
+        """Re-render a list of Message objects as a conversation replay."""
+        from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
+
+        self.console.print(Text(" session history ", style=f"bold {_TEXT} on #2e2047"))
+        for msg in messages:
+            role = getattr(msg, "role", "?")
+            content = getattr(msg, "content", "")
+
+            if role == "system":
+                continue
+
+            if role == "user":
+                # Skip pure tool-result messages (internal plumbing)
+                if not isinstance(content, str) and all(
+                    isinstance(b, ToolResultBlock) for b in content
+                ):
+                    continue
+                label = Text("user", style=_ACCENT2)
+                self.console.print(label)
+                if isinstance(content, str):
+                    self.console.print(
+                        Panel(
+                            Text(content, style=_TEXT),
+                            border_style=_MUTED2,
+                            box=box.SQUARE,
+                            padding=(0, 1),
+                            style="on #0f0c14",
+                        )
+                    )
+                else:
+                    for block in content:
+                        if isinstance(block, TextBlock):
+                            self.console.print(Text(f"  {block.text}", style=_TEXT))
+
+            elif role == "assistant":
+                badge = Text(" assistant ", style=f"bold {_TEXT} on #3a255e")
+                self.console.print(badge)
+                if isinstance(content, str) and content.strip():
+                    self.console.print(
+                        Panel(
+                            Markdown(content.strip(), code_theme="monokai"),
+                            border_style=_MUTED2,
+                            box=box.SQUARE,
+                            padding=(0, 1),
+                            style=_PANEL_BG,
+                        )
+                    )
+                elif not isinstance(content, str):
+                    text_parts = [b.text for b in content if isinstance(b, TextBlock)]
+                    tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
+                    combined = "\n".join(text_parts).strip()
+                    if combined:
+                        self.console.print(
+                            Panel(
+                                Markdown(combined, code_theme="monokai"),
+                                border_style=_MUTED2,
+                                box=box.SQUARE,
+                                padding=(0, 1),
+                                style=_PANEL_BG,
+                            )
+                        )
+                    for b in tool_uses:
+                        t = Text()
+                        t.append("  │ ", style=_ACCENT2)
+                        t.append("⚙ ", style=_ACCENT2)
+                        t.append(b.tool_name, style=f"bold {_ACCENT}")
+                        self.console.print(t)
+
+        self.console.print(Rule(style=_MUTED2))
+
+    def print_sessions_table(self, sessions: list) -> None:
+        table = Table(
+            show_header=True,
+            header_style=f"bold {_ACCENT}",
+            border_style=_MUTED2,
+            box=box.SIMPLE_HEAVY,
+            padding=(0, 1),
+        )
+        table.add_column("#", style=_MUTED, width=3, justify="right")
+        table.add_column("Session ID", style="white", no_wrap=True)
+        table.add_column("Messages", style=_MUTED, justify="right")
+        table.add_column("Updated", style=_MUTED)
+        table.add_column("State", style=_ACCENT2)
+        for i, s in enumerate(sessions, start=1):
+            updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
+            state = (
+                "active"
+                if str(s.id).startswith((self.session_id or "")[:4])
+                else "saved"
+            )
+            table.add_row(str(i), s.id, str(s.message_count), updated, state)
+        self.console.print(table)
+
+    def print_help(self, commands: set[str]) -> None:
+        _desc = {
+            "/exit": "Quit phoson_cli",
+            "/quit": "Quit phoson_cli",
+            "/new": "Start a new conversation session",
+            "/clear": "Alias for /new",
+            "/model": "Show or switch model  (/model <name>)",
+            "/tree": "Display conversation tree for current session",
+            "/sessions": "List and load saved sessions",
+            "/branch": "Branch conversation from current node",
+            "/label": "Label current node  (/label <text>)",
+            "/help": "Show this help",
+        }
+        table = Table(
+            show_header=False,
+            border_style=_MUTED2,
+            box=box.SIMPLE_HEAVY,
+            padding=(0, 1),
+        )
+        table.add_column("cmd", style=f"bold {_ACCENT}", no_wrap=True)
+        table.add_column("desc", style=_MUTED)
+        for cmd in sorted(commands):
+            table.add_row(cmd, _desc.get(cmd, ""))
+        self.console.print(table)
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _args_preview(tool_name: str, args: dict) -> str:
+    """Return a compact one-line preview of tool args."""
+    if not args:
+        return ""
+    # For known single-key tools show the value directly
+    if len(args) == 1:
+        val = next(iter(args.values()))
+        s = str(val)
+        if len(s) > 72:
+            s = s[:69] + "…"
+        return f"`{s}`"
+    # For multi-key, show key=value pairs inline
+    parts = []
+    total = 0
+    for k, v in args.items():
+        s = f"{k}={json.dumps(v)}"
+        total += len(s)
+        if total > 80:
+            parts.append("…")
+            break
+        parts.append(s)
+    return "  ".join(parts)
