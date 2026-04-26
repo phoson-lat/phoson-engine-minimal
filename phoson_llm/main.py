@@ -27,7 +27,7 @@ async def run(label: str, chat, messages, config, tools=None):
     print(f"  {label}")
     print(f"{'─' * 60}")
 
-    async for event in await chat.stream(messages, config, tools):
+    async for event in chat.stream(messages, config, tools):
         match event:
             case LLMStartEvent():
                 print(f"[start] model={event.model} msgs={event.message_count}")
@@ -116,16 +116,22 @@ async def test_anthropic_tools():
 
 
 async def test_openai_basic():
-    chat = OpenAIChat()
+    chat = OpenAIChat(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="sk-or-v1-REDACTED",
+    )
     messages = [Message(role="user", content="Di hola en 3 idiomas distintos.")]
-    config = ModelConfig(model="gpt-4o-mini", max_tokens=256)
+    config = ModelConfig(model="minimax/minimax-m2.5:free", max_tokens=256)
     await run("OpenAI — texto básico", chat, messages, config)
 
 
 async def test_openai_tools():
-    chat = OpenAIChat()
+    chat = OpenAIChat(
+        base_url="https://openrouter.ai/api/v1",
+        api_key="sk-or-v1-REDACTED",
+    )
     messages = [Message(role="user", content="¿Qué clima hace en Querétaro?")]
-    config = ModelConfig(model="gpt-4o-mini", max_tokens=512)
+    config = ModelConfig(model="minimax/minimax-m2.5:free", max_tokens=512)
     tools = [
         ToolDefinition(
             name="get_weather",
