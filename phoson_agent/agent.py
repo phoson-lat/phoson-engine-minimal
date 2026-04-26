@@ -36,6 +36,7 @@ from phoson_agent.models import (
     AgentToolStartEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_agent.middleware import AgentMiddleware
 
 
 def _now_utc() -> datetime.datetime:
@@ -56,6 +57,7 @@ def _to_result_text(value: str | dict[str, Any]) -> str:
 class AgentEngine:
     chat: BaseLLMChat
     tools: list[AgentTool]
+    middlewares: list[AgentMiddleware] = field(default_factory=list)
     phoson_weight: float = 1.0
     max_iterations: int = 12
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
@@ -71,6 +73,46 @@ class AgentEngine:
 
     def is_running(self) -> bool:
         return self._running
+
+    async def _notify_middlewares(self, event: AgentEvent) -> None:
+        for middleware in self.middlewares:
+            await middleware.on_agent_event(event)
+
+    async def _prepare_event(self, event: AgentEvent) -> AgentEvent:
+        await self._notify_middlewares(event)
+        return event
+
+    async def _apply_before_llm(
+        self,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> list[Message]:
+        updated = messages
+        for middleware in self.middlewares:
+            updated = await middleware.on_before_llm(updated, config)
+        return updated
+
+    async def _apply_before_tool(
+        self,
+        call: ToolCallEvent,
+    ) -> ToolCallEvent | None:
+        current: ToolCallEvent | None = call
+        for middleware in self.middlewares:
+            if current is None:
+                return None
+            current = await middleware.on_before_tool(current)
+        return current
+
+    async def _apply_after_tool(
+        self,
+        call: ToolCallEvent,
+        result: str,
+        error: bool,
+    ) -> str:
+        updated = result
+        for middleware in self.middlewares:
+            updated = await middleware.on_after_tool(call, updated, error)
+        return updated
 
     async def stream(
         self,
@@ -99,13 +141,18 @@ class AgentEngine:
         ]
 
         try:
-            yield AgentStartEvent(
-                model=config.model,
-                message_count=len(messages),
-                max_iterations=self.max_iterations,
+            yield await self._prepare_event(
+                AgentStartEvent(
+                    model=config.model,
+                    message_count=len(messages),
+                    max_iterations=self.max_iterations,
+                )
             )
 
             for _ in range(self.max_iterations):
+                history = await self._apply_before_llm(history, config)
+                self._history = history
+
                 llm_started = _now_utc()
                 usage_event: UsageEvent | None = None
                 done_event: LLMDoneEvent | None = None
@@ -114,9 +161,13 @@ class AgentEngine:
 
                 async for event in self.chat.stream(history, config, tool_definitions):  # pyright: ignore[reportGeneralTypeIssues]
                     if isinstance(event, TokenEvent):
-                        yield AgentTokenEvent(content=event.content)
+                        yield await self._prepare_event(
+                            AgentTokenEvent(content=event.content)
+                        )
                     elif isinstance(event, ReasoningTokenEvent):
-                        yield AgentReasoningEvent(content=event.content)
+                        yield await self._prepare_event(
+                            AgentReasoningEvent(content=event.content)
+                        )
                     elif isinstance(event, ToolCallEvent):
                         tool_calls.append(event)
                     elif isinstance(event, UsageEvent):
@@ -156,21 +207,25 @@ class AgentEngine:
                     },
                 )
                 steps.append(llm_step)
-                yield AgentStepDoneEvent(step=llm_step)
+                yield await self._prepare_event(AgentStepDoneEvent(step=llm_step))
 
                 if error_event:
-                    yield AgentErrorEvent(
-                        message=error_event.message,
-                        code=error_event.code,
-                        retryable=error_event.retryable,
+                    yield await self._prepare_event(
+                        AgentErrorEvent(
+                            message=error_event.message,
+                            code=error_event.code,
+                            retryable=error_event.retryable,
+                        )
                     )
                     return
 
                 if not done_event:
-                    yield AgentErrorEvent(
-                        message="LLM stream finished without LLMDoneEvent.",
-                        code="llm_protocol",
-                        retryable=False,
+                    yield await self._prepare_event(
+                        AgentErrorEvent(
+                            message="LLM stream finished without LLMDoneEvent.",
+                            code="llm_protocol",
+                            retryable=False,
+                        )
                     )
                     return
 
@@ -188,14 +243,16 @@ class AgentEngine:
                         total_cost_usd=total_cost_usd,
                         total_credits=total_credits,
                     )
-                    yield AgentDoneEvent(result=result)
+                    yield await self._prepare_event(AgentDoneEvent(result=result))
                     return
 
                 if not tool_calls:
-                    yield AgentErrorEvent(
-                        message="LLM indicated tool calls but emitted none.",
-                        code="llm_protocol",
-                        retryable=False,
+                    yield await self._prepare_event(
+                        AgentErrorEvent(
+                            message="LLM indicated tool calls but emitted none.",
+                            code="llm_protocol",
+                            retryable=False,
+                        )
                     )
                     return
 
@@ -214,14 +271,63 @@ class AgentEngine:
 
                 history.append(Message(role="assistant", content=assistant_blocks))
 
-                for call_idx, call in enumerate(tool_calls):
+                for call_idx, original_call in enumerate(tool_calls):
                     result_committed = False
                     try:
-                        yield AgentToolStartEvent(
-                            index=call.index,
-                            tool_call_id=call.tool_call_id,
-                            tool_name=call.tool_name,
-                            args=call.args,
+                        call = await self._apply_before_tool(original_call)
+
+                        if call is None:
+                            cancelled_result = "Tool execution blocked by middleware."
+                            history.append(
+                                Message(
+                                    role="user",
+                                    content=[
+                                        ToolResultBlock(
+                                            tool_call_id=original_call.tool_call_id,
+                                            result=cancelled_result,
+                                            error=True,
+                                        )
+                                    ],
+                                )
+                            )
+                            result_committed = True
+
+                            blocked_step = RunStep(
+                                kind="tool",
+                                started_at=_now_utc(),
+                                ended_at=_now_utc(),
+                                duration_ms=0,
+                                tool_name=original_call.tool_name,
+                                tool_call_id=original_call.tool_call_id,
+                                error="blocked_by_middleware",
+                                payload={
+                                    "args": original_call.args,
+                                    "result": cancelled_result,
+                                },
+                            )
+                            steps.append(blocked_step)
+                            yield await self._prepare_event(
+                                AgentToolDoneEvent(
+                                    index=original_call.index,
+                                    tool_call_id=original_call.tool_call_id,
+                                    tool_name=original_call.tool_name,
+                                    result=cancelled_result,
+                                    error="blocked_by_middleware",
+                                    duration_ms=0,
+                                )
+                            )
+                            yield await self._prepare_event(
+                                AgentStepDoneEvent(step=blocked_step)
+                            )
+                            continue
+
+                        yield await self._prepare_event(
+                            AgentToolStartEvent(
+                                index=call.index,
+                                tool_call_id=call.tool_call_id,
+                                tool_name=call.tool_name,
+                                args=call.args,
+                            )
                         )
 
                         tool_started = _now_utc()
@@ -251,6 +357,12 @@ class AgentEngine:
                                 tool_error = str(exc)
                                 result_text = tool_error
                                 error_flag = True
+
+                        result_text = await self._apply_after_tool(
+                            call=call,
+                            result=result_text,
+                            error=error_flag,
+                        )
 
                         tool_ended = _now_utc()
                         tool_step = RunStep(
@@ -282,15 +394,19 @@ class AgentEngine:
                         )
                         result_committed = True
 
-                        yield AgentToolDoneEvent(
-                            index=call.index,
-                            tool_call_id=call.tool_call_id,
-                            tool_name=call.tool_name,
-                            result=result_text,
-                            error=tool_error,
-                            duration_ms=tool_step.duration_ms,
+                        yield await self._prepare_event(
+                            AgentToolDoneEvent(
+                                index=call.index,
+                                tool_call_id=call.tool_call_id,
+                                tool_name=call.tool_name,
+                                result=result_text,
+                                error=tool_error,
+                                duration_ms=tool_step.duration_ms,
+                            )
                         )
-                        yield AgentStepDoneEvent(step=tool_step)
+                        yield await self._prepare_event(
+                            AgentStepDoneEvent(step=tool_step)
+                        )
                     except asyncio.CancelledError:
                         start_idx = call_idx + 1 if result_committed else call_idx
                         for pending_call in tool_calls[start_idx:]:
@@ -308,13 +424,15 @@ class AgentEngine:
                             )
                         raise
 
-            yield AgentErrorEvent(
-                message=(
-                    "Agent reached "
-                    f"max_iterations={self.max_iterations} without a final answer."
-                ),
-                code="max_iterations",
-                retryable=False,
+            yield await self._prepare_event(
+                AgentErrorEvent(
+                    message=(
+                        "Agent reached "
+                        f"max_iterations={self.max_iterations} without a final answer."
+                    ),
+                    code="max_iterations",
+                    retryable=False,
+                )
             )
             return
         finally:
