@@ -1,4 +1,6 @@
 import json
+import threading
+from time import sleep
 
 from rich import box
 from rich.rule import Rule
@@ -42,6 +44,10 @@ class Renderer:
         self._token_buf: list[str] = []
         self._reasoning_active = False
         self._stream_had_tokens = False
+        self._waiting_thread: threading.Thread | None = None
+        self._waiting_stop: threading.Event | None = None
+        self._waiting_message = ""
+        self._waiting_visible = False
 
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
@@ -49,6 +55,7 @@ class Renderer:
     # ── Called after all streaming is done for a turn ─────────────────────────
     def flush_line(self) -> None:
         """Ensure we're on a fresh line after any raw-streamed tokens."""
+        self.stop_waiting()
         if self._streaming:
             self.console.print()
             self._streaming = False
@@ -76,14 +83,17 @@ class Renderer:
         match event:
             case AgentStartEvent():
                 self._on_start(event)
+                self.start_waiting("thinking")
 
             case AgentTokenEvent():
+                self.stop_waiting()
                 self._token_buf.append(event.content)
                 self.console.print(event.content, end="", soft_wrap=True)
                 self._streaming = True
                 self._stream_had_tokens = True
 
             case AgentReasoningEvent():
+                self.stop_waiting()
                 if not self._reasoning_active:
                     self.console.print(Text("  thinking", style=f"italic {_REASONING}"))
                     self._reasoning_active = True
@@ -100,6 +110,7 @@ class Renderer:
 
             case AgentToolDoneEvent():
                 self._on_tool_done(event)
+                self.start_waiting("thinking")
 
             case AgentStepDoneEvent():
                 return  # silent
@@ -113,6 +124,51 @@ class Renderer:
                 self.flush_line()
                 self._on_error(event)
                 self._stream_had_tokens = False
+
+    def start_waiting(self, label: str = "thinking") -> None:
+        if self._waiting_thread is not None and self._waiting_thread.is_alive():
+            self._waiting_message = label
+            return
+        self._waiting_message = label
+        self._waiting_stop = threading.Event()
+        self._waiting_thread = threading.Thread(
+            target=self._run_waiting_animation,
+            daemon=True,
+        )
+        self._waiting_thread.start()
+
+    def stop_waiting(self) -> None:
+        if self._waiting_stop is None:
+            return
+        self._waiting_stop.set()
+        if self._waiting_thread is not None and self._waiting_thread.is_alive():
+            self._waiting_thread.join(timeout=0.2)
+        self._clear_waiting_line()
+        self._waiting_thread = None
+        self._waiting_stop = None
+        self._waiting_message = ""
+        self._waiting_visible = False
+
+    def _run_waiting_animation(self) -> None:
+        stop = self._waiting_stop
+        if stop is None:
+            return
+
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        idx = 0
+        while not stop.is_set():
+            frame = frames[idx % len(frames)]
+            self.console.file.write(f"\r\x1b[2K  {frame} {self._waiting_message}")
+            self.console.file.flush()
+            self._waiting_visible = True
+            idx += 1
+            sleep(0.08)
+
+    def _clear_waiting_line(self) -> None:
+        if not self._waiting_visible:
+            return
+        self.console.file.write("\r\x1b[2K")
+        self.console.file.flush()
 
     # ── Sub-renderers ─────────────────────────────────────────────────────────
     def _on_start(self, event: AgentStartEvent) -> None:
