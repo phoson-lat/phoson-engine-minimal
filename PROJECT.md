@@ -30,7 +30,10 @@ phoson-engine-minimal/
 │   ├── pricing.py           # Tabla de precios por modelo, calculate_cost()
 │   └── main.py              # Script de pruebas
 │
-├── phoson_agent/            # Capa 2: agent loop (PENDIENTE)
+├── phoson_agent/            # Capa 2: agent loop (EN PROGRESO)
+│   ├── __init__.py          # API pública del agent
+│   ├── agent.py             # ReAct loop stateless + wrappers sync/async
+│   └── models.py            # AgentTool, RunStep, AgentRunResult
 │
 ├── pyproject.toml
 └── uv.lock
@@ -132,24 +135,43 @@ Modelos en tabla: `claude-opus-4-6/4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
 
 ---
 
-## Capa 2: `phoson_agent` — diseño pendiente
+## Capa 2: `phoson_agent` — estado actual (Fase 2 en curso)
 
-El agent loop que se construirá encima de `phoson_llm`. Responsabilidades:
+`phoson_agent` monta un loop ReAct minimal encima de `phoson_llm`.
+
+Objetivos de esta fase:
 
 - ReAct loop: `stream()` → detectar `ToolCallEvent` → ejecutar tool → retroalimentar → repetir
-- Gestión del historial de mensajes (`list[Message]`)
-- Emitir `RunStep`s para observabilidad (PhosonTracer)
+- Gestión del historial de mensajes (`list[Message]`) sin estado interno persistente entre runs
+- Emitir `RunStep`s básicos para observabilidad (llm/tool, duración, errores)
 - Calcular `credits = UsageEvent.cost_usd * phoson_weight`
 - Condición de parada: `LLMDoneEvent.has_tool_calls == False`
 
-El loop debe ser stateless entre runs — el estado vive en el historial que le pases.
+Decisión de diseño: el estado vive en el historial entregado al run; el engine solo transforma ese historial durante la ejecución y devuelve el resultado completo.
+
+Interfaz objetivo de esta fase:
+
+```python
+from phoson_agent import AgentEngine, AgentTool
+
+engine = AgentEngine(chat=OpenAIChat(), tools=[...], phoson_weight=1.2)
+result = await engine.run(messages, config)
+
+print(result.final_content)
+print(result.total_credits)
+for step in result.steps:
+    print(step.kind, step.duration_ms)
+```
 
 ---
 
 ## Known issues / bugs pendientes
 
-### Tool call duplicado en OpenRouter
-Al usar `OpenAIChat` con OpenRouter, el `ToolCallEvent` se emite dos veces. El bug está en `openai.py`: la condición `finish_reason == "tool_calls"` puede evaluarse en más de un chunk. Fix: usar un flag `_tools_emitted` para emitir solo una vez.
+### Tool call duplicado en OpenRouter ✅ FIXED
+Resuelto en `phoson_llm/chats/openai.py` usando un flag local para garantizar emisión única de `ToolCallEvent` cuando `finish_reason == "tool_calls"` llega más de una vez.
+
+### Wrappers `complete()/stream_sync()` en `BaseLLMChat` ✅ FIXED
+Resuelto en `phoson_llm/chats/base.py`: ahora consumen correctamente async generators sin `await` inválido sobre `stream()`.
 
 ### Usage en 0 con modelos free de OpenRouter
 OpenRouter no siempre respeta `stream_options={"include_usage": True}` en modelos gratuitos. `cost_known` será `False` en esos casos y `cost_usd` será `0.0`. Comportamiento esperado.
