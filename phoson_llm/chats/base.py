@@ -57,7 +57,7 @@ class BaseLLMChat(ABC):
         Útil para: tests, endpoints sync simples, casos donde no
         necesitas tokens individuales ni UsageEvent intermedio.
         """
-        async for event in await self.stream(messages, config, tools):
+        async for event in self.stream(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
                 return event
             if isinstance(event, ErrorEvent):
@@ -81,7 +81,7 @@ class BaseLLMChat(ABC):
         """
         loop = asyncio.new_event_loop()
         try:
-            aiter = loop.run_until_complete(self.stream(messages, config, tools))
+            aiter = self.stream(messages, config, tools)
             while True:
                 try:
                     yield loop.run_until_complete(aiter.__anext__())

@@ -187,6 +187,7 @@ class OpenAIChat(BaseLLMChat):
         tool_ids: dict[int, str] = {}  # index → tool_call_id
         has_tool_calls = False
         final_usage = None
+        tools_emitted = False
 
         # ── LLMStartEvent ─────────────────────────────────────────────────────
         yield LLMStartEvent(
@@ -242,7 +243,8 @@ class OpenAIChat(BaseLLMChat):
 
                 # ── finish_reason: tool_calls → emitir ToolCallEvents completos
                 finish = chunk.choices[0].finish_reason
-                if finish == "tool_calls":
+                if finish == "tool_calls" and not tools_emitted:
+                    tools_emitted = True
                     for idx, raw in tool_args_acc.items():
                         try:
                             args = json.loads(raw) if raw else {}
