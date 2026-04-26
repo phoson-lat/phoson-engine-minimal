@@ -57,6 +57,13 @@ _CMD_META: dict[str, str] = {
     "/help": "show command reference",
 }
 
+_SYSTEM_PROMPT_TEMPLATE = (
+    "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
+    "You are running in working directory: {cwd}. "
+    "Available tools: read_file, write_file, list_dir, bash, web_search. "
+    "Be concise, accurate, and use tools when needed."
+)
+
 
 class _SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
@@ -164,7 +171,10 @@ class PhosonRepl:
 
         path = self.tree.get_path(self.current_node_id)
         base_count = len(path)
-        config = ModelConfig(model=self.current_model)
+        config = ModelConfig(
+            model=self.current_model,
+            system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
+        )
 
         done_event: AgentDoneEvent | None = None
         had_error = False
