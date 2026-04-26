@@ -10,7 +10,7 @@ from phoson_llm.chats.anthropic import AnthropicChat
 
 @dataclass
 class PhosonConfig:
-    model: str = "moonshotai/kimi-k2.6"
+    model: str = "openai/gpt-5.4-mini"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
