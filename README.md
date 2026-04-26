@@ -4,7 +4,7 @@
 
 # phoson-engine-minimal
 
-Minimal Python runtime for the Phoson agent engine.
+Minimal Python runtime for the Phoson autonomous-agent platform.
 
 ![Owner](https://img.shields.io/badge/owner-phoson.lat-0E7490)
 ![Repository](https://img.shields.io/badge/repository-private-B91C1C)
@@ -25,6 +25,7 @@ It is intentionally built without agent frameworks (no LangChain/LangGraph), usi
 - Cost and credit accounting
 - Observability (`RunStep`, typed events)
 - Session tree persistence
+- CLI for interactive agent sessions
 
 ## High-level architecture
 
@@ -69,20 +70,67 @@ sequenceDiagram
 
 ```text
 phoson-engine-minimal/
-├── phoson_llm/        # LLM normalization layer (adapters + schemas + pricing)
-├── phoson_agent/      # ReAct agent loop, tools, middleware, sessions
-├── tests/             # Unit/integration tests for llm and agent layers
-├── .github/workflows/ # CI and security automation
-├── PROJECT.md         # Deep architecture notes and roadmap (Spanish)
-└── pyproject.toml     # Project metadata, dependencies, tooling config
+├── phoson_llm/           # LLM normalization layer (adapters + schemas + pricing)
+├── phoson_agent/         # ReAct agent loop, tools, middleware, sessions
+├── phoson_cli/           # Interactive CLI (REPL) for agent sessions
+├── tests/                # Unit/integration tests for llm and agent layers
+├── .github/workflows/    # CIand security automation
+├── PROJECT.md            # Deep architecture notes and roadmap (Spanish)
+└── pyproject.toml        # Project metadata, dependencies, tooling config
 ```
 
 ## Core modules
 
-- `phoson_llm`: provider adapters return a single typed event stream (`LLMEvent` subclasses).
-- `phoson_agent`: stateless-by-run orchestration over message history with tool execution.
-- `phoson_agent.sessions`: branchable conversation tree + JSONL-backed storage.
-- `phoson_llm.pricing`: model pricing table + `calculate_cost()` for provider-level USD usage.
+### `phoson_llm` — LLM normalization layer
+
+Provider adapters return a single typed event stream (`LLMEvent` subclasses):
+
+| Event | Description |
+|-------|-------------|
+| `LLMStartEvent` | Call start (model, message count) |
+| `TokenEvent` | Text fragment token-by-token |
+| `ReasoningStartEvent` | Model started reasoning (Anthropic thinking / OpenAI o1) |
+| `ReasoningTokenEvent` | Reasoning fragment |
+| `ReasoningDoneEvent` | Complete reasoning block |
+| `ToolCallDeltaEvent` | Partial tool args chunk (for real-time UI) |
+| `ToolCallEvent` | Complete tool call with parsed args |
+| `UsageEvent` | Tokens + cost in USD |
+| `LLMDoneEvent` | Full assembled text (always last) |
+| `ErrorEvent` | Error with code, message, retryable flag |
+
+Supported providers:
+- **Anthropic** — `AnthropicChat` (thinking, tool use, prompt caching)
+- **OpenAI** — `OpenAIChat` (tool use, reasoning_effort for o1/o3)
+- **OpenRouter** — `OpenAIChat(base_url=..., api_key=...)`
+- **Ollama** — `OpenAIChat(base_url="http://localhost:11434/v1", api_key="ollama")`
+
+Pricing module (`phoson_llm.pricing`) provides `calculate_cost()` for provider-level USD usage.
+
+### `phoson_agent` — Agent orchestration
+
+Stateless-by-run orchestration over message history with tool execution:
+
+- `AgentEngine` — Main entry point for running agents (async and sync)
+- `@tool` decorator — Transform Python functions into `AgentTool` definitions with JSON Schema
+- `AgentMiddleware` — Hooks for pre/post processing (LLM calls, tool execution)
+- `AgentContext` — Shared state across middleware and tools
+
+### `phoson_agent.sessions` — Conversation persistence
+
+- `ConversationTree` — Branchable conversation structure (not linear)
+- `ConversationNode` — Individual node with messages, children, label
+- `JsonlStorage` — JSONL-backed session storage (local file)
+- `SessionMeta` — Session metadata (id, message_count, created_at, updated_at)
+
+### `phoson_cli` — Interactive REPL
+
+Command-line interface for interactive agent sessions:
+
+- `PhosonRepl` — Interactive read-eval-print loop
+- Commands: `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/branch`, `/label`, `/help`
+- Real-time streaming responses
+- Session branching and labeling
+- Multiple model switching
 
 ## Development setup
 
@@ -105,7 +153,7 @@ uv run pre-commit install --hook-type pre-push
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run python -m compileall phoson_llm phoson_agent
+uv run python -m compileall phoson_llm phoson_agent phoson_cli
 uv run pytest -q
 ```
 
@@ -119,7 +167,9 @@ OPENROUTER_API_KEY=
 
 Use `OPENROUTER_API_KEY` when initializing `OpenAIChat` with an OpenRouter `base_url`.
 
-## Minimal usage example
+## Usage examples
+
+### Minimal agent usage
 
 ```python
 from phoson_agent import AgentEngine
@@ -141,10 +191,36 @@ print(result.final_content)
 print(result.total_cost_usd, result.total_credits)
 ```
 
+### Define a tool
+
+```python
+from phoson_agent import tool
+
+@tool
+def calculate(expression: str) -> str:
+    """Evaluate a mathematical expression."""
+    return str(eval(expression))
+```
+
+### Interactive CLI
+
+```bash
+uv run phoson-cli
+```
+
+Available commands:
+- `/new` — Start a new session
+- `/model <name>` — Switch model
+- `/tree` — Show conversation tree
+- `/sessions` — List saved sessions
+- `/branch` — Branch from current node
+- `/label <text>` — Label current node
+- `/help` — Show all commands
+
 ## CI and security workflows
 
-- `.github/workflows/ci.yml`: format check, lint, smoke compile, and tests on PRs and pushes to `main`.
-- `.github/workflows/security.yml`: dependency audit and secret scan on PRs, pushes to `main`, and weekly schedule.
+- `.github/workflows/ci.yml`: format check, lint, smoke compile, and tests on PRsand pushes to `main`.
+- `.github/workflows/security.yml`: dependency auditand secret scan on PRs, pushes to `main`,and weekly schedule.
 
 ## Commit message format
 
