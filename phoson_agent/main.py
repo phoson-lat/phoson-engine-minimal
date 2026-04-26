@@ -30,11 +30,6 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 
-os.environ["PHOSON_PROVIDER"] = (
-    "openrouter"  # Cambia a "openrouter", "openai" o "anthropic" para forzar proveedor
-)
-os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-REDACTED"
-
 
 class FakeToolChat(BaseLLMChat):
     """

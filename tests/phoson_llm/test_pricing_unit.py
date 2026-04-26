@@ -35,3 +35,15 @@ def test_calculate_cost_unknown_model_returns_not_known() -> None:
 
     assert cost_known is False
     assert cost_usd == 0.0
+
+
+def test_calculate_cost_known_unprefixed_model_with_provider() -> None:
+    cost_usd, cost_known = calculate_cost(
+        model="claude-haiku-4-5",
+        provider="anthropic",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+
+    assert cost_known is True
+    assert cost_usd == pytest.approx(0.0035, abs=1e-9)

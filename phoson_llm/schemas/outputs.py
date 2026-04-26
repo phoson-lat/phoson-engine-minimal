@@ -70,27 +70,6 @@ class ToolCallEvent(LLMEvent):
     args: dict = field(default_factory=dict)
 
 
-# ─── Ejecución de tools ──────────────────────────────────────────────────────
-
-
-@dataclass
-class ToolStartEvent(LLMEvent):
-    index: int = 0
-    tool_call_id: str = ""
-    tool_name: str = ""
-    args: dict = field(default_factory=dict)
-
-
-@dataclass
-class ToolDoneEvent(LLMEvent):
-    index: int = 0
-    tool_call_id: str = ""
-    tool_name: str = ""
-    result: str = ""
-    duration_ms: int = 0
-    error: str | None = None
-
-
 # ─── Usage ───────────────────────────────────────────────────────────────────
 
 

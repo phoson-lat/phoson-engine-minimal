@@ -158,8 +158,11 @@ class OpenAIChat(BaseLLMChat):
             "stream_options": {"include_usage": True},  # usage en último chunk
         }
 
-        # system desde config tiene prioridad sobre el mensaje system
+        # system desde config tiene prioridad sobre system previo
         if config.system:
+            kwargs["messages"] = [
+                m for m in kwargs["messages"] if m.get("role") != "system"
+            ]
             kwargs["messages"].insert(
                 0,
                 {
@@ -296,6 +299,7 @@ class OpenAIChat(BaseLLMChat):
                 input_tokens=usage.input,
                 output_tokens=usage.output,
                 cache_read_tokens=usage.cache_read,
+                provider="openai",
             )
             yield UsageEvent(
                 model=config.model,
