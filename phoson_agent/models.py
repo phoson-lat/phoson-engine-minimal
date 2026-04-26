@@ -41,3 +41,63 @@ class AgentRunResult:
     steps: list[RunStep] = field(default_factory=list)
     total_cost_usd: float = 0.0
     total_credits: float = 0.0
+
+
+@dataclass
+class AgentEvent:
+    timestamp: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+        init=False,
+    )
+
+
+@dataclass
+class AgentStartEvent(AgentEvent):
+    model: str = ""
+    message_count: int = 0
+    max_iterations: int = 0
+
+
+@dataclass
+class AgentTokenEvent(AgentEvent):
+    content: str = ""
+
+
+@dataclass
+class AgentReasoningEvent(AgentEvent):
+    content: str = ""
+
+
+@dataclass
+class AgentToolStartEvent(AgentEvent):
+    index: int = 0
+    tool_call_id: str = ""
+    tool_name: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentToolDoneEvent(AgentEvent):
+    index: int = 0
+    tool_call_id: str = ""
+    tool_name: str = ""
+    result: str = ""
+    error: str | None = None
+    duration_ms: int = 0
+
+
+@dataclass
+class AgentStepDoneEvent(AgentEvent):
+    step: RunStep
+
+
+@dataclass
+class AgentDoneEvent(AgentEvent):
+    result: AgentRunResult
+
+
+@dataclass
+class AgentErrorEvent(AgentEvent):
+    message: str = ""
+    code: str | None = None
+    retryable: bool = False
