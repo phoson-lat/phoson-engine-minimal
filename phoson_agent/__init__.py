@@ -23,12 +23,13 @@ from .sessions import (
     ConversationNode,
     ConversationTree,
 )
-from .middleware import AgentMiddleware
+from .middleware import AgentMiddleware, RetryMiddleware
 
 __all__ = [
     "AgentEngine",
     "AgentContext",
     "AgentMiddleware",
+    "RetryMiddleware",
     "tool",
     "AgentTool",
     "ToolHandler",
