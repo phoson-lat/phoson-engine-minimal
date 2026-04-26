@@ -257,6 +257,7 @@ class AnthropicChat(BaseLLMChat):
                     output_tokens=usage.output,
                     cache_write_tokens=usage.cache_write,
                     cache_read_tokens=usage.cache_read,
+                    provider="anthropic",
                 )
                 yield UsageEvent(
                     model=config.model,

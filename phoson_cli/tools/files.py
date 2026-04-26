@@ -42,14 +42,16 @@ def list_dir(path: str = ".") -> str:
     for current_root, dirs, files in os.walk(root):
         current_path = Path(current_root)
         rel_depth = len(current_path.resolve().parts) - base_depth
-        if rel_depth >= 3:
-            dirs[:] = []
 
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+        if rel_depth >= 3:
+            dirs[:] = []
+            continue
+
         files = sorted(files)
 
-        for dirname in dirs:
-            lines.append(f"{'  ' * (rel_depth + 1)}{dirname}/")
+        if rel_depth > 0:
+            lines.append(f"{'  ' * rel_depth}{current_path.name}/")
         for filename in files:
             lines.append(f"{'  ' * (rel_depth + 1)}{filename}")
     return "\n".join(lines)

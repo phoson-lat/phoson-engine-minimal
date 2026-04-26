@@ -8,9 +8,12 @@ dependencies = [
     "anthropic>=0.97.0",
     "httpx>=0.28.0",
     "openai>=2.32.0",
-    "pydantic>=2.13.3",
+    "prompt-toolkit>=3.0.51",
     "rich>=15.0.0",
 ]
+
+[project.scripts]
+phoson-cli = "phoson_cli.__main__:main"
 
 [tool.ruff]
 # Target version for Python

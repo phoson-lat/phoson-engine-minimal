@@ -10,7 +10,7 @@ from phoson_llm.chats.anthropic import AnthropicChat
 
 @dataclass
 class PhosonConfig:
-    model: str = "moonshotai/kimi-k2.6"
+    model: str = "minimax/minimax-m2.7"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None

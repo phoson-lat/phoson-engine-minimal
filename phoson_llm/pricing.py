@@ -66,10 +66,19 @@ _ALIASES: dict[str, str] = {
 }
 
 
-def _resolve(model: str) -> PriceEntry | None:
+def _resolve(model: str, provider: str | None = None) -> PriceEntry | None:
     """Resuelve el modelo al PriceEntry correspondiente, con alias."""
     key = _ALIASES.get(model, model)
-    return PRICES.get(key)
+    entry = PRICES.get(key)
+    if entry is not None:
+        return entry
+
+    if provider and "/" not in key:
+        prefixed = f"{provider}/{key}"
+        prefixed = _ALIASES.get(prefixed, prefixed)
+        return PRICES.get(prefixed)
+
+    return None
 
 
 def calculate_cost(
@@ -78,6 +87,7 @@ def calculate_cost(
     output_tokens: int,
     cache_write_tokens: int = 0,
     cache_read_tokens: int = 0,
+    provider: str | None = None,
 ) -> tuple[float, bool]:
     """
     Calcula el costo real en USD para una LLM call.
@@ -86,7 +96,7 @@ def calculate_cost(
     cost_known=False cuando el modelo no está en la tabla
     (e.g. modelos locales de Ollama).
     """
-    entry = _resolve(model)
+    entry = _resolve(model, provider=provider)
 
     if entry is None:
         return 0.0, False
