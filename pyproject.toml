@@ -57,6 +57,7 @@ pythonpath = ["."]
 dev = [
     "commitizen>=3.29.0",
     "git-filter-repo>=2.47.0",
+    "pip-audit>=2.10.0",
     "pre-commit>=3.8.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=1.3.0",
