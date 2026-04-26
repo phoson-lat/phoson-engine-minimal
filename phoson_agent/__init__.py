@@ -21,9 +21,11 @@ from .sessions import (
     ConversationNode,
     ConversationTree,
 )
+from .middleware import AgentMiddleware
 
 __all__ = [
     "AgentEngine",
+    "AgentMiddleware",
     "AgentTool",
     "ToolHandler",
     "AgentEvent",
