@@ -1,3 +1,4 @@
+from .tool import tool
 from .agent import AgentEngine
 from .models import (
     RunStep,
@@ -14,6 +15,7 @@ from .models import (
     AgentReasoningEvent,
     AgentToolStartEvent,
 )
+from .context import AgentContext
 from .sessions import (
     SessionMeta,
     JsonlStorage,
@@ -25,7 +27,9 @@ from .middleware import AgentMiddleware
 
 __all__ = [
     "AgentEngine",
+    "AgentContext",
     "AgentMiddleware",
+    "tool",
     "AgentTool",
     "ToolHandler",
     "AgentEvent",

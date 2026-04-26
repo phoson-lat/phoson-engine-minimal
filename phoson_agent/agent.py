@@ -35,6 +35,7 @@ from phoson_agent.models import (
     AgentReasoningEvent,
     AgentToolStartEvent,
 )
+from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent.middleware import AgentMiddleware
 
@@ -58,6 +59,7 @@ class AgentEngine:
     chat: BaseLLMChat
     tools: list[AgentTool]
     middlewares: list[AgentMiddleware] = field(default_factory=list)
+    context: AgentContext = field(default_factory=AgentContext)
     phoson_weight: float = 1.0
     max_iterations: int = 12
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
@@ -342,7 +344,12 @@ class AgentEngine:
                             error_flag = True
                         else:
                             try:
-                                tool_result = tool.handler(call.args)
+                                handler_sig = inspect.signature(tool.handler)
+                                if len(handler_sig.parameters) >= 2:
+                                    tool_result = tool.handler(call.args, self.context)
+                                else:
+                                    tool_result = tool.handler(call.args)
+
                                 if inspect.isawaitable(tool_result):
                                     tool_result = await tool_result
 
