@@ -10,13 +10,13 @@ from phoson_llm.chats.anthropic import AnthropicChat
 
 @dataclass
 class PhosonConfig:
-    model: str = "minimax/minimax-m2.5:free"
+    model: str = "moonshotai/kimi-k2.6"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
-    max_iterations: int = 12
+    max_iterations: int = 50
     safe_mode: bool = False
 
 
