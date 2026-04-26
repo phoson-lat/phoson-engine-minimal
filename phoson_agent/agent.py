@@ -258,7 +258,6 @@ class AgentEngine:
                     error=tool_error,
                     duration_ms=tool_step.duration_ms,
                 )
-                yield AgentStepDoneEvent(step=tool_step)
 
                 history.append(
                     Message(
@@ -272,6 +271,8 @@ class AgentEngine:
                         ],
                     )
                 )
+
+                yield AgentStepDoneEvent(step=tool_step)
 
         yield AgentErrorEvent(
             message=(
