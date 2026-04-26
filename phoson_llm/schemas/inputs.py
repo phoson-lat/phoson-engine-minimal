@@ -1,5 +1,6 @@
 from typing import Literal
 from dataclasses import dataclass
+from collections.abc import Sequence
 
 # ─── Content Blocks ──────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
 @dataclass
 class Message:
     role: Literal["system", "user", "assistant"]
-    content: str | list[ContentBlock]
+    content: str | Sequence[ContentBlock]
 
 
 # ─── Tool ────────────────────────────────────────────────────────────────────
