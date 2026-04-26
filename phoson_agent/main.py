@@ -33,7 +33,9 @@ from phoson_llm.chats.anthropic import AnthropicChat
 os.environ["PHOSON_PROVIDER"] = (
     "openrouter"  # Cambia a "openrouter", "openai" o "anthropic" para forzar proveedor
 )
-os.environ["OPENROUTER_API_KEY"] = "***"
+os.environ["OPENROUTER_API_KEY"] = (
+    "sk-or-v1-REDACTED"
+)
 
 
 class FakeToolChat(BaseLLMChat):
@@ -126,7 +128,7 @@ def render_stream_event(event: AgentEvent) -> None:
         case AgentTokenEvent():
             print(event.content, end="", flush=True)
         case AgentReasoningEvent():
-            print(f"\n[agent.reasoning] {event.content}")
+            print(event.content, end="", flush=True)
         case AgentToolStartEvent():
             print(
                 f"\n[agent.tool.start] {event.tool_name} "
@@ -282,7 +284,7 @@ async def test_provider_agent_stream() -> None:
 async def main() -> None:
     tests = {
         "provider_agent_loop": True,
-        "provider_agent_stream": False,
+        "provider_agent_stream": True,
         "fake_agent_loop": False,
         "fake_agent_stream": False,
     }
