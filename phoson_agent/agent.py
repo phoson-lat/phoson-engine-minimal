@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 
 from phoson_llm.schemas import (
     Message,
+    LLMEvent,
     TextBlock,
     ErrorEvent,
     TokenEvent,
@@ -37,7 +38,7 @@ from phoson_agent.models import (
 )
 from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_agent.middleware import AgentMiddleware
+from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 
 
 def _now_utc() -> datetime.datetime:
@@ -94,6 +95,38 @@ class AgentEngine:
             updated = await middleware.on_before_llm(updated, config)
         return updated
 
+    def _build_llm_call_chain(
+        self,
+        tool_definitions: list[ToolDefinition],
+    ) -> LLMCallNext:
+        async def base_call(
+            messages: list[Message],
+            config: ModelConfig,
+        ) -> AsyncIterator[LLMEvent]:
+            async for event in self.chat.stream(messages, config, tool_definitions):  # pyright: ignore[reportGeneralTypeIssues]
+                yield event
+
+        call_next: LLMCallNext = base_call
+        for middleware in reversed(self.middlewares):
+            previous = call_next
+
+            def make_wrapped(
+                mw: AgentMiddleware,
+                nxt: LLMCallNext,
+            ) -> LLMCallNext:
+                async def wrapped(
+                    messages: list[Message],
+                    config: ModelConfig,
+                ) -> AsyncIterator[LLMEvent]:
+                    async for event in mw.wrap_llm_call(nxt, messages, config):
+                        yield event
+
+                return wrapped
+
+            call_next = make_wrapped(middleware, previous)
+
+        return call_next
+
     async def _apply_before_tool(
         self,
         call: ToolCallEvent,
@@ -141,6 +174,7 @@ class AgentEngine:
             )
             for tool in self.tools
         ]
+        llm_call = self._build_llm_call_chain(tool_definitions)
 
         try:
             yield await self._prepare_event(
@@ -161,7 +195,7 @@ class AgentEngine:
                 error_event: ErrorEvent | None = None
                 tool_calls: list[ToolCallEvent] = []
 
-                async for event in self.chat.stream(history, config, tool_definitions):  # pyright: ignore[reportGeneralTypeIssues]
+                async for event in llm_call(history, config):
                     if isinstance(event, TokenEvent):
                         yield await self._prepare_event(
                             AgentTokenEvent(content=event.content)
