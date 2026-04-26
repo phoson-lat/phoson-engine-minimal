@@ -2,7 +2,19 @@ import os
 import asyncio
 from collections.abc import AsyncIterator
 
-from phoson_agent import AgentTool, AgentEngine
+from phoson_agent import (
+    AgentTool,
+    AgentEvent,
+    AgentEngine,
+    AgentDoneEvent,
+    AgentErrorEvent,
+    AgentStartEvent,
+    AgentTokenEvent,
+    AgentStepDoneEvent,
+    AgentToolDoneEvent,
+    AgentReasoningEvent,
+    AgentToolStartEvent,
+)
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -18,8 +30,9 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 
-# Cambia a "openrouter", "openai" o "anthropic" para probar otros providers
-os.environ["PHOSON_PROVIDER"] = "openrouter"
+os.environ["PHOSON_PROVIDER"] = (
+    "openrouter"  # Cambia a "openrouter", "openai" o "anthropic" para forzar proveedor
+)
 os.environ["OPENROUTER_API_KEY"] = "***"
 
 
@@ -103,6 +116,38 @@ def render_result(label: str, result) -> None:
         )
 
 
+def render_stream_event(event: AgentEvent) -> None:
+    match event:
+        case AgentStartEvent():
+            print(
+                f"[agent.start] model={event.model} messages={event.message_count} "
+                f"max_iterations={event.max_iterations}"
+            )
+        case AgentTokenEvent():
+            print(event.content, end="", flush=True)
+        case AgentReasoningEvent():
+            print(f"\n[agent.reasoning] {event.content}")
+        case AgentToolStartEvent():
+            print(
+                f"\n[agent.tool.start] {event.tool_name} "
+                f"id={event.tool_call_id} args={event.args}"
+            )
+        case AgentToolDoneEvent():
+            print(
+                f"[agent.tool.done] {event.tool_name} id={event.tool_call_id} "
+                f"duration_ms={event.duration_ms} error={event.error}"
+            )
+        case AgentStepDoneEvent():
+            print(
+                f"[agent.step.done] kind={event.step.kind} "
+                f"duration_ms={event.step.duration_ms}"
+            )
+        case AgentDoneEvent():
+            print("\n[agent.done]")
+        case AgentErrorEvent():
+            print(f"\n[agent.error] code={event.code} message={event.message}")
+
+
 async def test_fake_agent_loop() -> None:
     chat = FakeToolChat()
     tools = [
@@ -127,6 +172,19 @@ async def test_fake_agent_loop() -> None:
 
     result = await engine.run(messages, config)
     render_result("Agent Demo - Fake Chat", result)
+
+
+async def test_fake_agent_stream() -> None:
+    chat = FakeToolChat()
+    engine = AgentEngine(chat=chat, tools=build_tools(), phoson_weight=1.2)
+    messages = [Message(role="user", content="Que clima hace en Queretaro?")]
+    config = ModelConfig(model="fake-demo-model", max_tokens=256)
+
+    print("\n" + "=" * 60)
+    print("Agent Stream Demo - Fake Chat")
+    print("=" * 60)
+    async for event in engine.stream(messages, config):
+        render_stream_event(event)
 
 
 def build_tools() -> list[AgentTool]:
@@ -204,17 +262,42 @@ async def test_provider_agent_loop() -> None:
     render_result(f"Agent Demo - {provider_name}", result)
 
 
+async def test_provider_agent_stream() -> None:
+    provider_setup = build_real_provider_chat()
+    if not provider_setup:
+        print("No provider credentials found. Skipping provider streaming demo.")
+        return
+
+    provider_name, chat, config = provider_setup
+    engine = AgentEngine(chat=chat, tools=build_tools(), phoson_weight=1.2)
+    messages = [Message(role="user", content="Que clima hace en Queretaro?")]
+
+    print("\n" + "=" * 60)
+    print(f"Agent Stream Demo - {provider_name}")
+    print("=" * 60)
+    async for event in engine.stream(messages, config):
+        render_stream_event(event)
+
+
 async def main() -> None:
     tests = {
         "provider_agent_loop": True,
+        "provider_agent_stream": False,
         "fake_agent_loop": False,
+        "fake_agent_stream": False,
     }
 
     if tests["provider_agent_loop"]:
         await test_provider_agent_loop()
 
+    if tests["provider_agent_stream"]:
+        await test_provider_agent_stream()
+
     if tests["fake_agent_loop"]:
         await test_fake_agent_loop()
+
+    if tests["fake_agent_stream"]:
+        await test_fake_agent_stream()
 
 
 if __name__ == "__main__":
