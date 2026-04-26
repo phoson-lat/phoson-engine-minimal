@@ -34,6 +34,11 @@ phoson-engine-minimal/
 │   ├── __init__.py          # API pública del agent
 │   ├── agent.py             # ReAct loop stateless + wrappers sync/async
 │   └── models.py            # AgentTool, RunStep, AgentRunResult
+│   └── sessions/            # Árbol de conversación + persistencia de sesión
+│       ├── __init__.py
+│       ├── models.py        # ConversationNode, ConversationTree, SessionStorage
+│       ├── serialization.py # Mensajes/nodos <-> dict
+│       └── storage_jsonl.py # JsonlStorage (archivo local)
 │
 ├── pyproject.toml
 └── uv.lock
@@ -175,6 +180,9 @@ Resuelto en `phoson_llm/chats/base.py`: ahora consumen correctamente async gener
 
 ### Usage en 0 con modelos free de OpenRouter
 OpenRouter no siempre respeta `stream_options={"include_usage": True}` en modelos gratuitos. `cost_known` será `False` en esos casos y `cost_usd` será `0.0`. Comportamiento esperado.
+
+### I/O síncrono en `JsonlStorage` (aceptado por ahora)
+`phoson_agent/sessions/storage_jsonl.py` usa acceso a disco síncrono dentro de métodos `async` (`save/load/list_sessions/delete`). Para CLI y sesiones pequeñas está bien; si se usa en API multi-usuario con alta concurrencia se migrará a `asyncio.to_thread()` o `aiofiles`.
 
 ---
 
