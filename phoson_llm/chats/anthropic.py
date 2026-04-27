@@ -1,5 +1,7 @@
 import os
 import json
+import base64
+from pathlib import Path
 from collections.abc import AsyncIterator
 
 import anthropic
@@ -11,13 +13,18 @@ from phoson_llm.schemas import (
     # outputs
     LLMEvent,
     TextBlock,
+    AudioBlock,
     ErrorEvent,
+    ImageBlock,
     TokenEvent,
     TokenUsage,
     UsageEvent,
+    VideoBlock,
     ModelConfig,
+    ContentBlock,
     LLMDoneEvent,
     ToolUseBlock,
+    DocumentBlock,
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
@@ -28,6 +35,104 @@ from phoson_llm.schemas import (
     ReasoningTokenEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _load_file_as_base64(path: str) -> str:
+    """Lee un archivo local y lo codifica en base64."""
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
+
+
+def _guess_mime(path: str) -> str:
+    ext = Path(path).suffix.lower()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".pdf": "application/pdf",
+    }.get(ext, "application/octet-stream")
+
+
+def _convert_content_block(block: ContentBlock) -> dict:
+    """
+    Convierte un ContentBlock multimodal al formato que espera Anthropic.
+
+    Soporta: TextBlock, ImageBlock, DocumentBlock.
+    AudioBlock y VideoBlock no son soportados por Anthropic — se reemplazan
+    con un texto informativo.
+    """
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+
+    if isinstance(block, ImageBlock):
+        source = block.source
+        if source.startswith("file://"):
+            path = source[7:]
+            data = _load_file_as_base64(path)
+            media = block.media_type or _guess_mime(path)
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media,
+                    "data": data,
+                },
+            }
+        # URL pública
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": source,
+            },
+        }
+
+    if isinstance(block, DocumentBlock):
+        source = block.source
+        if source.startswith("file://"):
+            path = source[7:]
+            data = _load_file_as_base64(path)
+            return {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": data,
+                },
+            }
+        return {
+            "type": "document",
+            "source": {
+                "type": "url",
+                "url": source,
+            },
+        }
+
+    if isinstance(block, AudioBlock):
+        return {
+            "type": "text",
+            "text": f"[Audio not supported by Anthropic: {block.source}]",
+        }
+
+    if isinstance(block, VideoBlock):
+        return {
+            "type": "text",
+            "text": f"[Video not supported by Anthropic: {block.source}]",
+        }
+
+    # ToolUseBlock y ToolResultBlock se manejan en _convert_messages
+    if isinstance(block, (ToolUseBlock, ToolResultBlock)):
+        raise TypeError(
+            f"ToolUseBlock/ToolResultBlock should not reach _convert_content_block. "
+            f"Got: {type(block)}"
+        )
+
+    return {"type": "text", "text": f"[Unsupported block: {type(block).__name__}]"}
+
 
 # ─── Conversión de mensajes Phoson → Anthropic ────────────────────────────────
 
@@ -40,6 +145,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     - role=system se separa y se pasa como parámetro `system` (manejado en stream())
     - ToolUseBlock  → {"type": "tool_use", ...}   en role=assistant
     - ToolResultBlock → {"type": "tool_result", ...} envuelto en role=user
+    - ImageBlock/DocumentBlock → blocks multimodales en mensajes
     """
     result = []
 
@@ -53,30 +159,50 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
         # content es lista de ContentBlocks
         blocks = []
+        tool_uses = []
+        tool_results = []
+        multimodal_blocks = []
+
         for block in msg.content:
             if isinstance(block, TextBlock):
                 blocks.append({"type": "text", "text": block.text})
 
             elif isinstance(block, ToolUseBlock):
-                blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": block.tool_call_id,
-                        "name": block.tool_name,
-                        "input": block.args,
-                    }
-                )
+                tool_uses.append(block)
 
             elif isinstance(block, ToolResultBlock):
-                # Anthropic espera tool_result dentro de un mensaje role=user
-                blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.tool_call_id,
-                        "content": block.result,
-                        "is_error": block.error,
-                    }
-                )
+                tool_results.append(block)
+
+            else:
+                # ImageBlock, AudioBlock, VideoBlock, DocumentBlock
+                multimodal_blocks.append(block)
+
+        # ToolUse: van como blocks de tool_use
+        for b in tool_uses:
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": b.tool_call_id,
+                    "name": b.tool_name,
+                    "input": b.args,
+                }
+            )
+
+        # ToolResults: van como tool_result en mensajes role=user
+        for b in tool_results:
+            blocks.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": b.tool_call_id,
+                    "content": b.result,
+                    "is_error": b.error,
+                }
+            )
+
+        # Blocks multimodales convertidos
+        for b in multimodal_blocks:
+            converted = _convert_content_block(b)
+            blocks.append(converted)
 
         if blocks:
             result.append({"role": msg.role, "content": blocks})
@@ -111,6 +237,11 @@ class AnthropicChat(BaseLLMChat):
     """
     Adapter para Anthropic Claude.
     Soporta: streaming, extended thinking, tool use, prompt caching.
+
+    Modalidades de entrada:
+    - Texto (nativo)
+    - Imágenes (URL o archivo local via ImageBlock)
+    - Documentos PDF (URL o archivo local via DocumentBlock)
     """
 
     def __init__(self, api_key: str | None = None) -> None:
@@ -232,14 +363,10 @@ class AnthropicChat(BaseLLMChat):
                                 args=args,
                             )
 
-                    # ── Usage (message_delta lleva el usage final) ────────────
+                    # ── Usage (message_delta lleva el usage final) ───────────
                     elif etype == "message_delta":
                         if hasattr(event, "usage") and event.usage:  # type: ignore
-                            u = event.usage  # type: ignore
-                            # input_tokens viene en message_start,
-                            # output en message_delta
-                            # los acumulamos via get_final_message al terminar
-                            pass
+                            pass  # usage final se obtiene via get_final_message()
 
                 # ── Fuera del loop: obtener usage final acumulado ─────────────
                 final_msg = await s.get_final_message()
