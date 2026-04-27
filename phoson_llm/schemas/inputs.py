@@ -134,7 +134,7 @@ class ToolDefinition:
 class ModelConfig:
     model: str
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 32 * 1024
     system: str | None = None
     # Anthropic extended thinking
     thinking_budget: int | None = None
