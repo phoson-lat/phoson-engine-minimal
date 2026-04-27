@@ -12,13 +12,14 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
-from phoson_llm.schemas import Message, ModelConfig
+from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 
 from .tools import build_tools
 from .config import PhosonConfig, build_chat
 from .commands import COMMANDS, CommandHandler, parse_command
 from .renderer import Renderer
+from .attachments import AttachmentManager
 
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
@@ -43,7 +44,7 @@ _PROMPT_STYLE = Style.from_dict(
     }
 )
 
-# ── Command descriptions shown in the meta column ─────────────────────────────
+# ── Command descriptions shown in the meta column ──────────────────────────────
 _CMD_META: dict[str, str] = {
     "/exit": "quit phoson_cli",
     "/quit": "quit phoson_cli",
@@ -54,6 +55,8 @@ _CMD_META: dict[str, str] = {
     "/sessions": "list & load saved sessions",
     "/branch": "branch from current node",
     "/label": "label current node",
+    "/attach": "attach image/audio/video/pdf",
+    "/attachments": "list or clear attachments",
     "/help": "show command reference",
 }
 
@@ -105,6 +108,7 @@ class PhosonRepl:
         self.renderer = Renderer()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
+        self.attachments = AttachmentManager()
 
         self.engine = AgentEngine(
             chat=build_chat(config),
@@ -161,9 +165,25 @@ class PhosonRepl:
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
     async def _run_agent(self, user_input: str) -> None:
+        # ── Construir el mensaje del usuario (texto + attachments) ────────────
+        pending_blocks: list[ContentBlock] = []
+        if self.attachments:
+            pending_blocks = list(self.attachments.flush())
+            for block in pending_blocks:
+                self.renderer.print_info(f"  📎 {block.source.split('file://', 1)[-1]}")
+
+        if user_input:
+            pending_blocks.insert(0, _text_block(user_input))
+
+        if pending_blocks:
+            content: str | list[ContentBlock] = pending_blocks
+        else:
+            content = user_input
+
+        user_message = Message(role="user", content=content)
         user_node = self.tree.append(
             parent_id=self.current_node_id,
-            message=Message(role="user", content=user_input),
+            message=user_message,
         )
         self.current_node_id = user_node.id
 
@@ -215,6 +235,7 @@ class PhosonRepl:
     def new_session(self) -> None:
         self.tree = ConversationTree.new()
         self.current_node_id = None
+        self.attachments.clear()
         self.renderer.set_session(self.tree.session_id)
 
     def branch_session(self) -> None:
@@ -290,12 +311,15 @@ class PhosonRepl:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
         short_model = self.current_model.split("/")[-1][:22]
         short_node = (self.current_node_id or "new")[:8]
+        # Mostrar indicador de attachments pendientes
+        attach_indicator = f" 📎{len(self.attachments)}" if self.attachments else ""
         return [
             ("class:prompt.prefix", "phoson"),
             ("class:prompt.bracket", " ["),
             ("class:prompt.model", short_model),
             ("class:prompt.sep", "·"),
             ("class:prompt.node", short_node),
+            ("class:prompt.sep", attach_indicator),
             ("class:prompt.bracket", "]"),
             ("class:prompt.arrow", " › "),
             ("", ""),
@@ -339,7 +363,7 @@ class PhosonRepl:
         c.print(
             Text(
                 "  /help for commands  ·  /sessions to resume work"
-                "  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
+                "  ·  /attach to add images  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
                 style="grey42",
             )
         )
@@ -355,3 +379,10 @@ def _message_preview(content: object, max_len: int = 56) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "…"
+
+
+def _text_block(text: str) -> "ContentBlock":
+    """Helper para crear un TextBlock inline."""
+    from phoson_llm.schemas import TextBlock
+
+    return TextBlock(text=text)

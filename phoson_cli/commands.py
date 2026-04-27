@@ -14,6 +14,8 @@ COMMANDS = {
     "/sessions",
     "/branch",
     "/label",
+    "/attach",
+    "/attachments",
     "/help",
 }
 
@@ -99,9 +101,41 @@ class CommandHandler:
             r.print_info(f"Labelled  \u201c{cmd.args}\u201d")
             return True
 
+        if cmd.name in {"/attach", "/attachments"}:
+            return await self._handle_attach(cmd, r)
+
         if cmd.name == "/help":
             r.print_help(COMMANDS)
             return True
 
         r.print_error(f"Unknown command: {cmd.name}")
+        return True
+
+    async def _handle_attach(self, cmd: Command, r) -> bool:
+        """Maneja /attach y /attachments."""
+        if not cmd.args:
+            pending = self.repl.attachments.list_pending()
+            if not pending:
+                r.print_info("No pending attachments. Usage:  /attach <path> [--clear]")
+                return True
+            r.print_info(f"{len(pending)} attachment(s) pending:")
+            for a in pending:
+                r.print_info(f"  📎 {a.path}")
+            return True
+
+        if cmd.args == "--clear":
+            count = len(self.repl.attachments)
+            self.repl.attachments.clear()
+            r.print_info(f"Cleared {count} attachment(s).")
+            return True
+
+        # Es una ruta de archivo
+        try:
+            self.repl.attachments.attach(cmd.args)
+            r.print_info(f"Attached  {cmd.args}")
+        except FileNotFoundError as e:
+            r.print_error(str(e))
+        except ValueError as e:
+            r.print_error(str(e))
+
         return True
