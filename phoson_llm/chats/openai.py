@@ -1,5 +1,7 @@
 import os
 import json
+import base64
+from pathlib import Path
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
@@ -11,11 +13,15 @@ from phoson_llm.schemas import (
     # outputs
     LLMEvent,
     TextBlock,
+    AudioBlock,
     ErrorEvent,
+    ImageBlock,
     TokenEvent,
     TokenUsage,
     UsageEvent,
+    VideoBlock,
     ModelConfig,
+    ContentBlock,
     LLMDoneEvent,
     ToolUseBlock,
     LLMStartEvent,
@@ -29,6 +35,105 @@ from phoson_llm.schemas import (
 )
 from phoson_llm.chats.base import BaseLLMChat
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _load_file_as_base64(path: str, media_type: str | None = None) -> str:
+    """Lee un archivo local y lo codifica en base64."""
+    with open(path, "rb") as f:
+        data = f.read()
+    b64 = base64.b64encode(data).decode("ascii")
+    mime = media_type or _guess_mime(path)
+    return f"data:{mime};base64,{b64}"
+
+
+def _load_audio_as_base64(path: str, fmt: str) -> str:
+    """Lee un archivo de audio y lo codifica en base64."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode("ascii")
+
+
+def _guess_mime(path: str) -> str:
+    ext = Path(path).suffix.lower()
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".bmp": "image/bmp",
+        ".pdf": "application/pdf",
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+    }.get(ext, "application/octet-stream")
+
+
+def _convert_content_block(block: ContentBlock) -> dict:
+    """
+    Convierte un ContentBlock de Phoson al formato que espera OpenAI.
+
+    Soporta: TextBlock, ImageBlock, AudioBlock.
+    VideoBlock y DocumentBlock no son soportados por OpenAI — se reemplazan
+    con un texto informativo.
+    """
+    if isinstance(block, TextBlock):
+        return {"type": "text", "text": block.text}
+
+    if isinstance(block, ImageBlock):
+        source = block.source
+        if source.startswith("file://"):
+            path = source[7:]
+            source = _load_file_as_base64(path, block.media_type)
+        return {
+            "type": "image_url",
+            "image_url": {
+                "url": source,
+                "detail": block.detail,
+            },
+        }
+
+    if isinstance(block, AudioBlock):
+        source = block.source
+        if source.startswith("file://"):
+            path = source[7:]
+            b64 = _load_audio_as_base64(path, block.format)
+        else:
+            b64 = source
+        return {
+            "type": "input_audio",
+            "input_audio": {
+                "data": b64,
+                "format": block.format,
+            },
+        }
+
+    if isinstance(block, VideoBlock):
+        return {
+            "type": "text",
+            "text": f"[Video not directly supported by OpenAI: {block.source}]",
+        }
+
+    # ToolUseBlock y ToolResultBlock se manejan en _convert_messages (no aquí)
+    if isinstance(block, (ToolUseBlock, ToolResultBlock)):
+        raise TypeError(
+            f"ToolUseBlock/ToolResultBlock should not reach _convert_content_block. "
+            f"Got: {type(block)}"
+        )
+
+    # Fallback
+    return {
+        "type": "text",
+        "text": f"[Unsupported content block: {type(block).__name__}]",
+    }
+
+
 # ─── Conversión de mensajes Phoson → OpenAI ───────────────────────────────────
 
 
@@ -40,6 +145,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     - system va como mensaje {"role": "system", "content": "..."}
     - ToolUseBlock  → mensaje role=assistant con tool_calls[]
     - ToolResultBlock → mensaje role=tool con tool_call_id
+    - ContentBlocks multimodales → array de parts en el mensaje
     """
     result = []
 
@@ -58,6 +164,11 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
         text_blocks = [b for b in msg.content if isinstance(b, TextBlock)]
         tool_uses = [b for b in msg.content if isinstance(b, ToolUseBlock)]
         tool_results = [b for b in msg.content if isinstance(b, ToolResultBlock)]
+        multimodal_blocks = [
+            b
+            for b in msg.content
+            if not isinstance(b, (TextBlock, ToolUseBlock, ToolResultBlock))
+        ]
 
         # Mensaje assistant con tool_calls
         if tool_uses:
@@ -89,8 +200,18 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
                 }
             )
 
-        # Mensaje de usuario puro (sin tool_uses ni tool_results)
-        if not tool_uses and not tool_results and text_blocks:
+        # Mensaje con contenido multimodal (imágenes, audio, video, docs)
+        if multimodal_blocks:
+            parts = [_convert_content_block(b) for b in multimodal_blocks]
+            # Agregar texto como parte si hay
+            if text_blocks:
+                parts.insert(
+                    0, {"type": "text", "text": " ".join(b.text for b in text_blocks)}
+                )
+            result.append({"role": msg.role, "content": parts})
+
+        # Mensaje de usuario puro (sin tool_uses, tool_results ni multimodal)
+        elif text_blocks and not tool_uses and not tool_results:
             result.append(
                 {
                     "role": msg.role,
@@ -123,6 +244,11 @@ class OpenAIChat(BaseLLMChat):
     """
     Adapter para OpenAI Chat Completions API.
     Compatible también con Ollama y OpenRouter vía base_url.
+
+    Soporta modalidades de entrada:
+    - Texto (nativo)
+    - Imágenes (URL o archivo local via ImageBlock)
+    - Audio (via AudioBlock)
 
     Ejemplos:
         OpenAIChat()                                    # OpenAI estándar
@@ -282,7 +408,7 @@ class OpenAIChat(BaseLLMChat):
         if reasoning_acc:
             yield ReasoningDoneEvent(content=reasoning_acc)
 
-        # ── UsageEvent ────────────────────────────────────────────────────────
+        # ── UsageEvent ───────────────────────────────────────────────────────
         if final_usage:
             u = final_usage
             usage = TokenUsage(
