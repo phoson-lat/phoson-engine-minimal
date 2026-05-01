@@ -8,14 +8,40 @@ SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 
 
 @tool
-def read_file(path: str) -> str:
-    """Read the contents of a file. path is relative to cwd."""
+def read_file(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    """Read the contents of a file.
+    - path: relative to cwd
+    - start_line: optional line to start reading (1-indexed, inclusive)
+    - end_line: optional line to stop reading (1-indexed, inclusive)
+    """
     file_path = Path(path)
-    data = file_path.read_bytes()
-    if len(data) > MAX_BYTES:
-        text = data[:MAX_BYTES].decode("utf-8", errors="replace")
-        return text + "\n\n[...truncated: file is larger than 50KB]"
-    return data.decode("utf-8", errors="replace")
+    if not file_path.exists():
+        return f"File not found: {path}"
+
+    content = file_path.read_text(encoding="utf-8")
+
+    # No range specified - return full file with truncation check
+    if start_line is None and end_line is None:
+        if len(content.encode("utf-8")) > MAX_BYTES:
+            return content[:MAX_BYTES] + "\n\n[...truncated: file is larger than 50KB]"
+        return content
+
+    # Handle line range
+    lines = content.splitlines(keepends=True)
+
+    # Convert to 0-indexed
+    start = (start_line - 1) if start_line else 0
+    end = end_line if end_line else len(lines)
+
+    # Clamp to valid range
+    start = max(0, min(start, len(lines)))
+    end = max(0, min(end, len(lines)))
+
+    if start >= len(lines):
+        return f"start_line {start_line} is beyond file length ({len(lines)} lines)"
+
+    selected_lines = lines[start:end]
+    return "".join(selected_lines)
 
 
 @tool
@@ -26,6 +52,36 @@ def write_file(path: str, content: str) -> str:
     encoded = content.encode("utf-8")
     file_path.write_bytes(encoded)
     return f"Written: {path} ({len(encoded)} bytes)"
+
+
+@tool
+def patch_file(path: str, old_content: str, new_content: str, replace_all: bool = False) -> str:
+    """Replace old_content with new_content in a file.
+    - path: relative to cwd
+    - old_content: the text to find and replace
+    - new_content: the replacement text
+    - replace_all: if True, replace all occurrences; if False, replace only first
+    """
+    file_path = Path(path)
+    if not file_path.exists():
+        return f"File not found: {path}"
+
+    content = file_path.read_text(encoding="utf-8")
+
+    if old_content not in content:
+        return f"old_content not found in {path}"
+
+    if replace_all:
+        new_content_full = content.replace(old_content, new_content)
+        count = content.count(old_content)
+    else:
+        new_content_full = content.replace(old_content, new_content, 1)
+        count = 1
+
+    encoded = new_content_full.encode("utf-8")
+    file_path.write_bytes(encoded)
+
+    return f"Replaced {count} occurrence(s) in {path} ({len(encoded)} bytes)"
 
 
 @tool
