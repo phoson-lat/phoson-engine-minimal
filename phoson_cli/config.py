@@ -13,7 +13,7 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 @dataclass
 class PhosonConfig:
     model: str = "minimax/minimax-m2.5"
-    subagent_model: str | None = "inception/mercury-2"
+    subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
