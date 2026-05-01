@@ -1,5 +1,7 @@
-import inspect
 import functools
+import inspect
+import typing
+from types import UnionType
 from typing import Any, Annotated, get_args, get_origin, get_type_hints
 
 from phoson_agent.models import AgentTool
@@ -33,7 +35,7 @@ def _context_values(context: Any | None) -> dict[str, Any]:
     return values
 
 
-def _get_json_type_and_description(python_type: Any) -> tuple[str, str | None]:
+def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]:
     description = None
 
     if get_origin(python_type) is Annotated:
@@ -41,8 +43,25 @@ def _get_json_type_and_description(python_type: Any) -> tuple[str, str | None]:
         python_type = args[0]
         description = next((a for a in args[1:] if isinstance(a, str)), None)
 
+    origin = get_origin(python_type)
+
+    if origin in (list, tuple):
+        item_type = get_args(python_type)
+        items_schema = {"type": "string"}
+        if item_type:
+            items_schema, _ = _json_schema_for_type(item_type[0])
+        return {"type": "array", "items": items_schema}, description
+
+    if origin is dict:
+        return {"type": "object"}, description
+
+    if origin in (UnionType, typing.Union):
+        args = [arg for arg in get_args(python_type) if arg is not type(None)]
+        if len(args) == 1:
+            return _json_schema_for_type(args[0])
+
     json_type = _TYPE_MAP.get(python_type, "string")
-    return json_type, description
+    return {"type": json_type}, description
 
 
 def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
@@ -60,9 +79,7 @@ def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
             continue
 
         python_type = hints.get(name, str)
-        json_type, description = _get_json_type_and_description(python_type)
-
-        prop: dict[str, Any] = {"type": json_type}
+        prop, description = _json_schema_for_type(python_type)
         if description:
             prop["description"] = description
         properties[name] = prop
