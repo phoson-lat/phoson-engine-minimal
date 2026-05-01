@@ -300,14 +300,16 @@ async def agents(
         if error:
             output_parts.append(f"=== Agent {idx}: {task_preview} === Error: {error}")
         else:
-            metrics_line = f"--- METRICS: {duration}ms | {input_tok}in/{output_tok}out | ${cost:.5f} ---"
+            metrics_line = f"--- METRICS: {duration}ms | {input_tok}in/{output_tok}out"
+            f" | ${cost:.5f} ---"
             output_parts.append(
                 f"=== Agent {idx}: {task_preview} ===\n{r['result']}\n{metrics_line}"
             )
 
     output_parts.append(
         f"=== SUMMARY ===\n"
-        f"Total: {len(tasks)} agents | {total_duration}ms | {total_input}in/{total_output}out | ${total_cost:.5f}"
+        f"Total: {len(tasks)} agents | {total_duration}ms "
+        f"| {total_input}in/{total_output}out | ${total_cost:.5f}"
     )
 
     return "\n\n".join(output_parts)
