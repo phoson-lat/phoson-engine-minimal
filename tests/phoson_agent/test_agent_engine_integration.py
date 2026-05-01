@@ -2,8 +2,8 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from phoson_agent.agent import AgentEngine
 from phoson_agent.tool import tool
+from phoson_agent.agent import AgentEngine
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
