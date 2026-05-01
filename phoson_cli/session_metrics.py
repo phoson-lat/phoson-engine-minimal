@@ -1,5 +1,5 @@
 """Session metrics tracking for cost, tokens, and steps."""
-from dataclasses import dataclass, field
+from dataclasses import field, dataclass
 
 from phoson_agent.models import RunStep
 

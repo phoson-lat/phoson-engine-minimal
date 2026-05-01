@@ -1,15 +1,13 @@
 """Sub-agent tools for Phoson CLI."""
+import os
 import asyncio
 import logging
-import os
 from typing import Any
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
-from phoson_agent.models import AgentSubagentResult
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_llm.chats.base import BaseLLMChat
-
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
 

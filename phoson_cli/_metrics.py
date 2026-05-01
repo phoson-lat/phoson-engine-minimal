@@ -1,5 +1,5 @@
 """Session metrics tracking."""
-from dataclasses import dataclass, field
+from dataclasses import field, dataclass
 
 
 @dataclass

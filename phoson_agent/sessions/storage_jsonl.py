@@ -1,7 +1,7 @@
-import json
 import datetime
-from pathlib import Path
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from phoson_agent.sessions.models import SessionMeta, SessionStorage, ConversationTree
 from phoson_agent.sessions.serialization import (
@@ -57,16 +57,15 @@ class JsonlStorage(SessionStorage):
                 lines = [line.strip() for line in f if line.strip()]
                 if not lines:
                     continue
-                first_node = next(
-                    (json.loads(line) for line in lines if json.loads(line).get("type") != "session_meta"),
-                    None,
-                )
+
+                def is_not_meta(l: str) -> bool:
+                    return json.loads(l).get("type") != "session_meta"
+
+                first_node = next((json.loads(l) for l in lines if is_not_meta(l)), None)
                 if first_node is None:
                     continue
                 created_at = datetime.datetime.fromisoformat(first_node["created_at"])
-                message_count = sum(
-                    1 for line in lines if json.loads(line).get("type") != "session_meta"
-                )
+                message_count = sum(1 for l in lines if is_not_meta(l))
 
             stat = file_path.stat()
             updated_at = datetime.datetime.fromtimestamp(stat.st_mtime, datetime.UTC)

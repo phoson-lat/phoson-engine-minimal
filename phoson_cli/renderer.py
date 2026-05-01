@@ -23,10 +23,10 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 from phoson_cli.tools.subagent_panel import (
-    parse_subagent_metrics,
     render_subagent_panel,
-    render_subagent_panel_frame,
+    parse_subagent_metrics,
     render_subagent_summary,
+    render_subagent_panel_frame,
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────────

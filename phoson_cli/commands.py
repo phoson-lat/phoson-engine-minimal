@@ -10,6 +10,7 @@ COMMANDS: Final[set[str]] = {
     "/clear",
     "/new",
     "/model",
+    "/subagent-model",
     "/tree",
     "/sessions",
     "/branch",
@@ -62,6 +63,17 @@ class CommandHandler:
             r.print_info(f"Model → {self.repl.current_model}")
             return True
 
+        if cmd.name == "/subagent-model":
+            if not cmd.args:
+                r.print_info(f"Sub-agent model: {self.repl.subagent_model}")
+                return True
+            self.repl.subagent_model = cmd.args
+            self.repl.config.subagent_model = cmd.args
+            # Re-inject into running engine
+            self.repl.engine.context.extra["default_model"] = cmd.args
+            r.print_info(f"Sub-agent model → {cmd.args}")
+            return True
+
         if cmd.name == "/tree":
             r.print_info(self.repl.render_tree_ascii())
             return True
@@ -94,13 +106,17 @@ class CommandHandler:
 
         if cmd.name == "/env":
             r.print_info(
-                f"provider={self.repl.config.provider} model={self.repl.current_model} cwd={self.repl.config.sessions_dir}"
+                f"provider={self.repl.config.provider} "
+                f"model={self.repl.current_model} "
+                f"subagent_model={self.repl.subagent_model} "
+                f"cwd={self.repl.config.sessions_dir}"
             )
             return True
 
         if cmd.name == "/cost":
             r.print_info(
-                f"cost=${self.repl.session_metrics.total_cost_usd:.5f} credits={self.repl.session_metrics.total_credits:.5f}"
+                f"cost=${self.repl.session_metrics.total_cost_usd:.5f} "
+                f"credits={self.repl.session_metrics.total_credits:.5f}"
             )
             return True
 
