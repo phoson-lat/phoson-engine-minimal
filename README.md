@@ -1,33 +1,101 @@
 <p align="center">
-  <img src="https://phoson.lat/icon.svg" alt="Phoson" width="96" height="96" />
+  <img src="https://phoson.lat/icon.svg" alt="Phoson" width="120" height="120" />
 </p>
 
-# phoson-engine-minimal
+<h1 align="center">phoson-engine-minimal</h1>
 
-Minimal Python runtime for the Phoson autonomous-agent platform.
+<p align="center">
+  <strong>Minimal Python runtime for the Phoson autonomous-agent platform</strong>
+</p>
 
-![Owner](https://img.shields.io/badge/owner-phoson.lat-0E7490)
-![Repository](https://img.shields.io/badge/repository-private-B91C1C)
-![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
-![Package Manager](https://img.shields.io/badge/package_manager-uv-4B32C3)
-![Lint](https://img.shields.io/badge/lint-ruff-F4D03F)
-![Tests](https://img.shields.io/badge/tests-pytest-0EA5E9)
+<p align="center">
+  <a href="#-quick-start"><img src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" alt="Python" /></a>
+  <a href="#-installation"><img src="https://img.shields.io/badge/package_manager-uv-4B32C3" alt="uv" /></a>
+  <a href="#-development-setup"><img src="https://img.shields.io/badge/lint-ruff-F4D03F" alt="ruff" /></a>
+  <a href="#-run-checks-locally"><img src="https://img.shields.io/badge/tests-pytest-0EA5E9" alt="pytest" /></a>
+  <a href="https://github.com/phoson-lat/phoson-engine-minimal/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E" alt="License" /></a>
+  <a href="https://github.com/phoson-lat/phoson-engine-minimal/stargazers"><img src="https://img.shields.io/github/stars/phoson-lat/phoson-engine-minimal" alt="Stars" /></a>
+  <a href="https://github.com/phoson-lat/phoson-engine-minimal/actions"><img src="https://img.shields.io/github/actions/workflow/status/phoson-lat/phoson-engine-minimal/ci" alt="Build" /></a>
+</p>
 
-> Internal repository for `phoson.lat` developers only.
+> 🔥 **Open Source** — Built for developers who want full control over their AI agents.
 
-## What this project is
+---
 
-`phoson-engine-minimal` is the core runtime behind the Phoson autonomous-agent platform.
-It is intentionally built without agent frameworks (no LangChain/LangGraph), using provider SDKs directly plus a custom ReAct loop to keep control over:
+## 📋 Table of Contents
 
-- Streaming behavior and normalized events
-- Tool-call orchestration
-- Cost and credit accounting
-- Observability (`RunStep`, typed events)
-- Session tree persistence
-- CLI for interactive agent sessions
+- [What this project is](#-what-this-project-is)
+- [Why Phoson?](#-why-phoson)
+- [Features](#-features)
+- [High-level architecture](#-high-level-architecture)
+- [Repository map](#-repository-map)
+- [Core modules](#-core-modules)
+  - [`phoson_llm` — LLM normalization layer](#phoson_llm--llm-normalization-layer)
+  - [`phoson_agent` — Agent orchestration](#phoson_agent--agent-orchestration)
+  - [`phoson_agent.sessions` — Conversation persistence](#phoson_agentsessions--conversation-persistence)
+  - [`phoson_cli` — Interactive REPL](#phoson_cli--interactive-repl)
+- [🚀 Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Development setup](#-development-setup)
+- [Run checks locally](#-run-checks-locally)
+- [Environment variables](#-environment-variables)
+- [Usage examples](#-usage-examples)
+  - [Minimal agent usage](#minimal-agent-usage)
+  - [Define a tool](#define-a-tool)
+  - [Interactive CLI](#interactive-cli)
+- [CI and security workflows](#-ci-and-security-workflows)
+- [Commit message format](#-commit-message-format)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Support](#-support)
 
-## High-level architecture
+---
+
+## 🤔 What this project is
+
+`phoson-engine-minimal` is the **core runtime** behind the Phoson autonomous-agent platform. It's a lightweight, framework-free Python implementation that gives you **complete control** over your AI agents without the bloat of heavy frameworks.
+
+Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **from scratch** using provider SDKs directly, with a custom ReAct loop designed for:
+
+- 🔄 **Streaming behavior** — Token-by-token events for real-time UIs
+- 🔧 **Tool-call orchestration** — Full control over tool execution
+- 💰 **Cost accounting** — Track spend per run with built-in pricing
+- 👁️ **Observability** — `RunStep` events and typed event streams
+- 🌳 **Session trees** — Branchable conversation history (not linear!)
+- ⌨️ **Interactive REPL** — Debug and iterate on agents interactively
+
+---
+
+## 🎯 Why Phoson?
+
+| Traditional Frameworks | Phoson |
+|------------------------|--------|
+| Heavy dependencies | Zero external agent frameworks |
+| Linear conversations | Branchable conversation trees |
+| Black-box streaming | Full event visibility |
+| Fixed patterns | Custom ReAct loop |
+| Enterprise pricing | MIT licensed |
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---------|-------------|
+| **Framework-free** | Pure Python + provider SDKs; no LangChain/LangGraph |
+| **Multi-provider** | OpenAI, Anthropic, OpenRouter, Ollama support |
+| **Typed events** | Normalized `LLMEvent` stream for all providers |
+| **Tool execution** | `@tool` decorator with JSON Schema definitions |
+| **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
+| **Branching sessions** | `ConversationTree` for non-linear conversation history |
+| **Interactive REPL** | CLI with streaming, branching, and model switching |
+| **Cost tracking** | Built-in pricing module for USD usage calculation |
+| **Thinking support** | Native reasoning/thinking token handling (Anthropic & OpenAI o1) |
+
+---
+
+## 🏗️ High-level architecture
 
 ```mermaid
 flowchart LR
@@ -46,7 +114,7 @@ flowchart LR
     AE --> R[Agent Events + RunResult]
 ```
 
-## Runtime loop (tool call cycle)
+### Runtime loop (tool call cycle)
 
 ```mermaid
 sequenceDiagram
@@ -66,20 +134,24 @@ sequenceDiagram
     Engine-->>Client: AgentRunResult
 ```
 
-## Repository map
+---
 
-```text
+## 🗺️ Repository map
+
+```
 phoson-engine-minimal/
 ├── phoson_llm/           # LLM normalization layer (adapters + schemas + pricing)
 ├── phoson_agent/         # ReAct agent loop, tools, middleware, sessions
 ├── phoson_cli/           # Interactive CLI (REPL) for agent sessions
 ├── tests/                # Unit/integration tests for llm and agent layers
-├── .github/workflows/    # CIand security automation
-├── PROJECT.md            # Deep architecture notes and roadmap (Spanish)
+├── .github/workflows/    # CI and security automation
+├── PROJECT.md            # Deep architecture notes and roadmap
 └── pyproject.toml        # Project metadata, dependencies, tooling config
 ```
 
-## Core modules
+---
+
+## 📦 Core modules
 
 ### `phoson_llm` — LLM normalization layer
 
@@ -98,7 +170,7 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 | `LLMDoneEvent` | Full assembled text (always last) |
 | `ErrorEvent` | Error with code, message, retryable flag |
 
-Supported providers:
+**Supported providers:**
 - **Anthropic** — `AnthropicChat` (thinking, tool use, prompt caching)
 - **OpenAI** — `OpenAIChat` (tool use, reasoning_effort for o1/o3)
 - **OpenRouter** — `OpenAIChat(base_url=..., api_key=...)`
@@ -127,20 +199,70 @@ Stateless-by-run orchestration over message history with tool execution:
 Command-line interface for interactive agent sessions:
 
 - `PhosonRepl` — Interactive read-eval-print loop
-- Commands: `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/branch`, `/label`, `/help`
+- **Commands:** `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/branch`, `/label`, `/help`
 - Real-time streaming responses
 - Session branching and labeling
 - Multiple model switching
 
-## Development setup
+---
 
-Install dependencies:
+## 🚀 Quick Start
+
+```python
+from phoson_agent import AgentEngine
+from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm.schemas import Message, ModelConfig
+
+engine = AgentEngine(
+    chat=OpenAIChat(),
+    tools=[],
+    phoson_weight=1.2,
+)
+
+result = engine.run_sync(
+    messages=[Message(role="user", content="Summarize this project in one line")],
+    config=ModelConfig(model="openai/gpt-4o-mini", max_tokens=128),
+)
+
+print(result.final_content)
+print(result.total_cost_usd, result.total_credits)
+```
+
+Or run the interactive CLI:
+
+```bash
+uv run phoson-cli
+```
+
+---
+
+## 📥 Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/phoson-lat/phoson-engine-minimal.git
+cd phoson-engine-minimal
+
+# Install dependencies
+uv sync --dev --locked
+
+# Install git hooks
+uv run pre-commit install --install-hooks
+uv run pre-commit install --hook-type commit-msg
+uv run pre-commit install --hook-type pre-push
+```
+
+---
+
+## 🛠️ Development setup
+
+### Install dependencies
 
 ```bash
 uv sync --dev --locked
 ```
 
-Install git hooks:
+### Install git hooks
 
 ```bash
 uv run pre-commit install --install-hooks
@@ -148,7 +270,9 @@ uv run pre-commit install --hook-type commit-msg
 uv run pre-commit install --hook-type pre-push
 ```
 
-## Run checks locally
+---
+
+## ✅ Run checks locally
 
 ```bash
 uv run ruff format --check .
@@ -157,7 +281,9 @@ uv run python -m compileall phoson_llm phoson_agent phoson_cli
 uv run pytest -q
 ```
 
-## Environment variables
+---
+
+## 🔐 Environment variables
 
 ```env
 ANTHROPIC_API_KEY=
@@ -165,9 +291,11 @@ OPENAI_API_KEY=
 OPENROUTER_API_KEY=
 ```
 
-Use `OPENROUTER_API_KEY` when initializing `OpenAIChat` with an OpenRouter `base_url`.
+> **Note:** Use `OPENROUTER_API_KEY` when initializing `OpenAIChat` with an OpenRouter `base_url`.
 
-## Usage examples
+---
+
+## 💻 Usage examples
 
 ### Minimal agent usage
 
@@ -208,7 +336,7 @@ def calculate(expression: str) -> str:
 uv run phoson-cli
 ```
 
-Available commands:
+**Available commands:**
 - `/new` — Start a new session
 - `/model <name>` — Switch model
 - `/tree` — Show conversation tree
@@ -217,19 +345,105 @@ Available commands:
 - `/label <text>` — Label current node
 - `/help` — Show all commands
 
-## CI and security workflows
+---
 
-- `.github/workflows/ci.yml`: format check, lint, smoke compile, and tests on PRsand pushes to `main`.
-- `.github/workflows/security.yml`: dependency auditand secret scan on PRs, pushes to `main`,and weekly schedule.
+## 🔒 CI and security workflows
 
-## Commit message format
+- `.github/workflows/ci.yml`: Format check, lint, smoke compile, and tests on PRs and pushes to `main`.
+- `.github/workflows/security.yml`: Dependency audit and secret scan on PRs, pushes to `main`, and weekly schedule.
+
+---
+
+## 📝 Commit message format
 
 Conventional Commits are enforced through a `commit-msg` hook.
 
-Examples:
+**Examples:**
 
-- `feat: add streaming chat abstraction`
-- `fix: handle unknown model pricing fallback`
-- `chore: update pre-commit hook versions`
+```
+feat: add streaming chat abstraction
+fix: handle unknown model pricing fallback
+chore: update pre-commit hook versions
+```
 
-Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`.
+**Common types:** `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`
+
+---
+
+## 🗓️ Roadmap
+
+For detailed architecture notes and future plans, see [PROJECT.md](./PROJECT.md).
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how you can help:
+
+1. **Fork** the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit your changes: `git commit -m 'feat: add amazing feature'`
+4. Push to the branch: `git push origin feature/amazing-feature`
+5. Open a **Pull Request**
+
+Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for details on our code of conduct and development process.
+
+### Ideas for contributions
+
+- 🆕 Add new LLM providers (Google Gemini, Azure OpenAI, etc.)
+- 🔧 Improve tool execution (batching, retries, caching)
+- 📊 Add observability integrations (OpenTelemetry, Langfuse)
+- 🖥️ Build a web-based REPL or playground
+- 📚 Improve documentation and examples
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** — see the [LICENSE](./LICENSE) file for details.
+
+```
+MIT License
+
+Copyright (c) 2024 Phoson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## 💬 Support
+
+- **Issues:** [GitHub Issues](https://github.com/phoson-lat/phoson-engine-minimal/issues) for bug reports
+- **Discussions:** [GitHub Discussions](https://github.com/phoson-lat/phoson-engine-minimal/discussions) for questions
+- **Documentation:** See [PROJECT.md](./PROJECT.md) for deep architecture notes
+- **Website:** [https://phoson.lat](https://phoson.lat)
+- **SDK Docs:** [https://phoson.lat/docs](https://phoson.lat/docs)
+
+---
+
+## ⭐ Show your support
+
+Give us a ⭐️ if this project helped you build better AI agents!
+
+---
+
+<p align="center">
+  Built with 🔥 by <a href="https://phoson.lat">phoson.lat</a>
+</p>
