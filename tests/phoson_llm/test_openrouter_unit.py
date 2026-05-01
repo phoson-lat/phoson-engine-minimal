@@ -25,7 +25,10 @@ def test_build_chat_returns_openrouter_chat_for_openrouter_provider() -> None:
 
 
 def test_extract_reasoning_delta_supports_reasoning_content() -> None:
-    assert _extract_reasoning_delta(_Delta(reasoning_content="step by step")) == "step by step"
+    assert (
+        _extract_reasoning_delta(_Delta(reasoning_content="step by step"))
+        == "step by step"
+    )
 
 
 def test_extract_reasoning_delta_supports_reasoning_alias() -> None:
