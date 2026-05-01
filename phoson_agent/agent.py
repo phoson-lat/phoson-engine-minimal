@@ -362,6 +362,13 @@ class AgentEngine:
                                 tool_call_id=call.tool_call_id,
                                 tool_name=call.tool_name,
                                 args=call.args,
+                                label=(
+                                    "subagent"
+                                    if call.tool_name == "agent"
+                                    else "subagents"
+                                    if call.tool_name == "agents"
+                                    else None
+                                ),
                             )
                         )
 
@@ -438,6 +445,13 @@ class AgentEngine:
                                 result=result_text,
                                 error=tool_error,
                                 duration_ms=tool_step.duration_ms,
+                                label=(
+                                    "subagent"
+                                    if call.tool_name == "agent"
+                                    else "subagents"
+                                    if call.tool_name == "agents"
+                                    else None
+                                ),
                             )
                         )
                         yield await self._prepare_event(

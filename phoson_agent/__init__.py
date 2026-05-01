@@ -13,6 +13,7 @@ from .models import (
     AgentStepDoneEvent,
     AgentToolDoneEvent,
     AgentReasoningEvent,
+    AgentSubagentResult,
     AgentToolStartEvent,
 )
 from .context import AgentContext
@@ -42,6 +43,7 @@ __all__ = [
     "AgentStepDoneEvent",
     "AgentDoneEvent",
     "AgentErrorEvent",
+    "AgentSubagentResult",
     "ConversationNode",
     "ConversationTree",
     "SessionMeta",

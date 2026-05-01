@@ -1,20 +1,26 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from .repl import PhosonRepl
 
-COMMANDS = {
+COMMANDS: Final[set[str]] = {
     "/exit",
     "/quit",
     "/clear",
     "/new",
     "/model",
+    "/subagent-model",
     "/tree",
     "/sessions",
     "/branch",
     "/label",
     "/help",
+    # ── New diagnostic commands ──────────────────────────────────────────────
+    "/env",
+    "/cost",
+    "/tokens",
+    "/steps",
 }
 
 
@@ -44,45 +50,32 @@ class CommandHandler:
         if cmd.name in {"/exit", "/quit"}:
             return False
 
-        if cmd.name in {"/clear", "/new"}:
+        if cmd.name in {"/new", "/clear"}:
             self.repl.new_session()
             r.print_info(f"New session  {self.repl.tree.session_id[:8]}")
             return True
 
         if cmd.name == "/model":
-            if cmd.args:
-                self.repl.set_model(cmd.args)
-                r.print_info(f"Model → {self.repl.current_model}")
-            else:
+            if not cmd.args:
                 r.print_info(f"Model: {self.repl.current_model}")
+                return True
+            self.repl.set_model(cmd.args)
+            r.print_info(f"Model → {self.repl.current_model}")
+            return True
+
+        if cmd.name == "/subagent-model":
+            if not cmd.args:
+                r.print_info(f"Sub-agent model: {self.repl.subagent_model}")
+                return True
+            self.repl.subagent_model = cmd.args
+            self.repl.config.subagent_model = cmd.args
+            # Re-inject into running engine
+            self.repl.engine.context.extra["default_model"] = cmd.args
+            r.print_info(f"Sub-agent model → {cmd.args}")
             return True
 
         if cmd.name == "/tree":
-            r.console.print(self.repl.render_tree_ascii())
-            return True
-
-        if cmd.name == "/sessions":
-            sessions = await self.repl.storage.list_sessions()
-            if not sessions:
-                r.print_info("No saved sessions.")
-                return True
-
-            r.print_sessions_table(sessions)
-            raw = input("  Load session #  (blank to cancel): ").strip()
-            if not raw:
-                return True
-            if not raw.isdigit() or not (1 <= int(raw) <= len(sessions)):
-                r.print_error("Invalid selection.")
-                return True
-
-            picked = sessions[int(raw) - 1]
-            self.repl.tree = await self.repl.storage.load(picked.id)
-            self.repl.current_node_id = self.repl.find_latest_node_id()
-            self.repl.renderer.set_session(self.repl.tree.session_id)
-            # Replay the conversation path up to the latest node
-            history = self.repl.tree.get_path(self.repl.current_node_id)
-            r.print_history(history)
-            r.print_info(f"Loaded  {picked.id}  ({len(history)} messages)")
+            r.print_info(self.repl.render_tree_ascii())
             return True
 
         if cmd.name == "/branch":
@@ -101,6 +94,42 @@ class CommandHandler:
 
         if cmd.name == "/help":
             r.print_help(COMMANDS)
+            return True
+
+        if cmd.name == "/sessions":
+            sessions = await self.repl.storage.list_meta()
+            if not sessions:
+                r.print_info("No saved sessions.")
+                return True
+            r.print_sessions_table(sessions)
+            return True
+
+        if cmd.name == "/env":
+            r.print_info(
+                f"provider={self.repl.config.provider} "
+                f"model={self.repl.current_model} "
+                f"subagent_model={self.repl.subagent_model} "
+                f"cwd={self.repl.config.sessions_dir}"
+            )
+            return True
+
+        if cmd.name == "/cost":
+            r.print_info(
+                f"cost=${self.repl.session_metrics.total_cost_usd:.5f} "
+                f"credits={self.repl.session_metrics.total_credits:.5f}"
+            )
+            return True
+
+        if cmd.name == "/tokens":
+            r.print_info(
+                "tokens="
+                f"{self.repl.session_metrics.total_input_tokens}in/"
+                f"{self.repl.session_metrics.total_output_tokens}out"
+            )
+            return True
+
+        if cmd.name == "/steps":
+            r.print_info(f"steps={self.repl.session_metrics.step_count}")
             return True
 
         r.print_error(f"Unknown command: {cmd.name}")
