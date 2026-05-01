@@ -1,10 +1,10 @@
 from phoson_cli.config import PhosonConfig, build_chat
+from phoson_llm.schemas import TokenUsage, UsageEvent
 from phoson_llm.chats.openrouter import (
     OpenRouterChat,
-    _extract_reasoning_delta,
     _parse_tool_args,
+    _extract_reasoning_delta,
 )
-from phoson_llm.schemas import TokenUsage, UsageEvent
 
 
 class _Delta:
