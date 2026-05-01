@@ -4,7 +4,12 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_agent.sessions.models import SessionMeta, SessionStorage, ConversationTree
-from phoson_agent.sessions.serialization import node_to_dict, node_from_dict
+from phoson_agent.sessions.serialization import (
+    apply_tree_meta,
+    node_from_dict,
+    node_to_dict,
+    tree_meta_to_dict,
+)
 
 
 @dataclass
@@ -21,6 +26,8 @@ class JsonlStorage(SessionStorage):
         file_path = self._session_file(tree.session_id)
         nodes = sorted(tree.nodes.values(), key=lambda n: n.created_at)
         with file_path.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(tree_meta_to_dict(tree), ensure_ascii=True))
+            f.write("\n")
             for node in nodes:
                 f.write(json.dumps(node_to_dict(node), ensure_ascii=True))
                 f.write("\n")
@@ -36,7 +43,11 @@ class JsonlStorage(SessionStorage):
                 raw = line.strip()
                 if not raw:
                     continue
-                tree.add_node(node_from_dict(json.loads(raw)))
+                data = json.loads(raw)
+                if data.get("type") == "session_meta":
+                    apply_tree_meta(tree, data)
+                    continue
+                tree.add_node(node_from_dict(data))
         return tree
 
     async def list_sessions(self) -> list[SessionMeta]:
@@ -46,9 +57,16 @@ class JsonlStorage(SessionStorage):
                 lines = [line.strip() for line in f if line.strip()]
                 if not lines:
                     continue
-                created_data = json.loads(lines[0])
-                created_at = datetime.datetime.fromisoformat(created_data["created_at"])
-                message_count = len(lines)
+                first_node = next(
+                    (json.loads(line) for line in lines if json.loads(line).get("type") != "session_meta"),
+                    None,
+                )
+                if first_node is None:
+                    continue
+                created_at = datetime.datetime.fromisoformat(first_node["created_at"])
+                message_count = sum(
+                    1 for line in lines if json.loads(line).get("type") != "session_meta"
+                )
 
             stat = file_path.stat()
             updated_at = datetime.datetime.fromtimestamp(stat.st_mtime, datetime.UTC)
@@ -68,3 +86,17 @@ class JsonlStorage(SessionStorage):
         file_path = self._session_file(session_id)
         if file_path.exists():
             file_path.unlink()
+
+    async def save_meta(self, session_id: str, meta: dict) -> None:
+        tree = await self.load(session_id)
+        tree.update_session_meta(
+            total_cost=float(meta.get("total_cost_usd", 0.0)),
+            total_tokens=int(meta.get("total_input_tokens", 0))
+            + int(meta.get("total_output_tokens", 0)),
+            step_count=int(meta.get("step_count", 0)),
+            last_model=meta.get("last_model") or None,
+        )
+        await self.save(tree)
+
+    async def list_meta(self) -> list[SessionMeta]:
+        return await self.list_sessions()
