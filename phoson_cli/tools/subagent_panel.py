@@ -1,6 +1,6 @@
 """Subagent panel renderer for parallel agents."""
-from dataclasses import dataclass
 from enum import Enum
+from dataclasses import dataclass
 
 from rich import box
 from rich.table import Table

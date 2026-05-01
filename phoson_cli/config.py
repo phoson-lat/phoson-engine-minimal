@@ -13,6 +13,7 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 @dataclass
 class PhosonConfig:
     model: str = "minimax/minimax-m2.5"
+    subagent_model: str | None = "inception/mercury-2"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -28,7 +29,6 @@ def _parse_bool(value: str | None, default: bool) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
-
 def _parse_int(value: str | None, default: int) -> int:
     if value is None:
         return default
@@ -36,7 +36,6 @@ def _parse_int(value: str | None, default: int) -> int:
         return int(value)
     except ValueError:
         return default
-
 
 def _load_file_defaults(config_path: Path) -> dict:
     if not config_path.exists():
@@ -46,7 +45,6 @@ def _load_file_defaults(config_path: Path) -> dict:
     defaults = raw.get("defaults", {})
     return defaults if isinstance(defaults, dict) else {}
 
-
 def load_config() -> PhosonConfig:
     defaults = PhosonConfig()
     cfg_file = Path("~/.phoson/config.toml").expanduser()
@@ -54,6 +52,11 @@ def load_config() -> PhosonConfig:
 
     model = (
         os.environ.get("PHOSON_MODEL") or file_defaults.get("model") or defaults.model
+    )
+    subagent_model = (
+        os.environ.get("PHOSON_SUBAGENT_MODEL")
+        or file_defaults.get("subagent_model")
+        or defaults.subagent_model
     )
     provider = (
         os.environ.get("PHOSON_PROVIDER")
@@ -83,6 +86,7 @@ def load_config() -> PhosonConfig:
 
     cfg = PhosonConfig(
         model=str(model),
+        subagent_model=str(subagent_model) if subagent_model else None,
         provider=str(provider).lower(),
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),

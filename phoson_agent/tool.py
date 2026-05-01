@@ -1,6 +1,6 @@
-import functools
-import inspect
 import typing
+import inspect
+import functools
 from types import UnionType
 from typing import Any, Annotated, get_args, get_origin, get_type_hints
 

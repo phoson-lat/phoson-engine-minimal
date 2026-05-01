@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import field, dataclass
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -9,10 +9,10 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
 from phoson_agent import (
+    RunStep,
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
-    RunStep,
 )
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_agent.sessions import JsonlStorage, ConversationTree
@@ -135,6 +135,7 @@ _CMD_META: dict[str, str] = {
     "/new": "start a new session",
     "/clear": "alias for /new",
     "/model": "show, list, or switch model",
+    "/subagent-model": "show or set the LLM model for sub-agents",
     "/env": "show environment variables",
     "/cost": "show session cost breakdown",
     "/tokens": "show token usage stats",
@@ -209,10 +210,14 @@ class PhosonRepl:
             max_iterations=config.max_iterations,
         )
 
+        # Sub-agent model: explicit override or fallback to main model
+        self.subagent_model: str = config.subagent_model or config.model
+
         # Inject context for sub-agents
         self.engine.context.extra["safe_mode"] = config.safe_mode
         self.engine.context.extra["available_tools"] = self.tools_dict
-        self.engine.context.extra["default_model"] = config.model
+        self.engine.context.extra["default_model"] = self.subagent_model
+
         self.engine.context.extra["max_iterations"] = config.max_iterations
         self.engine.context.extra["chat"] = self.chat
 
@@ -349,9 +354,11 @@ class PhosonRepl:
         )
 
         # Re-inject context for sub-agents
+        self.subagent_model = self.config.subagent_model or model
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
         self.engine.context.extra["available_tools"] = self.tools_dict
-        self.engine.context.extra["default_model"] = self.config.model
+        self.engine.context.extra["default_model"] = self.subagent_model
+
         self.engine.context.extra["max_iterations"] = self.config.max_iterations
         self.engine.context.extra["chat"] = self.chat
 
