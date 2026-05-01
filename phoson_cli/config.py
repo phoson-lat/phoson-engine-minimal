@@ -13,6 +13,7 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 @dataclass
 class PhosonConfig:
     model: str = "minimax/minimax-m2.5"
+    subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -55,6 +56,11 @@ def load_config() -> PhosonConfig:
     model = (
         os.environ.get("PHOSON_MODEL") or file_defaults.get("model") or defaults.model
     )
+    subagent_model = (
+        os.environ.get("PHOSON_SUBAGENT_MODEL")
+        or file_defaults.get("subagent_model")
+        or defaults.subagent_model
+    )
     provider = (
         os.environ.get("PHOSON_PROVIDER")
         or file_defaults.get("provider")
@@ -83,6 +89,7 @@ def load_config() -> PhosonConfig:
 
     cfg = PhosonConfig(
         model=str(model),
+        subagent_model=str(subagent_model) if subagent_model else None,
         provider=str(provider).lower(),
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),

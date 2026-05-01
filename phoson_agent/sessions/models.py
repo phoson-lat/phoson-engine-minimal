@@ -30,6 +30,11 @@ class SessionMeta:
     created_at: datetime.datetime
     updated_at: datetime.datetime
     message_count: int
+    # Extended metadata for session tracking
+    total_cost: float = 0.0
+    total_tokens: int = 0
+    step_count: int = 0
+    last_model: str | None = None
 
 
 @dataclass
@@ -37,6 +42,12 @@ class ConversationTree:
     session_id: str
     nodes: dict[str, ConversationNode] = field(default_factory=dict)
     _children: dict[str | None, list[str]] = field(default_factory=dict, init=False)
+
+    # Session-level metadata
+    total_cost: float = 0.0
+    total_tokens: int = 0
+    step_count: int = 0
+    last_model: str | None = None
 
     @classmethod
     def new(cls, session_id: str | None = None) -> "ConversationTree":
@@ -130,6 +141,10 @@ class ConversationTree:
                 created_at=now,
                 updated_at=now,
                 message_count=0,
+                total_cost=self.total_cost,
+                total_tokens=self.total_tokens,
+                step_count=self.step_count,
+                last_model=self.last_model,
             )
 
         return SessionMeta(
@@ -137,6 +152,10 @@ class ConversationTree:
             created_at=min(node.created_at for node in nodes),
             updated_at=max(node.created_at for node in nodes),
             message_count=len(nodes),
+            total_cost=self.total_cost,
+            total_tokens=self.total_tokens,
+            step_count=self.step_count,
+            last_model=self.last_model,
         )
 
     def label(self, node_id: str, text: str) -> None:
@@ -146,6 +165,23 @@ class ConversationTree:
 
     def node_count(self) -> int:
         return len(self.nodes)
+
+    def update_session_meta(
+        self,
+        total_cost: float | None = None,
+        total_tokens: int | None = None,
+        step_count: int | None = None,
+        last_model: str | None = None,
+    ) -> None:
+        """Update session-level metadata."""
+        if total_cost is not None:
+            self.total_cost = total_cost
+        if total_tokens is not None:
+            self.total_tokens = total_tokens
+        if step_count is not None:
+            self.step_count = step_count
+        if last_model is not None:
+            self.last_model = last_model
 
 
 class SessionStorage(ABC):

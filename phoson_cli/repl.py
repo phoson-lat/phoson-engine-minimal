@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from dataclasses import field, dataclass
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -8,6 +9,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
 from phoson_agent import (
+    RunStep,
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
@@ -15,10 +17,93 @@ from phoson_agent import (
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 
-from .tools import build_tools
+from .tools import build_tools, build_tools_dict
 from .config import PhosonConfig, build_chat
 from .commands import COMMANDS, CommandHandler, parse_command
 from .renderer import Renderer
+
+
+@dataclass
+class SessionMetrics:
+    """Accumulated metrics for the current session."""
+
+    total_cost_usd: float = 0.0
+    total_credits: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    step_count: int = 0
+    last_model: str = ""
+    steps: list[RunStep] = field(default_factory=list)
+
+    # For phoson_weight calculation
+    phoson_weight: float = 1.0
+
+    def add_run_step(self, step: RunStep) -> None:
+        """Add a run step and update totals."""
+        self.steps.append(step)
+        self.step_count += 1
+
+        if step.usage:
+            self.total_input_tokens += step.usage.input_tokens
+            self.total_output_tokens += step.usage.output_tokens
+            if step.usage.cache_write_tokens:
+                self.total_cache_write_tokens += step.usage.cache_write_tokens
+            if step.usage.cache_read_tokens:
+                self.total_cache_read_tokens += step.usage.cache_read_tokens
+
+        self.total_cost_usd += step.cost_usd
+        self.total_credits += step.credits
+        if step.model:
+            self.last_model = step.model
+
+    def reset(self) -> None:
+        """Reset all metrics for a new session."""
+        self.total_cost_usd = 0.0
+        self.total_credits = 0.0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_write_tokens = 0
+        self.total_cache_read_tokens = 0
+        self.step_count = 0
+        self.last_model = ""
+        self.steps.clear()
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    @property
+    def avg_cost_per_message(self) -> float:
+        if self.step_count == 0:
+            return 0.0
+        return self.total_cost_usd / self.step_count
+
+    def load_from_meta(self, meta: dict) -> None:
+        """Load metrics from session metadata dict."""
+        self.total_cost_usd = meta.get("total_cost_usd", 0.0)
+        self.total_credits = meta.get("total_credits", 0.0)
+        self.total_input_tokens = meta.get("total_input_tokens", 0)
+        self.total_output_tokens = meta.get("total_output_tokens", 0)
+        self.total_cache_write_tokens = meta.get("total_cache_write_tokens", 0)
+        self.total_cache_read_tokens = meta.get("total_cache_read_tokens", 0)
+        self.step_count = meta.get("step_count", 0)
+        self.last_model = meta.get("last_model", "")
+
+    def to_meta(self) -> dict:
+        """Convert to metadata dict for storage."""
+        return {
+            "total_cost_usd": self.total_cost_usd,
+            "total_credits": self.total_credits,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_cache_write_tokens": self.total_cache_write_tokens,
+            "total_cache_read_tokens": self.total_cache_read_tokens,
+            "step_count": self.step_count,
+            "last_model": self.last_model,
+        }
+
 
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
@@ -49,7 +134,12 @@ _CMD_META: dict[str, str] = {
     "/quit": "quit phoson_cli",
     "/new": "start a new session",
     "/clear": "alias for /new",
-    "/model": "show or switch model",
+    "/model": "show, list, or switch model",
+    "/subagent-model": "show or set the LLM model for sub-agents",
+    "/env": "show environment variables",
+    "/cost": "show session cost breakdown",
+    "/tokens": "show token usage stats",
+    "/steps": "show execution steps",
     "/tree": "show conversation tree",
     "/sessions": "list & load saved sessions",
     "/branch": "branch from current node",
@@ -60,7 +150,7 @@ _CMD_META: dict[str, str] = {
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
-    "Available tools: read_file, write_file, list_dir, bash, web_search. "
+    "Available tools: read_file, write_file, list_dir, bash, web_search, subagents. "
     "Be concise, accurate, and use tools when needed."
 )
 
@@ -105,13 +195,32 @@ class PhosonRepl:
         self.renderer = Renderer()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
+        self.session_metrics = SessionMetrics()
+
+        # Build tools and registry for sub-agents
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
+        # Create chat instance for sub-agents
+        self.chat = build_chat(config)
 
         self.engine = AgentEngine(
-            chat=build_chat(config),
-            tools=build_tools(),
+            chat=self.chat,
+            tools=self.tools,
             max_iterations=config.max_iterations,
         )
+
+        # Sub-agent model: explicit override or fallback to main model
+        self.subagent_model: str = config.subagent_model or config.model
+
+        # Inject context for sub-agents
         self.engine.context.extra["safe_mode"] = config.safe_mode
+        self.engine.context.extra["available_tools"] = self.tools_dict
+        self.engine.context.extra["default_model"] = self.subagent_model
+
+        self.engine.context.extra["max_iterations"] = config.max_iterations
+        self.engine.context.extra["chat"] = self.chat
+
         self.renderer.set_session(self.tree.session_id)
 
     async def run(self) -> None:
@@ -198,6 +307,9 @@ class PhosonRepl:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
             await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
             self.renderer.flush_line()
             self.renderer.print_warn("Partial progress saved.")
         finally:
@@ -208,14 +320,22 @@ class PhosonRepl:
             if new_messages:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
+            # Update session metrics from run steps
+            for step in done_event.result.steps:
+                self.session_metrics.add_run_step(step)
+            # Save both tree and metadata
             await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
 
-    # ── Session / model management ────────────────────────────────────────────
+    # ── Session / model management ─────────────────────────────────────────��──
 
     def new_session(self) -> None:
         self.tree = ConversationTree.new()
         self.current_node_id = None
         self.renderer.set_session(self.tree.session_id)
+        self.session_metrics.reset()
 
     def branch_session(self) -> None:
         if self.current_node_id is None:
@@ -225,12 +345,26 @@ class PhosonRepl:
     def set_model(self, model: str) -> None:
         self.current_model = model
         self.config.model = model
+
+        # Rebuild chat and tools for new model
+        self.chat = build_chat(self.config)
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
         self.engine = AgentEngine(
-            chat=build_chat(self.config),
-            tools=build_tools(),
+            chat=self.chat,
+            tools=self.tools,
             max_iterations=self.config.max_iterations,
         )
+
+        # Re-inject context for sub-agents
+        self.subagent_model = self.config.subagent_model or model
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
+        self.engine.context.extra["available_tools"] = self.tools_dict
+        self.engine.context.extra["default_model"] = self.subagent_model
+
+        self.engine.context.extra["max_iterations"] = self.config.max_iterations
+        self.engine.context.extra["chat"] = self.chat
 
     def label_current_node(self, text: str) -> None:
         if self.current_node_id is None:
