@@ -1,8 +1,7 @@
-import datetime
 import json
-from dataclasses import dataclass
+import datetime
 from pathlib import Path
-
+from dataclasses import dataclass
 
 from phoson_agent.sessions.models import SessionMeta, SessionStorage, ConversationTree
 from phoson_agent.sessions.serialization import (
