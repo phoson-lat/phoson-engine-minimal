@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.openrouter import OpenRouterChat
 
 
 @dataclass
 class PhosonConfig:
-    model: str = "minimax/minimax-m2.7"
+    model: str = "minimax/minimax-m2.5"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -97,10 +98,7 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
     if provider == "openrouter":
         if not config.openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY is required for provider=openrouter")
-        return OpenAIChat(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=config.openrouter_api_key,
-        )
+        return OpenRouterChat(api_key=config.openrouter_api_key)
     if provider == "openai":
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for provider=openai")

@@ -1,6 +1,5 @@
 import json
 import asyncio
-import inspect
 import datetime
 from typing import Any
 from dataclasses import field, dataclass
@@ -378,13 +377,9 @@ class AgentEngine:
                             error_flag = True
                         else:
                             try:
-                                handler_sig = inspect.signature(tool.handler)
-                                if len(handler_sig.parameters) >= 2:
-                                    tool_result = tool.handler(call.args, self.context)
-                                else:
-                                    tool_result = tool.handler(call.args)
+                                tool_result = tool.handler(call.args, self.context)
 
-                                if inspect.isawaitable(tool_result):
+                                if asyncio.iscoroutine(tool_result):
                                     tool_result = await tool_result
 
                                 if not isinstance(tool_result, (str, dict)):
