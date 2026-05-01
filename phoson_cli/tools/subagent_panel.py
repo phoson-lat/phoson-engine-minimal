@@ -1,4 +1,5 @@
 """Subagent panel renderer for parallel agents."""
+
 from enum import Enum
 from dataclasses import dataclass
 
@@ -47,7 +48,7 @@ def _format_duration(ms: int) -> str:
     """Format duration in human-readable form."""
     if ms < 1000:
         return f"{ms}ms"
-    return f"{ms/1000:.1f}s"
+    return f"{ms / 1000:.1f}s"
 
 
 def _format_tokens(in_tok: int, out_tok: int) -> str:

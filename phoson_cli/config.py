@@ -29,6 +29,7 @@ def _parse_bool(value: str | None, default: bool) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+
 def _parse_int(value: str | None, default: int) -> int:
     if value is None:
         return default
@@ -37,6 +38,7 @@ def _parse_int(value: str | None, default: int) -> int:
     except ValueError:
         return default
 
+
 def _load_file_defaults(config_path: Path) -> dict:
     if not config_path.exists():
         return {}
@@ -44,6 +46,7 @@ def _load_file_defaults(config_path: Path) -> dict:
         raw = tomllib.load(f)
     defaults = raw.get("defaults", {})
     return defaults if isinstance(defaults, dict) else {}
+
 
 def load_config() -> PhosonConfig:
     defaults = PhosonConfig()

@@ -307,7 +307,9 @@ class PhosonRepl:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
             await self.storage.save(self.tree)
-            await self.storage.save_meta(self.tree.session_id, self.session_metrics.to_meta())
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
             self.renderer.flush_line()
             self.renderer.print_warn("Partial progress saved.")
         finally:
@@ -323,7 +325,9 @@ class PhosonRepl:
                 self.session_metrics.add_run_step(step)
             # Save both tree and metadata
             await self.storage.save(self.tree)
-            await self.storage.save_meta(self.tree.session_id, self.session_metrics.to_meta())
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
 
     # ── Session / model management ─────────────────────────────────────────��──
 
