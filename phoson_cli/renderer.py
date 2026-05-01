@@ -3,6 +3,7 @@ import threading
 from time import sleep
 
 from rich import box
+from rich.live import Live
 from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
@@ -20,6 +21,12 @@ from phoson_agent import (
     AgentToolDoneEvent,
     AgentReasoningEvent,
     AgentToolStartEvent,
+)
+from phoson_cli.tools.subagent_panel import (
+    parse_subagent_metrics,
+    render_subagent_panel,
+    render_subagent_panel_frame,
+    render_subagent_summary,
 )
 
 # ── Palette ────────────────────────────────────────────────────────────────────
@@ -48,6 +55,9 @@ class Renderer:
         self._waiting_stop: threading.Event | None = None
         self._waiting_message = ""
         self._waiting_visible = False
+        self._subagent_live: Live | None = None
+        self._subagent_stop: threading.Event | None = None
+        self._subagent_thread: threading.Thread | None = None
 
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
@@ -56,6 +66,7 @@ class Renderer:
     def flush_line(self) -> None:
         """Ensure we're on a fresh line after any raw-streamed tokens."""
         self.stop_waiting()
+        self.stop_subagent_waiting()
         if self._streaming:
             self.console.print()
             self._streaming = False
@@ -184,29 +195,91 @@ class Renderer:
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
         args_preview = _args_preview(event.tool_name, event.args)
+        label = _tool_label(event)
         line = Text()
         line.append("  │ ", style=_ACCENT2)
-        line.append("⚙ ", style=_ACCENT2)
-        line.append(event.tool_name, style=f"bold {_ACCENT}")
+        if event.tool_name in {"agent", "agents"}:
+            line.append("◌ ", style=_ACCENT2)
+            line.append(f"spawning {label}", style=f"bold {_ACCENT}")
+        else:
+            line.append("⚙ ", style=_ACCENT2)
+            line.append(label, style=f"bold {_ACCENT}")
         if args_preview:
             line.append(f"  {args_preview}", style=_MUTED)
         self.console.print(line)
 
+        if event.tool_name in {"agent", "agents"}:
+            tasks = _subagent_tasks_from_args(event.tool_name, event.args)
+            if tasks:
+                self.start_subagent_waiting(tasks)
+
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
+        if event.tool_name in {"agent", "agents"}:
+            self.stop_subagent_waiting()
+            metrics = parse_subagent_metrics(event.result)
+            if metrics:
+                self.console.print(render_subagent_summary(metrics))
+                return
+
+        label = _tool_label(event)
         line = Text()
         if event.error:
             line.append("  │ ", style=_ACCENT2)
             line.append("✗ ", style=_TOOL_ERR)
-            line.append(event.tool_name, style=f"bold {_TOOL_ERR}")
+            line.append(label, style=f"bold {_TOOL_ERR}")
             line.append(f"  {event.duration_ms}ms", style=_MUTED)
             err_short = event.error.splitlines()[0][:72]
             line.append(f"  {err_short}", style=_TOOL_ERR)
         else:
             line.append("  │ ", style=_ACCENT2)
-            line.append("✓ ", style=_TOOL_OK)
-            line.append(event.tool_name, style=_TOOL_OK)
+            if event.tool_name in {"agent", "agents"}:
+                line.append("◍ ", style=_TOOL_OK)
+                line.append(f"spawned {label}", style=_TOOL_OK)
+            else:
+                line.append("✓ ", style=_TOOL_OK)
+                line.append(label, style=_TOOL_OK)
             line.append(f"  {event.duration_ms}ms", style=_MUTED)
         self.console.print(line)
+
+    def start_subagent_waiting(self, tasks: list[str]) -> None:
+        self.stop_subagent_waiting()
+        self._subagent_stop = threading.Event()
+        self._subagent_live = Live(
+            render_subagent_panel(tasks),
+            console=self.console,
+            refresh_per_second=12,
+            transient=True,
+        )
+        self._subagent_live.start()
+        self._subagent_thread = threading.Thread(
+            target=self._run_subagent_animation,
+            args=(tasks,),
+            daemon=True,
+        )
+        self._subagent_thread.start()
+
+    def stop_subagent_waiting(self) -> None:
+        if self._subagent_stop is not None:
+            self._subagent_stop.set()
+        if self._subagent_thread is not None and self._subagent_thread.is_alive():
+            self._subagent_thread.join(timeout=0.2)
+        if self._subagent_live is not None:
+            self._subagent_live.stop()
+        self._subagent_stop = None
+        self._subagent_thread = None
+        self._subagent_live = None
+
+    def _run_subagent_animation(self, tasks: list[str]) -> None:
+        stop = self._subagent_stop
+        live = self._subagent_live
+        if stop is None or live is None:
+            return
+
+        frame = 0
+        while not stop.is_set():
+            live.update(render_subagent_panel_frame(tasks, frame), refresh=True)
+            frame += 1
+            sleep(0.08)
 
     def _on_done(self, event: AgentDoneEvent) -> None:
         r = event.result
@@ -404,3 +477,25 @@ def _args_preview(tool_name: str, args: dict) -> str:
             break
         parts.append(s)
     return "  ".join(parts)
+
+
+def _tool_label(event: AgentToolStartEvent | AgentToolDoneEvent) -> str:
+    if event.label:
+        return event.label
+    if event.tool_name == "agent":
+        return "subagent"
+    if event.tool_name == "agents":
+        return "subagents"
+    return event.tool_name
+
+
+def _subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:
+    if tool_name == "agent":
+        task = args.get("task")
+        return [task] if isinstance(task, str) and task else []
+
+    tasks = args.get("tasks")
+    if isinstance(tasks, list):
+        return [task for task in tasks if isinstance(task, str) and task]
+
+    return []
