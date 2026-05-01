@@ -80,7 +80,7 @@ class FakeErrorChat(BaseLLMChat):
         yield ErrorEvent(message="provider timeout", code="timeout", retryable=True)
 
 
-def get_weather(args: dict) -> dict:
+def get_weather(args: dict, context: object = None) -> dict:
     city = args.get("city", "unknown")
     country = args.get("country", "unknown")
     return {
