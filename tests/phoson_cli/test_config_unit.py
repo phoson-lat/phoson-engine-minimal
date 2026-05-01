@@ -1,4 +1,3 @@
-
 from phoson_cli.config import load_config
 
 
@@ -25,7 +24,7 @@ def test_load_config_file_subagent_model(monkeypatch, tmp_path) -> None:
     config_dir = home / ".phoson"
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text(
-        "[defaults]\nsubagent_model = \"openai/gpt-4.1-mini\"\n",
+        '[defaults]\nsubagent_model = "openai/gpt-4.1-mini"\n',
         encoding="utf-8",
     )
 
@@ -42,7 +41,7 @@ def test_load_config_env_subagent_model(monkeypatch, tmp_path) -> None:
     config_dir = home / ".phoson"
     config_dir.mkdir(parents=True)
     (config_dir / "config.toml").write_text(
-        "[defaults]\nsubagent_model = \"openai/gpt-4.1-mini\"\n",
+        '[defaults]\nsubagent_model = "openai/gpt-4.1-mini"\n',
         encoding="utf-8",
     )
 

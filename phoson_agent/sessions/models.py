@@ -42,7 +42,7 @@ class ConversationTree:
     session_id: str
     nodes: dict[str, ConversationNode] = field(default_factory=dict)
     _children: dict[str | None, list[str]] = field(default_factory=dict, init=False)
-    
+
     # Session-level metadata
     total_cost: float = 0.0
     total_tokens: int = 0
@@ -165,7 +165,7 @@ class ConversationTree:
 
     def node_count(self) -> int:
         return len(self.nodes)
-    
+
     def update_session_meta(
         self,
         total_cost: float | None = None,

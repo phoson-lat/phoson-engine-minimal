@@ -1,4 +1,5 @@
 """Sub-agent tools for Phoson CLI."""
+
 import asyncio
 import logging
 import os
@@ -301,9 +302,7 @@ async def agents(
         else:
             metrics_line = f"--- METRICS: {duration}ms | {input_tok}in/{output_tok}out | ${cost:.5f} ---"
             output_parts.append(
-                f"=== Agent {idx}: {task_preview} ===\n"
-                f"{r['result']}\n"
-                f"{metrics_line}"
+                f"=== Agent {idx}: {task_preview} ===\n{r['result']}\n{metrics_line}"
             )
 
     output_parts.append(
