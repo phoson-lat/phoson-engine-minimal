@@ -80,6 +80,7 @@ class AgentToolStartEvent(AgentEvent):
     tool_call_id: str = ""
     tool_name: str = ""
     args: dict[str, Any] = field(default_factory=dict)
+    label: str | None = None
 
 
 @dataclass
@@ -90,6 +91,7 @@ class AgentToolDoneEvent(AgentEvent):
     result: str = ""
     error: str | None = None
     duration_ms: int = 0
+    label: str | None = None
 
 
 @dataclass
@@ -107,3 +109,18 @@ class AgentErrorEvent(AgentEvent):
     message: str = ""
     code: str | None = None
     retryable: bool = False
+
+
+@dataclass
+class AgentSubagentResult(AgentEvent):
+    """Event emitted when a subagent completes with its metrics."""
+
+    index: int = 0
+    task: str = ""
+    result: str = ""
+    cost_usd: float = 0.0
+    credits: float = 0.0
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    error: str | None = None
