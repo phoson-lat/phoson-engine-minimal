@@ -40,7 +40,7 @@ class SessionMetrics:
         return self.total_input_tokens / self.total_output_tokens
 
     def average_cost_per_message(self) -> float:
-        """Average cost per user message (approximate as total_steps / 2 for user turns)."""
+        """Average cost per user message (≈ total_steps/2 for user turns)."""
         user_turns = max(1, self.total_steps // 2)
         return self.total_cost_usd / user_turns
 

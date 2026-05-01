@@ -98,7 +98,11 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
                 m.error = header_line.split("Error:")[1].strip()
             elif metrics_line:
                 # Parse: "--- METRICS: 1234ms | 100in/200out | $0.00123 ---"
-                parts2 = metrics_line.replace("--- METRICS:", "").replace("---", "").split("|")
+                parts2 = (
+                    metrics_line.replace("--- METRICS:", "")
+                    .replace("---", "")
+                    .split("|")
+                )
                 if len(parts2) >= 3:
                     dur_str = parts2[0].strip()
                     m.duration_ms = int(dur_str.replace("ms", ""))

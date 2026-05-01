@@ -1,13 +1,13 @@
 """Sub-agent tools for Phoson CLI."""
-import os
 import asyncio
 import logging
+import os
 from typing import Any
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
-from phoson_llm.schemas import Message, ModelConfig
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.schemas import Message, ModelConfig
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
 
@@ -70,7 +70,17 @@ def _aggregate_tokens(steps: list) -> tuple[int, int]:
     return input_tokens, output_tokens
 
 
-@tool(inject=["chat", "available_tools", "default_model", "max_iterations", "safe_mode"])
+# Sub-agent tool injection parameters
+_SUBAGENT_INJECT = [
+    "chat",
+    "available_tools",
+    "default_model",
+    "max_iterations",
+    "safe_mode",
+]
+
+
+@tool(inject=_SUBAGENT_INJECT)
 async def agent(
     task: str,
     tools: list[str] | None = None,
@@ -129,18 +139,6 @@ async def agent(
 
         # Build output with metrics (renderer will extract these)
         input_tokens, output_tokens = _aggregate_tokens(result.steps)
-        output = {
-            "index": 0,
-            "task": task,
-            "task_preview": task[:40] + "..." if len(task) > 40 else task,
-            "result": result.final_content,
-            "cost_usd": result.total_cost_usd,
-            "credits": result.total_credits,
-            "duration_ms": sum(s.duration_ms for s in result.steps),
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        }
-
         _log_debug(
             "single subagent finished",
             task_preview=task[:80],
@@ -157,7 +155,7 @@ async def agent(
         return f"Sub-agent error: {e}"
 
 
-@tool(inject=["chat", "available_tools", "default_model", "max_iterations", "safe_mode"])
+@tool(inject=_SUBAGENT_INJECT)
 async def agents(
     tasks: list[str],
     tools: list[str] | None = None,
@@ -273,7 +271,6 @@ async def agents(
     results.sort(key=lambda x: x["index"])
 
     # Build output with all metrics (renderer will format this)
-    # The output format is a structured string that the renderer can parse
     output_parts: list[str] = []
 
     total_cost = 0.0
@@ -302,13 +299,13 @@ async def agents(
         if error:
             output_parts.append(f"=== Agent {idx}: {task_preview} === Error: {error}")
         else:
+            metrics_line = f"--- METRICS: {duration}ms | {input_tok}in/{output_tok}out | ${cost:.5f} ---"
             output_parts.append(
                 f"=== Agent {idx}: {task_preview} ===\n"
                 f"{r['result']}\n"
-                f"--- METRICS: {duration}ms | {input_tok}in/{output_tok}out | ${cost:.5f} ---"
+                f"{metrics_line}"
             )
 
-    # Add summary
     output_parts.append(
         f"=== SUMMARY ===\n"
         f"Total: {len(tasks)} agents | {total_duration}ms | {total_input}in/{total_output}out | ${total_cost:.5f}"

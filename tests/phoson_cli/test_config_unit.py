@@ -1,9 +1,8 @@
-from pathlib import Path
 
 from phoson_cli.config import load_config
 
 
-def test_load_config_uses_default_subagent_model_when_not_overridden(monkeypatch, tmp_path) -> None:
+def test_load_config_default_subagent_model(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     config_dir = home / ".phoson"
     config_dir.mkdir(parents=True)
@@ -21,7 +20,7 @@ def test_load_config_uses_default_subagent_model_when_not_overridden(monkeypatch
     assert config.subagent_model == "google/gemini-3.1-flash-lite-preview"
 
 
-def test_load_config_prefers_file_subagent_model_over_default(monkeypatch, tmp_path) -> None:
+def test_load_config_file_subagent_model(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     config_dir = home / ".phoson"
     config_dir.mkdir(parents=True)
@@ -38,7 +37,7 @@ def test_load_config_prefers_file_subagent_model_over_default(monkeypatch, tmp_p
     assert config.subagent_model == "openai/gpt-4.1-mini"
 
 
-def test_load_config_prefers_env_subagent_model_over_file(monkeypatch, tmp_path) -> None:
+def test_load_config_env_subagent_model(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     config_dir = home / ".phoson"
     config_dir.mkdir(parents=True)
