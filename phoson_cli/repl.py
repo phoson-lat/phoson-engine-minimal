@@ -150,8 +150,8 @@ _CMD_META: dict[str, str] = {
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
-    "Available tools: read_file, write_file, list_dir, bash, web_search, subagents. "
-    "Be concise, accurate, and use tools when needed."
+    "Available tools: read_file, write_file, patch_file, list_dir, bash, "
+    "web_search, subagents. Be concise, accurate, and use tools when needed."
 )
 
 
