@@ -4,6 +4,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.openrouter import OpenRouterChat
@@ -16,6 +17,7 @@ class PhosonConfig:
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+    ollama_base_url: str | None = None
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
@@ -85,6 +87,7 @@ def load_config() -> PhosonConfig:
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL"),
         sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
         max_iterations=max_iterations,
         safe_mode=safe_mode,
@@ -107,4 +110,6 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
         if not config.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for provider=anthropic")
         return AnthropicChat(api_key=config.anthropic_api_key)
+    if provider == "ollama":
+        return OllamaChat(base_url=config.ollama_base_url or "http://localhost:11434")
     raise ValueError(f"Unsupported provider: {config.provider}")
