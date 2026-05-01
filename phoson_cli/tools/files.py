@@ -8,7 +8,9 @@ SKIP_DIRS = {"__pycache__", ".git", "node_modules"}
 
 
 @tool
-def read_file(path: str, start_line: int | None = None, end_line: int | None = None) -> str:
+def read_file(
+    path: str, start_line: int | None = None, end_line: int | None = None
+) -> str:
     """Read the contents of a file.
     - path: relative to cwd
     - start_line: optional line to start reading (1-indexed, inclusive)
@@ -55,7 +57,9 @@ def write_file(path: str, content: str) -> str:
 
 
 @tool
-def patch_file(path: str, old_content: str, new_content: str, replace_all: bool = False) -> str:
+def patch_file(
+    path: str, old_content: str, new_content: str, replace_all: bool = False
+) -> str:
     """Replace old_content with new_content in a file.
     - path: relative to cwd
     - old_content: the text to find and replace
