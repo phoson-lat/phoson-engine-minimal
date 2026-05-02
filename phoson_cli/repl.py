@@ -14,6 +14,8 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
+from phoson_agent.plugins.summarizer import SummarizationMiddleware
+from phoson_agent.plugins.context_window import ContextWindowResolver
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 
@@ -116,6 +118,7 @@ _PROMPT_STYLE = Style.from_dict(
         "prompt.model": "#e0d0ff bold",
         "prompt.sep": "#5a4e6e",
         "prompt.node": "#6b5b8a",
+        "prompt.tokens": "#8a7a9a",
         "prompt.arrow": "#b57bee bold",
         # completion dropdown
         "completion-menu": "bg:#1e1530 #9a8faa",
@@ -141,7 +144,8 @@ _CMD_META: dict[str, str] = {
     "/tokens": "show token usage stats",
     "/steps": "show execution steps",
     "/tree": "show conversation tree",
-    "/sessions": "list & load saved sessions",
+    "/sessions": "interactive session picker (navigate, select, delete)",
+    "/delete": "delete a saved session by id",
     "/branch": "branch from current node",
     "/label": "label current node",
     "/help": "show command reference",
@@ -204,9 +208,28 @@ class PhosonRepl:
         # Create chat instance for sub-agents
         self.chat = build_chat(config)
 
+        # Context window resolver + token estimator for prompt display
+        self._cw_resolver = ContextWindowResolver(
+            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+            openrouter_api_key=config.openrouter_api_key,
+        )
+        self._context_window: int = 128_000  # default, resolved on first use
+        self._context_tokens: int = 0  # current estimated tokens in context
+
+        # Summarization middleware
+        self.summarizer = SummarizationMiddleware(
+            threshold=0.80,
+            min_keep_messages=4,
+            provider=config.provider,
+            model=config.model,
+            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+            openrouter_api_key=config.openrouter_api_key,
+        )
+
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
+            middlewares=[self.summarizer],
             max_iterations=config.max_iterations,
         )
 
@@ -285,6 +308,12 @@ class PhosonRepl:
             system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
         )
 
+        # Resolve context window and estimate current tokens
+        self._context_window = await self._cw_resolver.resolve(
+            self.config.provider, self.current_model
+        )
+        self._context_tokens = self.summarizer._estimator.count_messages(path)
+
         done_event: AgentDoneEvent | None = None
         had_error = False
 
@@ -320,6 +349,10 @@ class PhosonRepl:
             if new_messages:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
+            # Update context tokens with the full history after the run
+            self._context_tokens = self.summarizer._estimator.count_messages(
+                done_event.result.history
+            )
             # Update session metrics from run steps
             for step in done_event.result.steps:
                 self.session_metrics.add_run_step(step)
@@ -337,6 +370,33 @@ class PhosonRepl:
         self.renderer.set_session(self.tree.session_id)
         self.session_metrics.reset()
 
+    async def load_session(self, session_id: str) -> bool:
+        """Load a session from storage. Returns True on success."""
+        try:
+            self.tree = await self.storage.load(session_id)
+            self.current_node_id = self.find_latest_node_id()
+            self.renderer.set_session(self.tree.session_id)
+            self.session_metrics.reset()
+            # Try to load saved metrics
+            metas = await self.storage.list_meta()
+            for m in metas:
+                if str(m.id) == session_id:
+                    if hasattr(m, "total_cost"):
+                        self.session_metrics.total_cost_usd = m.total_cost
+                    if hasattr(m, "total_tokens"):
+                        self.session_metrics.total_output_tokens = m.total_tokens
+                        self.session_metrics.total_input_tokens = 0
+                    if hasattr(m, "step_count"):
+                        self.session_metrics.step_count = m.step_count
+                    break
+            return True
+        except FileNotFoundError:
+            self.renderer.print_error(f"Session {session_id[:8]} not found.")
+            return False
+        except Exception as e:
+            self.renderer.print_error(f"Failed to load session: {e}")
+            return False
+
     def branch_session(self) -> None:
         if self.current_node_id is None:
             return
@@ -351,9 +411,14 @@ class PhosonRepl:
         self.tools = build_tools()
         self.tools_dict = build_tools_dict()
 
+        # Update summarizer with new provider/model
+        self.summarizer.provider = self.config.provider
+        self.summarizer.model = model
+
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
+            middlewares=[self.summarizer],
             max_iterations=self.config.max_iterations,
         )
 
@@ -424,16 +489,39 @@ class PhosonRepl:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
         short_model = self.current_model.split("/")[-1][:22]
         short_node = (self.current_node_id or "new")[:8]
+
+        # Token context indicator
+        token_part = self._token_indicator()
+
         return [
             ("class:prompt.prefix", "phoson"),
             ("class:prompt.bracket", " ["),
             ("class:prompt.model", short_model),
             ("class:prompt.sep", "·"),
             ("class:prompt.node", short_node),
+            ("class:prompt.sep", "·"),
+            ("class:prompt.tokens", token_part),
             ("class:prompt.bracket", "]"),
             ("class:prompt.arrow", " › "),
             ("", ""),
         ]
+
+    def _token_indicator(self) -> str:
+        """Return a short token usage string like '12.4k/128k'."""
+        if self._context_window <= 0:
+            return "?"
+        used = self._context_tokens
+        total = self._context_window
+        pct = (used / total) * 100
+
+        def _fmt(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}k"
+            return str(n)
+
+        return f"{_fmt(used)}/{_fmt(total)}"
 
     # ── Banner ────────────────────────────────────────────────────────────────
 
