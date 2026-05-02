@@ -317,8 +317,7 @@ class SummarizationMiddleware(AgentMiddleware):
         compacted = list(system_msgs)
         if summary_text.strip():
             summary_content = (
-                f"[Conversation summary up to this point: "
-                f"{summary_text.strip()}]"
+                f"[Conversation summary up to this point: {summary_text.strip()}]"
             )
             compacted.append(Message(role="user", content=summary_content))
         compacted.extend(keep)

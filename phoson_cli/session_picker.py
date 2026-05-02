@@ -1,19 +1,14 @@
 """Interactive session picker with pagination."""
 
-from __future__ import annotations
-
-from dataclasses import dataclass
 from typing import Any
+from dataclasses import dataclass
 
-from prompt_toolkit.application import Application
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.containers import HSplit, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.styles import Style
+from prompt_toolkit.application import Application
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.containers import HSplit, Window
 
 
 @dataclass
@@ -36,6 +31,11 @@ _SESSION_PICKER_STYLE = Style.from_dict(
     }
 )
 
+_HEADER = (
+    f"  {'#':>3}  {'Session ID':<10} {'Msgs':>5}"
+    f"  {'Updated':<16} {'State':<8} {'Cost':>8}\n"
+)
+
 
 def _render_sessions(
     sessions: list[Any],
@@ -48,12 +48,7 @@ def _render_sessions(
     lines: list[tuple[str, str]] = []
 
     lines.append(("class:title", "  Saved Sessions\n"))
-    lines.append(
-        (
-            "class:header",
-            f"  {'#':>3}  {'Session ID':<10} {'Msgs':>5}  {'Updated':<16} {'State':<8} {'Cost':>8}\n",
-        )
-    )
+    lines.append(("class:header", _HEADER))
     lines.append(("class:header", "  " + "─" * 68 + "\n"))
 
     start = page * page_size
@@ -65,7 +60,8 @@ def _render_sessions(
         sid = str(s.id)[:10]
         msgs = str(s.message_count)
         updated = s.updated_at.strftime("%m-%d %H:%M")
-        cost = f"${s.total_cost:.4f}" if hasattr(s, "total_cost") and s.total_cost else "—"
+        has_cost = hasattr(s, "total_cost") and s.total_cost
+        cost = f"${s.total_cost:.4f}" if has_cost else "—"
 
         is_current = str(s.id).startswith(current_id[:4])
         is_selected = i == selected
@@ -81,7 +77,8 @@ def _render_sessions(
         state = "active" if is_current else "saved"
 
         line = (
-            f"  {marker} {idx:>2}  {sid:<10} {msgs:>5}  {updated:<16} {state:<8} {cost:>8}\n"
+            f"  {marker} {idx:>2}  {sid:<10} {msgs:>5}"
+            f"  {updated:<16} {state:<8} {cost:>8}\n"
         )
         lines.append((style, line))
 
@@ -164,8 +161,8 @@ async def pick_session(
 
     @kb.add("d")
     def _delete(_event: Any) -> None:
-        # Mark for deletion — return special result
-        app.exit(result=SessionPickerResult(session_id=sessions[selected].id, delete=True))
+        sid = sessions[selected].id
+        app.exit(result=SessionPickerResult(session_id=sid, delete=True))
 
     info_window = Window(
         content=FormattedTextControl(get_text),

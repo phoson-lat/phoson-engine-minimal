@@ -116,12 +116,16 @@ class CommandHandler:
                 return True
 
             if result.delete:
-                # Delete the selected session
                 if result.session_id == self.repl.tree.session_id:
-                    r.print_error("Cannot delete the current active session. Use /new first.")
+                    r.print_error(
+                        "Cannot delete the current active session. Use /new first."
+                    )
                     return True
                 await self.repl.storage.delete(result.session_id)
-                r.print_info(f"Session {result.session_id[:8]} deleted. Run /sessions again to refresh.")
+                r.print_info(
+                    f"Session {result.session_id[:8]} deleted."
+                    " Run /sessions again to refresh."
+                )
                 return True
 
             # Load the selected session
@@ -137,7 +141,9 @@ class CommandHandler:
             session_id = cmd.args.strip()
             # Prevent deleting the current active session
             if session_id == self.repl.tree.session_id:
-                r.print_error("Cannot delete the current active session. Use /new first.")
+                r.print_error(
+                    "Cannot delete the current active session. Use /new first."
+                )
                 return True
             try:
                 await self.repl.storage.delete(session_id)
