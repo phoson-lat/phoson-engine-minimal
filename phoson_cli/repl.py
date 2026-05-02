@@ -14,10 +14,10 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
-from phoson_agent.plugins.summarizer import SummarizationMiddleware
-from phoson_agent.plugins.context_window import ContextWindowResolver
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_agent.sessions import JsonlStorage, ConversationTree
+from phoson_agent.plugins.summarizer import SummarizationMiddleware
+from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
 from .config import PhosonConfig, build_chat
@@ -512,7 +512,6 @@ class PhosonRepl:
             return "?"
         used = self._context_tokens
         total = self._context_window
-        pct = (used / total) * 100
 
         def _fmt(n: int) -> str:
             if n >= 1_000_000:
