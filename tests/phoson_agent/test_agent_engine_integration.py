@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
 from phoson_llm.schemas import (
     Message,
@@ -79,7 +80,7 @@ class FakeErrorChat(BaseLLMChat):
         yield ErrorEvent(message="provider timeout", code="timeout", retryable=True)
 
 
-def get_weather(args: dict) -> dict:
+def get_weather(args: dict, context: object = None) -> dict:
     city = args.get("city", "unknown")
     country = args.get("country", "unknown")
     return {
@@ -107,6 +108,11 @@ def build_tools() -> list[AgentTool]:
             handler=get_weather,
         )
     ]
+
+
+@tool(inject=["safe_mode"])
+def run_shell(command: str, safe_mode: bool = False) -> str:
+    return f"cmd={command} safe={safe_mode}"
 
 
 @pytest.mark.asyncio
@@ -174,3 +180,36 @@ async def test_stream_emits_agent_error_when_llm_fails() -> None:
     assert len(error_events) == 1
     assert error_events[0].code == "timeout"
     assert error_events[0].retryable is True
+
+
+@pytest.mark.asyncio
+async def test_run_executes_decorated_tool_with_context_injection() -> None:
+    class FakeInjectedToolChat(BaseLLMChat):
+        async def stream(
+            self,
+            messages: list[Message],
+            config: ModelConfig,
+            tools: list[ToolDefinition] | None = None,
+        ) -> AsyncIterator[LLMEvent]:
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_shell_1",
+                tool_name="run_shell",
+                args={"command": "git log -1 --oneline"},
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+
+    engine = AgentEngine(chat=FakeInjectedToolChat(), tools=[run_shell])
+    engine.context.extra["safe_mode"] = True
+
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="revisa cambios")],
+            config=ModelConfig(model="fake-demo-model", max_tokens=128),
+        )
+    ]
+
+    tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
+    assert tool_done.result == "cmd=git log -1 --oneline safe=True"

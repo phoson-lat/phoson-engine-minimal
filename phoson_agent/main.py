@@ -29,6 +29,7 @@ from phoson_llm.schemas import (
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.openrouter import OpenRouterChat
 
 
 class FakeToolChat(BaseLLMChat):
@@ -208,7 +209,7 @@ def build_real_provider_chat() -> tuple[str, BaseLLMChat, ModelConfig] | None:
         if api_key:
             return (
                 "openrouter",
-                OpenAIChat(base_url="https://openrouter.ai/api/v1", api_key=api_key),
+                OpenRouterChat(api_key=api_key),
                 ModelConfig(model="minimax/minimax-m2.5:free", max_tokens=512),
             )
 

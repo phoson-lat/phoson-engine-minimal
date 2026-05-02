@@ -1,6 +1,5 @@
 import json
 import asyncio
-import inspect
 import datetime
 from typing import Any
 from dataclasses import field, dataclass
@@ -363,6 +362,13 @@ class AgentEngine:
                                 tool_call_id=call.tool_call_id,
                                 tool_name=call.tool_name,
                                 args=call.args,
+                                label=(
+                                    "subagent"
+                                    if call.tool_name == "agent"
+                                    else "subagents"
+                                    if call.tool_name == "agents"
+                                    else None
+                                ),
                             )
                         )
 
@@ -378,13 +384,9 @@ class AgentEngine:
                             error_flag = True
                         else:
                             try:
-                                handler_sig = inspect.signature(tool.handler)
-                                if len(handler_sig.parameters) >= 2:
-                                    tool_result = tool.handler(call.args, self.context)
-                                else:
-                                    tool_result = tool.handler(call.args)
+                                tool_result = tool.handler(call.args, self.context)
 
-                                if inspect.isawaitable(tool_result):
+                                if asyncio.iscoroutine(tool_result):
                                     tool_result = await tool_result
 
                                 if not isinstance(tool_result, (str, dict)):
@@ -443,6 +445,13 @@ class AgentEngine:
                                 result=result_text,
                                 error=tool_error,
                                 duration_ms=tool_step.duration_ms,
+                                label=(
+                                    "subagent"
+                                    if call.tool_name == "agent"
+                                    else "subagents"
+                                    if call.tool_name == "agents"
+                                    else None
+                                ),
                             )
                         )
                         yield await self._prepare_event(

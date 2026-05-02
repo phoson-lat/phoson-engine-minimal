@@ -2,7 +2,7 @@ import datetime
 from typing import Any
 
 from phoson_llm.schemas import Message, TextBlock, ToolUseBlock, ToolResultBlock
-from phoson_agent.sessions.models import ConversationNode
+from phoson_agent.sessions.models import ConversationNode, ConversationTree
 
 
 def block_to_dict(block: TextBlock | ToolUseBlock | ToolResultBlock) -> dict[str, Any]:
@@ -82,4 +82,24 @@ def node_from_dict(data: dict[str, Any]) -> ConversationNode:
         message=message_from_dict(data["message"]),
         created_at=datetime.datetime.fromisoformat(data["created_at"]),
         metadata=dict(data.get("metadata", {})),
+    )
+
+
+def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
+    return {
+        "type": "session_meta",
+        "session_id": tree.session_id,
+        "total_cost": tree.total_cost,
+        "total_tokens": tree.total_tokens,
+        "step_count": tree.step_count,
+        "last_model": tree.last_model,
+    }
+
+
+def apply_tree_meta(tree: ConversationTree, data: dict[str, Any]) -> None:
+    tree.update_session_meta(
+        total_cost=float(data.get("total_cost", 0.0)),
+        total_tokens=int(data.get("total_tokens", 0)),
+        step_count=int(data.get("step_count", 0)),
+        last_model=data.get("last_model"),
     )

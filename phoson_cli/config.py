@@ -4,17 +4,21 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.openrouter import OpenRouterChat
 
 
 @dataclass
 class PhosonConfig:
-    model: str = "minimax/minimax-m2.7"
+    model: str = "minimax/minimax-m2.5"
+    subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
+    ollama_base_url: str | None = None
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
@@ -52,6 +56,11 @@ def load_config() -> PhosonConfig:
     model = (
         os.environ.get("PHOSON_MODEL") or file_defaults.get("model") or defaults.model
     )
+    subagent_model = (
+        os.environ.get("PHOSON_SUBAGENT_MODEL")
+        or file_defaults.get("subagent_model")
+        or defaults.subagent_model
+    )
     provider = (
         os.environ.get("PHOSON_PROVIDER")
         or file_defaults.get("provider")
@@ -80,10 +89,12 @@ def load_config() -> PhosonConfig:
 
     cfg = PhosonConfig(
         model=str(model),
+        subagent_model=str(subagent_model) if subagent_model else None,
         provider=str(provider).lower(),
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL"),
         sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
         max_iterations=max_iterations,
         safe_mode=safe_mode,
@@ -97,10 +108,7 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
     if provider == "openrouter":
         if not config.openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY is required for provider=openrouter")
-        return OpenAIChat(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=config.openrouter_api_key,
-        )
+        return OpenRouterChat(api_key=config.openrouter_api_key)
     if provider == "openai":
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for provider=openai")
@@ -109,4 +117,6 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
         if not config.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for provider=anthropic")
         return AnthropicChat(api_key=config.anthropic_api_key)
+    if provider == "ollama":
+        return OllamaChat(base_url=config.ollama_base_url or "http://localhost:11434")
     raise ValueError(f"Unsupported provider: {config.provider}")

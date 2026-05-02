@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from dataclasses import field, dataclass
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -8,18 +9,103 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
 from phoson_agent import (
+    RunStep,
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
 )
 from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
+from phoson_agent.plugins.summarizer import SummarizationMiddleware
+from phoson_agent.plugins.context_window import ContextWindowResolver
 
-from .tools import build_tools
+from .tools import build_tools, build_tools_dict
 from .config import PhosonConfig, build_chat
 from .commands import COMMANDS, CommandHandler, parse_command
 from .renderer import Renderer
-from .attachments import AttachmentManager
+
+
+@dataclass
+class SessionMetrics:
+    """Accumulated metrics for the current session."""
+
+    total_cost_usd: float = 0.0
+    total_credits: float = 0.0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    step_count: int = 0
+    last_model: str = ""
+    steps: list[RunStep] = field(default_factory=list)
+
+    # For phoson_weight calculation
+    phoson_weight: float = 1.0
+
+    def add_run_step(self, step: RunStep) -> None:
+        """Add a run step and update totals."""
+        self.steps.append(step)
+        self.step_count += 1
+
+        if step.usage:
+            self.total_input_tokens += step.usage.input_tokens
+            self.total_output_tokens += step.usage.output_tokens
+            if step.usage.cache_write_tokens:
+                self.total_cache_write_tokens += step.usage.cache_write_tokens
+            if step.usage.cache_read_tokens:
+                self.total_cache_read_tokens += step.usage.cache_read_tokens
+
+        self.total_cost_usd += step.cost_usd
+        self.total_credits += step.credits
+        if step.model:
+            self.last_model = step.model
+
+    def reset(self) -> None:
+        """Reset all metrics for a new session."""
+        self.total_cost_usd = 0.0
+        self.total_credits = 0.0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cache_write_tokens = 0
+        self.total_cache_read_tokens = 0
+        self.step_count = 0
+        self.last_model = ""
+        self.steps.clear()
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
+
+    @property
+    def avg_cost_per_message(self) -> float:
+        if self.step_count == 0:
+            return 0.0
+        return self.total_cost_usd / self.step_count
+
+    def load_from_meta(self, meta: dict) -> None:
+        """Load metrics from session metadata dict."""
+        self.total_cost_usd = meta.get("total_cost_usd", 0.0)
+        self.total_credits = meta.get("total_credits", 0.0)
+        self.total_input_tokens = meta.get("total_input_tokens", 0)
+        self.total_output_tokens = meta.get("total_output_tokens", 0)
+        self.total_cache_write_tokens = meta.get("total_cache_write_tokens", 0)
+        self.total_cache_read_tokens = meta.get("total_cache_read_tokens", 0)
+        self.step_count = meta.get("step_count", 0)
+        self.last_model = meta.get("last_model", "")
+
+    def to_meta(self) -> dict:
+        """Convert to metadata dict for storage."""
+        return {
+            "total_cost_usd": self.total_cost_usd,
+            "total_credits": self.total_credits,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_cache_write_tokens": self.total_cache_write_tokens,
+            "total_cache_read_tokens": self.total_cache_read_tokens,
+            "step_count": self.step_count,
+            "last_model": self.last_model,
+        }
+
 
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
@@ -32,6 +118,7 @@ _PROMPT_STYLE = Style.from_dict(
         "prompt.model": "#e0d0ff bold",
         "prompt.sep": "#5a4e6e",
         "prompt.node": "#6b5b8a",
+        "prompt.tokens": "#8a7a9a",
         "prompt.arrow": "#b57bee bold",
         # completion dropdown
         "completion-menu": "bg:#1e1530 #9a8faa",
@@ -50,9 +137,15 @@ _CMD_META: dict[str, str] = {
     "/quit": "quit phoson_cli",
     "/new": "start a new session",
     "/clear": "alias for /new",
-    "/model": "show or switch model",
+    "/model": "show, list, or switch model",
+    "/subagent-model": "show or set the LLM model for sub-agents",
+    "/env": "show environment variables",
+    "/cost": "show session cost breakdown",
+    "/tokens": "show token usage stats",
+    "/steps": "show execution steps",
     "/tree": "show conversation tree",
-    "/sessions": "list & load saved sessions",
+    "/sessions": "interactive session picker (navigate, select, delete)",
+    "/delete": "delete a saved session by id",
     "/branch": "branch from current node",
     "/label": "label current node",
     "/attach": "attach image/audio/video/pdf",
@@ -63,8 +156,8 @@ _CMD_META: dict[str, str] = {
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
-    "Available tools: read_file, write_file, list_dir, bash, web_search. "
-    "Be concise, accurate, and use tools when needed."
+    "Available tools: read_file, write_file, patch_file, list_dir, bash, "
+    "web_search, subagents. Be concise, accurate, and use tools when needed."
 )
 
 
@@ -108,14 +201,52 @@ class PhosonRepl:
         self.renderer = Renderer()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
+        self.session_metrics = SessionMetrics()
+
+        # Build tools and registry for sub-agents
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
+        # Create chat instance for sub-agents
+        self.chat = build_chat(config)
+
+        # Context window resolver + token estimator for prompt display
+        self._cw_resolver = ContextWindowResolver(
+            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+            openrouter_api_key=config.openrouter_api_key,
+        )
+        self._context_window: int = 128_000  # default, resolved on first use
+        self._context_tokens: int = 0  # current estimated tokens in context
+
+        # Summarization middleware
+        self.summarizer = SummarizationMiddleware(
+            threshold=0.80,
+            min_keep_messages=4,
+            provider=config.provider,
+            model=config.model,
+            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+            openrouter_api_key=config.openrouter_api_key,
+        )
         self.attachments = AttachmentManager()
 
         self.engine = AgentEngine(
-            chat=build_chat(config),
-            tools=build_tools(),
+            chat=self.chat,
+            tools=self.tools,
+            middlewares=[self.summarizer],
             max_iterations=config.max_iterations,
         )
+
+        # Sub-agent model: explicit override or fallback to main model
+        self.subagent_model: str = config.subagent_model or config.model
+
+        # Inject context for sub-agents
         self.engine.context.extra["safe_mode"] = config.safe_mode
+        self.engine.context.extra["available_tools"] = self.tools_dict
+        self.engine.context.extra["default_model"] = self.subagent_model
+
+        self.engine.context.extra["max_iterations"] = config.max_iterations
+        self.engine.context.extra["chat"] = self.chat
+
         self.renderer.set_session(self.tree.session_id)
 
     async def run(self) -> None:
@@ -196,6 +327,12 @@ class PhosonRepl:
             system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
         )
 
+        # Resolve context window and estimate current tokens
+        self._context_window = await self._cw_resolver.resolve(
+            self.config.provider, self.current_model
+        )
+        self._context_tokens = self.summarizer._estimator.count_messages(path)
+
         done_event: AgentDoneEvent | None = None
         had_error = False
 
@@ -218,6 +355,9 @@ class PhosonRepl:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
             await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
             self.renderer.flush_line()
             self.renderer.print_warn("Partial progress saved.")
         finally:
@@ -228,15 +368,54 @@ class PhosonRepl:
             if new_messages:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
+            # Update context tokens with the full history after the run
+            self._context_tokens = self.summarizer._estimator.count_messages(
+                done_event.result.history
+            )
+            # Update session metrics from run steps
+            for step in done_event.result.steps:
+                self.session_metrics.add_run_step(step)
+            # Save both tree and metadata
             await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
 
-    # ── Session / model management ────────────────────────────────────────────
+    # ── Session / model management ─────────────────────────────────────────��──
 
     def new_session(self) -> None:
         self.tree = ConversationTree.new()
         self.current_node_id = None
         self.attachments.clear()
         self.renderer.set_session(self.tree.session_id)
+        self.session_metrics.reset()
+
+    async def load_session(self, session_id: str) -> bool:
+        """Load a session from storage. Returns True on success."""
+        try:
+            self.tree = await self.storage.load(session_id)
+            self.current_node_id = self.find_latest_node_id()
+            self.renderer.set_session(self.tree.session_id)
+            self.session_metrics.reset()
+            # Try to load saved metrics
+            metas = await self.storage.list_meta()
+            for m in metas:
+                if str(m.id) == session_id:
+                    if hasattr(m, "total_cost"):
+                        self.session_metrics.total_cost_usd = m.total_cost
+                    if hasattr(m, "total_tokens"):
+                        self.session_metrics.total_output_tokens = m.total_tokens
+                        self.session_metrics.total_input_tokens = 0
+                    if hasattr(m, "step_count"):
+                        self.session_metrics.step_count = m.step_count
+                    break
+            return True
+        except FileNotFoundError:
+            self.renderer.print_error(f"Session {session_id[:8]} not found.")
+            return False
+        except Exception as e:
+            self.renderer.print_error(f"Failed to load session: {e}")
+            return False
 
     def branch_session(self) -> None:
         if self.current_node_id is None:
@@ -246,12 +425,31 @@ class PhosonRepl:
     def set_model(self, model: str) -> None:
         self.current_model = model
         self.config.model = model
+
+        # Rebuild chat and tools for new model
+        self.chat = build_chat(self.config)
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
+        # Update summarizer with new provider/model
+        self.summarizer.provider = self.config.provider
+        self.summarizer.model = model
+
         self.engine = AgentEngine(
-            chat=build_chat(self.config),
-            tools=build_tools(),
+            chat=self.chat,
+            tools=self.tools,
+            middlewares=[self.summarizer],
             max_iterations=self.config.max_iterations,
         )
+
+        # Re-inject context for sub-agents
+        self.subagent_model = self.config.subagent_model or model
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
+        self.engine.context.extra["available_tools"] = self.tools_dict
+        self.engine.context.extra["default_model"] = self.subagent_model
+
+        self.engine.context.extra["max_iterations"] = self.config.max_iterations
+        self.engine.context.extra["chat"] = self.chat
 
     def label_current_node(self, text: str) -> None:
         if self.current_node_id is None:
@@ -313,6 +511,10 @@ class PhosonRepl:
         short_node = (self.current_node_id or "new")[:8]
         # Mostrar indicador de attachments pendientes
         attach_indicator = f" 📎{len(self.attachments)}" if self.attachments else ""
+
+        # Token context indicator
+        token_part = self._token_indicator()
+
         return [
             ("class:prompt.prefix", "phoson"),
             ("class:prompt.bracket", " ["),
@@ -320,10 +522,28 @@ class PhosonRepl:
             ("class:prompt.sep", "·"),
             ("class:prompt.node", short_node),
             ("class:prompt.sep", attach_indicator),
+            ("class:prompt.sep", "·"),
+            ("class:prompt.tokens", token_part),
             ("class:prompt.bracket", "]"),
             ("class:prompt.arrow", " › "),
             ("", ""),
         ]
+
+    def _token_indicator(self) -> str:
+        """Return a short token usage string like '12.4k/128k'."""
+        if self._context_window <= 0:
+            return "?"
+        used = self._context_tokens
+        total = self._context_window
+
+        def _fmt(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}k"
+            return str(n)
+
+        return f"{_fmt(used)}/{_fmt(total)}"
 
     # ── Banner ────────────────────────────────────────────────────────────────
 
