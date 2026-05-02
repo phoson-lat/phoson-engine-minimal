@@ -13,6 +13,7 @@ COMMANDS: Final[set[str]] = {
     "/subagent-model",
     "/tree",
     "/sessions",
+    "/delete",
     "/branch",
     "/label",
     "/help",
@@ -101,7 +102,54 @@ class CommandHandler:
             if not sessions:
                 r.print_info("No saved sessions.")
                 return True
-            r.print_sessions_table(sessions)
+
+            from phoson_cli.session_picker import pick_session
+
+            result = await pick_session(
+                sessions=sessions,
+                current_id=self.repl.tree.session_id,
+                page_size=15,
+            )
+
+            if result.cancelled:
+                r.print_info("Cancelled.")
+                return True
+
+            if result.delete:
+                if result.session_id == self.repl.tree.session_id:
+                    r.print_error(
+                        "Cannot delete the current active session. Use /new first."
+                    )
+                    return True
+                await self.repl.storage.delete(result.session_id)
+                r.print_info(
+                    f"Session {result.session_id[:8]} deleted."
+                    " Run /sessions again to refresh."
+                )
+                return True
+
+            # Load the selected session
+            ok = await self.repl.load_session(result.session_id)
+            if ok:
+                r.print_info(f"Loaded session  {result.session_id[:8]}")
+            return True
+
+        if cmd.name == "/delete":
+            if not cmd.args:
+                r.print_info("Usage:  /delete <session_id>")
+                return True
+            session_id = cmd.args.strip()
+            # Prevent deleting the current active session
+            if session_id == self.repl.tree.session_id:
+                r.print_error(
+                    "Cannot delete the current active session. Use /new first."
+                )
+                return True
+            try:
+                await self.repl.storage.delete(session_id)
+                r.print_info(f"Session {session_id[:8]} deleted.")
+            except Exception as e:
+                r.print_error(f"Failed to delete session: {e}")
             return True
 
         if cmd.name == "/env":
