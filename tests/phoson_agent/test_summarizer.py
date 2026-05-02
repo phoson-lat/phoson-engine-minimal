@@ -1,10 +1,8 @@
 """Tests for summarization middleware and token estimator."""
 
-import pytest
 
 from phoson_llm.schemas import Message, TextBlock, ToolUseBlock, ToolResultBlock
 from phoson_agent.plugins.summarizer import TokenEstimator, _format_messages_for_summary
-
 
 # ── TokenEstimator ──────────────────────────────────────────────────
 
