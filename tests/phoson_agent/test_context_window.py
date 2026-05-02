@@ -3,11 +3,10 @@
 import pytest
 
 from phoson_agent.plugins.context_window import (
+    DEFAULT_CONTEXT_WINDOW,
     CONTEXT_WINDOW_REGISTRY,
     ContextWindowResolver,
-    DEFAULT_CONTEXT_WINDOW,
 )
-
 
 # ── Static registry tests ────────────────────────────────────────────
 
