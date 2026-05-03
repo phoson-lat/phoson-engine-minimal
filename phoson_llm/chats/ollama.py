@@ -87,8 +87,9 @@ def _extract_system(messages: list[Message]) -> str | None:
 
 
 class OllamaChat(BaseLLMChat):
-    """
-    Adapter para Ollama API (/api/chat).
+    """Adapter for Ollama local LLM inference API (/api/chat).
+
+    Supports running Llama, Mistral, and other models locally.
     """
 
     def __init__(
@@ -96,6 +97,12 @@ class OllamaChat(BaseLLMChat):
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
+        """Initialize the Ollama client.
+
+        Args:
+            base_url: Ollama API base URL (default: http://localhost:11434).
+            timeout: Request timeout in seconds.
+        """
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
@@ -105,16 +112,15 @@ class OllamaChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """
-        Transmite una respuesta del modelo.
+        """Stream a response from the Ollama model.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuration del modelo.
-            tools (list[ToolDefinition] | None): Tools opcionales.
+            messages: List of conversation messages.
+            config: Model configuration (model, max_tokens, temperature, etc.).
+            tools: Optional list of tool definitions.
 
         Yields:
-            LLMEvent: Eventos del ciclo de vida del LLM.
+            LLMEvent objects representing the model's response stream.
         """
         payload: dict = {
             "model": config.model,

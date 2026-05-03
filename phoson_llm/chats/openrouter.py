@@ -129,7 +129,10 @@ def _parse_tool_args(raw: str) -> dict:
 
 
 class OpenRouterChat(BaseLLMChat):
-    """Adapter para OpenRouter API."""
+    """Adapter for OpenRouter API (multi-provider aggregation).
+
+    Provides unified interface to various LLM providers through OpenRouter.
+    """
 
     def __init__(
         self,
@@ -138,6 +141,14 @@ class OpenRouterChat(BaseLLMChat):
         http_referer: str | None = None,
         app_title: str | None = None,
     ) -> None:
+        """Initialize the OpenRouter client.
+
+        Args:
+            api_key: OpenRouter API key. Defaults to OPENROUTER_API_KEY env var.
+            base_url: OpenRouter API base URL.
+            http_referer: Optional HTTP referer for API calls.
+            app_title: Optional application title for OpenRouter analytics.
+        """
         default_headers: dict[str, str] = {}
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
@@ -156,7 +167,16 @@ class OpenRouterChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """Streams a model response."""
+        """Stream a response from the OpenRouter model.
+
+        Args:
+            messages: List of conversation messages.
+            config: Model configuration (model, max_tokens, temperature, etc.).
+            tools: Optional list of tool definitions.
+
+        Yields:
+            LLMEvent objects representing the model's response stream.
+        """
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,

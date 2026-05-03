@@ -50,6 +50,10 @@ class ContextWindowResolver:
     3. For Ollama: query /api/show (with cache)
     4. For OpenRouter: query /api/v1/models (with cache)
     5. Fallback: DEFAULT_CONTEXT_WINDOW
+
+    Args:
+        ollama_base_url: Base URL for Ollama API (default: http://localhost:11434).
+        openrouter_api_key: Optional OpenRouter API key for model queries.
     """
 
     def __init__(
@@ -57,9 +61,9 @@ class ContextWindowResolver:
         ollama_base_url: str = "http://localhost:11434",
         openrouter_api_key: str | None = None,
     ) -> None:
+        """Initialize the resolver with optional API endpoints."""
         self._ollama_base_url = ollama_base_url.rstrip("/")
         self._openrouter_api_key = openrouter_api_key
-        # Cache: model_name -> context_window
         self._ollama_cache: dict[str, int] = {}
         self._openrouter_cache: dict[str, int] = {}
 

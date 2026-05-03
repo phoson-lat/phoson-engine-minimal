@@ -196,9 +196,10 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 class OpenAIChat(BaseLLMChat):
-    """
-    Adapter for OpenAI Chat Completions API.
+    """Adapter for OpenAI Chat Completions API.
+
     Also compatible with Ollama and OpenRouter via base_url.
+    Supports: streaming, tools, multimodal inputs (images, audio, video, documents).
     """
 
     def __init__(
@@ -206,6 +207,12 @@ class OpenAIChat(BaseLLMChat):
         api_key: str | None = None,
         base_url: str | None = None,
     ) -> None:
+        """Initialize the OpenAI client.
+
+        Args:
+            api_key: OpenAI API key. Defaults to OPENAI_API_KEY env var.
+            base_url: Optional base URL for compatible APIs (Ollama, OpenRouter).
+        """
         self._client = AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY", ""),
             base_url=base_url,
@@ -217,16 +224,15 @@ class OpenAIChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """
-        Streams a response from the model.
+        """Stream a response from the OpenAI model.
 
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional list of tools.
+            messages: List of conversation messages.
+            config: Model configuration (model, max_tokens, temperature, etc.).
+            tools: Optional list of tool definitions.
 
         Yields:
-            LLMEvent: Events from the LLM lifecycle.
+            LLMEvent objects representing the model's response stream.
         """
 
         kwargs: dict = {

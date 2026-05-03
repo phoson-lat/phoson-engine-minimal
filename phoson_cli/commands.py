@@ -55,6 +55,11 @@ class CommandHandler:
     """Handles execution of CLI commands."""
 
     def __init__(self, repl: "PhosonRepl") -> None:
+        """Initialize handler with a REPL reference.
+
+        Args:
+            repl: The PhosonRepl instance to operate on.
+        """
         self.repl = repl
 
     async def handle(self, cmd: Command) -> bool:

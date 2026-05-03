@@ -14,15 +14,36 @@ from phoson_agent.sessions.serialization import (
 
 @dataclass
 class JsonlStorage(SessionStorage):
+    """JSONL-based session storage for conversation trees.
+
+    Each session is stored as a single JSONL file where each line is a JSON object.
+    The first line (optional) contains session metadata, followed by node records.
+
+    Args:
+        base_path: Directory path where session JSONL files are stored.
+
+    Example:
+        storage = JsonlStorage(base_path=Path("./sessions"))
+        await storage.save(tree)
+        sessions = await storage.list_sessions()
+    """
+
     base_path: Path
 
     def __post_init__(self) -> None:
+        """Create the base directory if it doesn't exist."""
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     def _session_file(self, session_id: str) -> Path:
+        """Get the file path for a session."""
         return self.base_path / f"{session_id}.jsonl"
 
     async def save(self, tree: ConversationTree) -> None:
+        """Persist a conversation tree to a JSONL file.
+
+        Args:
+            tree: The ConversationTree to save.
+        """
         file_path = self._session_file(tree.session_id)
         nodes = sorted(tree.nodes.values(), key=lambda n: n.created_at)
         with file_path.open("w", encoding="utf-8") as f:
@@ -33,6 +54,17 @@ class JsonlStorage(SessionStorage):
                 f.write("\n")
 
     async def load(self, session_id: str) -> ConversationTree:
+        """Load a conversation tree from a JSONL file.
+
+        Args:
+            session_id: The session identifier.
+
+        Returns:
+            The loaded ConversationTree.
+
+        Raises:
+            FileNotFoundError: If session file doesn't exist.
+        """
         file_path = self._session_file(session_id)
         if not file_path.exists():
             raise FileNotFoundError(f"Session {session_id} does not exist.")
@@ -51,6 +83,11 @@ class JsonlStorage(SessionStorage):
         return tree
 
     async def list_sessions(self) -> list[SessionMeta]:
+        """List all available sessions.
+
+        Returns:
+            List of SessionMeta objects sorted by most recently updated.
+        """
         sessions: list[SessionMeta] = []
         for file_path in sorted(self.base_path.glob("*.jsonl")):
             with file_path.open("r", encoding="utf-8") as f:
@@ -84,11 +121,22 @@ class JsonlStorage(SessionStorage):
         return sessions
 
     async def delete(self, session_id: str) -> None:
+        """Delete a session file.
+
+        Args:
+            session_id: The session identifier to delete.
+        """
         file_path = self._session_file(session_id)
         if file_path.exists():
             file_path.unlink()
 
     async def save_meta(self, session_id: str, meta: dict) -> None:
+        """Update session metadata and save.
+
+        Args:
+            session_id: The session identifier.
+            meta: Metadata dict with keys like total_cost_usd, total_input_tokens.
+        """
         tree = await self.load(session_id)
         tree.update_session_meta(
             total_cost=float(meta.get("total_cost_usd", 0.0)),
