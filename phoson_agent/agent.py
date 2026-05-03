@@ -1,6 +1,7 @@
 """
 Módulo para el motor principal del agente.
 """
+
 import json
 import asyncio
 import datetime
@@ -65,6 +66,7 @@ class AgentEngine:
     """
     Motor principal para ejecutar agentes basados en LLM con soporte para herramientas y middleware.
     """
+
     chat: BaseLLMChat
     tools: list[AgentTool]
     middlewares: list[AgentMiddleware] = field(default_factory=list)
@@ -114,6 +116,7 @@ class AgentEngine:
         tool_definitions: list[ToolDefinition],
     ) -> LLMCallNext:
         """Construye la cadena de ejecución de middleware para la llamada al LLM."""
+
         async def base_call(
             messages: list[Message],
             config: ModelConfig,

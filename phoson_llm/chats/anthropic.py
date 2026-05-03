@@ -35,6 +35,7 @@ from phoson_llm.chats.base import BaseLLMChat
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _convert_content_block(block: ContentBlock) -> dict:
     """
     Convierte un ContentBlock multimodal al formato que espera Anthropic.

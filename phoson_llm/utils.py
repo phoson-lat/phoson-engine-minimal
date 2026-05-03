@@ -19,6 +19,7 @@ def load_file_as_base64(path: str, media_type: str | None = None) -> str:
     mime = media_type or guess_mime(path)
     return f"data:{mime};base64,{b64}"
 
+
 def guess_mime(path: str) -> str:
     """
     Adivina el tipo MIME de un archivo basado en su extensión.
@@ -47,6 +48,7 @@ def guess_mime(path: str) -> str:
         ".ogg": "audio/ogg",
         ".flac": "audio/flac",
     }.get(ext, "application/octet-stream")
+
 
 def map_error_code(status_code: int) -> str:
     """

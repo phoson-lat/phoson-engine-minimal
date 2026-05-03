@@ -1,6 +1,7 @@
 """
 Módulo para la definición de herramientas del agente.
 """
+
 import typing
 import inspect
 import functools
@@ -106,6 +107,7 @@ def tool(_fn: Any = None, *, inject: list[str] | None = None) -> Any:
     """
     Decorador para registrar una función como herramienta del agente.
     """
+
     def decorator(fn: Any) -> AgentTool:
         injected = set(inject or [])
 
