@@ -64,7 +64,8 @@ def _to_result_text(value: str | dict[str, Any]) -> str:
 @dataclass
 class AgentEngine:
     """
-    Motor principal para ejecutar agentes basados en LLM con soporte para herramientas y middleware.
+    Motor principal para ejecutar agentes basados en LLM 
+    con soporte para herramientas y middleware.
     """
 
     chat: BaseLLMChat
