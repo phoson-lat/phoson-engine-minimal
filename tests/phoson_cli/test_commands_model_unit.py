@@ -21,7 +21,18 @@ class DummyRepl:
     def __init__(self) -> None:
         self.current_model = "openai/gpt-4.1-mini"
         self.subagent_model = "openai/gpt-4.1-mini"
-        self.config = SimpleNamespace(provider="openrouter", model=self.current_model)
+        self.config = SimpleNamespace(
+            provider="openrouter",
+            model=self.current_model,
+            subagent_model=self.subagent_model,
+            openrouter_api_key="sk-or-test",
+            openai_api_key=None,
+            anthropic_api_key=None,
+            ollama_base_url=None,
+            sessions_dir="~/.phoson/sessions",
+            max_iterations=50,
+            safe_mode=False,
+        )
         self.renderer = DummyRenderer()
         self.set_model_calls: list[str] = []
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
@@ -77,7 +88,7 @@ async def test_model_command_opens_picker_and_switches_model(monkeypatch) -> Non
 
     assert result is True
     assert repl.set_model_calls == ["google/gemini-2.5-flash"]
-    assert repl.renderer.infos[-1] == "Model → google/gemini-2.5-flash"
+    assert repl.renderer.infos[-1] == "Model → google/gemini-2.5-flash  ·  saved"
 
 
 @pytest.mark.asyncio
@@ -91,7 +102,7 @@ async def test_model_command_switches_model_directly() -> None:
 
     assert result is True
     assert repl.set_model_calls == ["google/gemini-2.5-flash"]
-    assert repl.renderer.infos[-1] == "Model → google/gemini-2.5-flash"
+    assert repl.renderer.infos[-1] == "Model → google/gemini-2.5-flash  ·  saved"
 
 
 @pytest.mark.asyncio
@@ -119,7 +130,10 @@ async def test_subagent_model_command_opens_picker_and_switches_model(
     assert repl.subagent_model == "anthropic/claude-3.5-haiku"
     assert repl.config.subagent_model == "anthropic/claude-3.5-haiku"
     assert repl.engine.context.extra["default_model"] == "anthropic/claude-3.5-haiku"
-    assert repl.renderer.infos[-1] == "Sub-agent model → anthropic/claude-3.5-haiku"
+    assert (
+        repl.renderer.infos[-1]
+        == "Sub-agent model → anthropic/claude-3.5-haiku  ·  saved"
+    )
 
 
 @pytest.mark.asyncio

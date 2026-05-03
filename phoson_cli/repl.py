@@ -49,12 +49,12 @@ class SessionMetrics:
         self.step_count += 1
 
         if step.usage:
-            self.total_input_tokens += step.usage.input_tokens
-            self.total_output_tokens += step.usage.output_tokens
-            if step.usage.cache_write_tokens:
-                self.total_cache_write_tokens += step.usage.cache_write_tokens
-            if step.usage.cache_read_tokens:
-                self.total_cache_read_tokens += step.usage.cache_read_tokens
+            self.total_input_tokens += step.usage.input
+            self.total_output_tokens += step.usage.output
+            if step.usage.cache_write:
+                self.total_cache_write_tokens += step.usage.cache_write
+            if step.usage.cache_read:
+                self.total_cache_read_tokens += step.usage.cache_read
 
         self.total_cost_usd += step.cost_usd
         self.total_credits += step.credits
@@ -442,6 +442,11 @@ class PhosonRepl:
             return
         self.current_node_id = self.tree.branch(self.current_node_id)
 
+    def set_provider(self, provider: str) -> None:
+        """Switch to a different provider and rebuild runtime state."""
+        self.config.provider = provider
+        self.set_model(self.config.model)
+
     def set_model(self, model: str) -> None:
         """Switch to a different model.
 
@@ -451,7 +456,7 @@ class PhosonRepl:
         self.current_model = model
         self.config.model = model
 
-        # Rebuild chat and tools for new model
+        # Rebuild chat and tools for new model/provider
         self.chat = build_chat(self.config)
         self.tools = build_tools()
         self.tools_dict = build_tools_dict()

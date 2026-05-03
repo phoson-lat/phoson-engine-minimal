@@ -7,8 +7,11 @@ Defines and implements the slash-commands available in the REPL.
 from typing import TYPE_CHECKING, Any, Final
 from dataclasses import dataclass
 
+from .config import save_config
+from .installer import run_install_wizard
 from .model_picker import pick_model
 from .model_selector import list_available_models
+from .provider_picker import pick_provider
 
 if TYPE_CHECKING:
     from .repl import PhosonRepl
@@ -19,6 +22,7 @@ COMMANDS: Final[set[str]] = {
     "/clear",
     "/new",
     "/model",
+    "/provider",
     "/subagent-model",
     "/tree",
     "/sessions",
@@ -32,6 +36,7 @@ COMMANDS: Final[set[str]] = {
     "/cost",
     "/tokens",
     "/steps",
+    "/setup",
 }
 
 
@@ -91,7 +96,8 @@ class CommandHandler:
                     r.print_info("Cancelled.")
                     return True
                 self.repl.set_model(result.model_id)
-                r.print_info(f"Model → {self.repl.current_model}")
+                save_config(self.repl.config)
+                r.print_info(f"Model → {self.repl.current_model}  ·  saved")
                 return True
             if cmd.args == "list":
                 models = await list_available_models(self.repl.config)
@@ -105,7 +111,67 @@ class CommandHandler:
                     r.print_info(f" {marker} {option.id}{suffix}")
                 return True
             self.repl.set_model(cmd.args)
-            r.print_info(f"Model → {self.repl.current_model}")
+            save_config(self.repl.config)
+            r.print_info(f"Model → {self.repl.current_model}  ·  saved")
+            return True
+
+        if cmd.name == "/provider":
+            providers = self._available_providers()
+            if not providers:
+                r.print_info("No providers configured. Run /setup first.")
+                return True
+            if cmd.args == "list":
+                r.print_info("Available providers:")
+                for provider in providers:
+                    marker = "*" if provider == self.repl.config.provider else " "
+                    r.print_info(f" {marker} {provider}")
+                return True
+
+            target_provider = cmd.args or None
+            if not target_provider:
+                result = await pick_provider(
+                    providers=providers,
+                    current_provider=self.repl.config.provider,
+                )
+                if result.cancelled or not result.provider:
+                    r.print_info("Cancelled.")
+                    return True
+                target_provider = result.provider
+
+            if target_provider not in providers:
+                r.print_error(f"Provider not configured: {target_provider}")
+                return True
+
+            try:
+                self.repl.set_provider(target_provider)
+            except ValueError as e:
+                r.print_error(str(e))
+                return True
+
+            models = await list_available_models(self.repl.config)
+            if not models:
+                save_config(self.repl.config)
+                r.print_info(f"Provider → {self.repl.config.provider}  ·  saved")
+                r.print_info("No models available for the selected provider.")
+                return True
+
+            model_result = await pick_model(
+                models=models,
+                current_model=self.repl.current_model,
+            )
+            if model_result.cancelled or not model_result.model_id:
+                save_config(self.repl.config)
+                r.print_info(f"Provider → {self.repl.config.provider}  ·  saved")
+                r.print_info("Model selection cancelled; kept current model.")
+                return True
+
+            self.repl.set_model(model_result.model_id)
+            save_config(self.repl.config)
+            r.print_info(
+                "Provider → "
+                f"{self.repl.config.provider}  ·  "
+                f"Model → {self.repl.current_model}  ·  saved"
+            )
             return True
 
         if cmd.name == "/subagent-model":
@@ -124,7 +190,8 @@ class CommandHandler:
                 self.repl.subagent_model = result.model_id
                 self.repl.config.subagent_model = result.model_id
                 self.repl.engine.context.extra["default_model"] = result.model_id
-                r.print_info(f"Sub-agent model → {result.model_id}")
+                save_config(self.repl.config)
+                r.print_info(f"Sub-agent model → {result.model_id}  ·  saved")
                 return True
             if cmd.args == "list":
                 models = await list_available_models(self.repl.config)
@@ -140,7 +207,8 @@ class CommandHandler:
             self.repl.subagent_model = cmd.args
             self.repl.config.subagent_model = cmd.args
             self.repl.engine.context.extra["default_model"] = cmd.args
-            r.print_info(f"Sub-agent model → {cmd.args}")
+            save_config(self.repl.config)
+            r.print_info(f"Sub-agent model → {cmd.args}  ·  saved")
             return True
 
         if cmd.name == "/tree":
@@ -166,6 +234,12 @@ class CommandHandler:
 
         if cmd.name == "/help":
             r.print_help(COMMANDS)
+            return True
+
+        if cmd.name == "/setup":
+            self.repl.config = await run_install_wizard(self.repl.config)
+            self.repl.set_model(self.repl.config.model)
+            r.print_info("Setup completed.")
             return True
 
         if cmd.name == "/sessions":
@@ -251,6 +325,21 @@ class CommandHandler:
 
         r.print_error(f"Unknown command: {cmd.name}")
         return True
+
+    def _available_providers(self) -> list[str]:
+        config = self.repl.config
+        providers: list[str] = []
+        if config.openrouter_api_key:
+            providers.append("openrouter")
+        if config.openai_api_key:
+            providers.append("openai")
+        if config.anthropic_api_key:
+            providers.append("anthropic")
+        if config.ollama_base_url:
+            providers.append("ollama")
+        if config.provider not in providers:
+            providers.append(config.provider)
+        return providers
 
     async def _handle_attach(self, cmd: Command, r: Any) -> bool:
         """Handle /attach and /attachments commands."""
