@@ -234,6 +234,12 @@ Or run the interactive CLI:
 uv run phoson-cli
 ```
 
+Run the setup wizard to configure provider credentials and defaults:
+
+```bash
+uv run phoson-cli --setup
+```
+
 ---
 
 ## 📥 Installation
