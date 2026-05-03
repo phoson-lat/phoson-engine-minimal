@@ -184,6 +184,13 @@ run_setup_wizard() {
         return 0
     fi
 
+    # Check if we have a terminal (non-interactive mode)
+    if [ ! -t 0 ]; then
+        info "Non-interactive mode detected. Skipping setup wizard."
+        info "Run 'phoson-cli --setup' later to configure."
+        return 0
+    fi
+
     info "Running setup wizard..."
     if command -v "$PHOSON_CLI" >/dev/null 2>&1; then
         "$PHOSON_CLI" --setup
