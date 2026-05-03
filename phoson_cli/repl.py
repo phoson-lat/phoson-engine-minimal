@@ -23,6 +23,7 @@ from .tools import build_tools, build_tools_dict
 from .config import PhosonConfig, build_chat
 from .commands import COMMANDS, CommandHandler, parse_command
 from .renderer import Renderer
+from .attachments import AttachmentManager
 
 
 @dataclass
