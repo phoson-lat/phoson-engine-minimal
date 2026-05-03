@@ -1,14 +1,10 @@
-import httpx
 from collections.abc import AsyncIterator
 
+import httpx
 import pytest
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
-from phoson_llm.chats.openai import OpenAIChat
-from phoson_llm.chats.openrouter import OpenRouterChat
-from phoson_llm.chats.anthropic import AnthropicChat
-from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -31,6 +27,10 @@ from phoson_agent.models import (
     AgentToolStartEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.ollama import OllamaChat
+from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.openrouter import OpenRouterChat
 
 
 class _Delta:
@@ -515,8 +515,12 @@ async def test_ollama_adapter_integration_tool_loop(monkeypatch) -> None:
         async def aiter_lines(self):
             nonlocal call_count
             if call_count == 1:
-                yield '{"message":{"type":"message","content":"","tool_calls":[{"index":0,"id":"call_ollama_1","function":{"name":"get_weather","arguments":"{\\"city\\":\\"Qro\\"}"}}]}}'
-                yield '{"message":{"type":"done"},"eval_count":5,"prompt_eval_count":10}'
+                yield ('{"message":{"type":"message","content":"","tool_calls":'
+                       '[{"index":0,"id":"call_ollama_1","function":'
+                       '{"name":"get_weather",'
+                       '"arguments":"{\\"city\\":\\"Qro\\"}"}}]}}')
+                yield ('{"message":{"type":"done"},'
+                       '"eval_count":5,"prompt_eval_count":10}')
             else:
                 yield '{"message":{"type":"message","content":"Listo"},"done":true}'
 
