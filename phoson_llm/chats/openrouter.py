@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 
+from phoson_llm.utils import map_error_code
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -28,6 +29,7 @@ from phoson_llm.chats.base import BaseLLMChat
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
+    """Converts Phoson messages to OpenRouter/OpenAI format."""
     result = []
 
     for msg in messages:
@@ -84,6 +86,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
+    """Converts ToolDefinition to OpenRouter tools format."""
     return [
         {
             "type": "function",
@@ -98,6 +101,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 def _extract_reasoning_delta(delta: object) -> str | None:
+    """Extracts reasoning_content from an OpenAI delta."""
     for attr in ("reasoning_content", "reasoning"):
         value = getattr(delta, attr, None)
         if isinstance(value, str) and value:
@@ -106,6 +110,7 @@ def _extract_reasoning_delta(delta: object) -> str | None:
 
 
 def _parse_tool_args(raw: str) -> dict:
+    """Safe parsing of tool arguments."""
     if not raw:
         return {}
 
@@ -124,6 +129,11 @@ def _parse_tool_args(raw: str) -> dict:
 
 
 class OpenRouterChat(BaseLLMChat):
+    """Adapter for OpenRouter API (multi-provider aggregation).
+
+    Provides unified interface to various LLM providers through OpenRouter.
+    """
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -131,6 +141,14 @@ class OpenRouterChat(BaseLLMChat):
         http_referer: str | None = None,
         app_title: str | None = None,
     ) -> None:
+        """Initialize the OpenRouter client.
+
+        Args:
+            api_key: OpenRouter API key. Defaults to OPENROUTER_API_KEY env var.
+            base_url: OpenRouter API base URL.
+            http_referer: Optional HTTP referer for API calls.
+            app_title: Optional application title for OpenRouter analytics.
+        """
         default_headers: dict[str, str] = {}
         if http_referer:
             default_headers["HTTP-Referer"] = http_referer
@@ -149,6 +167,16 @@ class OpenRouterChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
+        """Stream a response from the OpenRouter model.
+
+        Args:
+            messages: List of conversation messages.
+            config: Model configuration (model, max_tokens, temperature, etc.).
+            tools: Optional list of tool definitions.
+
+        Yields:
+            LLMEvent objects representing the model's response stream.
+        """
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,
@@ -247,7 +275,7 @@ class OpenRouterChat(BaseLLMChat):
                         )
 
         except APIStatusError as e:
-            code = _map_error_code(e.status_code)
+            code = map_error_code(e.status_code)
             yield ErrorEvent(
                 message=str(e.message),
                 code=code,
@@ -285,14 +313,3 @@ class OpenRouterChat(BaseLLMChat):
             )
 
         yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
-
-
-def _map_error_code(status_code: int) -> str:
-    return {
-        401: "auth",
-        403: "permission",
-        404: "not_found",
-        429: "rate_limit",
-        500: "server_error",
-        503: "overloaded",
-    }.get(status_code, "unknown")

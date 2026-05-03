@@ -1,3 +1,7 @@
+"""
+Module for agent middlewares.
+"""
+
 from abc import ABC
 from collections.abc import Callable, AsyncIterator
 
@@ -12,12 +16,7 @@ LLMCallNext = Callable[
 
 class AgentMiddleware(ABC):
     """
-    Middleware hooks for AgentEngine.
-
-    Known limitation (v1): `on_before_tool` can return a modified ToolCallEvent,
-    but the assistant-side ToolUseBlock already persisted in history comes from
-    the original LLM call. If a middleware mutates tool args/name/id, assistant
-    ToolUseBlock and tool execution/result payload may diverge.
+    Base class for agent engine middlewares.
     """
 
     async def on_before_llm(
@@ -25,6 +24,7 @@ class AgentMiddleware(ABC):
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
+        """Hook executed before calling the LLM."""
         return messages
 
     async def wrap_llm_call(
@@ -33,6 +33,7 @@ class AgentMiddleware(ABC):
         messages: list[Message],
         config: ModelConfig,
     ) -> AsyncIterator[LLMEvent]:
+        """Wraps the LLM call to intercept events."""
         async for event in call_next(messages, config):
             yield event
 
@@ -40,6 +41,7 @@ class AgentMiddleware(ABC):
         self,
         call: ToolCallEvent,
     ) -> ToolCallEvent | None:
+        """Hook executed before executing a tool."""
         return call
 
     async def on_after_tool(
@@ -48,13 +50,19 @@ class AgentMiddleware(ABC):
         result: str,
         error: bool,
     ) -> str:
+        """Hook executed after executing a tool."""
         return result
 
     async def on_agent_event(self, event: AgentEvent) -> None:
+        """Hook executed on any agent event."""
         return None
 
 
 class RetryMiddleware(AgentMiddleware):
+    """
+    Middleware to automatically retry LLM calls on errors.
+    """
+
     def __init__(
         self,
         max_retries: int = 2,

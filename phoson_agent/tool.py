@@ -1,3 +1,7 @@
+"""
+Module for the definition of agent tools.
+"""
+
 import typing
 import inspect
 import functools
@@ -17,6 +21,7 @@ _TYPE_MAP: dict[type, str] = {
 
 
 def _context_values(context: Any | None) -> dict[str, Any]:
+    """Extracts relevant values from a context object."""
     if context is None:
         return {}
 
@@ -36,6 +41,7 @@ def _context_values(context: Any | None) -> dict[str, Any]:
 
 
 def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]:
+    """Generates a JSON schema from a Python type."""
     description = None
 
     if get_origin(python_type) is Annotated:
@@ -65,6 +71,7 @@ def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]
 
 
 def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
+    """Builds the JSON parameter schema for a function."""
     hints = get_type_hints(fn, include_extras=True)
     sig = inspect.signature(fn)
 
@@ -97,6 +104,10 @@ def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
 
 
 def tool(_fn: Any = None, *, inject: list[str] | None = None) -> Any:
+    """
+    Decorator to register a function as an agent tool.
+    """
+
     def decorator(fn: Any) -> AgentTool:
         injected = set(inject or [])
 

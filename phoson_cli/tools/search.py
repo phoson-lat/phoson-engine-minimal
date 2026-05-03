@@ -1,3 +1,5 @@
+"""Web search tool."""
+
 from html.parser import HTMLParser
 from urllib.parse import urlencode
 
@@ -5,8 +7,12 @@ import httpx
 
 from phoson_agent.tool import tool
 
+from .base import BaseTool
+
 
 class _DuckParser(HTMLParser):
+    """Internal HTML parser for DuckDuckGo search results."""
+
     def __init__(self) -> None:
         super().__init__()
         self.results: list[dict[str, str]] = []
@@ -45,34 +51,42 @@ class _DuckParser(HTMLParser):
             current["snippet"] = text
 
 
+class SearchTool(BaseTool):
+    """Tool to perform web searches."""
+
+    def run(self, query: str) -> str:
+        """Search the web and return top 5 results with titles, URLs and snippets."""
+        q = urlencode({"q": query})
+        url = f"https://html.duckduckgo.com/html/?{q}"
+
+        try:
+            response = httpx.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (phoson-cli)"},
+                timeout=15,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            return f"Search failed: {exc}"
+
+        parser = _DuckParser()
+        parser.feed(response.text)
+
+        top = parser.results[:5]
+        if not top:
+            return "No results found."
+
+        lines: list[str] = []
+        for idx, result in enumerate(top, start=1):
+            title = result.get("title") or "(no title)"
+            link = result.get("url") or "(no url)"
+            snippet = result.get("snippet") or "(no snippet)"
+            lines.append(f"{idx}. {title}\n   {link}\n   {snippet}")
+        return "\n\n".join(lines)
+
+
 @tool
 def web_search(query: str) -> str:
-    """Search the web and return top 5 results with titles, URLs and snippets."""
-    q = urlencode({"q": query})
-    url = f"https://html.duckduckgo.com/html/?{q}"
-
-    try:
-        response = httpx.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (phoson-cli)"},
-            timeout=15,
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        return f"Search failed: {exc}"
-
-    parser = _DuckParser()
-    parser.feed(response.text)
-
-    top = parser.results[:5]
-    if not top:
-        return "No results found."
-
-    lines: list[str] = []
-    for idx, result in enumerate(top, start=1):
-        title = result.get("title") or "(no title)"
-        link = result.get("url") or "(no url)"
-        snippet = result.get("snippet") or "(no snippet)"
-        lines.append(f"{idx}. {title}\n   {link}\n   {snippet}")
-    return "\n\n".join(lines)
+    """Search the web and return top 5 results."""
+    return SearchTool().run(query)

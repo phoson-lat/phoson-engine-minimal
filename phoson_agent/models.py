@@ -17,6 +17,8 @@ ToolHandler = (
 
 @dataclass
 class AgentTool:
+    """Definition of an agent tool."""
+
     name: str
     description: str
     parameters: dict[str, Any]
@@ -25,6 +27,8 @@ class AgentTool:
 
 @dataclass
 class RunStep:
+    """Represents a step in the agent execution run."""
+
     kind: Literal["llm", "tool"]
     started_at: datetime.datetime
     ended_at: datetime.datetime
@@ -41,6 +45,8 @@ class RunStep:
 
 @dataclass
 class AgentRunResult:
+    """Result of an agent run."""
+
     final_content: str
     history: list[Message]
     input_messages: list[Message]
@@ -51,6 +57,8 @@ class AgentRunResult:
 
 @dataclass
 class AgentEvent:
+    """Base class for agent events."""
+
     timestamp: datetime.datetime = field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
         init=False,
@@ -59,6 +67,8 @@ class AgentEvent:
 
 @dataclass
 class AgentStartEvent(AgentEvent):
+    """Event emitted when the agent starts."""
+
     model: str = ""
     message_count: int = 0
     max_iterations: int = 0
@@ -66,16 +76,22 @@ class AgentStartEvent(AgentEvent):
 
 @dataclass
 class AgentTokenEvent(AgentEvent):
+    """Event emitted when a token is generated."""
+
     content: str = ""
 
 
 @dataclass
 class AgentReasoningEvent(AgentEvent):
+    """Event emitted when a reasoning token is generated."""
+
     content: str = ""
 
 
 @dataclass
 class AgentToolStartEvent(AgentEvent):
+    """Event emitted when a tool call starts."""
+
     index: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
@@ -85,6 +101,8 @@ class AgentToolStartEvent(AgentEvent):
 
 @dataclass
 class AgentToolDoneEvent(AgentEvent):
+    """Event emitted when a tool call completes."""
+
     index: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
@@ -96,16 +114,22 @@ class AgentToolDoneEvent(AgentEvent):
 
 @dataclass
 class AgentStepDoneEvent(AgentEvent):
+    """Event emitted when a step (LLM or tool) completes."""
+
     step: RunStep
 
 
 @dataclass
 class AgentDoneEvent(AgentEvent):
+    """Event emitted when the agent finishes."""
+
     result: AgentRunResult
 
 
 @dataclass
 class AgentErrorEvent(AgentEvent):
+    """Event emitted when an error occurs."""
+
     message: str = ""
     code: str | None = None
     retryable: bool = False

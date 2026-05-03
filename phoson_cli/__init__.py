@@ -1,4 +1,10 @@
-from .repl import PhosonRepl
-from .config import PhosonConfig, build_chat, load_config
+"""
+Phoson CLI module.
 
-__all__ = ["PhosonConfig", "PhosonRepl", "build_chat", "load_config"]
+This module provides the interactive command-line interface for the Phoson agent,
+including session management, tool execution, and conversation history.
+"""
+
+from .repl import PhosonRepl
+
+__all__ = ["PhosonRepl"]
