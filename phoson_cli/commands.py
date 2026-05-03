@@ -1,4 +1,10 @@
-from typing import TYPE_CHECKING, Final
+"""
+Command handler for the Phoson CLI.
+
+Defines and implements the slash-commands available in the REPL.
+"""
+
+from typing import TYPE_CHECKING, Any, Final
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
@@ -19,7 +25,6 @@ COMMANDS: Final[set[str]] = {
     "/attach",
     "/attachments",
     "/help",
-    # ── New diagnostic commands ──────────────────────────────────────────────
     "/env",
     "/cost",
     "/tokens",
@@ -29,11 +34,13 @@ COMMANDS: Final[set[str]] = {
 
 @dataclass
 class Command:
+    """Represents a parsed slash command."""
     name: str
     args: str
 
 
 def parse_command(text: str) -> Command | None:
+    """Parse a string input into a Command, if it starts with '/'."""
     stripped = text.strip()
     if not stripped.startswith("/"):
         return None
@@ -44,10 +51,13 @@ def parse_command(text: str) -> Command | None:
 
 
 class CommandHandler:
+    """Handles execution of CLI commands."""
+
     def __init__(self, repl: "PhosonRepl") -> None:
         self.repl = repl
 
     async def handle(self, cmd: Command) -> bool:
+        """Handle a command. Return False if the REPL should exit."""
         r = self.repl.renderer
 
         if cmd.name in {"/exit", "/quit"}:
@@ -72,7 +82,6 @@ class CommandHandler:
                 return True
             self.repl.subagent_model = cmd.args
             self.repl.config.subagent_model = cmd.args
-            # Re-inject into running engine
             self.repl.engine.context.extra["default_model"] = cmd.args
             r.print_info(f"Sub-agent model → {cmd.args}")
             return True
@@ -133,7 +142,6 @@ class CommandHandler:
                 )
                 return True
 
-            # Load the selected session
             ok = await self.repl.load_session(result.session_id)
             if ok:
                 r.print_info(f"Loaded session  {result.session_id[:8]}")
@@ -144,7 +152,6 @@ class CommandHandler:
                 r.print_info("Usage:  /delete <session_id>")
                 return True
             session_id = cmd.args.strip()
-            # Prevent deleting the current active session
             if session_id == self.repl.tree.session_id:
                 r.print_error(
                     "Cannot delete the current active session. Use /new first."
@@ -188,8 +195,8 @@ class CommandHandler:
         r.print_error(f"Unknown command: {cmd.name}")
         return True
 
-    async def _handle_attach(self, cmd: Command, r) -> bool:
-        """Maneja /attach y /attachments."""
+    async def _handle_attach(self, cmd: Command, r: Any) -> bool:
+        """Handle /attach and /attachments commands."""
         if not cmd.args:
             pending = self.repl.attachments.list_pending()
             if not pending:
@@ -206,7 +213,6 @@ class CommandHandler:
             r.print_info(f"Cleared {count} attachment(s).")
             return True
 
-        # Es una ruta de archivo
         try:
             self.repl.attachments.attach(cmd.args)
             r.print_info(f"Attached  {cmd.args}")
