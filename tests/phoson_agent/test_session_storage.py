@@ -1,11 +1,10 @@
-import datetime
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from phoson_llm.schemas import Message, TextBlock
-from phoson_agent.sessions.models import ConversationTree, ConversationNode
+from phoson_agent.sessions.models import ConversationTree
 from phoson_agent.sessions.storage_jsonl import JsonlStorage
 
 
