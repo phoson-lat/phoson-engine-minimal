@@ -5,7 +5,7 @@ description = "Minimal Python runtime for the Phoson autonomous-agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [
-    { name = "Abel Santillan Rodriguez", email = "https://github.com/abelsr" },
+    { name = "Abel Santillan Rodriguez", email = "abel@phoson.lat" },
 ]
 dependencies = [
     "anthropic>=0.97.0",
