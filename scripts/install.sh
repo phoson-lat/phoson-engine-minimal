@@ -5,7 +5,7 @@
 
 set -e
 
-INSTALLER_URL="${INSTALLER_URL:-https://phoson.lat/scripts/phoson-installer.sh}"
+INSTALLER_URL="${INSTALLER_URL:-https://github.com/phoson-lat/phoson-engine-minimal/releases/latest/download/phoson-installer.sh}"
 INSTALLER_SHA="${INSTALLER_SHA:-}"
 
 main() {
