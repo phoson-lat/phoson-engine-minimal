@@ -1,3 +1,4 @@
+import httpx
 from collections.abc import AsyncIterator
 
 import pytest
@@ -5,6 +6,9 @@ import pytest
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
 from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm.chats.openrouter import OpenRouterChat
+from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -324,3 +328,217 @@ async def test_openai_adapter_integration_tool_loop(monkeypatch) -> None:
     assert done.result.steps[1].kind == "tool"
     assert done.result.steps[2].kind == "llm"
     assert done.result.final_content == "Listo"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_adapter_integration_tool_loop(monkeypatch) -> None:
+    call_count = 0
+
+    async def _fake_create(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _FakeStream(
+                [
+                    _Chunk(
+                        delta=_Delta(
+                            tool_calls=[
+                                _ToolCall(
+                                    index=0,
+                                    call_id="call_openrouter_1",
+                                    name="get_weather",
+                                    arguments='{"city":"Qro"}',
+                                )
+                            ]
+                        )
+                    ),
+                    _Chunk(finish_reason="tool_calls"),
+                    _Chunk(delta=_Delta(content="")),
+                ]
+            )
+        return _FakeStream(
+            [
+                _Chunk(delta=_Delta(content="Ok")),
+            ]
+        )
+
+    chat = OpenRouterChat(api_key="test")
+    monkeypatch.setattr(chat._client.chat.completions, "create", _fake_create)
+
+    engine = AgentEngine(chat=chat, tools=build_tools())
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="clima")],
+            config=ModelConfig(model="openrouter/test", max_tokens=128),
+        )
+    ]
+
+    event_types = _extract_agent_event_types(events)
+    assert event_types[0] is AgentStartEvent
+    assert AgentToolStartEvent in event_types
+    assert AgentToolDoneEvent in event_types
+    assert AgentStepDoneEvent in event_types
+    assert event_types[-1] is AgentDoneEvent
+    done = next(event for event in events if isinstance(event, AgentDoneEvent))
+    tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
+    assert tool_done.tool_name == "get_weather"
+    assert tool_done.tool_call_id == "call_openrouter_1"
+    assert done.result.final_content == "Ok"
+    assert [step.kind for step in done.result.steps] == ["llm", "tool", "llm"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_adapter_integration_tool_loop(monkeypatch) -> None:
+    class _Delta:
+        def __init__(self, delta_type, text=None, thinking=None, partial_json=None):
+            self.type = delta_type
+            self.text = text
+            self.thinking = thinking
+            self.partial_json = partial_json
+
+    class _Event:
+        def __init__(self, etype, index=0, delta=None, content_block=None):
+            self.type = etype
+            self.index = index
+            self.delta = delta
+            self.content_block = content_block
+
+    class _ToolBlock:
+        def __init__(self, name, tool_id):
+            self.type = "tool_use"
+            self.name = name
+            self.id = tool_id
+
+    class _Usage:
+        def __init__(self):
+            self.input_tokens = 12
+            self.output_tokens = 4
+            self.cache_creation_input_tokens = 0
+            self.cache_read_input_tokens = 0
+
+    class _FinalMessage:
+        def __init__(self):
+            self.usage = _Usage()
+
+    class _Stream:
+        def __init__(self, events):
+            self._events = events
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def __aiter__(self):
+            async def _iter():
+                for item in self._events:
+                    yield item
+            return _iter()
+
+        async def get_final_message(self):
+            return _FinalMessage()
+
+    events = [
+        _Event("content_block_start", index=0, content_block=_ToolBlock("get_weather", "call_anthropic_1")),
+        _Event("content_block_delta", index=0, delta=_Delta("input_json_delta", partial_json='{"city":"Qro"}')),
+        _Event("content_block_stop", index=0),
+        _Event("content_block_delta", index=1, delta=_Delta("text_delta", text="")),
+    ]
+    final_events = [
+        _Event("content_block_delta", index=0, delta=_Delta("text_delta", text="Listo")),
+    ]
+
+    call_count = 0
+
+    def _make_stream(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        return _Stream(events if call_count == 1 else final_events)
+
+    chat = AnthropicChat(api_key="test")
+    monkeypatch.setattr(chat._client.messages, "stream", _make_stream)
+
+    engine = AgentEngine(chat=chat, tools=build_tools())
+    events_out = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="clima")],
+            config=ModelConfig(model="claude-3-haiku", max_tokens=128),
+        )
+    ]
+
+    event_types = _extract_agent_event_types(events_out)
+    assert event_types[0] is AgentStartEvent
+    assert AgentToolStartEvent in event_types
+    assert AgentToolDoneEvent in event_types
+    assert AgentStepDoneEvent in event_types
+    assert event_types[-1] is AgentDoneEvent
+    done = next(event for event in events_out if isinstance(event, AgentDoneEvent))
+    tool_done = next(event for event in events_out if isinstance(event, AgentToolDoneEvent))
+    assert tool_done.tool_name == "get_weather"
+    assert tool_done.tool_call_id == "call_anthropic_1"
+    assert done.result.final_content == "Listo"
+    assert [step.kind for step in done.result.steps] == ["llm", "tool", "llm"]
+
+
+@pytest.mark.asyncio
+async def test_ollama_adapter_integration_tool_loop(monkeypatch) -> None:
+    call_count = 0
+
+    class _Response:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            nonlocal call_count
+            if call_count == 1:
+                yield '{"message":{"type":"message","content":"","tool_calls":[{"index":0,"id":"call_ollama_1","function":{"name":"get_weather","arguments":"{\\"city\\":\\"Qro\\"}"}}]}}'
+                yield '{"message":{"type":"done"},"eval_count":5,"prompt_eval_count":10}'
+            else:
+                yield '{"message":{"type":"message","content":"Listo"},"done":true}'
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, json):
+            return _Response()
+
+    def make_client(timeout=None):
+        nonlocal call_count
+        call_count += 1
+        return _Client()
+
+    monkeypatch.setattr(httpx, "AsyncClient", make_client)
+
+    chat = OllamaChat(base_url="http://ollama")
+    engine = AgentEngine(chat=chat, tools=build_tools())
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="clima")],
+            config=ModelConfig(model="llama3", max_tokens=128),
+        )
+    ]
+
+    event_types = _extract_agent_event_types(events)
+    assert event_types[0] is AgentStartEvent
+    assert AgentToolStartEvent in event_types
+    assert AgentToolDoneEvent in event_types
+    assert AgentStepDoneEvent in event_types
+    assert event_types[-1] is AgentDoneEvent
+    done = next(event for event in events if isinstance(event, AgentDoneEvent))
+    tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
+    assert tool_done.tool_name == "get_weather"
+    assert tool_done.tool_call_id == "call_ollama_1"
+    assert [step.kind for step in done.result.steps] == ["llm", "tool", "llm"]
