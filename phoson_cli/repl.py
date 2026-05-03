@@ -399,7 +399,7 @@ class PhosonRepl:
                 self.tree.session_id, self.session_metrics.to_meta()
             )
 
-    # ── Session / model management ─────────────────────────────────────────��──
+    # ── Session / model management ─────────────────────────────────────────────
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
