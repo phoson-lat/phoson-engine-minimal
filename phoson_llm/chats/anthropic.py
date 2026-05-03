@@ -1,16 +1,13 @@
 import os
 import json
-import base64
-from pathlib import Path
 from collections.abc import AsyncIterator
 
 import anthropic
 
+from phoson_llm.utils import guess_mime, map_error_code, load_file_as_base64
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    # inputs
     Message,
-    # outputs
     LLMEvent,
     TextBlock,
     AudioBlock,
@@ -38,32 +35,15 @@ from phoson_llm.chats.base import BaseLLMChat
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-
-def _load_file_as_base64(path: str) -> str:
-    """Lee un archivo local y lo codifica en base64."""
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("ascii")
-
-
-def _guess_mime(path: str) -> str:
-    ext = Path(path).suffix.lower()
-    return {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".pdf": "application/pdf",
-    }.get(ext, "application/octet-stream")
-
-
 def _convert_content_block(block: ContentBlock) -> dict:
     """
     Convierte un ContentBlock multimodal al formato que espera Anthropic.
 
-    Soporta: TextBlock, ImageBlock, DocumentBlock.
-    AudioBlock y VideoBlock no son soportados por Anthropic — se reemplazan
-    con un texto informativo.
+    Args:
+        block (ContentBlock): El bloque de contenido a convertir.
+
+    Returns:
+        dict: Diccionario formateado para la API de Anthropic.
     """
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
@@ -72,8 +52,8 @@ def _convert_content_block(block: ContentBlock) -> dict:
         source = block.source
         if source.startswith("file://"):
             path = source[7:]
-            data = _load_file_as_base64(path)
-            media = block.media_type or _guess_mime(path)
+            data = load_file_as_base64(path).split(",", 1)[-1]
+            media = block.media_type or guess_mime(path)
             return {
                 "type": "image",
                 "source": {
@@ -82,7 +62,6 @@ def _convert_content_block(block: ContentBlock) -> dict:
                     "data": data,
                 },
             }
-        # URL pública
         return {
             "type": "image",
             "source": {
@@ -95,7 +74,7 @@ def _convert_content_block(block: ContentBlock) -> dict:
         source = block.source
         if source.startswith("file://"):
             path = source[7:]
-            data = _load_file_as_base64(path)
+            data = load_file_as_base64(path).split(",", 1)[-1]
             return {
                 "type": "document",
                 "source": {
@@ -124,7 +103,6 @@ def _convert_content_block(block: ContentBlock) -> dict:
             "text": f"[Video not supported by Anthropic: {block.source}]",
         }
 
-    # ToolUseBlock y ToolResultBlock se manejan en _convert_messages
     if isinstance(block, (ToolUseBlock, ToolResultBlock)):
         raise TypeError(
             f"ToolUseBlock/ToolResultBlock should not reach _convert_content_block. "
@@ -134,30 +112,26 @@ def _convert_content_block(block: ContentBlock) -> dict:
     return {"type": "text", "text": f"[Unsupported block: {type(block).__name__}]"}
 
 
-# ─── Conversión de mensajes Phoson → Anthropic ────────────────────────────────
-
-
 def _convert_messages(messages: list[Message]) -> list[dict]:
     """
     Convierte el formato interno de Phoson al formato que espera Anthropic.
 
-    Reglas:
-    - role=system se separa y se pasa como parámetro `system` (manejado en stream())
-    - ToolUseBlock  → {"type": "tool_use", ...}   en role=assistant
-    - ToolResultBlock → {"type": "tool_result", ...} envuelto en role=user
-    - ImageBlock/DocumentBlock → blocks multimodales en mensajes
+    Args:
+        messages (list[Message]): Lista de mensajes de Phoson.
+
+    Returns:
+        list[dict]: Lista de mensajes formateados para la API de Anthropic.
     """
     result = []
 
     for msg in messages:
         if msg.role == "system":
-            continue  # se pasa aparte como parámetro `system`
+            continue
 
         if isinstance(msg.content, str):
             result.append({"role": msg.role, "content": msg.content})
             continue
 
-        # content es lista de ContentBlocks
         blocks = []
         tool_uses = []
         tool_results = []
@@ -166,18 +140,13 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
         for block in msg.content:
             if isinstance(block, TextBlock):
                 blocks.append({"type": "text", "text": block.text})
-
             elif isinstance(block, ToolUseBlock):
                 tool_uses.append(block)
-
             elif isinstance(block, ToolResultBlock):
                 tool_results.append(block)
-
             else:
-                # ImageBlock, AudioBlock, VideoBlock, DocumentBlock
                 multimodal_blocks.append(block)
 
-        # ToolUse: van como blocks de tool_use
         for b in tool_uses:
             blocks.append(
                 {
@@ -188,7 +157,6 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
                 }
             )
 
-        # ToolResults: van como tool_result en mensajes role=user
         for b in tool_results:
             blocks.append(
                 {
@@ -199,10 +167,8 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
                 }
             )
 
-        # Blocks multimodales convertidos
         for b in multimodal_blocks:
-            converted = _convert_content_block(b)
-            blocks.append(converted)
+            blocks.append(_convert_content_block(b))
 
         if blocks:
             result.append({"role": msg.role, "content": blocks})
@@ -237,16 +203,11 @@ class AnthropicChat(BaseLLMChat):
     """
     Adapter para Anthropic Claude.
     Soporta: streaming, extended thinking, tool use, prompt caching.
-
-    Modalidades de entrada:
-    - Texto (nativo)
-    - Imágenes (URL o archivo local via ImageBlock)
-    - Documentos PDF (URL o archivo local via DocumentBlock)
     """
 
     def __init__(self, api_key: str | None = None) -> None:
         self._client = anthropic.AsyncAnthropic(
-            api_key=api_key or os.environ["ANTHROPIC_API_KEY"]
+            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
         )
 
     async def stream(
@@ -255,8 +216,18 @@ class AnthropicChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
+        """
+        Transmite una respuesta del modelo.
 
-        # ── Construir kwargs del request ──────────────────────────────────────
+        Args:
+            messages (list[Message]): Lista de mensajes.
+            config (ModelConfig): Configuración del modelo.
+            tools (list[ToolDefinition] | None): Lista de herramientas opcionales.
+
+        Yields:
+            LLMEvent: Eventos del ciclo de vida del LLM.
+        """
+
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,
@@ -273,35 +244,30 @@ class AnthropicChat(BaseLLMChat):
         if tools:
             kwargs["tools"] = _convert_tools(tools)
 
-        # Extended thinking: requiere deshabilitar temperature
         if config.thinking_budget:
             kwargs["thinking"] = {
                 "type": "enabled",
                 "budget_tokens": config.thinking_budget,
             }
-            kwargs.pop("temperature", None)  # incompatible con thinking
+            kwargs.pop("temperature", None)
 
-        # ── Estado interno del stream ─────────────────────────────────────────
-        text_acc = ""  # texto final acumulado
-        reasoning_acc = ""  # reasoning acumulado
-        tool_args_acc: dict[int, str] = {}  # index → partial JSON acumulado
-        tool_names: dict[int, str] = {}  # index → nombre de la tool
-        tool_ids: dict[int, str] = {}  # index → tool_call_id
+        text_acc = ""
+        reasoning_acc = ""
+        tool_args_acc: dict[int, str] = {}
+        tool_names: dict[int, str] = {}
+        tool_ids: dict[int, str] = {}
         has_tool_calls = False
 
-        # ── Emitir LLMStartEvent ──────────────────────────────────────────────
         yield LLMStartEvent(
             model=config.model,
             message_count=len(messages),
         )
 
-        # ── Stream ────────────────────────────────────────────────────────────
         try:
             async with self._client.messages.stream(**kwargs) as s:
                 async for event in s:
                     etype = event.type
 
-                    # ── Texto ─────────────────────────────────────────────────
                     if etype == "content_block_delta":
                         delta = event.delta  # type: ignore
 
@@ -309,15 +275,12 @@ class AnthropicChat(BaseLLMChat):
                             text_acc += delta.text  # type: ignore
                             yield TokenEvent(content=delta.text)  # type: ignore
 
-                        # ── Reasoning (thinking) ──────────────────────────────
                         elif delta.type == "thinking_delta":  # type: ignore
                             if not reasoning_acc:
-                                # primer chunk → emitir start
                                 yield ReasoningStartEvent()
                             reasoning_acc += delta.thinking  # type: ignore
                             yield ReasoningTokenEvent(content=delta.thinking)
 
-                        # ── Tool call args (partial JSON) ─────────────────────
                         elif delta.type == "input_json_delta":  # type: ignore
                             idx = event.index  # type: ignore
                             tool_args_acc[idx] = (
@@ -329,7 +292,6 @@ class AnthropicChat(BaseLLMChat):
                                 args_chunk=delta.partial_json,  # type: ignore
                             )
 
-                    # ── Inicio de bloque de contenido ─────────────────────────
                     elif etype == "content_block_start":
                         block = event.content_block  # type: ignore
                         idx = event.index  # type: ignore
@@ -340,15 +302,12 @@ class AnthropicChat(BaseLLMChat):
                             tool_ids[idx] = block.id
                             tool_args_acc[idx] = ""
 
-                    # ── Fin de bloque de contenido ────────────────────────────
                     elif etype == "content_block_stop":
                         idx = event.index  # type: ignore
 
-                        # Reasoning completo
                         if reasoning_acc and idx == 0:
                             yield ReasoningDoneEvent(content=reasoning_acc)
 
-                        # Tool call completa — emitir ToolCallEvent con args parseados
                         if idx in tool_args_acc and tool_names.get(idx):
                             raw = tool_args_acc[idx]
                             try:
@@ -363,12 +322,6 @@ class AnthropicChat(BaseLLMChat):
                                 args=args,
                             )
 
-                    # ── Usage (message_delta lleva el usage final) ───────────
-                    elif etype == "message_delta":
-                        if hasattr(event, "usage") and event.usage:  # type: ignore
-                            pass  # usage final se obtiene via get_final_message()
-
-                # ── Fuera del loop: obtener usage final acumulado ─────────────
                 final_msg = await s.get_final_message()
                 u = final_msg.usage
 
@@ -394,7 +347,7 @@ class AnthropicChat(BaseLLMChat):
                 )
 
         except anthropic.APIStatusError as e:
-            code = _map_error_code(e.status_code)
+            code = map_error_code(e.status_code)
             yield ErrorEvent(
                 message=str(e.message),
                 code=code,
@@ -410,19 +363,7 @@ class AnthropicChat(BaseLLMChat):
             )
             return
 
-        # ── LLMDoneEvent final ────────────────────────────────────────────────
         yield LLMDoneEvent(
             content=text_acc,
             has_tool_calls=has_tool_calls,
         )
-
-
-def _map_error_code(status_code: int) -> str:
-    return {
-        401: "auth",
-        403: "permission",
-        404: "not_found",
-        429: "rate_limit",
-        500: "server_error",
-        529: "overloaded",
-    }.get(status_code, "unknown")

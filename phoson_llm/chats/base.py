@@ -38,7 +38,14 @@ class BaseLLMChat(ABC):
     ) -> AsyncIterator[LLMEvent]:
         """
         Llama al LLM y devuelve un AsyncIterator de LLMEvents normalizados.
-        Siempre termina con LLMDoneEvent o ErrorEvent.
+
+        Args:
+            messages (list[Message]): Lista de mensajes.
+            config (ModelConfig): Configuración del modelo.
+            tools (list[ToolDefinition] | None): Herramientas opcionales.
+
+        Returns:
+            AsyncIterator[LLMEvent]: Eventos del ciclo de vida del LLM.
         """
         ...
 
@@ -54,8 +61,16 @@ class BaseLLMChat(ABC):
         Versión async no-streaming. Consume el stream internamente y
         retorna solo el LLMDoneEvent final.
 
-        Útil para: tests, endpoints sync simples, casos donde no
-        necesitas tokens individuales ni UsageEvent intermedio.
+        Args:
+            messages (list[Message]): Lista de mensajes.
+            config (ModelConfig): Configuración del modelo.
+            tools (list[ToolDefinition] | None): Herramientas opcionales.
+
+        Returns:
+            LLMDoneEvent: Evento final del LLM.
+
+        Raises:
+            RuntimeError: Si ocurre un error o el stream no emite LLMDoneEvent.
         """
         async for event in self.stream(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
@@ -74,10 +89,15 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> Iterator[LLMEvent]:
         """
-        Versión sync del stream. Crea un event loop aislado para no
-        interferir con el loop de FastAPI/uvicorn en el hilo principal.
+        Versión sync del stream. Crea un event loop aislado.
 
-        Útil para: scripts CLI, workers síncronos, SDK en contextos no-async.
+        Args:
+            messages (list[Message]): Lista de mensajes.
+            config (ModelConfig): Configuración del modelo.
+            tools (list[ToolDefinition] | None): Herramientas opcionales.
+
+        Yields:
+            LLMEvent: Eventos del ciclo de vida del LLM.
         """
         loop = asyncio.new_event_loop()
         try:
@@ -99,10 +119,18 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> LLMDoneEvent:
         """
-        Versión sync no-streaming. Consume stream_sync y retorna
-        solo el LLMDoneEvent final.
+        Versión sync no-streaming. Consume stream_sync.
 
-        Útil para: scripts, tests síncronos, integraciones legacy.
+        Args:
+            messages (list[Message]): Lista de mensajes.
+            config (ModelConfig): Configuración del modelo.
+            tools (list[ToolDefinition] | None): Herramientas opcionales.
+
+        Returns:
+            LLMDoneEvent: Evento final del LLM.
+
+        Raises:
+            RuntimeError: Si ocurre un error o el stream no emite LLMDoneEvent.
         """
         for event in self.stream_sync(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
