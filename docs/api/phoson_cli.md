@@ -30,11 +30,13 @@ from phoson_cli.config import PhosonConfig
 config = PhosonConfig(
     provider="openai",           # openai, anthropic, openrouter, ollama
     model="gpt-4o",
-    api_key="sk-...",
     sessions_dir="./sessions",
     max_iterations=12,
     safe_mode=False,
 )
+
+# Provider API keys are typically loaded from environment variables,
+# for example: OPENAI_API_KEY or OPENROUTER_API_KEY.
 ```
 
 ## REPL Usage
