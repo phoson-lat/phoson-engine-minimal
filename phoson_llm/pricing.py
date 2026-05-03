@@ -4,8 +4,8 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class PriceEntry:
     """
-    Precios por millón de tokens (USD).
-    cache_write y cache_read solo aplican a providers que soporten prompt caching.
+    Prices per million tokens (USD).
+    cache_write and cache_read only apply to providers that support prompt caching.
     """
 
     input: float
@@ -15,13 +15,13 @@ class PriceEntry:
 
 
 def _per_million(n: float) -> float:
-    """Convierte un valor absoluto a costo por millón."""
+    """Converts an absolute value to cost per million."""
     return n / 1_000_000
 
 
-# ─── Tabla de precios (por millón de tokens, USD) ─────────────────────────────
-# Verificados abril 2026. Actualizar cuando cambien los providers.
-# Convención de nombres: provider/modelo, sin sufijos de versión (ver _ALIASES).
+# ─── Price table (per million tokens, USD) ────────────────────────────────────
+# Verified April 2026. Update when providers change.
+# Naming convention: provider/model, without version suffixes (see _ALIASES).
 
 PRICES: dict[str, PriceEntry] = {
     # ── Anthropic ────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ PRICES: dict[str, PriceEntry] = {
     "openai/o3": PriceEntry(input=2.00, output=8.00, cache_read=1.00),
     "openai/o4-mini": PriceEntry(input=1.10, output=4.40, cache_read=0.275),
     # ── Google Gemini ─────────────────────────────────────────────────────────
-    # Google no cobra cache_write, solo cache_read (10% del input)
+    # Google does not charge for cache_write, only cache_read (10% of input)
     "google/gemini-2.5-pro": PriceEntry(input=1.25, output=10.00, cache_read=0.125),
     "google/gemini-2.5-flash": PriceEntry(input=0.30, output=2.50, cache_read=0.03),
     "google/gemini-2.5-flash-lite": PriceEntry(
@@ -54,7 +54,7 @@ PRICES: dict[str, PriceEntry] = {
     "google/gemini-2.0-flash": PriceEntry(input=0.10, output=0.40, cache_read=0.01),
 }
 
-# Aliases — el SDK puede mandar strings con sufijos de versión
+# Aliases — the SDK may send strings with version suffixes
 _ALIASES: dict[str, str] = {
     "anthropic/claude-sonnet-4-6-20250514": "anthropic/claude-sonnet-4-6",
     "anthropic/claude-haiku-4-5-20251001": "anthropic/claude-haiku-4-5",
@@ -68,7 +68,7 @@ _ALIASES: dict[str, str] = {
 
 
 def _resolve(model: str, provider: str | None = None) -> PriceEntry | None:
-    """Resuelve el modelo al PriceEntry correspondiente, con alias."""
+    """Resolves the model to the corresponding PriceEntry, with support for aliases."""
     key = _ALIASES.get(model, model)
     entry = PRICES.get(key)
     if entry is not None:
@@ -91,20 +91,20 @@ def calculate_cost(
     provider: str | None = None,
 ) -> tuple[float, bool]:
     """
-    Calcula el costo real en USD para una LLM call.
+    Calculates the real cost in USD for an LLM call.
 
     Args:
-        model (str): Nombre del modelo.
-        input_tokens (int): Tokens de entrada.
-        output_tokens (int): Tokens de salida.
-        cache_write_tokens (int): Tokens escritos en caché.
-        cache_read_tokens (int): Tokens leídos de caché.
-        provider (str | None): Proveedor opcional.
+        model (str): Name of the model.
+        input_tokens (int): Input tokens.
+        output_tokens (int): Output tokens.
+        cache_write_tokens (int): Cache write tokens.
+        cache_read_tokens (int): Cache read tokens.
+        provider (str | None): Optional provider.
 
     Returns:
         Tuple[float, bool]: (cost_usd, cost_known).
-        cost_known=False cuando el modelo no está en la tabla
-        (e.g. modelos locales de Ollama).
+        cost_known=False when the model is not in the table
+        (e.g. local Ollama models).
     """
     entry = _resolve(model, provider=provider)
 

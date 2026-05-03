@@ -12,7 +12,7 @@ class TextBlock:
 
 @dataclass
 class ToolUseBlock:
-    """El LLM pidió ejecutar esta tool. Va en mensajes role=assistant."""
+    """LLM requested tool execution. Goes in assistant role messages."""
 
     tool_call_id: str
     tool_name: str
@@ -21,7 +21,7 @@ class ToolUseBlock:
 
 @dataclass
 class ToolResultBlock:
-    """Resultado de ejecutar una tool. Va en mensajes role=user."""
+    """Result of tool execution. Goes in user role messages."""
 
     tool_call_id: str
     result: str
@@ -91,7 +91,7 @@ class DocumentBlock:
     """
 
     source: str  # URL, base64://..., o file://...
-    pages: int | None = None  # total páginas (informativo)
+    pages: int | None = None  # total pages (informational)
 
 
 # ─── Union ───────────────────────────────────────────────────────────────────
@@ -108,7 +108,7 @@ ContentBlock = (
 )
 
 
-# ─── Mensaje ─────────────────────────────────────────────────────────────────
+# ─── Message ─────────────────────────────────────────────────────────────────
 
 
 @dataclass

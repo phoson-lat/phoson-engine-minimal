@@ -38,13 +38,13 @@ from phoson_llm.chats.base import BaseLLMChat
 
 def _convert_content_block(block: ContentBlock) -> dict:
     """
-    Convierte un ContentBlock multimodal al formato que espera Anthropic.
+    Converts a multimodal ContentBlock to the format expected by Anthropic.
 
     Args:
-        block (ContentBlock): El bloque de contenido a convertir.
+        block (ContentBlock): The content block to convert.
 
     Returns:
-        dict: Diccionario formateado para la API de Anthropic.
+        dict: Formatted dictionary for the Anthropic API.
     """
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
@@ -115,13 +115,13 @@ def _convert_content_block(block: ContentBlock) -> dict:
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
     """
-    Convierte el formato interno de Phoson al formato que espera Anthropic.
+    Converts Phoson's internal format to the format expected by Anthropic.
 
     Args:
-        messages (list[Message]): Lista de mensajes de Phoson.
+        messages (list[Message]): List of Phoson messages.
 
     Returns:
-        list[dict]: Lista de mensajes formateados para la API de Anthropic.
+        list[dict]: List of formatted messages for the Anthropic API.
     """
     result = []
 
@@ -178,7 +178,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
-    """Convierte ToolDefinition al formato de tools de Anthropic."""
+    """Converts ToolDefinition to Anthropic's tools format."""
     return [
         {
             "name": t.name,
@@ -190,7 +190,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 def _extract_system(messages: list[Message]) -> str | None:
-    """Extrae el primer mensaje system de la lista."""
+    """Extracts the first system message from the list."""
     for msg in messages:
         if msg.role == "system":
             return msg.content if isinstance(msg.content, str) else None
@@ -202,8 +202,8 @@ def _extract_system(messages: list[Message]) -> str | None:
 
 class AnthropicChat(BaseLLMChat):
     """
-    Adapter para Anthropic Claude.
-    Soporta: streaming, extended thinking, tool use, prompt caching.
+    Adapter for Anthropic Claude.
+    Supports: streaming, extended thinking, tool use, prompt caching.
     """
 
     def __init__(self, api_key: str | None = None) -> None:
@@ -218,15 +218,15 @@ class AnthropicChat(BaseLLMChat):
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
         """
-        Transmite una respuesta del modelo.
+        Streams a response from the model.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Lista de herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional list of tools.
 
         Yields:
-            LLMEvent: Eventos del ciclo de vida del LLM.
+            LLMEvent: Events from the LLM lifecycle.
         """
 
         kwargs: dict = {

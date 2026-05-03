@@ -29,7 +29,7 @@ from phoson_llm.chats.base import BaseLLMChat
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
-    """Convierte mensajes de Phoson a formato OpenRouter/OpenAI."""
+    """Converts Phoson messages to OpenRouter/OpenAI format."""
     result = []
 
     for msg in messages:
@@ -86,7 +86,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
-    """Convierte ToolDefinition al formato de herramientas de OpenRouter."""
+    """Converts ToolDefinition to OpenRouter tools format."""
     return [
         {
             "type": "function",
@@ -101,7 +101,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 def _extract_reasoning_delta(delta: object) -> str | None:
-    """Extrae reasoning_content de un delta de OpenAI."""
+    """Extracts reasoning_content from an OpenAI delta."""
     for attr in ("reasoning_content", "reasoning"):
         value = getattr(delta, attr, None)
         if isinstance(value, str) and value:
@@ -110,7 +110,7 @@ def _extract_reasoning_delta(delta: object) -> str | None:
 
 
 def _parse_tool_args(raw: str) -> dict:
-    """Parseo seguro de argumentos de herramientas."""
+    """Safe parsing of tool arguments."""
     if not raw:
         return {}
 
@@ -156,7 +156,7 @@ class OpenRouterChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """Transmite una respuesta del modelo."""
+        """Streams a model response."""
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,

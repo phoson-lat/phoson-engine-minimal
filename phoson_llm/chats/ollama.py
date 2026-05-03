@@ -21,13 +21,13 @@ from phoson_llm.schemas import (
 )
 from phoson_llm.chats.base import BaseLLMChat
 
-# ─── Constantes ───────────────────────────────────────────────────────────────
+# ─── Constants ───────────────────────────────────────────────────────────────
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_TIMEOUT = 300.0
 
 
-# ─── Conversión de mensajes Phoson → Ollama ─────────────────────────────────
+# ─── Message conversion Phoson → Ollama ─────────────────────────────────
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
@@ -61,7 +61,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
-    """Convierte ToolDefinition al formato de tools de Ollama."""
+    """Converts ToolDefinition to Ollama tools format."""
     return [
         {
             "type": "function",
@@ -76,7 +76,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 def _extract_system(messages: list[Message]) -> str | None:
-    """Extrae el primer mensaje system de la lista."""
+    """Extracts the first system message from the list."""
     for msg in messages:
         if msg.role == "system":
             return msg.content if isinstance(msg.content, str) else None
@@ -110,8 +110,8 @@ class OllamaChat(BaseLLMChat):
 
         Args:
             messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Herramientas opcionales.
+            config (ModelConfig): Configuration del modelo.
+            tools (list[ToolDefinition] | None): Tools opcionales.
 
         Yields:
             LLMEvent: Eventos del ciclo de vida del LLM.

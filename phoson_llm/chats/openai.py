@@ -38,16 +38,16 @@ from phoson_llm.chats.base import BaseLLMChat
 
 def _convert_content_block(block: ContentBlock) -> dict:
     """
-    Convierte un ContentBlock de Phoson al formato que espera OpenAI.
+    Converts a Phoson ContentBlock to the format expected by OpenAI.
 
     Args:
-        block (ContentBlock): El bloque de contenido a convertir.
+        block (ContentBlock): The content block to convert.
 
     Returns:
-        dict: Diccionario formateado para la API de OpenAI.
+        dict: Formatted dictionary for the OpenAI API.
 
     Raises:
-        TypeError: Si se pasa un bloque no soportado.
+        TypeError: If an unsupported block is passed.
     """
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
@@ -101,13 +101,13 @@ def _convert_content_block(block: ContentBlock) -> dict:
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
     """
-    Convierte el formato interno de Phoson al formato que espera OpenAI.
+    Converts Phoson's internal format to the format expected by OpenAI.
 
     Args:
-        messages (list[Message]): Lista de mensajes de Phoson.
+        messages (list[Message]): List of Phoson messages.
 
     Returns:
-        list[dict]: Lista de mensajes formateados para la API de OpenAI.
+        list[dict]: List of formatted messages for the OpenAI API.
     """
     result = []
 
@@ -178,7 +178,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
-    """Convierte ToolDefinition al formato de tools de OpenAI."""
+    """Converts ToolDefinition to OpenAI's tools format."""
     return [
         {
             "type": "function",
@@ -197,8 +197,8 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 class OpenAIChat(BaseLLMChat):
     """
-    Adapter para OpenAI Chat Completions API.
-    Compatible también con Ollama y OpenRouter vía base_url.
+    Adapter for OpenAI Chat Completions API.
+    Also compatible with Ollama and OpenRouter via base_url.
     """
 
     def __init__(
@@ -218,15 +218,15 @@ class OpenAIChat(BaseLLMChat):
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
         """
-        Transmite una respuesta del modelo.
+        Streams a response from the model.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Lista de herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional list of tools.
 
         Yields:
-            LLMEvent: Eventos del ciclo de vida del LLM.
+            LLMEvent: Events from the LLM lifecycle.
         """
 
         kwargs: dict = {

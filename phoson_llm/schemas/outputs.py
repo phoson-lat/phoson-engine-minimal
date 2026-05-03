@@ -11,7 +11,7 @@ class LLMEvent:
     )
 
 
-# ─── Ciclo de vida ───────────────────────────────────────────────────────────
+# ─── Lifecycle ───────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -26,7 +26,7 @@ class LLMDoneEvent(LLMEvent):
     has_tool_calls: bool = False
 
 
-# ─── Texto ───────────────────────────────────────────────────────────────────
+# ─── Text ───────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -89,13 +89,13 @@ class UsageEvent(LLMEvent):
     cost_known: bool = True
 
 
-# ─── Modalidades ─────────────────────────────────────────────────────────────
+# ─── Modalities ─────────────────────────────────────────────────────────────
 
 
 @dataclass
 class LLMModalitiesEvent(LLMEvent):
     """
-    Indica las modalidades de entrada soportadas por el modelo.
+    Indicates the input modalities supported by the model.
 
     Ejemplo: ["text", "vision", "audio"]
     """

@@ -34,10 +34,10 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 
 class FakeToolChat(BaseLLMChat):
     """
-    Chat fake para validar el loop ReAct sin depender de providers reales.
+    Fake chat to validate the ReAct loop without depending on real providers.
 
-    Iteración 1: solicita get_weather
-    Iteración 2: devuelve respuesta final sin tools
+    Iteration 1: requests get_weather
+    Iteration 2: returns final response without tools
     """
 
     def __init__(self) -> None:
@@ -82,6 +82,7 @@ class FakeToolChat(BaseLLMChat):
 
 
 def get_weather(args: dict) -> dict:
+    """Gets the weather for a city and country."""
     city = args.get("city", "unknown")
     country = args.get("country", "unknown")
     return {
@@ -94,6 +95,7 @@ def get_weather(args: dict) -> dict:
 
 
 def render_result(label: str, result) -> None:
+    """Renders the final agent result."""
     print(f"\n{'=' * 60}")
     print(f"{label}")
     print(f"{'=' * 60}")
@@ -113,6 +115,7 @@ def render_result(label: str, result) -> None:
 
 
 def render_stream_event(event: AgentEvent) -> None:
+    """Renders an agent stream event."""
     match event:
         case AgentStartEvent():
             print(
@@ -145,6 +148,7 @@ def render_stream_event(event: AgentEvent) -> None:
 
 
 async def test_fake_agent_loop() -> None:
+    """Tests the agent loop with a fake chat."""
     chat = FakeToolChat()
     tools = [
         AgentTool(
@@ -171,6 +175,7 @@ async def test_fake_agent_loop() -> None:
 
 
 async def test_fake_agent_stream() -> None:
+    """Tests the agent stream with a fake chat."""
     chat = FakeToolChat()
     engine = AgentEngine(chat=chat, tools=build_tools(), phoson_weight=1.2)
     messages = [Message(role="user", content="Que clima hace en Queretaro?")]
@@ -184,6 +189,7 @@ async def test_fake_agent_stream() -> None:
 
 
 def build_tools() -> list[AgentTool]:
+    """Builds the list of tools for testing."""
     return [
         AgentTool(
             name="get_weather",
@@ -202,6 +208,7 @@ def build_tools() -> list[AgentTool]:
 
 
 def build_real_provider_chat() -> tuple[str, BaseLLMChat, ModelConfig] | None:
+    """Builds a real provider chat from environment variables."""
     provider = os.environ.get("PHOSON_PROVIDER", "auto").lower()
 
     if provider in ("openrouter", "auto"):
@@ -235,6 +242,7 @@ def build_real_provider_chat() -> tuple[str, BaseLLMChat, ModelConfig] | None:
 
 
 async def test_provider_agent_loop() -> None:
+    """Tests the agent loop with a real provider."""
     provider_setup = build_real_provider_chat()
     if not provider_setup:
         print(
@@ -259,6 +267,7 @@ async def test_provider_agent_loop() -> None:
 
 
 async def test_provider_agent_stream() -> None:
+    """Tests the agent stream with a real provider."""
     provider_setup = build_real_provider_chat()
     if not provider_setup:
         print("No provider credentials found. Skipping provider streaming demo.")
@@ -276,6 +285,7 @@ async def test_provider_agent_stream() -> None:
 
 
 async def main() -> None:
+    """Main function to run tests."""
     tests = {
         "provider_agent_loop": True,
         "provider_agent_stream": True,
