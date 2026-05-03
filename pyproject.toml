@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["phoson_cli", "phoson_llm", "phoson_agent"]
+where = ["."]
+include = ["phoson_*"]
 
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"
