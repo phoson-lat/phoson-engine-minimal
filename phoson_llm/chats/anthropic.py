@@ -201,12 +201,17 @@ def _extract_system(messages: list[Message]) -> str | None:
 
 
 class AnthropicChat(BaseLLMChat):
-    """
-    Adapter for Anthropic Claude.
-    Supports: streaming, extended thinking, tool use, prompt caching.
+    """Adapter for Anthropic Claude API.
+
+    Supports: streaming, extended thinking, tool use, prompt caching, multimodal inputs.
     """
 
     def __init__(self, api_key: str | None = None) -> None:
+        """Initialize the Anthropic client.
+
+        Args:
+            api_key: Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.
+        """
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
         )
@@ -217,16 +222,15 @@ class AnthropicChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """
-        Streams a response from the model.
+        """Stream a response from the Anthropic model.
 
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional list of tools.
+            messages: List of conversation messages.
+            config: Model configuration (model, max_tokens, temperature, etc.).
+            tools: Optional list of tool definitions.
 
         Yields:
-            LLMEvent: Events from the LLM lifecycle.
+            LLMEvent objects representing the model's response stream.
         """
 
         kwargs: dict = {

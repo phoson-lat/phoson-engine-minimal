@@ -38,6 +38,11 @@ class TokenEstimator:
     """Estimates token count for messages using tiktoken."""
 
     def __init__(self, provider: str = "openai") -> None:
+        """Initialize the estimator with the provider's encoding.
+
+        Args:
+            provider: The LLM provider name (openai, anthropic, openrouter, ollama).
+        """
         enc_name = _ENCODINGS.get(provider, "cl100k_base")
         self._encoding = tiktoken.get_encoding(enc_name)
 
