@@ -55,6 +55,29 @@ check_python() {
     fi
 }
 
+install_dependencies() {
+    info "Installing required dependencies (git, unzip)..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq git unzip 2>/dev/null || {
+            warn "Could not install dependencies via apt-get"
+        }
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y git unzip 2>/dev/null || {
+            warn "Could not install dependencies via yum"
+        }
+    elif command -v apk >/dev/null 2>&1; then
+        apk add git unzip 2>/dev/null || {
+            warn "Could not install dependencies via apk"
+        }
+    elif command -v brew >/dev/null 2>&1; then
+        brew install git unzip 2>/dev/null || {
+            warn "Could not install dependencies via brew"
+        }
+    else
+        warn "Could not detect a package manager. Please install git and unzip manually."
+    fi
+}
+
 check_uv() {
     if command -v uv >/dev/null 2>&1; then
         UV_VERSION=$(uv --version | cut -d' ' -f2)
@@ -105,10 +128,37 @@ install_with_pipx() {
 install_package() {
     info "Installing $PACKAGE_NAME..."
 
-    if ! uv tool install --python 3.12 "$PACKAGE_NAME" 2>/dev/null; then
+    # Create a temporary directory for the installation
+    TEMP_DIR=$(mktemp -d)
+    info "Downloading phoson-engine-minimal from GitHub..."
+    cd "$TEMP_DIR"
+
+    # Download the package from GitHub releases or repository
+    # Using the main branch as source
+    if command -v git >/dev/null 2>&1; then
+        git clone --depth 1 https://github.com/abelsr/phoson-engine-minimal.git "$TEMP_DIR/phoson-engine-minimal" 2>/dev/null || {
+            # Fallback: download as zip
+            curl -sL https://github.com/abelsr/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
+            unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
+            mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
+        }
+    else
+        # Fallback: download as zip
+        curl -sL https://github.com/abelsr/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
+        unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
+        mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
+    fi
+
+    cd "$TEMP_DIR/phoson-engine-minimal"
+
+    if ! uv tool install --python 3.12 . 2>/dev/null; then
         error "Failed to install $PACKAGE_NAME"
+        rm -rf "$TEMP_DIR"
         exit 1
     fi
+
+    # Cleanup
+    rm -rf "$TEMP_DIR"
 
     info "Package installed successfully"
 }
@@ -189,6 +239,7 @@ main() {
     detect_os
     detect_shell
     check_python
+    install_dependencies
 
     # Install uv if needed
     if [ -n "$USE_PIPX" ]; then
