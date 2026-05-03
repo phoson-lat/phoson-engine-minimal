@@ -151,8 +151,11 @@ install_package() {
 
     cd "$TEMP_DIR/phoson-engine-minimal"
 
-    if ! uv tool install --python 3.12 . 2>/dev/null; then
+    info "Running: uv tool install --python 3.12 ."
+    if ! uv tool install --python 3.12 .; then
         error "Failed to install $PACKAGE_NAME"
+        # Show the actual error
+        uv tool install --python 3.12 . 2>&1 || true
         rm -rf "$TEMP_DIR"
         exit 1
     fi
