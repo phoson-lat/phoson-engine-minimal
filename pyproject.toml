@@ -20,6 +20,9 @@ dependencies = [
 where = ["."]
 include = ["phoson_*"]
 
+[tool.setuptools.package-data]
+phoson_cli = ["*.txt"]
+
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"
 
