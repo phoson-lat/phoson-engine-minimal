@@ -1,3 +1,7 @@
+"""
+Module for the main agent engine.
+"""
+
 import json
 import asyncio
 import datetime
@@ -41,14 +45,17 @@ from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 
 
 def _now_utc() -> datetime.datetime:
+    """Returns the current date and time in UTC."""
     return datetime.datetime.now(datetime.UTC)
 
 
 def _duration_ms(started_at: datetime.datetime, ended_at: datetime.datetime) -> int:
+    """Calculates the duration in milliseconds between two timestamps."""
     return int((ended_at - started_at).total_seconds() * 1000)
 
 
 def _to_result_text(value: str | dict[str, Any]) -> str:
+    """Converts a tool result to a text string."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=True)
@@ -56,6 +63,11 @@ def _to_result_text(value: str | dict[str, Any]) -> str:
 
 @dataclass
 class AgentEngine:
+    """
+    Main engine for running LLM-based agents
+    with support for tools and middleware.
+    """
+
     chat: BaseLLMChat
     tools: list[AgentTool]
     middlewares: list[AgentMiddleware] = field(default_factory=list)
@@ -66,21 +78,26 @@ class AgentEngine:
     _running: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Initializes the tool map by name."""
         self._tools_by_name: dict[str, AgentTool] = {
             tool.name: tool for tool in self.tools
         }
 
     def get_partial_history(self) -> list[Message]:
+        """Returns the current message history."""
         return list(self._history)
 
     def is_running(self) -> bool:
+        """Checks if the agent is currently running."""
         return self._running
 
     async def _notify_middlewares(self, event: AgentEvent) -> None:
+        """Notifies all middlewares about an agent event."""
         for middleware in self.middlewares:
             await middleware.on_agent_event(event)
 
     async def _prepare_event(self, event: AgentEvent) -> AgentEvent:
+        """Prepares an event, notifying the middlewares."""
         await self._notify_middlewares(event)
         return event
 
@@ -89,6 +106,7 @@ class AgentEngine:
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
+        """Applies middlewares before calling the LLM."""
         updated = messages
         for middleware in self.middlewares:
             updated = await middleware.on_before_llm(updated, config)
@@ -98,6 +116,8 @@ class AgentEngine:
         self,
         tool_definitions: list[ToolDefinition],
     ) -> LLMCallNext:
+        """Builds the middleware execution chain for the LLM call."""
+
         async def base_call(
             messages: list[Message],
             config: ModelConfig,
@@ -130,6 +150,7 @@ class AgentEngine:
         self,
         call: ToolCallEvent,
     ) -> ToolCallEvent | None:
+        """Applies middlewares before executing a tool."""
         current: ToolCallEvent | None = call
         for middleware in self.middlewares:
             if current is None:
@@ -143,6 +164,7 @@ class AgentEngine:
         result: str,
         error: bool,
     ) -> str:
+        """Applies middlewares after executing a tool."""
         updated = result
         for middleware in self.middlewares:
             updated = await middleware.on_after_tool(call, updated, error)
@@ -153,6 +175,9 @@ class AgentEngine:
         messages: list[Message],
         config: ModelConfig,
     ) -> AsyncIterator[AgentEvent]:
+        """
+        Executes the agent and streams events as they occur.
+        """
         if self._running:
             raise RuntimeError("AgentEngine is already running.")
 
@@ -493,6 +518,7 @@ class AgentEngine:
         messages: list[Message],
         config: ModelConfig,
     ) -> AgentRunResult:
+        """Executes the agent until completion and returns the result."""
         async for event in self.stream(messages, config):
             if isinstance(event, AgentDoneEvent):
                 return event.result
@@ -503,6 +529,7 @@ class AgentEngine:
         raise RuntimeError("Agent stream finished without AgentDoneEvent.")
 
     def run_sync(self, messages: list[Message], config: ModelConfig) -> AgentRunResult:
+        """Executes the agent synchronously."""
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(self.run(messages, config))

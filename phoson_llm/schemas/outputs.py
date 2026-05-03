@@ -6,31 +6,42 @@ from dataclasses import field, dataclass
 
 @dataclass
 class LLMEvent:
+    """Base class for all LLM events.
+
+    Contains a timestamp of when the event was emitted.
+    """
+
     timestamp: datetime.datetime = field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC)
     )
 
 
-# ─── Ciclo de vida ───────────────────────────────────────────────────────────
+# ─── Lifecycle ───────────────────────────────────────────────────────────
 
 
 @dataclass
 class LLMStartEvent(LLMEvent):
+    """Event emitted when an LLM call starts."""
+
     model: str = ""
     message_count: int = 0
 
 
 @dataclass
 class LLMDoneEvent(LLMEvent):
+    """Event emitted when an LLM call completes successfully."""
+
     content: str = ""
     has_tool_calls: bool = False
 
 
-# ─── Texto ───────────────────────────────────────────────────────────────────
+# ─── Text ───────────────────────────────────────────────────────────────────
 
 
 @dataclass
 class TokenEvent(LLMEvent):
+    """Event emitted when a text token is generated."""
+
     content: str = ""
 
 
@@ -39,16 +50,20 @@ class TokenEvent(LLMEvent):
 
 @dataclass
 class ReasoningStartEvent(LLMEvent):
-    pass
+    """Event emitted when extended reasoning/thinking starts (Anthropic, OpenAI o1)."""
 
 
 @dataclass
 class ReasoningTokenEvent(LLMEvent):
+    """Event emitted for each reasoning/thinking token."""
+
     content: str = ""
 
 
 @dataclass
 class ReasoningDoneEvent(LLMEvent):
+    """Event emitted when extended reasoning/thinking completes."""
+
     content: str = ""
 
 
@@ -57,6 +72,8 @@ class ReasoningDoneEvent(LLMEvent):
 
 @dataclass
 class ToolCallDeltaEvent(LLMEvent):
+    """Event emitted for incremental chunks of tool call arguments during streaming."""
+
     index: int = 0
     tool_name: str = ""
     args_chunk: str = ""
@@ -64,6 +81,8 @@ class ToolCallDeltaEvent(LLMEvent):
 
 @dataclass
 class ToolCallEvent(LLMEvent):
+    """Event emitted when a complete tool call is ready to execute."""
+
     index: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
@@ -75,6 +94,8 @@ class ToolCallEvent(LLMEvent):
 
 @dataclass
 class TokenUsage:
+    """Tracks token consumption for an LLM call."""
+
     input: int = 0
     output: int = 0
     cache_write: int = 0
@@ -83,21 +104,22 @@ class TokenUsage:
 
 @dataclass
 class UsageEvent(LLMEvent):
+    """Event emitted with token usage statistics and cost after an LLM call."""
+
     model: str = ""
     usage: TokenUsage = field(default_factory=TokenUsage)
     cost_usd: float = 0.0
     cost_known: bool = True
 
 
-# ─── Modalidades ─────────────────────────────────────────────────────────────
+# ─── Modalities ─────────────────────────────────────────────────────────────
 
 
 @dataclass
 class LLMModalitiesEvent(LLMEvent):
-    """
-    Indica las modalidades de entrada soportadas por el modelo.
+    """Event emitted to indicate which input modalities the model supports.
 
-    Ejemplo: ["text", "vision", "audio"]
+    Supported modalities vary by provider/model (e.g., ["text", "vision", "audio"]).
     """
 
     supported: list[str] = field(default_factory=list)
@@ -108,6 +130,8 @@ class LLMModalitiesEvent(LLMEvent):
 
 @dataclass
 class ErrorEvent(LLMEvent):
+    """Event emitted when an error occurs during LLM interaction."""
+
     message: str = ""
     code: str | None = None
     retryable: bool = False

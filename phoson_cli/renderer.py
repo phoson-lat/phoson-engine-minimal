@@ -44,7 +44,18 @@ _ERR_BORDER = "indian_red1"
 
 
 class Renderer:
+    """Handles terminal rendering of agent events and user output.
+
+    Manages streaming display, tool execution visualization, and
+    session information rendering using Rich library.
+    """
+
     def __init__(self, console: Console | None = None) -> None:
+        """Initialize the renderer.
+
+        Args:
+            console: Optional Rich Console instance. Creates default if None.
+        """
         self.console = console or Console(highlight=False)
         self.session_id: str | None = None
         self._streaming = False
@@ -60,9 +71,13 @@ class Renderer:
         self._subagent_thread: threading.Thread | None = None
 
     def set_session(self, session_id: str) -> None:
+        """Set the current session ID for display.
+
+        Args:
+            session_id: The session identifier.
+        """
         self.session_id = session_id
 
-    # ── Called after all streaming is done for a turn ─────────────────────────
     def flush_line(self) -> None:
         """Ensure we're on a fresh line after any raw-streamed tokens."""
         self.stop_waiting()
@@ -90,7 +105,13 @@ class Renderer:
             )
 
     # ── Event dispatch ────────────────────────────────────────────────────────
+
     def on_event(self, event: AgentEvent) -> None:
+        """Dispatch an agent event to the appropriate handler.
+
+        Args:
+            event: The agent event to render.
+        """
         match event:
             case AgentStartEvent():
                 self._on_start(event)
@@ -137,6 +158,11 @@ class Renderer:
                 self._stream_had_tokens = False
 
     def start_waiting(self, label: str = "thinking") -> None:
+        """Start the waiting animation with a label.
+
+        Args:
+            label: Text to display next to the animation (e.g., "thinking").
+        """
         if self._waiting_thread is not None and self._waiting_thread.is_alive():
             self._waiting_message = label
             return
@@ -149,6 +175,7 @@ class Renderer:
         self._waiting_thread.start()
 
     def stop_waiting(self) -> None:
+        """Stop the waiting animation."""
         if self._waiting_stop is None:
             return
         self._waiting_stop.set()
@@ -161,6 +188,7 @@ class Renderer:
         self._waiting_visible = False
 
     def _run_waiting_animation(self) -> None:
+        """Internal animation loop for waiting indicator."""
         stop = self._waiting_stop
         if stop is None:
             return
@@ -176,13 +204,16 @@ class Renderer:
             sleep(0.08)
 
     def _clear_waiting_line(self) -> None:
+        """Clear the waiting animation line from terminal."""
         if not self._waiting_visible:
             return
         self.console.file.write("\r\x1b[2K")
         self.console.file.flush()
 
     # ── Sub-renderers ─────────────────────────────────────────────────────────
+
     def _on_start(self, event: AgentStartEvent) -> None:
+        """Handle AgentStartEvent by displaying session info."""
         session = (self.session_id or "")[:8] or "—"
         badge = Text(" assistant ", style=f"bold {_TEXT} on #3a255e")
         meta = Text.assemble(
@@ -194,6 +225,7 @@ class Renderer:
         self.console.print(meta)
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
+        """Handle AgentToolStartEvent by displaying tool invocation."""
         args_preview = _args_preview(event.tool_name, event.args)
         label = _tool_label(event)
         line = Text()
@@ -214,6 +246,7 @@ class Renderer:
                 self.start_subagent_waiting(tasks)
 
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
+        """Handle AgentToolDoneEvent by displaying tool result."""
         if event.tool_name in {"agent", "agents"}:
             self.stop_subagent_waiting()
             metrics = parse_subagent_metrics(event.result)
@@ -242,6 +275,11 @@ class Renderer:
         self.console.print(line)
 
     def start_subagent_waiting(self, tasks: list[str]) -> None:
+        """Start displaying the subagent waiting panel.
+
+        Args:
+            tasks: List of subagent task descriptions to display.
+        """
         self.stop_subagent_waiting()
         self._subagent_stop = threading.Event()
         self._subagent_live = Live(
@@ -259,6 +297,7 @@ class Renderer:
         self._subagent_thread.start()
 
     def stop_subagent_waiting(self) -> None:
+        """Stop the subagent waiting panel animation."""
         if self._subagent_stop is not None:
             self._subagent_stop.set()
         if self._subagent_thread is not None and self._subagent_thread.is_alive():
@@ -270,6 +309,7 @@ class Renderer:
         self._subagent_live = None
 
     def _run_subagent_animation(self, tasks: list[str]) -> None:
+        """Internal animation loop for subagent panel."""
         stop = self._subagent_stop
         live = self._subagent_live
         if stop is None or live is None:
@@ -282,6 +322,7 @@ class Renderer:
             sleep(0.08)
 
     def _on_done(self, event: AgentDoneEvent) -> None:
+        """Handle AgentDoneEvent by displaying run summary."""
         r = event.result
         parts: list[str] = []
         if r.total_cost_usd > 0:
@@ -292,6 +333,7 @@ class Renderer:
             self.console.print(Text(f"  {chr(183)} ".join(["", *parts]), style=_MUTED))
 
     def _on_error(self, event: AgentErrorEvent) -> None:
+        """Handle AgentErrorEvent by displaying error panel."""
         body = Text()
         body.append(event.message, style="bold")
         if event.code:
@@ -324,16 +366,35 @@ class Renderer:
         )
 
     def print_info(self, message: str) -> None:
+        """Print an informational message.
+
+        Args:
+            message: The message to display.
+        """
         self.console.print(Text(f"  {message}", style=_MUTED))
 
     def print_warn(self, message: str) -> None:
+        """Print a warning message.
+
+        Args:
+            message: The warning text.
+        """
         self.console.print(Text(f"  ⚠ {message}", style=_WARN))
 
     def print_error(self, message: str) -> None:
+        """Print an error message.
+
+        Args:
+            message: The error text.
+        """
         self.console.print(Text(f"  ✗ {message}", style=_TOOL_ERR))
 
     def print_history(self, messages: list) -> None:
-        """Re-render a list of Message objects as a conversation replay."""
+        """Re-render a list of Message objects as a conversation replay.
+
+        Args:
+            messages: List of conversation messages to display.
+        """
         from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
         self.console.print(Text(" session history ", style=f"bold {_TEXT} on #2e2047"))
@@ -404,6 +465,11 @@ class Renderer:
         self.console.print(Rule(style=_MUTED2))
 
     def print_sessions_table(self, sessions: list) -> None:
+        """Print a table of sessions.
+
+        Args:
+            sessions: List of SessionMeta objects to display.
+        """
         table = Table(
             show_header=True,
             header_style=f"bold {_ACCENT}",

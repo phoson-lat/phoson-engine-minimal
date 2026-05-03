@@ -192,7 +192,17 @@ _PHOS_ART = (
 
 
 class PhosonRepl:
+    """Interactive REPL for the Phoson agent platform.
+
+    Handles user input, command execution, agent running, and session management.
+    """
+
     def __init__(self, config: PhosonConfig) -> None:
+        """Initialize the REPL with configuration.
+
+        Args:
+            config: PhosonConfig containing provider, model, and session settings.
+        """
         self.config = config
         self.storage = JsonlStorage(base_path=config.sessions_dir)
         self.tree = ConversationTree.new()
@@ -249,6 +259,11 @@ class PhosonRepl:
         self.renderer.set_session(self.tree.session_id)
 
     async def run(self) -> None:
+        """Run the REPL main loop.
+
+        Displays the banner, initializes the prompt session, and processes
+        user input until EOF or /exit command.
+        """
         self._print_banner()
 
         history_path = Path("~/.phoson/history.txt").expanduser()
@@ -295,7 +310,11 @@ class PhosonRepl:
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
     async def _run_agent(self, user_input: str) -> None:
-        # ── Construir el mensaje del usuario (texto + attachments) ────────────
+        """Execute the agent with user input.
+
+        Args:
+            user_input: The user's message text.
+        """
         pending_blocks: list[ContentBlock] = []
         if self.attachments:
             pending_blocks = list(self.attachments.flush())
@@ -380,9 +399,10 @@ class PhosonRepl:
                 self.tree.session_id, self.session_metrics.to_meta()
             )
 
-    # ── Session / model management ─────────────────────────────────────────��──
+    # ── Session / model management ─────────────────────────────────────────────
 
     def new_session(self) -> None:
+        """Start a fresh session, resetting tree and metrics."""
         self.tree = ConversationTree.new()
         self.current_node_id = None
         self.attachments.clear()
@@ -417,11 +437,17 @@ class PhosonRepl:
             return False
 
     def branch_session(self) -> None:
+        """Branch the conversation from the current node."""
         if self.current_node_id is None:
             return
         self.current_node_id = self.tree.branch(self.current_node_id)
 
     def set_model(self, model: str) -> None:
+        """Switch to a different model.
+
+        Args:
+            model: The new model name to use.
+        """
         self.current_model = model
         self.config.model = model
 
@@ -451,11 +477,21 @@ class PhosonRepl:
         self.engine.context.extra["chat"] = self.chat
 
     def label_current_node(self, text: str) -> None:
+        """Label the current node with text.
+
+        Args:
+            text: The label text to assign.
+        """
         if self.current_node_id is None:
             return
         self.tree.label(self.current_node_id, text)
 
     def find_latest_node_id(self) -> str | None:
+        """Find the most recently created node.
+
+        Returns:
+            Node ID of the latest node, or None if tree is empty.
+        """
         if not self.tree.nodes:
             return None
         latest = max(self.tree.nodes.values(), key=lambda n: n.created_at)
@@ -464,6 +500,11 @@ class PhosonRepl:
     # ── Tree rendering ────────────────────────────────────────────────────────
 
     def render_tree_ascii(self) -> str:
+        """Render the conversation tree as an ASCII diagram.
+
+        Returns:
+            String representation of the tree, or "(empty session)" if empty.
+        """
         if not self.tree.nodes:
             return "(empty session)"
 
