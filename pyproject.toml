@@ -1,9 +1,12 @@
 [project]
 name = "phoson-engine-minimal"
 version = "0.1.0"
-description = "Add your description here"
+description = "Minimal Python runtime for the Phoson autonomous-agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    { name = "Abel Santillan Rodriguez", email = "https://github.com/abelsr" },
+]
 dependencies = [
     "anthropic>=0.97.0",
     "httpx>=0.28.0",
@@ -12,6 +15,9 @@ dependencies = [
     "rich>=15.0.0",
     "tiktoken>=0.9.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["phoson_cli", "phoson_llm", "phoson_agent"]
 
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"

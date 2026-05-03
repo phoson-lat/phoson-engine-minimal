@@ -237,7 +237,7 @@ class OpenAIChat(BaseLLMChat):
 
         kwargs: dict = {
             "model": config.model,
-            "max_tokens": config.max_tokens,
+            "max_completion_tokens": config.max_tokens,
             "messages": _convert_messages(messages),
             "stream": True,
             "stream_options": {"include_usage": True},

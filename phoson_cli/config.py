@@ -104,16 +104,75 @@ def load_config() -> PhosonConfig:
         model=str(model),
         subagent_model=str(subagent_model) if subagent_model else None,
         provider=str(provider).lower(),
-        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
-        openai_api_key=os.environ.get("OPENAI_API_KEY"),
-        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY"),
-        ollama_base_url=os.environ.get("OLLAMA_BASE_URL"),
+        openrouter_api_key=(
+            os.environ.get("OPENROUTER_API_KEY")
+            or file_defaults.get("openrouter_api_key")
+        ),
+        openai_api_key=os.environ.get("OPENAI_API_KEY")
+        or file_defaults.get("openai_api_key"),
+        anthropic_api_key=(
+            os.environ.get("ANTHROPIC_API_KEY")
+            or file_defaults.get("anthropic_api_key")
+        ),
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL")
+        or file_defaults.get("ollama_base_url"),
         sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
         max_iterations=max_iterations,
         safe_mode=safe_mode,
     )
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def save_config(config: PhosonConfig) -> Path:
+    """Persist configuration defaults to ~/.phoson/config.toml."""
+    config_dir = Path("~/.phoson").expanduser()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / "config.toml"
+
+    def _line(key: str, value: str | int | bool | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif isinstance(value, int):
+            rendered = str(value)
+        else:
+            escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+            rendered = f'"{escaped}"'
+        return f"{key} = {rendered}"
+
+    enabled_providers: list[str] = []
+    if config.openrouter_api_key:
+        enabled_providers.append("openrouter")
+    if config.openai_api_key:
+        enabled_providers.append("openai")
+    if config.anthropic_api_key:
+        enabled_providers.append("anthropic")
+    if config.ollama_base_url:
+        enabled_providers.append("ollama")
+    if config.provider not in enabled_providers:
+        enabled_providers.append(config.provider)
+
+    lines = ["[defaults]"]
+    for line in [
+        _line("provider", config.provider),
+        _line("enabled_providers", ",".join(enabled_providers)),
+        _line("model", config.model),
+        _line("subagent_model", config.subagent_model),
+        _line("openrouter_api_key", config.openrouter_api_key),
+        _line("openai_api_key", config.openai_api_key),
+        _line("anthropic_api_key", config.anthropic_api_key),
+        _line("ollama_base_url", config.ollama_base_url),
+        _line("sessions_dir", str(config.sessions_dir)),
+        _line("max_iterations", config.max_iterations),
+        _line("safe_mode", config.safe_mode),
+    ]:
+        if line:
+            lines.append(line)
+
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config_path
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
