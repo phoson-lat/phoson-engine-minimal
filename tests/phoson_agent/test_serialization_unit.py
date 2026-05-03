@@ -3,17 +3,17 @@ import datetime
 import pytest
 
 from phoson_llm.schemas import Message, TextBlock, ToolUseBlock, ToolResultBlock
+from phoson_agent.sessions.models import ConversationNode, ConversationTree
 from phoson_agent.sessions.serialization import (
+    node_to_dict,
     block_to_dict,
+    node_from_dict,
+    apply_tree_meta,
     block_from_dict,
     message_to_dict,
     message_from_dict,
-    node_to_dict,
-    node_from_dict,
     tree_meta_to_dict,
-    apply_tree_meta,
 )
-from phoson_agent.sessions.models import ConversationTree, ConversationNode
 
 
 def test_block_to_dict_text() -> None:

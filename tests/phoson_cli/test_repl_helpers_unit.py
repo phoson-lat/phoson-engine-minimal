@@ -1,4 +1,3 @@
-import pytest
 
 from phoson_cli.repl import _message_preview
 

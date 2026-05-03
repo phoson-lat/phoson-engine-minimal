@@ -1,6 +1,5 @@
-import pytest
 
-from phoson_cli.commands import parse_command, Command
+from phoson_cli.commands import Command, parse_command
 
 
 def test_parse_command_returns_none_for_non_slash() -> None:
