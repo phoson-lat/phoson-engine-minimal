@@ -19,18 +19,25 @@ pip install phoson-engine-minimal
 ## Quick Start
 
 ```python
+import asyncio
+
 from phoson_agent import AgentEngine, tool
-from phoson_llm import build_chat, ModelConfig
+from phoson_llm import Message, ModelConfig
 
 @tool
 def get_weather(location: str) -> str:
     """Get weather for a location."""
     return f"Weather in {location}: Sunny"
 
-agent = AgentEngine(chat=build_chat("openai", api_key="sk-..."))
-result = await agent.run(
-    messages=[{"role": "user", "content": "What's the weather in NYC?"}],
-    tools=[get_weather],
-)
-print(result.final_content)
+async def main() -> None:
+    agent = AgentEngine(
+        chat=ModelConfig(provider="openai", api_key="sk-..."),
+        tools=[get_weather],
+    )
+    result = await agent.run(
+        messages=[Message(role="user", content="What's the weather in NYC?")],
+    )
+    print(result.final_content)
+
+asyncio.run(main())
 ```
