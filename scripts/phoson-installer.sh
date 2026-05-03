@@ -200,6 +200,14 @@ run_setup_wizard() {
     fi
 }
 
+launch_setup() {
+    # Only launch setup if we have a terminal
+    if [ -t 0 ]; then
+        info "Launching setup wizard..."
+        "$PHOSON_CLI" --setup
+    fi
+}
+
 print_next_steps() {
     echo ""
     info "${BOLD}Installation complete!${RESET}"
@@ -268,6 +276,9 @@ main() {
     if [ -z "$SKIP_SETUP" ]; then
         run_setup_wizard
     fi
+
+    # Launch setup wizard if we have a terminal
+    launch_setup
 
     print_next_steps
 }
