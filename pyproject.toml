@@ -13,6 +13,9 @@ dependencies = [
     "tiktoken>=0.9.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["phoson_cli", "phoson_llm", "phoson_agent"]
+
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"
 
