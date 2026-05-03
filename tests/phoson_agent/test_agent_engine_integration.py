@@ -542,3 +542,128 @@ async def test_ollama_adapter_integration_tool_loop(monkeypatch) -> None:
     assert tool_done.tool_name == "get_weather"
     assert tool_done.tool_call_id == "call_ollama_1"
     assert [step.kind for step in done.result.steps] == ["llm", "tool", "llm"]
+
+
+@pytest.mark.asyncio
+async def test_tool_handler_error_sets_tool_done_error(monkeypatch) -> None:
+    class FakeToolErrorChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_tool_error_1",
+                tool_name="get_weather",
+                args={"city": "Qro"},
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+
+    def boom(args, context=None):
+        raise RuntimeError("boom")
+
+    tools = [
+        AgentTool(
+            name="get_weather",
+            description="",
+            parameters={"type": "object", "properties": {}},
+            handler=boom,
+        )
+    ]
+
+    engine = AgentEngine(chat=FakeToolErrorChat(), tools=tools)
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="clima")],
+            config=ModelConfig(model="fake", max_tokens=64),
+        )
+    ]
+
+    tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
+    step_done = next(event for event in events if isinstance(event, AgentStepDoneEvent) and event.step.kind == "tool")
+    assert tool_done.error == "boom"
+    assert step_done.step.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_empty_done_content_returns_empty_final_content() -> None:
+    class FakeEmptyDoneChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield LLMDoneEvent(content="", has_tool_calls=False)
+
+    engine = AgentEngine(chat=FakeEmptyDoneChat(), tools=[])
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="hola")],
+            config=ModelConfig(model="fake", max_tokens=16),
+        )
+    ]
+
+    done = next(event for event in events if isinstance(event, AgentDoneEvent))
+    assert done.result.final_content == ""
+
+
+@pytest.mark.asyncio
+async def test_max_iterations_emits_error_event() -> None:
+    class FakeLoopingChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_loop_1",
+                tool_name="get_weather",
+                args={"city": "Qro"},
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+
+    engine = AgentEngine(chat=FakeLoopingChat(), tools=build_tools(), max_iterations=2)
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="loop")],
+            config=ModelConfig(model="fake", max_tokens=32),
+        )
+    ]
+
+    error_event = next(event for event in events if isinstance(event, AgentErrorEvent))
+    assert error_event.code == "max_iterations"
+
+
+@pytest.mark.asyncio
+async def test_llm_protocol_error_missing_tool_calls() -> None:
+    class FakeMissingToolCallsChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+
+    engine = AgentEngine(chat=FakeMissingToolCallsChat(), tools=build_tools())
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="hola")],
+            config=ModelConfig(model="fake", max_tokens=32),
+        )
+    ]
+
+    error_event = next(event for event in events if isinstance(event, AgentErrorEvent))
+    assert error_event.code == "llm_protocol"
+
+
+@pytest.mark.asyncio
+async def test_llm_protocol_error_missing_done_event() -> None:
+    class FakeMissingDoneChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+
+    engine = AgentEngine(chat=FakeMissingDoneChat(), tools=[])
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="hola")],
+            config=ModelConfig(model="fake", max_tokens=32),
+        )
+    ]
+
+    error_event = next(event for event in events if isinstance(event, AgentErrorEvent))
+    assert error_event.code == "llm_protocol"
