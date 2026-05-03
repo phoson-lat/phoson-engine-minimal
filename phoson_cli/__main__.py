@@ -67,6 +67,21 @@ def main() -> None:
         return
 
     config = load_config()
+
+    # Check if API keys are configured - if not, run setup wizard
+    has_api_key = (
+        config.openrouter_api_key
+        or config.openai_api_key
+        or config.anthropic_api_key
+        or config.ollama_base_url
+    )
+
+    if not has_api_key:
+        print("No API keys configured. Running setup wizard...")
+        asyncio.run(run_install_wizard(config))
+        # Reload config after setup
+        config = load_config()
+
     repl = PhosonRepl(config)
     asyncio.run(repl.run())
 
