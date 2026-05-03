@@ -219,9 +219,7 @@ async def agents(
                 "---"
             )
             output_parts.append(
-                f"=== Agent {idx}: {task_preview} ===\n"
-                f"{r['result']}\n"
-                f"{metrics_line}"
+                f"=== Agent {idx}: {task_preview} ===\n{r['result']}\n{metrics_line}"
             )
 
     return "\n\n".join(output_parts)
