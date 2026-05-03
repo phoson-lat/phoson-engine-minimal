@@ -89,6 +89,20 @@ class UsageEvent(LLMEvent):
     cost_known: bool = True
 
 
+# ─── Modalidades ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class LLMModalitiesEvent(LLMEvent):
+    """
+    Indica las modalidades de entrada soportadas por el modelo.
+
+    Ejemplo: ["text", "vision", "audio"]
+    """
+
+    supported: list[str] = field(default_factory=list)
+
+
 # ─── Error ───────────────────────────────────────────────────────────────────
 
 

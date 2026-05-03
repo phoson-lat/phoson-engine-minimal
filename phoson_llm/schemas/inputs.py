@@ -28,7 +28,84 @@ class ToolResultBlock:
     error: bool = False
 
 
-ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
+# ─── Multimodal Content Blocks ───────────────────────────────────────────────
+
+
+@dataclass
+class ImageBlock:
+    """
+    Imagen como input para el LLM (vision).
+
+    source puede ser:
+    - URL pública:  "https://example.com/image.png"
+    - Base64:      "data:image/png;base64,iVBORw0KGgo..."
+    - Archivo local: "file://path/to/image.png"
+    """
+
+    source: str
+    detail: Literal["low", "high", "auto"] = "auto"  # OpenAI only
+    media_type: str | None = None  # e.g. "image/png", "image/jpeg"
+
+
+@dataclass
+class AudioBlock:
+    """
+    Audio como input para el LLM.
+
+    source puede ser:
+    - URL pública:   "https://example.com/audio.wav"
+    - Base64:       "data:audio/wav;base64,..."
+    - Archivo local: "file://path/to/audio.wav"
+
+    Soportado por: OpenAI (audio input), Gemini
+    """
+
+    source: str
+    format: str = "wav"  # wav, mp3, ogg, flac
+    duration_ms: int | None = None
+
+
+@dataclass
+class VideoBlock:
+    """
+    Video como input para el LLM.
+
+    Los providers dividen internamente el video en frames muestreados.
+    source puede ser:
+    - URL pública:   "https://example.com/video.mp4"
+    - Archivo local: "file://path/to/video.mp4"
+
+    Soportado por: Gemini, GPT-4o (experimental)
+    """
+
+    source: str
+    sampling_interval_ms: int = 2000  # sample cada N ms por defecto
+
+
+@dataclass
+class DocumentBlock:
+    """
+    Documento PDF como input.
+
+    Soportado por: Anthropic Claude 3.5+ (document parsing)
+    """
+
+    source: str  # URL, base64://..., o file://...
+    pages: int | None = None  # total páginas (informativo)
+
+
+# ─── Union ───────────────────────────────────────────────────────────────────
+
+
+ContentBlock = (
+    TextBlock
+    | ToolUseBlock
+    | ToolResultBlock
+    | ImageBlock
+    | AudioBlock
+    | VideoBlock
+    | DocumentBlock
+)
 
 
 # ─── Mensaje ─────────────────────────────────────────────────────────────────
@@ -57,7 +134,7 @@ class ToolDefinition:
 class ModelConfig:
     model: str
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 32 * 1024
     system: str | None = None
     # Anthropic extended thinking
     thinking_budget: int | None = None

@@ -1,9 +1,14 @@
 from .inputs import (
     Message,
     TextBlock,
+    AudioBlock,
+    # multimodal
+    ImageBlock,
+    VideoBlock,
     ModelConfig,
     ContentBlock,
     ToolUseBlock,
+    DocumentBlock,
     ToolDefinition,
     ToolResultBlock,
 )
@@ -16,6 +21,7 @@ from .outputs import (
     LLMDoneEvent,
     LLMStartEvent,
     ToolCallEvent,
+    LLMModalitiesEvent,
     ReasoningDoneEvent,
     ToolCallDeltaEvent,
     ReasoningStartEvent,
@@ -31,6 +37,11 @@ __all__ = [
     "Message",
     "ToolDefinition",
     "ModelConfig",
+    # multimodal inputs
+    "ImageBlock",
+    "AudioBlock",
+    "VideoBlock",
+    "DocumentBlock",
     # outputs
     "LLMEvent",
     "LLMStartEvent",
@@ -43,5 +54,6 @@ __all__ = [
     "ToolCallEvent",
     "TokenUsage",
     "UsageEvent",
+    "LLMModalitiesEvent",
     "ErrorEvent",
 ]
