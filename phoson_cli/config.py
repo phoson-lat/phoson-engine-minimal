@@ -1,3 +1,10 @@
+"""
+Configuration management for the Phoson CLI.
+
+Handles loading settings from files and environment variables, and building
+the LLM chat clients.
+"""
+
 import os
 import tomllib
 from pathlib import Path
@@ -12,6 +19,7 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 
 @dataclass
 class PhosonConfig:
+    """Application configuration."""
     model: str = "minimax/minimax-m2.5"
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     provider: str = "openrouter"
@@ -25,12 +33,14 @@ class PhosonConfig:
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
+    """Parse string to boolean."""
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_int(value: str | None, default: int) -> int:
+    """Parse string to integer."""
     if value is None:
         return default
     try:
@@ -40,6 +50,7 @@ def _parse_int(value: str | None, default: int) -> int:
 
 
 def _load_file_defaults(config_path: Path) -> dict:
+    """Load defaults from the config TOML file."""
     if not config_path.exists():
         return {}
     with config_path.open("rb") as f:
@@ -49,6 +60,7 @@ def _load_file_defaults(config_path: Path) -> dict:
 
 
 def load_config() -> PhosonConfig:
+    """Load configuration from files and environment."""
     defaults = PhosonConfig()
     cfg_file = Path("~/.phoson/config.toml").expanduser()
     file_defaults = _load_file_defaults(cfg_file)
@@ -104,6 +116,7 @@ def load_config() -> PhosonConfig:
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
+    """Build the appropriate LLM chat client based on configuration."""
     provider = config.provider.lower()
     if provider == "openrouter":
         if not config.openrouter_api_key:

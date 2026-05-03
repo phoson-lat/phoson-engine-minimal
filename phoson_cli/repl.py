@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-from dataclasses import field, dataclass
+from dataclasses import field
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -26,7 +26,6 @@ from .renderer import Renderer
 from .attachments import AttachmentManager
 
 
-@dataclass
 class SessionMetrics:
     """Accumulated metrics for the current session."""
 

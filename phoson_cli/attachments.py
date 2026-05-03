@@ -1,8 +1,8 @@
 """
-Attachment manager para el CLI.
+Attachment manager for the CLI.
 
-Maneja archivos multimodales (imágenes, audio, video, PDFs) que el usuario
-adjunta antes de enviar un mensaje, convirtiéndolos en ContentBlocks.
+Handles multimodal files (images, audio, video, PDFs) attached by the user
+before sending a message, converting them into appropriate ContentBlocks.
 """
 
 from pathlib import Path
@@ -17,20 +17,16 @@ from phoson_llm.schemas import (
     DocumentBlock,
 )
 
-# ─── Tipos de archivos soportados ────────────────────────────────────────────
-
+# ─── Supported File Extensions ──────────────────────────────────────────────
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
 
-# ─── Attachment ──────────────────────────────────────────────────────────────
-
-
 @dataclass
 class Attachment:
-    """Un archivo adjunto pendiente de incluir en el próximo mensaje."""
+    """A file attached to the pending message."""
 
     path: Path
     block: ImageBlock | AudioBlock | VideoBlock | DocumentBlock
@@ -39,33 +35,26 @@ class Attachment:
         return f"📎 {self.path.name}"
 
 
-# ─── AttachmentManager ────────────────────────────────────────────────────────
-
-
 @dataclass
 class AttachmentManager:
     """
-    Colección de archivos pendientes de adjuntar al próximo mensaje.
+    Collection of files to be attached to the next message.
 
-    Uso típico en el REPL:
-
-        repl.attachments.attach("screenshot.png")
-        repl.attachments.attach("audio.wav")
-        blocks = repl.attachments.flush()
-        message = Message(role="user", content=list(blocks))
+    Used by the REPL to manage multimodal inputs.
     """
 
     _pending: list[Attachment] = field(default_factory=list)
 
-    # ── Gestionar attachments ────────────────────────────────────────────────
-
     def attach(self, path: str) -> None:
         """
-        Adjunta un archivo. Detecta el tipo por extensión.
+        Attach a file, detecting its type by extension.
+
+        Args:
+            path: String path to the file.
 
         Raises:
-            FileNotFoundError: si el archivo no existe.
-            ValueError: si la extensión no es soportada.
+            FileNotFoundError: If the file does not exist.
+            ValueError: If the file extension is not supported.
         """
         p = Path(path).expanduser().resolve()
         if not p.exists():
@@ -82,7 +71,7 @@ class AttachmentManager:
         elif suffix in AUDIO_EXTS:
             block = AudioBlock(
                 source=f"file://{p}",
-                format=suffix[1:],  # sin el punto
+                format=suffix[1:],  # remove dot
             )
         elif suffix in VIDEO_EXTS:
             block = VideoBlock(source=f"file://{p}")
@@ -98,17 +87,17 @@ class AttachmentManager:
         self._pending.append(Attachment(path=p, block=block))
 
     def flush(self) -> Sequence[ContentBlock]:
-        """Retorna los blocks pendientes y los limpia."""
+        """Return pending blocks and clear the manager."""
         blocks = [a.block for a in self._pending]
         self._pending.clear()
         return blocks
 
     def clear(self) -> None:
-        """Limpia todos los attachments pendientes sin enviarlos."""
+        """Clear all pending attachments without sending."""
         self._pending.clear()
 
     def list_pending(self) -> list[Attachment]:
-        """Retorna la lista actual de attachments pendientes."""
+        """Return the current list of pending attachments."""
         return list(self._pending)
 
     def __len__(self) -> int:
@@ -118,10 +107,8 @@ class AttachmentManager:
         return bool(self._pending)
 
 
-# ─── Helper ───────────────────────────────────────────────────────────────────
-
-
 def _suffix_to_mime(suffix: str) -> str:
+    """Map file extension to MIME type."""
     return {
         ".png": "image/png",
         ".jpg": "image/jpeg",
