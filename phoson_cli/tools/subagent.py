@@ -209,6 +209,19 @@ async def agents(
         if error:
             output_parts.append(f"=== Agent {idx}: {task_preview} === Error: {error}")
         else:
-            output_parts.append(f"=== Agent {idx}: {task_preview} ===\n{r['result']}")
+            metrics_line = (
+                "--- METRICS: "
+                f"duration_ms={r['duration_ms']} "
+                f"input_tokens={r['input_tokens']} "
+                f"output_tokens={r['output_tokens']} "
+                f"cost_usd={r['cost_usd']} "
+                f"credits={r['credits']} "
+                "---"
+            )
+            output_parts.append(
+                f"=== Agent {idx}: {task_preview} ===\n"
+                f"{r['result']}\n"
+                f"{metrics_line}"
+            )
 
     return "\n\n".join(output_parts)
