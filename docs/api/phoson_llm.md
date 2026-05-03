@@ -103,10 +103,8 @@ msg = Message(role="user", content="Hello!")
 
 | Field     | Type                     | Description                          |
 |-----------|--------------------------|--------------------------------------|
-| `role`    | `Literal["system", "user", "assistant", "tool"]` | Message sender |
+| `role`    | `Literal["system", "user", "assistant"]` | Message sender |
 | `content` | `str \| list[ContentBlock]` | Message content                      |
-| `name`    | `str \| None`           | For tool/assistant messages          |
-| `tool_call_id` | `str \| None`       | For tool messages                    |
 
 ### ModelConfig
 
