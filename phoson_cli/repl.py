@@ -186,11 +186,7 @@ class _SlashCompleter(Completer):
 
 
 # Load the phos ASCII art from the package file at import time
-_PHOS_ART = (
-    (Path(__file__).parent.parent / "phoson_llm" / "phos-ascii.txt")
-    .read_text(encoding="utf-8")
-    .rstrip("\n")
-)
+_PHOS_ART = (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
 
 
 class PhosonRepl:
