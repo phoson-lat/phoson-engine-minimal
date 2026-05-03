@@ -395,7 +395,6 @@ class Renderer:
         Args:
             messages: List of conversation messages to display.
         """
-        """Re-render a list of Message objects as a conversation replay."""
         from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
         self.console.print(Text(" session history ", style=f"bold {_TEXT} on #2e2047"))
