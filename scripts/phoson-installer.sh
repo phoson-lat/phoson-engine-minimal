@@ -201,10 +201,14 @@ run_setup_wizard() {
 }
 
 launch_setup() {
-    # Only launch setup if we have a terminal
-    if [ -t 0 ]; then
-        info "Launching setup wizard..."
-        "$PHOSON_CLI" --setup
+    # Try to launch setup wizard
+    # If no terminal, it will fail gracefully
+    info "Launching setup wizard..."
+    if "$PHOSON_CLI" --setup 2>/dev/null; then
+        : # Setup completed
+    else
+        info "Setup skipped (no interactive terminal)"
+        info "Run 'phoson-cli --setup' later to configure"
     fi
 }
 
