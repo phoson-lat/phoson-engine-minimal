@@ -4,6 +4,7 @@ import pytest
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
+from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -20,11 +21,61 @@ from phoson_agent.models import (
     AgentTool,
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentStartEvent,
     AgentStepDoneEvent,
     AgentToolDoneEvent,
     AgentToolStartEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
+
+
+class _Delta:
+    def __init__(self, content=None, tool_calls=None) -> None:
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _ToolFunction:
+    def __init__(self, name=None, arguments=None) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _ToolCall:
+    def __init__(self, index, call_id, name, arguments) -> None:
+        self.index = index
+        self.id = call_id
+        self.function = _ToolFunction(name=name, arguments=arguments)
+
+
+class _Choice:
+    def __init__(self, delta=None, finish_reason=None) -> None:
+        self.delta = delta
+        self.finish_reason = finish_reason
+
+
+class _Chunk:
+    def __init__(self, delta=None, finish_reason=None, usage=None) -> None:
+        self.choices = [
+            _Choice(delta=delta if delta is not None else _Delta(), finish_reason=finish_reason)
+        ]
+        self.usage = usage
+
+
+class _FakeStream:
+    def __init__(self, chunks: list[_Chunk]) -> None:
+        self._chunks = chunks
+
+    def __aiter__(self):
+        async def _iterator():
+            for chunk in self._chunks:
+                yield chunk
+
+        return _iterator()
+
+
+def _extract_agent_event_types(events):
+    return [type(event) for event in events]
 
 
 class FakeToolChat(BaseLLMChat):
@@ -213,3 +264,63 @@ async def test_run_executes_decorated_tool_with_context_injection() -> None:
 
     tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
     assert tool_done.result == "cmd=git log -1 --oneline safe=True"
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_integration_tool_loop(monkeypatch) -> None:
+    call_count = 0
+
+    async def _fake_create(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _FakeStream(
+                [
+                    _Chunk(
+                        delta=_Delta(
+                            tool_calls=[
+                                _ToolCall(
+                                    index=0,
+                                    call_id="call_openai_1",
+                                    name="get_weather",
+                                    arguments='{"city":"Qro"}',
+                                )
+                            ]
+                        )
+                    ),
+                    _Chunk(finish_reason="tool_calls"),
+                    _Chunk(delta=_Delta(content="")),
+                ]
+            )
+        return _FakeStream(
+            [
+                _Chunk(delta=_Delta(content="Listo")),
+            ]
+        )
+
+    chat = OpenAIChat(api_key="test")
+    monkeypatch.setattr(chat._client.chat.completions, "create", _fake_create)
+
+    engine = AgentEngine(chat=chat, tools=build_tools())
+    events = [
+        event
+        async for event in engine.stream(
+            messages=[Message(role="user", content="clima")],
+            config=ModelConfig(model="gpt-4o-mini", max_tokens=128),
+        )
+    ]
+
+    event_types = _extract_agent_event_types(events)
+    assert event_types[0] is AgentStartEvent
+    assert AgentToolStartEvent in event_types
+    assert AgentToolDoneEvent in event_types
+    assert AgentStepDoneEvent in event_types
+    assert event_types[-1] is AgentDoneEvent
+    done = next(event for event in events if isinstance(event, AgentDoneEvent))
+    tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
+    assert tool_done.tool_name == "get_weather"
+    assert tool_done.tool_call_id == "call_openai_1"
+    assert done.result.steps[0].kind == "llm"
+    assert done.result.steps[1].kind == "tool"
+    assert done.result.steps[2].kind == "llm"
+    assert done.result.final_content == "Listo"
