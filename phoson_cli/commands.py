@@ -35,6 +35,7 @@ COMMANDS: Final[set[str]] = {
 @dataclass
 class Command:
     """Represents a parsed slash command."""
+
     name: str
     args: str
 

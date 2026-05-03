@@ -1,6 +1,7 @@
 """
 Módulo para gestionar el contexto del agente.
 """
+
 from typing import Any
 from dataclasses import field, dataclass
 
@@ -10,6 +11,7 @@ class AgentContext:
     """
     Contenedor de contexto para la ejecución del agente.
     """
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def get(self, key: str, default: Any = None) -> Any:

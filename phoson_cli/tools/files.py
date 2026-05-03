@@ -32,7 +32,9 @@ class FileTool(BaseTool):
         # No range specified - return full file with truncation check
         if start_line is None and end_line is None:
             if len(content.encode("utf-8")) > MAX_BYTES:
-                return content[:MAX_BYTES] + "\n\n[...truncated: file is larger than 50KB]"
+                return (
+                    content[:MAX_BYTES] + "\n\n[...truncated: file is larger than 50KB]"
+                )
             return content
 
         # Handle line range

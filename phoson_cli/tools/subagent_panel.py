@@ -12,6 +12,7 @@ from .base import BaseTool
 
 class AgentStatus(Enum):
     """Represent the execution state of a subagent."""
+
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"
@@ -37,6 +38,7 @@ _TOOL_ERR = "indian_red1"
 @dataclass
 class SubagentMetrics:
     """Metrics for a single subagent task."""
+
     index: int
     task: str
     status: AgentStatus
@@ -131,7 +133,11 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
                 m.status = AgentStatus.ERROR
                 m.error = header_line.split("Error:")[1].strip()
             elif metrics_line:
-                parts2 = metrics_line.replace("--- METRICS:", "").replace("---", "").split("|")
+                parts2 = (
+                    metrics_line.replace("--- METRICS:", "")
+                    .replace("---", "")
+                    .split("|")
+                )
                 if len(parts2) >= 3:
                     m.duration_ms = int(parts2[0].strip().replace("ms", ""))
                     tok_str = parts2[1].strip()
@@ -150,10 +156,10 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
 
 def render_subagent_panel(tasks: list[str]) -> Table:
     """Render initial subagent panel with pending tasks.
-    
+
     Args:
         tasks: List of task descriptions to display.
-        
+
     Returns:
         A Rich Table representing the initial panel state.
     """
@@ -163,11 +169,11 @@ def render_subagent_panel(tasks: list[str]) -> Table:
 
 def render_subagent_panel_frame(tasks: list[str], frame_index: int) -> Table:
     """Render live subagent panel for a spinner frame.
-    
+
     Args:
         tasks: List of task descriptions.
         frame_index: Current frame index for spinner animation.
-        
+
     Returns:
         A Rich Table with animated spinner.
     """
@@ -202,9 +208,32 @@ def render_subagent_summary(metrics: list[SubagentMetrics]) -> Table | None:
             total_input += m.input_tokens
             total_output += m.output_tokens
             total_cost += m.cost_usd
-            table.add_row(str(m.index), status_icon, task_preview, _format_duration(m.duration_ms), _format_tokens(m.input_tokens, m.output_tokens), _format_cost(m.cost_usd))
+            table.add_row(
+                str(m.index),
+                status_icon,
+                task_preview,
+                _format_duration(m.duration_ms),
+                _format_tokens(m.input_tokens, m.output_tokens),
+                _format_cost(m.cost_usd),
+            )
         elif m.status == AgentStatus.ERROR:
-            table.add_row(str(m.index), status_icon, task_preview, "—", "—", m.error[:20] if m.error else "error", style=_TOOL_ERR)
+            table.add_row(
+                str(m.index),
+                status_icon,
+                task_preview,
+                "—",
+                "—",
+                m.error[:20] if m.error else "error",
+                style=_TOOL_ERR,
+            )
     if total_duration > 0:
-        table.add_row("—", "", "Total", _format_duration(total_duration), _format_tokens(total_input, total_output), _format_cost(total_cost), style=f"bold {_ACCENT}")
+        table.add_row(
+            "—",
+            "",
+            "Total",
+            _format_duration(total_duration),
+            _format_tokens(total_input, total_output),
+            _format_cost(total_cost),
+            style=f"bold {_ACCENT}",
+        )
     return table

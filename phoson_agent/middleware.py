@@ -1,6 +1,7 @@
 """
 Módulo para middlewares del agente.
 """
+
 from abc import ABC
 from collections.abc import Callable, AsyncIterator
 
@@ -61,6 +62,7 @@ class RetryMiddleware(AgentMiddleware):
     """
     Middleware para reintentar automáticamente llamadas al LLM ante errores.
     """
+
     def __init__(
         self,
         max_retries: int = 2,

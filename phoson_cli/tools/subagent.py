@@ -76,7 +76,9 @@ class SubAgentTool(BaseTool):
         """Logic for single sub-agent execution."""
         allowed_tools = {k: v for k, v in available_tools.items() if k != "agent"}
         if tools is not None:
-            selected = {name: tool for name, tool in allowed_tools.items() if name in tools}
+            selected = {
+                name: tool for name, tool in allowed_tools.items() if name in tools
+            }
             missing = set(tools) - set(allowed_tools)
             if missing:
                 return f"Error: Tools not found: {missing}"

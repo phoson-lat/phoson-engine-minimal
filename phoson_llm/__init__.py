@@ -7,10 +7,10 @@ multimodal inputs.
 
 Example:
     >>> from phoson_llm import build_chat, ModelConfig
-    >>> 
+    >>>
     >>> chat = build_chat("openai", api_key="sk-...")
     >>> config = ModelConfig(model="gpt-4o", max_tokens=1024)
-    >>> 
+    >>>
     >>> messages = [Message(role="user", content="Hello!")]
     >>> async for event in chat.stream(messages, config):
     ...     print(event)
