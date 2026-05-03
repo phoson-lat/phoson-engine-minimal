@@ -61,7 +61,10 @@ class _Choice:
 class _Chunk:
     def __init__(self, delta=None, finish_reason=None, usage=None) -> None:
         self.choices = [
-            _Choice(delta=delta if delta is not None else _Delta(), finish_reason=finish_reason)
+            _Choice(
+                delta=delta if delta is not None else _Delta(),
+                finish_reason=finish_reason,
+            )
         ]
         self.usage = usage
 
@@ -435,19 +438,30 @@ async def test_anthropic_adapter_integration_tool_loop(monkeypatch) -> None:
             async def _iter():
                 for item in self._events:
                     yield item
+
             return _iter()
 
         async def get_final_message(self):
             return _FinalMessage()
 
     events = [
-        _Event("content_block_start", index=0, content_block=_ToolBlock("get_weather", "call_anthropic_1")),
-        _Event("content_block_delta", index=0, delta=_Delta("input_json_delta", partial_json='{"city":"Qro"}')),
+        _Event(
+            "content_block_start",
+            index=0,
+            content_block=_ToolBlock("get_weather", "call_anthropic_1"),
+        ),
+        _Event(
+            "content_block_delta",
+            index=0,
+            delta=_Delta("input_json_delta", partial_json='{"city":"Qro"}'),
+        ),
         _Event("content_block_stop", index=0),
         _Event("content_block_delta", index=1, delta=_Delta("text_delta", text="")),
     ]
     final_events = [
-        _Event("content_block_delta", index=0, delta=_Delta("text_delta", text="Listo")),
+        _Event(
+            "content_block_delta", index=0, delta=_Delta("text_delta", text="Listo")
+        ),
     ]
 
     call_count = 0
@@ -476,7 +490,9 @@ async def test_anthropic_adapter_integration_tool_loop(monkeypatch) -> None:
     assert AgentStepDoneEvent in event_types
     assert event_types[-1] is AgentDoneEvent
     done = next(event for event in events_out if isinstance(event, AgentDoneEvent))
-    tool_done = next(event for event in events_out if isinstance(event, AgentToolDoneEvent))
+    tool_done = next(
+        event for event in events_out if isinstance(event, AgentToolDoneEvent)
+    )
     assert tool_done.tool_name == "get_weather"
     assert tool_done.tool_call_id == "call_anthropic_1"
     assert done.result.final_content == "Listo"
@@ -579,7 +595,11 @@ async def test_tool_handler_error_sets_tool_done_error(monkeypatch) -> None:
     ]
 
     tool_done = next(event for event in events if isinstance(event, AgentToolDoneEvent))
-    step_done = next(event for event in events if isinstance(event, AgentStepDoneEvent) and event.step.kind == "tool")
+    step_done = next(
+        event
+        for event in events
+        if isinstance(event, AgentStepDoneEvent) and event.step.kind == "tool"
+    )
     assert tool_done.error == "boom"
     assert step_done.step.error == "boom"
 
