@@ -7,6 +7,9 @@ Defines and implements the slash-commands available in the REPL.
 from typing import TYPE_CHECKING, Any, Final
 from dataclasses import dataclass
 
+from .model_picker import pick_model
+from .model_selector import list_available_models
+
 if TYPE_CHECKING:
     from .repl import PhosonRepl
 
@@ -76,7 +79,30 @@ class CommandHandler:
 
         if cmd.name == "/model":
             if not cmd.args:
-                r.print_info(f"Model: {self.repl.current_model}")
+                models = await list_available_models(self.repl.config)
+                if not models:
+                    r.print_info("No models available.")
+                    return True
+                result = await pick_model(
+                    models=models,
+                    current_model=self.repl.current_model,
+                )
+                if result.cancelled or not result.model_id:
+                    r.print_info("Cancelled.")
+                    return True
+                self.repl.set_model(result.model_id)
+                r.print_info(f"Model → {self.repl.current_model}")
+                return True
+            if cmd.args == "list":
+                models = await list_available_models(self.repl.config)
+                if not models:
+                    r.print_info("No models available.")
+                    return True
+                r.print_info("Available models:")
+                for option in models:
+                    marker = "*" if option.id == self.repl.current_model else " "
+                    suffix = f" [{option.provider}]" if option.provider else ""
+                    r.print_info(f" {marker} {option.id}{suffix}")
                 return True
             self.repl.set_model(cmd.args)
             r.print_info(f"Model → {self.repl.current_model}")
@@ -84,7 +110,32 @@ class CommandHandler:
 
         if cmd.name == "/subagent-model":
             if not cmd.args:
-                r.print_info(f"Sub-agent model: {self.repl.subagent_model}")
+                models = await list_available_models(self.repl.config)
+                if not models:
+                    r.print_info("No models available.")
+                    return True
+                result = await pick_model(
+                    models=models,
+                    current_model=self.repl.subagent_model,
+                )
+                if result.cancelled or not result.model_id:
+                    r.print_info("Cancelled.")
+                    return True
+                self.repl.subagent_model = result.model_id
+                self.repl.config.subagent_model = result.model_id
+                self.repl.engine.context.extra["default_model"] = result.model_id
+                r.print_info(f"Sub-agent model → {result.model_id}")
+                return True
+            if cmd.args == "list":
+                models = await list_available_models(self.repl.config)
+                if not models:
+                    r.print_info("No models available.")
+                    return True
+                r.print_info("Available sub-agent models:")
+                for option in models:
+                    marker = "*" if option.id == self.repl.subagent_model else " "
+                    suffix = f" [{option.provider}]" if option.provider else ""
+                    r.print_info(f" {marker} {option.id}{suffix}")
                 return True
             self.repl.subagent_model = cmd.args
             self.repl.config.subagent_model = cmd.args
