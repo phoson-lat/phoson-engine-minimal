@@ -15,6 +15,7 @@ class PriceEntry:
 
 
 def _per_million(n: float) -> float:
+    """Convierte un valor absoluto a costo por millón."""
     return n / 1_000_000
 
 
@@ -92,9 +93,18 @@ def calculate_cost(
     """
     Calcula el costo real en USD para una LLM call.
 
-    Retorna (cost_usd, cost_known).
-    cost_known=False cuando el modelo no está en la tabla
-    (e.g. modelos locales de Ollama).
+    Args:
+        model (str): Nombre del modelo.
+        input_tokens (int): Tokens de entrada.
+        output_tokens (int): Tokens de salida.
+        cache_write_tokens (int): Tokens escritos en caché.
+        cache_read_tokens (int): Tokens leídos de caché.
+        provider (str | None): Proveedor opcional.
+
+    Returns:
+        Tuple[float, bool]: (cost_usd, cost_known).
+        cost_known=False cuando el modelo no está en la tabla
+        (e.g. modelos locales de Ollama).
     """
     entry = _resolve(model, provider=provider)
 

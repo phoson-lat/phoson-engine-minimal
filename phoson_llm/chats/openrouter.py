@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 
+from phoson_llm.utils import map_error_code
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -28,6 +29,7 @@ from phoson_llm.chats.base import BaseLLMChat
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
+    """Convierte mensajes de Phoson a formato OpenRouter/OpenAI."""
     result = []
 
     for msg in messages:
@@ -84,6 +86,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
+    """Convierte ToolDefinition al formato de herramientas de OpenRouter."""
     return [
         {
             "type": "function",
@@ -98,6 +101,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
 
 
 def _extract_reasoning_delta(delta: object) -> str | None:
+    """Extrae reasoning_content de un delta de OpenAI."""
     for attr in ("reasoning_content", "reasoning"):
         value = getattr(delta, attr, None)
         if isinstance(value, str) and value:
@@ -106,6 +110,7 @@ def _extract_reasoning_delta(delta: object) -> str | None:
 
 
 def _parse_tool_args(raw: str) -> dict:
+    """Parseo seguro de argumentos de herramientas."""
     if not raw:
         return {}
 
@@ -124,6 +129,8 @@ def _parse_tool_args(raw: str) -> dict:
 
 
 class OpenRouterChat(BaseLLMChat):
+    """Adapter para OpenRouter API."""
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -149,6 +156,7 @@ class OpenRouterChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
+        """Transmite una respuesta del modelo."""
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,
@@ -247,7 +255,7 @@ class OpenRouterChat(BaseLLMChat):
                         )
 
         except APIStatusError as e:
-            code = _map_error_code(e.status_code)
+            code = map_error_code(e.status_code)
             yield ErrorEvent(
                 message=str(e.message),
                 code=code,
@@ -285,14 +293,3 @@ class OpenRouterChat(BaseLLMChat):
             )
 
         yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
-
-
-def _map_error_code(status_code: int) -> str:
-    return {
-        401: "auth",
-        403: "permission",
-        404: "not_found",
-        429: "rate_limit",
-        500: "server_error",
-        503: "overloaded",
-    }.get(status_code, "unknown")

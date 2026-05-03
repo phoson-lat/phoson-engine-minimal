@@ -7,7 +7,6 @@ from phoson_llm.schemas import (
     UsageEvent,
     ModelConfig,
     LLMDoneEvent,
-    # outputs
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
@@ -16,13 +15,30 @@ from phoson_llm.schemas import (
     ReasoningStartEvent,
     ReasoningTokenEvent,
 )
+from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 
 # ─── Renderer de eventos ──────────────────────────────────────────────────────
 
 
-async def run(label: str, chat, messages, config, tools=None):
+async def run(
+    label: str,
+    chat: BaseLLMChat,
+    messages: list[Message],
+    config: ModelConfig,
+    tools: list[ToolDefinition] | None = None,
+) -> None:
+    """
+    Ejecuta un chat y renderiza los eventos en la consola.
+
+    Args:
+        label (str): Etiqueta para el test.
+        chat (BaseLLMChat): Instancia del adaptador de chat.
+        messages (list[Message]): Lista de mensajes.
+        config (ModelConfig): Configuración del modelo.
+        tools (list[ToolDefinition] | None): Herramientas opcionales.
+    """
     print(f"\n{'─' * 60}")
     print(f"  {label}")
     print(f"{'─' * 60}")
@@ -45,7 +61,6 @@ async def run(label: str, chat, messages, config, tools=None):
                 print(event.content, end="", flush=True)
 
             case ToolCallDeltaEvent():
-                # args llegando en tiempo real — solo los mostramos si hay contenido
                 if event.args_chunk:
                     print(event.args_chunk, end="", flush=True)
 
@@ -66,22 +81,24 @@ async def run(label: str, chat, messages, config, tools=None):
 
             case ErrorEvent():
                 print(
-                    f"\n[error] {event.code}: {event.message}"
-                    " retryable={event.retryable}"
+                    f"\n[error] {event.code}: {event.message} "
+                    f"retryable={event.retryable}"
                 )
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
 
-async def test_anthropic_basic():
+async def test_anthropic_basic() -> None:
+    """Test básico con Anthropic."""
     chat = AnthropicChat()
     messages = [Message(role="user", content="Di hola en 3 idiomas distintos.")]
     config = ModelConfig(model="claude-haiku-4-5", max_tokens=256)
     await run("Anthropic — texto básico", chat, messages, config)
 
 
-async def test_anthropic_thinking():
+async def test_anthropic_thinking() -> None:
+    """Test de extended thinking con Anthropic."""
     chat = AnthropicChat()
     messages = [
         Message(role="user", content="¿Cuántos r tiene la palabra 'strawberry'?")
@@ -94,7 +111,8 @@ async def test_anthropic_thinking():
     await run("Anthropic — extended thinking", chat, messages, config)
 
 
-async def test_anthropic_tools():
+async def test_anthropic_tools() -> None:
+    """Test de tool use con Anthropic."""
     chat = AnthropicChat()
     messages = [Message(role="user", content="¿Qué clima hace en Querétaro?")]
     config = ModelConfig(model="claude-haiku-4-5", max_tokens=512)
@@ -115,7 +133,8 @@ async def test_anthropic_tools():
     await run("Anthropic — tool call", chat, messages, config, tools)
 
 
-async def test_openai_basic():
+async def test_openai_basic() -> None:
+    """Test básico con OpenAI/OpenRouter."""
     chat = OpenAIChat(
         base_url="https://openrouter.ai/api/v1",
         api_key="sk-or-v1-REDACTED",
@@ -125,7 +144,8 @@ async def test_openai_basic():
     await run("OpenAI — texto básico", chat, messages, config)
 
 
-async def test_openai_tools():
+async def test_openai_tools() -> None:
+    """Test de tool use con OpenAI/OpenRouter."""
     chat = OpenAIChat(
         base_url="https://openrouter.ai/api/v1",
         api_key="sk-or-v1-REDACTED",
@@ -149,11 +169,8 @@ async def test_openai_tools():
     await run("OpenAI — tool call", chat, messages, config, tools)
 
 
-async def test_ollama_basic():
-    """
-    Requiere Ollama corriendo localmente con un modelo descargado.
-    ollama pull llama3.2
-    """
+async def test_ollama_basic() -> None:
+    """Test básico con Ollama local."""
     chat = OpenAIChat(
         base_url="http://localhost:11434/v1",
         api_key="ollama",
@@ -166,15 +183,15 @@ async def test_ollama_basic():
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 
-async def main():
-    # Cambia a True los tests que quieras correr
+async def main() -> None:
+    """Punto de entrada principal para tests."""
     tests = {
         "anthropic_basic": False,
-        "anthropic_thinking": False,  # cuesta más, actívalo cuando quieras
+        "anthropic_thinking": False,
         "anthropic_tools": False,
         "openai_basic": True,
         "openai_tools": True,
-        "ollama_basic": False,  # requiere Ollama local
+        "ollama_basic": False,
     }
 
     if tests["anthropic_basic"]:
