@@ -42,13 +42,13 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 
 
 class ContextWindowResolver:
-    """Resuelve el context_window de un modelo dado provider + model name.
+    """Resolves the context_window for a given provider + model name.
 
-    Estrategia:
-    1. Lookup en registry estático
-    2. Prefix matching para Anthropic/OpenAI
-    3. Para Ollama: query a /api/show (con caché)
-    4. Para OpenRouter: query a /api/v1/models (con caché)
+    Strategy:
+    1. Static registry lookup
+    2. Prefix matching for Anthropic/OpenAI
+    3. For Ollama: query /api/show (with cache)
+    4. For OpenRouter: query /api/v1/models (with cache)
     5. Fallback: DEFAULT_CONTEXT_WINDOW
     """
 
@@ -59,7 +59,7 @@ class ContextWindowResolver:
     ) -> None:
         self._ollama_base_url = ollama_base_url.rstrip("/")
         self._openrouter_api_key = openrouter_api_key
-        # Caché: model_name → context_window
+        # Cache: model_name -> context_window
         self._ollama_cache: dict[str, int] = {}
         self._openrouter_cache: dict[str, int] = {}
 
@@ -70,10 +70,10 @@ class ContextWindowResolver:
         provider: str,
         model: str,
     ) -> int:
-        """Devuelve el context_window en tokens para el modelo dado."""
+        """Returns the context_window in tokens for the given model."""
         key = f"{provider}/{model}"
 
-        # 1. Registry estático
+        # 1. Static registry
         if key in CONTEXT_WINDOW_REGISTRY:
             return CONTEXT_WINDOW_REGISTRY[key]
 
@@ -111,7 +111,7 @@ class ContextWindowResolver:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    # num_ctx puede estar en parameters o en model_info
+                    # num_ctx may be in parameters or in model_info
                     num_ctx = self._extract_ollama_num_ctx(data)
                     if num_ctx:
                         self._ollama_cache[model] = num_ctx
@@ -124,11 +124,11 @@ class ContextWindowResolver:
 
     @staticmethod
     def _extract_ollama_num_ctx(data: dict) -> int | None:
-        """Extrae num_ctx del response de /api/show."""
-        # Opción 1: parameters → num_ctx
+        """Extracts num_ctx from /api/show response."""
+        # Option 1: parameters -> num_ctx
         params = data.get("parameters", {})
         if isinstance(params, str):
-            # A veces viene como string multilinea
+            # Sometimes comes as multiline string
             for line in params.splitlines():
                 parts = line.strip().split()
                 if len(parts) == 2 and parts[0].lower() == "num_ctx":
@@ -141,7 +141,7 @@ class ContextWindowResolver:
             if val is not None:
                 return int(val)
 
-        # Opción 2: model_info → context_length
+        # Option 2: model_info -> context_length
         model_info = data.get("model_info", {})
         for k, v in model_info.items():
             if "context_length" in k and isinstance(v, int):
@@ -191,5 +191,6 @@ class ContextWindowResolver:
     # ── Cache management ──────────────────────────────────────────────
 
     def clear_cache(self) -> None:
+        """Clears the internal caches."""
         self._ollama_cache.clear()
         self._openrouter_cache.clear()

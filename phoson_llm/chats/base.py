@@ -14,12 +14,12 @@ from phoson_llm.schemas import (
 
 class BaseLLMChat(ABC):
     """
-    Contrato base para todos los adapters de providers (Anthropic, OpenAI, Google, ...).
+    Base contract for all provider adapters (Anthropic, OpenAI, Google, ...).
 
-    Solo stream() es abstracto — los adapters implementan únicamente ese método.
-    Los otros tres (complete, stream_sync, complete_sync) se heredan gratis.
+    Only stream() is abstract — adapters implement only that method.
+    The other three (complete, stream_sync, complete_sync) are inherited for free.
 
-    Orden garantizado de eventos en stream():
+    Guaranteed order of events in stream():
         LLMStartEvent
         (ReasoningStartEvent → ReasoningTokenEvent* → ReasoningDoneEvent)?
         (TokenEvent | ToolCallDeltaEvent | ToolCallEvent)*
@@ -27,7 +27,7 @@ class BaseLLMChat(ABC):
         LLMDoneEvent | ErrorEvent
     """
 
-    # ── Abstracto: único método que cada adapter debe implementar ─────────────
+    # ── Abstract: the only method each adapter must implement ─────────────
 
     @abstractmethod
     async def stream(
@@ -37,15 +37,15 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
         """
-        Llama al LLM y devuelve un AsyncIterator de LLMEvents normalizados.
+        Calls the LLM and returns an AsyncIterator of normalized LLMEvents.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional tools.
 
         Returns:
-            AsyncIterator[LLMEvent]: Eventos del ciclo de vida del LLM.
+            AsyncIterator[LLMEvent]: Events from the LLM lifecycle.
         """
         ...
 
@@ -58,19 +58,19 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> LLMDoneEvent:
         """
-        Versión async no-streaming. Consume el stream internamente y
-        retorna solo el LLMDoneEvent final.
+        Async non-streaming version. Consumes the stream internally and
+        returns only the final LLMDoneEvent.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional tools.
 
         Returns:
-            LLMDoneEvent: Evento final del LLM.
+            LLMDoneEvent: Final LLM event.
 
         Raises:
-            RuntimeError: Si ocurre un error o el stream no emite LLMDoneEvent.
+            RuntimeError: If an error occurs or the stream does not emit LLMDoneEvent.
         """
         async for event in self.stream(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
@@ -78,7 +78,9 @@ class BaseLLMChat(ABC):
             if isinstance(event, ErrorEvent):
                 raise RuntimeError(f"[{event.code}] {event.message}")
 
-        raise RuntimeError("El stream terminó sin emitir LLMDoneEvent ni ErrorEvent.")
+        raise RuntimeError(
+            "The stream finished without emitting LLMDoneEvent or ErrorEvent."
+        )
 
     # ── Sync streaming ────────────────────────────────────────────────────────
 
@@ -89,15 +91,15 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> Iterator[LLMEvent]:
         """
-        Versión sync del stream. Crea un event loop aislado.
+        Sync version of the stream. Creates an isolated event loop.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional tools.
 
         Yields:
-            LLMEvent: Eventos del ciclo de vida del LLM.
+            LLMEvent: Events from the LLM lifecycle.
         """
         loop = asyncio.new_event_loop()
         try:
@@ -119,18 +121,18 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> LLMDoneEvent:
         """
-        Versión sync no-streaming. Consume stream_sync.
+        Sync non-streaming version. Consumes stream_sync.
 
         Args:
-            messages (list[Message]): Lista de mensajes.
-            config (ModelConfig): Configuración del modelo.
-            tools (list[ToolDefinition] | None): Herramientas opcionales.
+            messages (list[Message]): List of messages.
+            config (ModelConfig): Model configuration.
+            tools (list[ToolDefinition] | None): Optional tools.
 
         Returns:
-            LLMDoneEvent: Evento final del LLM.
+            LLMDoneEvent: Final LLM event.
 
         Raises:
-            RuntimeError: Si ocurre un error o el stream no emite LLMDoneEvent.
+            RuntimeError: If an error occurs or the stream does not emit LLMDoneEvent.
         """
         for event in self.stream_sync(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
@@ -138,4 +140,6 @@ class BaseLLMChat(ABC):
             if isinstance(event, ErrorEvent):
                 raise RuntimeError(f"[{event.code}] {event.message}")
 
-        raise RuntimeError("El stream terminó sin emitir LLMDoneEvent ni ErrorEvent.")
+        raise RuntimeError(
+            "The stream finished without emitting LLMDoneEvent or ErrorEvent."
+        )

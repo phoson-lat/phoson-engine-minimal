@@ -4,14 +4,14 @@ from pathlib import Path
 
 def load_file_as_base64(path: str, media_type: str | None = None) -> str:
     """
-    Lee un archivo local y lo codifica en base64.
+    Reads a local file and encodes it to base64.
 
     Args:
-        path (str): Ruta al archivo local.
-        media_type (str | None): Tipo MIME opcional. Si no se proporciona, se adivina.
+        path (str): Path to the local file.
+        media_type (str | None): Optional MIME type. If not provided, it is guessed.
 
     Returns:
-        str: Cadena formateada como 'data:<mime>;base64,<base64_data>'.
+        str: String formatted as 'data:<mime>;base64,<base64_data>'.
     """
     with open(path, "rb") as f:
         data = f.read()
@@ -22,13 +22,13 @@ def load_file_as_base64(path: str, media_type: str | None = None) -> str:
 
 def guess_mime(path: str) -> str:
     """
-    Adivina el tipo MIME de un archivo basado en su extensión.
+    Guesses the MIME type of a file based on its extension.
 
     Args:
-        path (str): Ruta al archivo.
+        path (str): Path to the file.
 
     Returns:
-        str: Tipo MIME (ej. 'image/png').
+        str: MIME type (e.g., 'image/png').
     """
     ext = Path(path).suffix.lower()
     return {
@@ -52,13 +52,13 @@ def guess_mime(path: str) -> str:
 
 def map_error_code(status_code: int) -> str:
     """
-    Mapea códigos de estado HTTP a códigos de error internos de Phoson.
+    Maps HTTP status codes to internal Phoson error codes.
 
     Args:
-        status_code (int): Código de estado HTTP.
+        status_code (int): HTTP status code.
 
     Returns:
-        str: Código de error interno (ej. 'rate_limit').
+        str: Internal error code (e.g., 'rate_limit').
     """
     return {
         401: "auth",

@@ -1,5 +1,5 @@
 """
-Módulo para el motor principal del agente.
+Module for the main agent engine.
 """
 
 import json
@@ -45,17 +45,17 @@ from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 
 
 def _now_utc() -> datetime.datetime:
-    """Retorna la fecha y hora actual en UTC."""
+    """Returns the current date and time in UTC."""
     return datetime.datetime.now(datetime.UTC)
 
 
 def _duration_ms(started_at: datetime.datetime, ended_at: datetime.datetime) -> int:
-    """Calcula la duración en milisegundos entre dos timestamps."""
+    """Calculates the duration in milliseconds between two timestamps."""
     return int((ended_at - started_at).total_seconds() * 1000)
 
 
 def _to_result_text(value: str | dict[str, Any]) -> str:
-    """Convierte un resultado de herramienta a cadena de texto."""
+    """Converts a tool result to a text string."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=True)
@@ -64,8 +64,8 @@ def _to_result_text(value: str | dict[str, Any]) -> str:
 @dataclass
 class AgentEngine:
     """
-    Motor principal para ejecutar agentes basados en LLM 
-    con soporte para herramientas y middleware.
+    Main engine for running LLM-based agents
+    with support for tools and middleware.
     """
 
     chat: BaseLLMChat
@@ -78,26 +78,26 @@ class AgentEngine:
     _running: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Inicializa el mapa de herramientas por nombre."""
+        """Initializes the tool map by name."""
         self._tools_by_name: dict[str, AgentTool] = {
             tool.name: tool for tool in self.tools
         }
 
     def get_partial_history(self) -> list[Message]:
-        """Retorna el historial actual de mensajes."""
+        """Returns the current message history."""
         return list(self._history)
 
     def is_running(self) -> bool:
-        """Verifica si el agente está actualmente en ejecución."""
+        """Checks if the agent is currently running."""
         return self._running
 
     async def _notify_middlewares(self, event: AgentEvent) -> None:
-        """Notifica a todos los middlewares sobre un evento del agente."""
+        """Notifies all middlewares about an agent event."""
         for middleware in self.middlewares:
             await middleware.on_agent_event(event)
 
     async def _prepare_event(self, event: AgentEvent) -> AgentEvent:
-        """Prepara un evento, notificando a los middlewares."""
+        """Prepares an event, notifying the middlewares."""
         await self._notify_middlewares(event)
         return event
 
@@ -106,7 +106,7 @@ class AgentEngine:
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
-        """Aplica middlewares antes de llamar al LLM."""
+        """Applies middlewares before calling the LLM."""
         updated = messages
         for middleware in self.middlewares:
             updated = await middleware.on_before_llm(updated, config)
@@ -116,7 +116,7 @@ class AgentEngine:
         self,
         tool_definitions: list[ToolDefinition],
     ) -> LLMCallNext:
-        """Construye la cadena de ejecución de middleware para la llamada al LLM."""
+        """Builds the middleware execution chain for the LLM call."""
 
         async def base_call(
             messages: list[Message],
@@ -150,7 +150,7 @@ class AgentEngine:
         self,
         call: ToolCallEvent,
     ) -> ToolCallEvent | None:
-        """Aplica middlewares antes de ejecutar una herramienta."""
+        """Applies middlewares before executing a tool."""
         current: ToolCallEvent | None = call
         for middleware in self.middlewares:
             if current is None:
@@ -164,7 +164,7 @@ class AgentEngine:
         result: str,
         error: bool,
     ) -> str:
-        """Aplica middlewares después de ejecutar una herramienta."""
+        """Applies middlewares after executing a tool."""
         updated = result
         for middleware in self.middlewares:
             updated = await middleware.on_after_tool(call, updated, error)
@@ -176,7 +176,7 @@ class AgentEngine:
         config: ModelConfig,
     ) -> AsyncIterator[AgentEvent]:
         """
-        Ejecuta el agente y transmite eventos a medida que ocurren.
+        Executes the agent and streams events as they occur.
         """
         if self._running:
             raise RuntimeError("AgentEngine is already running.")
@@ -518,7 +518,7 @@ class AgentEngine:
         messages: list[Message],
         config: ModelConfig,
     ) -> AgentRunResult:
-        """Ejecuta el agente hasta completarse y retorna el resultado."""
+        """Executes the agent until completion and returns the result."""
         async for event in self.stream(messages, config):
             if isinstance(event, AgentDoneEvent):
                 return event.result
@@ -529,7 +529,7 @@ class AgentEngine:
         raise RuntimeError("Agent stream finished without AgentDoneEvent.")
 
     def run_sync(self, messages: list[Message], config: ModelConfig) -> AgentRunResult:
-        """Ejecuta el agente de forma síncrona."""
+        """Executes the agent synchronously."""
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(self.run(messages, config))

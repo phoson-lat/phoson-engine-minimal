@@ -68,6 +68,7 @@ class TokenEstimator:
 
     @classmethod
     def for_provider(cls, provider: str) -> "TokenEstimator":
+        """Factory method to create a TokenEstimator for a provider."""
         return cls(provider=provider)
 
 
@@ -168,6 +169,7 @@ class SummarizationMiddleware(AgentMiddleware):
     )
 
     def __post_init__(self) -> None:
+        """Initializes the resolver and estimator."""
         self._resolver = ContextWindowResolver(
             ollama_base_url=self.ollama_base_url,
             openrouter_api_key=self.openrouter_api_key,
@@ -181,6 +183,7 @@ class SummarizationMiddleware(AgentMiddleware):
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
+        """Hook called before the LLM call to perform compaction if needed."""
         current_tokens = self._estimator.count_messages(messages)
         context_window = await self._resolver.resolve(self.provider, self.model)
         threshold_tokens = int(context_window * self.threshold)
@@ -253,7 +256,7 @@ class SummarizationMiddleware(AgentMiddleware):
         return compacted, summary_prompt
 
     async def on_agent_event(self, event: AgentEvent) -> None:
-        """Emit SummarizationEvent when a step completes."""
+        """Hook executed on any agent event."""
         pass
 
     # ── LLM call wrapper: actually performs the summarization ─────────

@@ -19,7 +19,7 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 
-# ─── Renderer de eventos ──────────────────────────────────────────────────────
+# ─── Event renderer ───────────────────────────────────────────────────────────
 
 
 async def run(
@@ -30,14 +30,14 @@ async def run(
     tools: list[ToolDefinition] | None = None,
 ) -> None:
     """
-    Ejecuta un chat y renderiza los eventos en la consola.
+    Executes a chat and renders events to the console.
 
     Args:
-        label (str): Etiqueta para el test.
-        chat (BaseLLMChat): Instancia del adaptador de chat.
-        messages (list[Message]): Lista de mensajes.
-        config (ModelConfig): Configuración del modelo.
-        tools (list[ToolDefinition] | None): Herramientas opcionales.
+        label (str): Label for the test.
+        chat (BaseLLMChat): Instance of the chat adapter.
+        messages (list[Message]): List of messages.
+        config (ModelConfig): Model configuration.
+        tools (list[ToolDefinition] | None): Optional tools.
     """
     print(f"\n{'─' * 60}")
     print(f"  {label}")
@@ -90,18 +90,18 @@ async def run(
 
 
 async def test_anthropic_basic() -> None:
-    """Test básico con Anthropic."""
+    """Basic test with Anthropic."""
     chat = AnthropicChat()
-    messages = [Message(role="user", content="Di hola en 3 idiomas distintos.")]
+    messages = [Message(role="user", content="Say hello in 3 different languages.")]
     config = ModelConfig(model="claude-haiku-4-5", max_tokens=256)
-    await run("Anthropic — texto básico", chat, messages, config)
+    await run("Anthropic — basic text", chat, messages, config)
 
 
 async def test_anthropic_thinking() -> None:
-    """Test de extended thinking con Anthropic."""
+    """Extended thinking test with Anthropic."""
     chat = AnthropicChat()
     messages = [
-        Message(role="user", content="¿Cuántos r tiene la palabra 'strawberry'?")
+        Message(role="user", content="How many r's are in the word 'strawberry'?")
     ]
     config = ModelConfig(
         model="claude-sonnet-4-6",
@@ -112,19 +112,19 @@ async def test_anthropic_thinking() -> None:
 
 
 async def test_anthropic_tools() -> None:
-    """Test de tool use con Anthropic."""
+    """Tool use test with Anthropic."""
     chat = AnthropicChat()
-    messages = [Message(role="user", content="¿Qué clima hace en Querétaro?")]
+    messages = [Message(role="user", content="What is the weather in Querétaro?")]
     config = ModelConfig(model="claude-haiku-4-5", max_tokens=512)
     tools = [
         ToolDefinition(
             name="get_weather",
-            description="Obtiene el clima actual de una ciudad.",
+            description="Gets the current weather of a city.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "city": {"type": "string", "description": "Nombre de la ciudad"},
-                    "country": {"type": "string", "description": "Código de país ISO"},
+                    "city": {"type": "string", "description": "Name of the city"},
+                    "country": {"type": "string", "description": "ISO country code"},
                 },
                 "required": ["city"],
             },
@@ -134,33 +134,33 @@ async def test_anthropic_tools() -> None:
 
 
 async def test_openai_basic() -> None:
-    """Test básico con OpenAI/OpenRouter."""
+    """Basic test with OpenAI/OpenRouter."""
     chat = OpenAIChat(
         base_url="https://openrouter.ai/api/v1",
         api_key="sk-or-v1-REDACTED",
     )
-    messages = [Message(role="user", content="Di hola en 3 idiomas distintos.")]
+    messages = [Message(role="user", content="Say hello in 3 different languages.")]
     config = ModelConfig(model="minimax/minimax-m2.5:free", max_tokens=256)
-    await run("OpenAI — texto básico", chat, messages, config)
+    await run("OpenAI — basic text", chat, messages, config)
 
 
 async def test_openai_tools() -> None:
-    """Test de tool use con OpenAI/OpenRouter."""
+    """Tool use test with OpenAI/OpenRouter."""
     chat = OpenAIChat(
         base_url="https://openrouter.ai/api/v1",
         api_key="sk-or-v1-REDACTED",
     )
-    messages = [Message(role="user", content="¿Qué clima hace en Querétaro?")]
+    messages = [Message(role="user", content="What is the weather in Querétaro?")]
     config = ModelConfig(model="minimax/minimax-m2.5:free", max_tokens=512)
     tools = [
         ToolDefinition(
             name="get_weather",
-            description="Obtiene el clima actual de una ciudad.",
+            description="Gets the current weather of a city.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "city": {"type": "string", "description": "Nombre de la ciudad"},
-                    "country": {"type": "string", "description": "Código de país ISO"},
+                    "city": {"type": "string", "description": "Name of the city"},
+                    "country": {"type": "string", "description": "ISO country code"},
                 },
                 "required": ["city"],
             },
@@ -170,21 +170,21 @@ async def test_openai_tools() -> None:
 
 
 async def test_ollama_basic() -> None:
-    """Test básico con Ollama local."""
+    """Basic test with local Ollama."""
     chat = OpenAIChat(
         base_url="http://localhost:11434/v1",
         api_key="ollama",
     )
-    messages = [Message(role="user", content="Di hola en 3 idiomas distintos.")]
+    messages = [Message(role="user", content="Say hello in 3 different languages.")]
     config = ModelConfig(model="llama3.2", max_tokens=256)
-    await run("Ollama — texto básico (local)", chat, messages, config)
+    await run("Ollama — basic text (local)", chat, messages, config)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 
 async def main() -> None:
-    """Punto de entrada principal para tests."""
+    """Main entry point for tests."""
     tests = {
         "anthropic_basic": False,
         "anthropic_thinking": False,
