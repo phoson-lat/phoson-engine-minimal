@@ -136,15 +136,15 @@ install_package() {
     # Download the package from GitHub releases or repository
     # Using the main branch as source
     if command -v git >/dev/null 2>&1; then
-        git clone --depth 1 https://github.com/abelsr/phoson-engine-minimal.git "$TEMP_DIR/phoson-engine-minimal" 2>/dev/null || {
+        git clone --depth 1 https://github.com/phoson-lat/phoson-engine-minimal.git "$TEMP_DIR/phoson-engine-minimal" 2>/dev/null || {
             # Fallback: download as zip
-            curl -sL https://github.com/abelsr/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
+            curl -sL https://github.com/phoson-lat/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
             unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
             mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
         }
     else
         # Fallback: download as zip
-        curl -sL https://github.com/abelsr/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
+        curl -sL https://github.com/phoson-lat/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
         unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
         mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
     fi
