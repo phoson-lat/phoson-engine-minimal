@@ -2,6 +2,16 @@
 
 El CLI de Phoson ahora soporta Model Context Protocol (MCP) para integrar servidores MCP directamente en tus conversaciones.
 
+## 🔌 Transportes Soportados
+
+Phoson soporta **tres tipos de transporte MCP**:
+
+- **STDIO** (default): Servidores locales ejecutados como procesos
+- **SSE** (Server-Sent Events): Servidores remotos con streaming
+- **HTTP**: Servidores HTTP estándar
+
+Esto te permite conectar tanto servidores locales como remotos.
+
 ## 🚀 Inicio Rápido
 
 ### 1. Crear configuración MCP
@@ -133,6 +143,109 @@ Edita `~/.phoson/config.toml`:
 [defaults]
 enable_mcp = true
 mcp_config_file = "phoson-mcp.json"
+```
+
+## 🔌 Tipos de Transporte
+
+### STDIO Transport (Default)
+
+Para servidores que se ejecutan como procesos locales:
+
+```json
+{
+  "mcpServers": {
+    "local-server": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Ejecuta el servidor como proceso hijo
+- Comunicación vía stdin/stdout
+- Ideal para servidores Node.js, Python locales
+- No requiere red
+
+### SSE Transport
+
+Para servidores remotos con Server-Sent Events:
+
+```json
+{
+  "mcpServers": {
+    "remote-sse": {
+      "transport": "sse",
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "Authorization": "Bearer token",
+        "X-API-Key": "key"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Conexión a servidores remotos
+- Streaming bidireccional
+- Ideal para servicios en la nube
+- Soporta autenticación vía headers
+
+### HTTP Transport
+
+Para servidores HTTP estándar:
+
+```json
+{
+  "mcpServers": {
+    "remote-http": {
+      "transport": "http",
+      "url": "http://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Protocolo HTTP estándar
+- Request/response
+- Compatible con APIs REST
+- Soporta autenticación
+
+### Mezclando Transportes
+
+Puedes usar múltiples transportes en la misma configuración:
+
+```json
+{
+  "mcpServers": {
+    "local-fs": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "remote-api": {
+      "transport": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    },
+    "streaming-service": {
+      "transport": "sse",
+      "url": "https://stream.example.com/sse"
+    }
+  }
+}
 ```
 
 ## 📦 Servidores MCP Disponibles
