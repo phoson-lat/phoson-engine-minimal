@@ -100,12 +100,17 @@ engine = AgentEngine(
 
 ## Formato del Archivo de Configuración
 
-El archivo `phoson-mcp.json` debe seguir este formato:
+El archivo `phoson-mcp.json` soporta tres tipos de transporte: **STDIO**, **SSE** y **HTTP**.
+
+### STDIO Transport (Default)
+
+Para servidores que se ejecutan como procesos locales:
 
 ```json
 {
   "mcpServers": {
     "server-name": {
+      "transport": "stdio",
       "command": "comando-ejecutable",
       "args": ["arg1", "arg2"],
       "env": {
@@ -116,12 +121,58 @@ El archivo `phoson-mcp.json` debe seguir este formato:
 }
 ```
 
-### Campos
+**Campos:**
+- `transport`: "stdio" (opcional, es el default)
+- `command`: Comando para ejecutar el servidor
+- `args`: Lista de argumentos
+- `env`: Variables de entorno (opcional)
 
-- **server-name**: Identificador único para el servidor
-- **command**: Comando para ejecutar el servidor (ej: "node", "npx", "python")
-- **args**: Lista de argumentos para el comando
-- **env**: Variables de entorno (opcional)
+### SSE Transport
+
+Para servidores que exponen Server-Sent Events:
+
+```json
+{
+  "mcpServers": {
+    "server-name": {
+      "transport": "sse",
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    }
+  }
+}
+```
+
+**Campos:**
+- `transport`: "sse"
+- `url`: URL del endpoint SSE (requerido)
+- `headers`: Headers HTTP (opcional)
+
+### HTTP Transport
+
+Para servidores HTTP estándar:
+
+```json
+{
+  "mcpServers": {
+    "server-name": {
+      "transport": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer token",
+        "X-API-Key": "key"
+      }
+    }
+  }
+}
+```
+
+**Campos:**
+- `transport`: "http" o "streamable_http"
+- `url`: URL del servidor MCP (requerido)
+- `headers`: Headers HTTP (opcional)
 
 ## Servidores MCP Disponibles
 
