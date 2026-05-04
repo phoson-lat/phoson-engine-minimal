@@ -31,6 +31,8 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    enable_mcp: bool = False
+    mcp_config_file: Path = Path("phoson-mcp.json")
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -99,6 +101,21 @@ def load_config() -> PhosonConfig:
         ),
         defaults.safe_mode,
     )
+    enable_mcp = _parse_bool(
+        os.environ.get("PHOSON_ENABLE_MCP")
+        if "PHOSON_ENABLE_MCP" in os.environ
+        else (
+            str(file_defaults["enable_mcp"])
+            if "enable_mcp" in file_defaults
+            else str(defaults.enable_mcp)
+        ),
+        defaults.enable_mcp,
+    )
+    mcp_config_file_raw = (
+        os.environ.get("PHOSON_MCP_CONFIG")
+        or file_defaults.get("mcp_config_file")
+        or str(defaults.mcp_config_file)
+    )
 
     cfg = PhosonConfig(
         model=str(model),
@@ -119,6 +136,8 @@ def load_config() -> PhosonConfig:
         sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
         max_iterations=max_iterations,
         safe_mode=safe_mode,
+        enable_mcp=enable_mcp,
+        mcp_config_file=Path(str(mcp_config_file_raw)),
     )
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
@@ -167,6 +186,8 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(config.sessions_dir)),
         _line("max_iterations", config.max_iterations),
         _line("safe_mode", config.safe_mode),
+        _line("enable_mcp", config.enable_mcp),
+        _line("mcp_config_file", str(config.mcp_config_file)),
     ]:
         if line:
             lines.append(line)
