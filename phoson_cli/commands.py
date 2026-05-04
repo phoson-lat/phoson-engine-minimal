@@ -37,6 +37,7 @@ COMMANDS: Final[set[str]] = {
     "/tokens",
     "/steps",
     "/setup",
+    "/mcp",
 }
 
 
@@ -323,6 +324,9 @@ class CommandHandler:
             r.print_info(f"steps={self.repl.session_metrics.step_count}")
             return True
 
+        if cmd.name == "/mcp":
+            return await self._handle_mcp(cmd)
+
         r.print_error(f"Unknown command: {cmd.name}")
         return True
 
@@ -367,4 +371,100 @@ class CommandHandler:
         except ValueError as e:
             r.print_error(str(e))
 
+        return True
+
+    async def _handle_mcp(self, cmd: Command) -> bool:
+        """Handle /mcp command for Model Context Protocol management."""
+        r = self.repl.renderer
+
+        if cmd.name != "/mcp":
+            return True
+
+        # /mcp status - show current MCP status
+        if cmd.args == "status" or not cmd.args:
+            status = "enabled" if self.repl.config.enable_mcp else "disabled"
+            r.print_info(f"MCP: {status}")
+            if self.repl.config.enable_mcp:
+                r.print_info(f"Config file: {self.repl.config.mcp_config_file}")
+                
+                # Show loaded MCP tools
+                mcp_tools = [t for t in self.repl.engine.tools if t.name.startswith("mcp_")]
+                if mcp_tools:
+                    r.print_info(f"Loaded {len(mcp_tools)} MCP tool(s):")
+                    for tool in mcp_tools:
+                        r.print_info(f"  • {tool.name}")
+                else:
+                    r.print_info("No MCP tools loaded (check config file)")
+            else:
+                r.print_info("Use '/mcp enable' to activate MCP support")
+            return True
+
+        # /mcp enable - enable MCP
+        if cmd.args == "enable":
+            if self.repl.config.enable_mcp:
+                r.print_info("MCP is already enabled")
+                return True
+            
+            self.repl.config.enable_mcp = True
+            save_config(self.repl.config)
+            
+            # Rebuild engine with MCP plugin
+            self.repl.set_model(self.repl.current_model)
+            
+            r.print_info("MCP enabled  ·  saved")
+            r.print_info(f"Config file: {self.repl.config.mcp_config_file}")
+            r.print_info("Restart or run '/mcp status' to see loaded tools")
+            return True
+
+        # /mcp disable - disable MCP
+        if cmd.args == "disable":
+            if not self.repl.config.enable_mcp:
+                r.print_info("MCP is already disabled")
+                return True
+            
+            self.repl.config.enable_mcp = False
+            save_config(self.repl.config)
+            
+            # Rebuild engine without MCP plugin
+            self.repl.set_model(self.repl.current_model)
+            
+            r.print_info("MCP disabled  ·  saved")
+            return True
+
+        # /mcp config <path> - set config file path
+        if cmd.args.startswith("config "):
+            from pathlib import Path
+            config_path = cmd.args[7:].strip()
+            self.repl.config.mcp_config_file = Path(config_path)
+            save_config(self.repl.config)
+            
+            # Rebuild engine if MCP is enabled
+            if self.repl.config.enable_mcp:
+                self.repl.set_model(self.repl.current_model)
+            
+            r.print_info(f"MCP config file → {config_path}  ·  saved")
+            return True
+
+        # /mcp help - show help
+        if cmd.args == "help":
+            r.print_info("MCP (Model Context Protocol) commands:")
+            r.print_info("  /mcp status          Show MCP status and loaded tools")
+            r.print_info("  /mcp enable          Enable MCP support")
+            r.print_info("  /mcp disable         Disable MCP support")
+            r.print_info("  /mcp config <path>   Set MCP config file path")
+            r.print_info("  /mcp help            Show this help")
+            r.print_info("")
+            r.print_info("Example phoson-mcp.json:")
+            r.print_info('  {')
+            r.print_info('    "mcpServers": {')
+            r.print_info('      "filesystem": {')
+            r.print_info('        "command": "npx",')
+            r.print_info('        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]')
+            r.print_info('      }')
+            r.print_info('    }')
+            r.print_info('  }')
+            return True
+
+        r.print_error(f"Unknown /mcp command: {cmd.args}")
+        r.print_info("Use '/mcp help' for available commands")
         return True
