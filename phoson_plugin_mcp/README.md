@@ -13,7 +13,16 @@ pip install mcp
 
 ## Configuración
 
-Crea un archivo `phoson-mcp.json` en el directorio raíz de tu proyecto:
+### Ubicación del Archivo
+
+El plugin busca la configuración MCP en estas ubicaciones (en orden):
+1. Ruta especificada en la configuración del plugin
+2. `~/.phoson/mcps.json` (default para CLI)
+3. `phoson-mcp.json` (directorio actual)
+
+### Crear Configuración
+
+Crea el archivo `~/.phoson/mcps.json` (recomendado para CLI):
 
 ```json
 {

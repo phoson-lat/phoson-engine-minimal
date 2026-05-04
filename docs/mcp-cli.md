@@ -14,9 +14,33 @@ Esto te permite conectar tanto servidores locales como remotos.
 
 ## 🚀 Inicio Rápido
 
-### 1. Crear configuración MCP
+### Método 1: Usando `/mcp init` (Recomendado)
 
-Crea un archivo `phoson-mcp.json` en tu directorio de trabajo:
+```bash
+phoson-cli
+```
+
+Dentro del CLI:
+```
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+Configured servers:
+  • filesystem (STDIO) - Access to home directory
+  • memory (STDIO) - Knowledge storage
+
+> /mcp enable
+MCP enabled  ·  saved
+
+> /mcp status
+MCP: enabled
+Loaded 2 MCP tool(s):
+  • mcp_filesystem_call
+  • mcp_memory_call
+```
+
+### Método 2: Crear configuración manualmente
+
+Crea un archivo `~/.phoson/mcps.json`:
 
 ```json
 {
@@ -35,17 +59,10 @@ Crea un archivo `phoson-mcp.json` en tu directorio de trabajo:
 }
 ```
 
-### 2. Habilitar MCP en el CLI
-
-```bash
-phoson-cli
-```
-
-Dentro del CLI:
+Luego en el CLI:
 ```
 > /mcp enable
 MCP enabled  ·  saved
-Config file: phoson-mcp.json
 ```
 
 ### 3. Verificar estado
@@ -71,13 +88,29 @@ Ahora el agente puede usar automáticamente las herramientas MCP:
 
 ## 📋 Comandos Disponibles
 
+### `/mcp init`
+Crea un archivo de configuración de ejemplo en `~/.phoson/mcps.json`.
+
+```
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+Configured servers:
+  • filesystem (STDIO) - Access to home directory
+  • memory (STDIO) - Knowledge storage
+
+Next steps:
+  1. Edit the file to add your servers
+  2. Run: /mcp enable
+  3. Run: /mcp status
+```
+
 ### `/mcp status`
 Muestra el estado actual de MCP y las herramientas cargadas.
 
 ```
 > /mcp status
 MCP: enabled
-Config file: phoson-mcp.json
+Config file: ~/.phoson/mcps.json
 Loaded 2 MCP tool(s):
   • mcp_filesystem_call
   • mcp_memory_call
@@ -122,27 +155,54 @@ MCP (Model Context Protocol) commands:
 
 ## ⚙️ Configuración
 
+### Ubicación del Archivo MCP
+
+Por defecto, el CLI busca la configuración MCP en:
+
+**`~/.phoson/mcps.json`**
+
+Puedes cambiar esta ubicación de tres formas:
+
+1. **Variable de entorno** (temporal):
+   ```bash
+   export PHOSON_MCP_CONFIG=./my-mcps.json
+   phoson-cli
+   ```
+
+2. **Archivo de configuración** (persistente):
+   ```toml
+   # ~/.phoson/config.toml
+   [defaults]
+   enable_mcp = true
+   mcp_config_file = "~/.phoson/mcps.json"
+   ```
+
+3. **Comando en runtime** (persistente):
+   ```
+   > /mcp config ./project-mcps.json
+   ```
+
 ### Variables de Entorno
 
 ```bash
 # Habilitar MCP al iniciar
 export PHOSON_ENABLE_MCP=true
 
-# Especificar archivo de configuración
-export PHOSON_MCP_CONFIG=./my-mcp-config.json
+# Especificar archivo de configuración personalizado
+export PHOSON_MCP_CONFIG=~/.phoson/mcps.json
 
 # Iniciar CLI
 phoson-cli
 ```
 
-### Archivo de Configuración
+### Archivo de Configuración Persistente
 
 Edita `~/.phoson/config.toml`:
 
 ```toml
 [defaults]
 enable_mcp = true
-mcp_config_file = "phoson-mcp.json"
+mcp_config_file = "~/.phoson/mcps.json"
 ```
 
 ## 🔌 Tipos de Transporte
@@ -415,8 +475,19 @@ npm install -g @modelcontextprotocol/server-memory
 
 ### 2. Crear configuración
 
+**Opción A: Usar el comando init (Fácil)**
+
 ```bash
-cat > phoson-mcp.json << 'EOF'
+phoson-cli
+
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+```
+
+**Opción B: Crear manualmente**
+
+```bash
+cat > ~/.phoson/mcps.json << 'EOF'
 {
   "mcpServers": {
     "filesystem": {
