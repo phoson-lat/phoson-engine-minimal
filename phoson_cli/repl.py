@@ -238,10 +238,23 @@ class PhosonRepl:
         )
         self.attachments = AttachmentManager()
 
+        # Load plugins
+        plugins = []
+        if config.enable_mcp:
+            # Add MCP plugin
+            mcp_plugin_config = {
+                "name": "path:./phoson_plugin_mcp/plugin.py",
+                "config": {
+                    "config_file": str(config.mcp_config_file)
+                }
+            }
+            plugins.append(mcp_plugin_config)
+
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
             middlewares=[self.summarizer],
+            plugins=plugins,
             max_iterations=config.max_iterations,
         )
 
@@ -465,10 +478,23 @@ class PhosonRepl:
         self.summarizer.provider = self.config.provider
         self.summarizer.model = model
 
+        # Load plugins
+        plugins = []
+        if self.config.enable_mcp:
+            # Add MCP plugin
+            mcp_plugin_config = {
+                "name": "path:./phoson_plugin_mcp/plugin.py",
+                "config": {
+                    "config_file": str(self.config.mcp_config_file)
+                }
+            }
+            plugins.append(mcp_plugin_config)
+
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
             middlewares=[self.summarizer],
+            plugins=plugins,
             max_iterations=self.config.max_iterations,
         )
 
