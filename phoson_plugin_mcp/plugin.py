@@ -13,6 +13,8 @@ from phoson_agent import Plugin, AgentTool, tool, AgentContext
 try:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    from mcp.client.sse import sse_client
+    from mcp.client.streamable_http import streamable_http_client
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -26,13 +28,42 @@ class MCPPlugin(Plugin):
     their tools to the agent.
     
     Configuration file format (phoson-mcp.json):
+    
+    STDIO transport (default):
     {
         "mcpServers": {
             "server-name": {
+                "transport": "stdio",
                 "command": "node",
                 "args": ["path/to/server.js"],
                 "env": {
                     "API_KEY": "value"
+                }
+            }
+        }
+    }
+    
+    SSE transport:
+    {
+        "mcpServers": {
+            "server-name": {
+                "transport": "sse",
+                "url": "http://localhost:3000/sse",
+                "headers": {
+                    "Authorization": "Bearer token"
+                }
+            }
+        }
+    }
+    
+    HTTP transport:
+    {
+        "mcpServers": {
+            "server-name": {
+                "transport": "http",
+                "url": "http://localhost:3000/mcp",
+                "headers": {
+                    "Authorization": "Bearer token"
                 }
             }
         }
@@ -156,51 +187,124 @@ class MCPPlugin(Plugin):
         """Execute a tool call on an MCP server."""
         server_config = self.servers[server_name]
         
-        # Extract server parameters
+        # Determine transport type (default: stdio)
+        transport = server_config.get("transport", "stdio").lower()
+        
+        # Connect based on transport type
+        if transport == "stdio":
+            return await self._execute_stdio(server_name, server_config, tool_name, arguments)
+        elif transport == "sse":
+            return await self._execute_sse(server_name, server_config, tool_name, arguments)
+        elif transport in ("http", "streamable_http"):
+            return await self._execute_http(server_name, server_config, tool_name, arguments)
+        else:
+            return {
+                "error": f"Unsupported transport: {transport}",
+                "supported": ["stdio", "sse", "http"]
+            }
+    
+    async def _execute_stdio(
+        self,
+        server_name: str,
+        server_config: dict[str, Any],
+        tool_name: str,
+        arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute tool via STDIO transport."""
         command = server_config.get("command", "node")
         args = server_config.get("args", [])
         env = server_config.get("env", {})
         
-        # Create server parameters
         server_params = StdioServerParameters(
             command=command,
             args=args,
             env=env if env else None
         )
         
-        # Connect to server and execute tool
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
-                # Initialize the session
-                await session.initialize()
-                
-                # List available tools
-                tools_result = await session.list_tools()
-                
-                # Find the requested tool
-                tool_found = None
-                for tool_info in tools_result.tools:
-                    if tool_info.name == tool_name:
-                        tool_found = tool_info
-                        break
-                
-                if not tool_found:
-                    available = [t.name for t in tools_result.tools]
-                    return {
-                        "error": f"Tool '{tool_name}' not found",
-                        "available_tools": available
-                    }
-                
-                # Call the tool
-                result = await session.call_tool(tool_name, arguments)
-                
-                # Return the result
-                return {
-                    "success": True,
-                    "result": result.content if hasattr(result, 'content') else result,
-                    "tool": tool_name,
-                    "server": server_name
-                }
+                return await self._call_tool_on_session(
+                    session, server_name, tool_name, arguments
+                )
+    
+    async def _execute_sse(
+        self,
+        server_name: str,
+        server_config: dict[str, Any],
+        tool_name: str,
+        arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute tool via SSE transport."""
+        url = server_config.get("url")
+        if not url:
+            return {"error": "SSE transport requires 'url' in config"}
+        
+        headers = server_config.get("headers", {})
+        
+        async with sse_client(url, headers=headers) as (read, write):
+            async with ClientSession(read, write) as session:
+                return await self._call_tool_on_session(
+                    session, server_name, tool_name, arguments
+                )
+    
+    async def _execute_http(
+        self,
+        server_name: str,
+        server_config: dict[str, Any],
+        tool_name: str,
+        arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Execute tool via HTTP transport."""
+        url = server_config.get("url")
+        if not url:
+            return {"error": "HTTP transport requires 'url' in config"}
+        
+        headers = server_config.get("headers", {})
+        
+        async with streamable_http_client(url, headers=headers) as (read, write):
+            async with ClientSession(read, write) as session:
+                return await self._call_tool_on_session(
+                    session, server_name, tool_name, arguments
+                )
+    
+    async def _call_tool_on_session(
+        self,
+        session: ClientSession,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Call a tool on an established session."""
+        # Initialize the session
+        await session.initialize()
+        
+        # List available tools
+        tools_result = await session.list_tools()
+        
+        # Find the requested tool
+        tool_found = None
+        for tool_info in tools_result.tools:
+            if tool_info.name == tool_name:
+                tool_found = tool_info
+                break
+        
+        if not tool_found:
+            available = [t.name for t in tools_result.tools]
+            return {
+                "error": f"Tool '{tool_name}' not found",
+                "available_tools": available
+            }
+        
+        # Call the tool
+        result = await session.call_tool(tool_name, arguments)
+        
+        # Return the result
+        return {
+            "success": True,
+            "result": result.content if hasattr(result, 'content') else result,
+            "tool": tool_name,
+            "server": server_name
+        }
     
     def get_tools(self) -> list[AgentTool]:
         """Return tools from all configured MCP servers."""
