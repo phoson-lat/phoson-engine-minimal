@@ -25,12 +25,20 @@ from .sessions import (
     ConversationTree,
 )
 from .middleware import AgentMiddleware, RetryMiddleware
+from .plugin import Plugin, PluginSpec, PluginLoader
+from .plugin_loader import PluginRegistry, load_plugin, register_loader
 
 __all__ = [
     "AgentEngine",
     "AgentContext",
     "AgentMiddleware",
     "RetryMiddleware",
+    "Plugin",
+    "PluginSpec",
+    "PluginLoader",
+    "PluginRegistry",
+    "load_plugin",
+    "register_loader",
     "tool",
     "AgentTool",
     "ToolHandler",

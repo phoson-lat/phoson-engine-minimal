@@ -42,6 +42,8 @@ from phoson_agent.models import (
 from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
+from phoson_agent.plugin import Plugin, PluginSpec
+from phoson_agent.plugin_loader import load_plugin
 
 
 def _now_utc() -> datetime.datetime:
@@ -65,20 +67,33 @@ def _to_result_text(value: str | dict[str, Any]) -> str:
 class AgentEngine:
     """
     Main engine for running LLM-based agents
-    with support for tools and middleware.
+    with support for tools, middleware, and plugins.
     """
 
     chat: BaseLLMChat
-    tools: list[AgentTool]
+    tools: list[AgentTool] = field(default_factory=list)
     middlewares: list[AgentMiddleware] = field(default_factory=list)
+    plugins: list[str | dict[str, Any] | Plugin] = field(default_factory=list)
     context: AgentContext = field(default_factory=AgentContext)
     phoson_weight: float = 1.0
     max_iterations: int = 12
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
     _running: bool = field(default=False, init=False, repr=False)
+    _loaded_plugins: list[Plugin] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Initializes the tool map by name."""
+        """Initializes plugins, tools, and middlewares."""
+        # Load plugins
+        self._loaded_plugins = []
+        for plugin_spec in self.plugins:
+            plugin = load_plugin(plugin_spec)
+            self._loaded_plugins.append(plugin)
+
+            # Add plugin tools and middlewares
+            self.tools.extend(plugin.get_tools())
+            self.middlewares.extend(plugin.get_middlewares())
+
+        # Build tool map
         self._tools_by_name: dict[str, AgentTool] = {
             tool.name: tool for tool in self.tools
         }
@@ -535,3 +550,19 @@ class AgentEngine:
             return loop.run_until_complete(self.run(messages, config))
         finally:
             loop.close()
+
+    def cleanup(self) -> None:
+        """Cleanup all loaded plugins."""
+        for plugin in self._loaded_plugins:
+            try:
+                plugin.cleanup()
+            except Exception:
+                pass  # Ignore cleanup errors
+
+    def __enter__(self) -> "AgentEngine":
+        """Context manager support."""
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        """Context manager cleanup."""
+        self.cleanup()
