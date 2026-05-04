@@ -380,6 +380,53 @@ class CommandHandler:
         if cmd.name != "/mcp":
             return True
 
+        # /mcp init - create example config file
+        if cmd.args == "init":
+            import json
+            from pathlib import Path
+            
+            config_file = self.repl.config.mcp_config_file
+            
+            if config_file.exists():
+                r.print_warn(f"Config file already exists: {config_file}")
+                r.print_info("Use '/mcp config <path>' to use a different file")
+                return True
+            
+            # Create directory if needed
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create example config
+            example_config = {
+                "mcpServers": {
+                    "filesystem": {
+                        "transport": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem", str(Path.home())],
+                        "env": {}
+                    },
+                    "memory": {
+                        "transport": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-memory"],
+                        "env": {}
+                    }
+                }
+            }
+            
+            with open(config_file, "w") as f:
+                json.dump(example_config, f, indent=2)
+            
+            r.print_info(f"✅ Created MCP config: {config_file}")
+            r.print_info("Configured servers:")
+            r.print_info("  • filesystem (STDIO) - Access to home directory")
+            r.print_info("  • memory (STDIO) - Knowledge storage")
+            r.print_info("")
+            r.print_info("Next steps:")
+            r.print_info("  1. Edit the file to add your servers")
+            r.print_info("  2. Run: /mcp enable")
+            r.print_info("  3. Run: /mcp status")
+            return True
+
         # /mcp status - show current MCP status
         if cmd.args == "status" or not cmd.args:
             status = "enabled" if self.repl.config.enable_mcp else "disabled"
@@ -448,11 +495,14 @@ class CommandHandler:
         # /mcp help - show help
         if cmd.args == "help":
             r.print_info("MCP (Model Context Protocol) commands:")
+            r.print_info("  /mcp init            Create example config file")
             r.print_info("  /mcp status          Show MCP status and loaded tools")
             r.print_info("  /mcp enable          Enable MCP support")
             r.print_info("  /mcp disable         Disable MCP support")
             r.print_info("  /mcp config <path>   Set MCP config file path")
             r.print_info("  /mcp help            Show this help")
+            r.print_info("")
+            r.print_info(f"Default config location: {self.repl.config.mcp_config_file}")
             r.print_info("")
             r.print_info("Example phoson-mcp.json:")
             r.print_info('  {')
