@@ -4,9 +4,13 @@ from dataclasses import field, dataclass
 # ─── Base ────────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LLMEvent:
     """Base class for all LLM events.
+
+    All event subclasses inherit ``kw_only=True`` so that their fields are
+    keyword-only. This avoids ordering issues between inherited defaults
+    (timestamp) and new fields, and makes call sites self-documenting.
 
     Contains a timestamp of when the event was emitted.
     """
@@ -19,7 +23,7 @@ class LLMEvent:
 # ─── Lifecycle ───────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LLMStartEvent(LLMEvent):
     """Event emitted when an LLM call starts."""
 
@@ -27,7 +31,7 @@ class LLMStartEvent(LLMEvent):
     message_count: int = 0
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LLMDoneEvent(LLMEvent):
     """Event emitted when an LLM call completes successfully."""
 
@@ -38,7 +42,7 @@ class LLMDoneEvent(LLMEvent):
 # ─── Text ───────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class TokenEvent(LLMEvent):
     """Event emitted when a text token is generated."""
 
@@ -48,19 +52,19 @@ class TokenEvent(LLMEvent):
 # ─── Reasoning ───────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ReasoningStartEvent(LLMEvent):
     """Event emitted when extended reasoning/thinking starts (Anthropic, OpenAI o1)."""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ReasoningTokenEvent(LLMEvent):
     """Event emitted for each reasoning/thinking token."""
 
     content: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ReasoningDoneEvent(LLMEvent):
     """Event emitted when extended reasoning/thinking completes."""
 
@@ -70,7 +74,7 @@ class ReasoningDoneEvent(LLMEvent):
 # ─── Tool calls ──────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ToolCallDeltaEvent(LLMEvent):
     """Event emitted for incremental chunks of tool call arguments during streaming."""
 
@@ -79,7 +83,7 @@ class ToolCallDeltaEvent(LLMEvent):
     args_chunk: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ToolCallEvent(LLMEvent):
     """Event emitted when a complete tool call is ready to execute."""
 
@@ -102,7 +106,7 @@ class TokenUsage:
     cache_read: int = 0
 
 
-@dataclass
+@dataclass(kw_only=True)
 class UsageEvent(LLMEvent):
     """Event emitted with token usage statistics and cost after an LLM call."""
 
@@ -115,7 +119,7 @@ class UsageEvent(LLMEvent):
 # ─── Modalities ─────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class LLMModalitiesEvent(LLMEvent):
     """Event emitted to indicate which input modalities the model supports.
 
@@ -128,7 +132,7 @@ class LLMModalitiesEvent(LLMEvent):
 # ─── Error ───────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(kw_only=True)
 class ErrorEvent(LLMEvent):
     """Event emitted when an error occurs during LLM interaction."""
 

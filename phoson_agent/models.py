@@ -54,9 +54,14 @@ class AgentRunResult:
     total_credits: float = 0.0
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentEvent:
-    """Base class for agent events."""
+    """Base class for agent events.
+
+    All event subclasses use ``kw_only=True`` so call sites are
+    self-documenting and field ordering between base and subclass is
+    not significant.
+    """
 
     timestamp: datetime.datetime = field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
@@ -64,7 +69,7 @@ class AgentEvent:
     )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentStartEvent(AgentEvent):
     """Event emitted when the agent starts."""
 
@@ -73,21 +78,21 @@ class AgentStartEvent(AgentEvent):
     max_iterations: int = 0
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentTokenEvent(AgentEvent):
     """Event emitted when a token is generated."""
 
     content: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentReasoningEvent(AgentEvent):
     """Event emitted when a reasoning token is generated."""
 
     content: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentToolStartEvent(AgentEvent):
     """Event emitted when a tool call starts."""
 
@@ -98,7 +103,7 @@ class AgentToolStartEvent(AgentEvent):
     label: str | None = None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentToolDoneEvent(AgentEvent):
     """Event emitted when a tool call completes."""
 
@@ -111,21 +116,21 @@ class AgentToolDoneEvent(AgentEvent):
     label: str | None = None
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentStepDoneEvent(AgentEvent):
     """Event emitted when a step (LLM or tool) completes."""
 
     step: RunStep
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentDoneEvent(AgentEvent):
     """Event emitted when the agent finishes."""
 
     result: AgentRunResult
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentErrorEvent(AgentEvent):
     """Event emitted when an error occurs."""
 
@@ -134,7 +139,7 @@ class AgentErrorEvent(AgentEvent):
     retryable: bool = False
 
 
-@dataclass
+@dataclass(kw_only=True)
 class AgentSubagentResult(AgentEvent):
     """Event emitted when a subagent completes with its metrics."""
 
