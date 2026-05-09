@@ -50,6 +50,7 @@ from phoson_agent._internals import (
     IterationFinal,
     IterationFailed,
     check_no_running_loop,
+    build_llm_call_chain,
 )
 from phoson_agent.exceptions import (
     PhosonAgentError,
@@ -57,7 +58,7 @@ from phoson_agent.exceptions import (
     PhosonMaxIterationsError,
     PhosonPluginCleanupError,
 )
-from phoson_agent.middleware import LLMCallNext, AgentMiddleware
+from phoson_agent.middleware import AgentMiddleware
 from phoson_agent._tool_runner import ToolRunner
 from phoson_agent.plugin_loader import load_plugin
 
@@ -289,46 +290,6 @@ class AgentEngine:
             updated = await middleware.on_before_llm(updated, config)
         return updated
 
-    def _build_llm_call_chain(
-        self,
-        tool_definitions: list[ToolDefinition],
-    ) -> LLMCallNext:
-        """Build the middleware execution chain for the LLM call.
-
-        The middlewares form an "onion": each ``wrap_llm_call`` wraps the
-        next call in the chain, with the chat client at the centre.
-        Iterating in reverse order builds the chain from the innermost
-        layer outwards.
-        """
-
-        async def base_call(
-            messages: list[Message],
-            config: ModelConfig,
-        ) -> AsyncIterator[LLMEvent]:
-            async for event in self.chat.stream(messages, config, tool_definitions):
-                yield event
-
-        call_next: LLMCallNext = base_call
-        for middleware in reversed(self.middlewares):
-            previous = call_next
-
-            def make_wrapped(
-                mw: AgentMiddleware,
-                nxt: LLMCallNext,
-            ) -> LLMCallNext:
-                async def wrapped(
-                    messages: list[Message],
-                    config: ModelConfig,
-                ) -> AsyncIterator[LLMEvent]:
-                    async for event in mw.wrap_llm_call(nxt, messages, config):
-                        yield event
-
-                return wrapped
-
-            call_next = make_wrapped(middleware, previous)
-
-        return call_next
-
     async def _apply_before_tool(
         self,
         call: ToolCallEvent,
@@ -351,16 +312,6 @@ class AgentEngine:
             updated = await middleware.on_after_tool(call, updated, error)
         return updated
 
-    def _get_tool_definitions(self) -> list[ToolDefinition]:
-        return [
-            ToolDefinition(
-                name=tool.name,
-                description=tool.description,
-                parameters=tool.parameters,
-            )
-            for tool in self.tools
-        ]
-
     # ── Outer loop ──────────────────────────────────────────────────────
 
     async def _stream_impl(
@@ -381,8 +332,15 @@ class AgentEngine:
         total_cost_usd = 0.0
         total_credits = 0.0
 
-        tool_definitions = self._get_tool_definitions()
-        llm_call = self._build_llm_call_chain(tool_definitions)
+        tool_definitions = [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.parameters,
+            )
+            for tool in self.tools
+        ]
+        llm_call = build_llm_call_chain(self.chat, self.middlewares, tool_definitions)
 
         yield await self._prepare_event(
             AgentStartEvent(

@@ -9,16 +9,25 @@ the orchestration story.
 import json
 import asyncio
 import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from dataclasses import field, dataclass
+from collections.abc import AsyncIterator
 
 from phoson_llm.schemas import (
+    Message,
+    LLMEvent,
     ErrorEvent,
     UsageEvent,
+    ModelConfig,
     LLMDoneEvent,
     ToolCallEvent,
 )
 from phoson_agent.models import AgentEvent, AgentErrorEvent
+
+if TYPE_CHECKING:
+    from phoson_llm.schemas import ToolDefinition
+    from phoson_llm.chats.base import BaseLLMChat
+    from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 
 # ─── Event-loop guard ────────────────────────────────────────────────────────
 
@@ -122,3 +131,57 @@ class IterationFailed(AgentEvent):
     """Internal: signals the iteration failed, carrying the public error."""
 
     error_event: AgentErrorEvent = field(default_factory=AgentErrorEvent)
+
+
+# ─── LLM call chain builder ──────────────────────────────────────────────────
+
+
+def build_llm_call_chain(
+    chat: "BaseLLMChat",
+    middlewares: "list[AgentMiddleware]",
+    tool_definitions: "list[ToolDefinition]",
+) -> "LLMCallNext":
+    """Build the middleware execution chain for an LLM call.
+
+    Middlewares form an "onion" around the chat client: each
+    ``wrap_llm_call`` wraps the next layer, with ``chat.stream`` at the
+    centre. Iterating in reverse builds the chain from the innermost
+    layer outwards.
+
+    Args:
+        chat: LLM adapter used as the innermost call.
+        middlewares: Ordered list of middlewares to wrap.
+        tool_definitions: Tool schemas forwarded to ``chat.stream``.
+
+    Returns:
+        A callable matching the :data:`~phoson_agent.middleware.LLMCallNext`
+        protocol.
+    """
+
+    async def base_call(
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> AsyncIterator[LLMEvent]:
+        async for event in chat.stream(messages, config, tool_definitions):
+            yield event
+
+    call_next: "LLMCallNext" = base_call
+    for middleware in reversed(middlewares):
+        previous = call_next
+
+        def make_wrapped(
+            mw: "AgentMiddleware",
+            nxt: "LLMCallNext",
+        ) -> "LLMCallNext":
+            async def wrapped(
+                messages: list[Message],
+                config: ModelConfig,
+            ) -> AsyncIterator[LLMEvent]:
+                async for event in mw.wrap_llm_call(nxt, messages, config):
+                    yield event
+
+            return wrapped
+
+        call_next = make_wrapped(middleware, previous)
+
+    return call_next
