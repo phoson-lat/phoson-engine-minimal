@@ -170,17 +170,37 @@ def test_subagent_panel_frame_changes_spinner() -> None:
 
 
 def test_renderer_shows_subagent_summary_on_done() -> None:
-    renderer = Renderer()
-    result = (
-        "=== Agent 0: Read README.md ===\n"
-        "done\n"
-        "--- METRICS: 200ms | 124in/89out | $0.00100 ---\n\n"
-        "=== Agent 1: Read PROJECT.md ===\n"
-        "done\n"
-        "--- METRICS: 300ms | 234in/156out | $0.00200 ---\n\n"
-        "=== SUMMARY ===\n"
-        "Total: 2 agents | 500ms | 358in/245out | $0.00300"
+    from phoson_cli.tools.subagent_panel import (
+        format_agent_block,
+        format_metrics_line,
     )
+
+    renderer = Renderer()
+    blocks = [
+        format_agent_block(
+            index=0,
+            task_preview="Read README.md",
+            body="done",
+            metrics_line=format_metrics_line(
+                duration_ms=200,
+                input_tokens=124,
+                output_tokens=89,
+                cost_usd=0.00100,
+            ),
+        ),
+        format_agent_block(
+            index=1,
+            task_preview="Read PROJECT.md",
+            body="done",
+            metrics_line=format_metrics_line(
+                duration_ms=300,
+                input_tokens=234,
+                output_tokens=156,
+                cost_usd=0.00200,
+            ),
+        ),
+    ]
+    result = "\n\n".join(blocks)
 
     with renderer.console.capture() as capture:
         renderer._on_tool_done(

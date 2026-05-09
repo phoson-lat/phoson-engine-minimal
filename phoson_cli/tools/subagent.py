@@ -11,6 +11,7 @@ from phoson_llm.schemas import Message, ModelConfig
 from phoson_llm.chats.base import BaseLLMChat
 
 from .base import BaseTool
+from .subagent_panel import format_agent_block, format_metrics_line
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
 
@@ -207,19 +208,29 @@ async def agents(
         task_preview = r["task_preview"]
         error = r.get("error")
         if error:
-            output_parts.append(f"=== Agent {idx}: {task_preview} === Error: {error}")
+            output_parts.append(
+                format_agent_block(
+                    index=idx,
+                    task_preview=task_preview,
+                    body="",
+                    error=error,
+                )
+            )
         else:
-            metrics_line = (
-                "--- METRICS: "
-                f"duration_ms={r['duration_ms']} "
-                f"input_tokens={r['input_tokens']} "
-                f"output_tokens={r['output_tokens']} "
-                f"cost_usd={r['cost_usd']} "
-                f"credits={r['credits']} "
-                "---"
+            metrics_line = format_metrics_line(
+                duration_ms=int(r["duration_ms"]),
+                input_tokens=int(r["input_tokens"]),
+                output_tokens=int(r["output_tokens"]),
+                cost_usd=float(r["cost_usd"]),
+                credits=r.get("credits", 0),
             )
             output_parts.append(
-                f"=== Agent {idx}: {task_preview} ===\n{r['result']}\n{metrics_line}"
+                format_agent_block(
+                    index=idx,
+                    task_preview=task_preview,
+                    body=str(r["result"]),
+                    metrics_line=metrics_line,
+                )
             )
 
     return "\n\n".join(output_parts)
