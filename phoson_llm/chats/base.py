@@ -10,6 +10,7 @@ from phoson_llm.schemas import (
     LLMDoneEvent,
     ToolDefinition,
 )
+from phoson_llm.exceptions import PhosonProviderError, PhosonLLMProtocolError
 
 
 class BaseLLMChat(ABC):
@@ -30,7 +31,7 @@ class BaseLLMChat(ABC):
     # ── Abstract: the only method each adapter must implement ─────────────
 
     @abstractmethod
-    async def stream(
+    def stream(
         self,
         messages: list[Message],
         config: ModelConfig,
@@ -39,17 +40,20 @@ class BaseLLMChat(ABC):
         """
         Calls the LLM and returns an AsyncIterator of normalized LLMEvents.
 
+        Implementations should be async generators (functions with `yield`),
+        which Python recognizes as returning AsyncIterator.
+
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional tools.
+            messages: List of messages.
+            config: Model configuration.
+            tools: Optional tools.
 
         Returns:
-            AsyncIterator[LLMEvent]: Events from the LLM lifecycle.
+            AsyncIterator over events from the LLM lifecycle.
         """
         ...
 
-    # ── Async completo ────────────────────────────────────────────────────────
+    # ── Async complete ────────────────────────────────────────────────────────
 
     async def complete(
         self,
@@ -62,23 +66,28 @@ class BaseLLMChat(ABC):
         returns only the final LLMDoneEvent.
 
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional tools.
+            messages: List of messages.
+            config: Model configuration.
+            tools: Optional tools.
 
         Returns:
-            LLMDoneEvent: Final LLM event.
+            LLMDoneEvent with the final assistant content.
 
         Raises:
-            RuntimeError: If an error occurs or the stream does not emit LLMDoneEvent.
+            PhosonProviderError: If the provider returned an error event.
+            PhosonLLMProtocolError: If the stream did not emit LLMDoneEvent.
         """
         async for event in self.stream(messages, config, tools):
             if isinstance(event, LLMDoneEvent):
                 return event
             if isinstance(event, ErrorEvent):
-                raise RuntimeError(f"[{event.code}] {event.message}")
+                raise PhosonProviderError(
+                    event.message,
+                    code=event.code,
+                    retryable=event.retryable,
+                )
 
-        raise RuntimeError(
+        raise PhosonLLMProtocolError(
             "The stream finished without emitting LLMDoneEvent or ErrorEvent."
         )
 
@@ -91,28 +100,39 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> Iterator[LLMEvent]:
         """
-        Sync version of the stream. Creates an isolated event loop.
+        Sync version of the stream. Uses asyncio.run() internally.
+
+        Cannot be called from inside a running event loop. Use stream() instead
+        when in async contexts (Jupyter, FastAPI, etc.).
 
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional tools.
+            messages: List of messages.
+            config: Model configuration.
+            tools: Optional tools.
 
         Yields:
-            LLMEvent: Events from the LLM lifecycle.
-        """
-        loop = asyncio.new_event_loop()
-        try:
-            aiter = self.stream(messages, config, tools)
-            while True:
-                try:
-                    yield loop.run_until_complete(aiter.__anext__())
-                except StopAsyncIteration:
-                    break
-        finally:
-            loop.close()
+            LLMEvent objects from the LLM lifecycle.
 
-    # ── Sync completo ─────────────────────────────────────────────────────────
+        Raises:
+            RuntimeError: If called from within a running event loop.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "stream_sync() cannot be called from within a running event loop. "
+                "Use stream() instead."
+            )
+
+        async def _collect() -> list[LLMEvent]:
+            return [event async for event in self.stream(messages, config, tools)]
+
+        events = asyncio.run(_collect())
+        yield from events
+
+    # ── Sync complete ─────────────────────────────────────────────────────────
 
     def complete_sync(
         self,
@@ -121,25 +141,32 @@ class BaseLLMChat(ABC):
         tools: list[ToolDefinition] | None = None,
     ) -> LLMDoneEvent:
         """
-        Sync non-streaming version. Consumes stream_sync.
+        Sync non-streaming version. Uses asyncio.run() internally.
+
+        Cannot be called from inside a running event loop. Use complete()
+        instead when in async contexts.
 
         Args:
-            messages (list[Message]): List of messages.
-            config (ModelConfig): Model configuration.
-            tools (list[ToolDefinition] | None): Optional tools.
+            messages: List of messages.
+            config: Model configuration.
+            tools: Optional tools.
 
         Returns:
-            LLMDoneEvent: Final LLM event.
+            LLMDoneEvent with the final assistant content.
 
         Raises:
-            RuntimeError: If an error occurs or the stream does not emit LLMDoneEvent.
+            PhosonProviderError: If the provider returned an error event.
+            PhosonLLMProtocolError: If the stream did not emit LLMDoneEvent.
+            RuntimeError: If called from within a running event loop.
         """
-        for event in self.stream_sync(messages, config, tools):
-            if isinstance(event, LLMDoneEvent):
-                return event
-            if isinstance(event, ErrorEvent):
-                raise RuntimeError(f"[{event.code}] {event.message}")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "complete_sync() cannot be called from within a running event loop. "
+                "Use complete() instead."
+            )
 
-        raise RuntimeError(
-            "The stream finished without emitting LLMDoneEvent or ErrorEvent."
-        )
+        return asyncio.run(self.complete(messages, config, tools))

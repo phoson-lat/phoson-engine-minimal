@@ -13,6 +13,7 @@ from phoson_llm.schemas import (
     ToolDefinition,
 )
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.exceptions import PhosonProviderError
 
 
 class FakeDoneChat(BaseLLMChat):
@@ -55,11 +56,14 @@ async def test_complete_returns_done_event() -> None:
 async def test_complete_raises_for_error_event() -> None:
     chat = FakeErrorChat()
 
-    with pytest.raises(RuntimeError, match=r"\[rate_limit\] rate limited"):
+    with pytest.raises(PhosonProviderError, match=r"rate limited") as exc_info:
         await chat.complete(
             messages=[Message(role="user", content="hola")],
             config=ModelConfig(model="fake-model"),
         )
+
+    assert exc_info.value.code == "rate_limit"
+    assert exc_info.value.retryable is True
 
 
 def test_stream_sync_yields_full_sequence() -> None:
