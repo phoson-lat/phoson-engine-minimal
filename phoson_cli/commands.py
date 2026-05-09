@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Final
 from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
-from .config import save_config
+from .config import save_config, enabled_providers_from_config
 from .installer import run_install_wizard
 from .model_picker import pick_model
 from .model_selector import list_available_models
@@ -171,19 +171,7 @@ class CommandHandler:
         return self.repl.renderer
 
     def _available_providers(self) -> list[str]:
-        config = self.repl.config
-        providers: list[str] = []
-        if config.openrouter_api_key:
-            providers.append("openrouter")
-        if config.openai_api_key:
-            providers.append("openai")
-        if config.anthropic_api_key:
-            providers.append("anthropic")
-        if config.ollama_base_url:
-            providers.append("ollama")
-        if config.provider not in providers:
-            providers.append(config.provider)
-        return providers
+        return enabled_providers_from_config(self.repl.config)
 
     async def _pick_and_set_model(
         self,

@@ -161,17 +161,7 @@ def save_config(config: PhosonConfig) -> Path:
             rendered = f'"{escaped}"'
         return f"{key} = {rendered}"
 
-    enabled_providers: list[str] = []
-    if config.openrouter_api_key:
-        enabled_providers.append("openrouter")
-    if config.openai_api_key:
-        enabled_providers.append("openai")
-    if config.anthropic_api_key:
-        enabled_providers.append("anthropic")
-    if config.ollama_base_url:
-        enabled_providers.append("ollama")
-    if config.provider not in enabled_providers:
-        enabled_providers.append(config.provider)
+    enabled_providers = enabled_providers_from_config(config)
 
     lines = ["[defaults]"]
     for line in [
@@ -197,6 +187,27 @@ def save_config(config: PhosonConfig) -> Path:
 
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config_path
+
+
+def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
+    """Return the list of usable providers derived from ``config``.
+
+    A provider is considered enabled when its credential (API key or base URL)
+    is present. The active ``config.provider`` is always included so the REPL
+    never ends up with an empty list.
+    """
+    providers: list[str] = []
+    if config.openrouter_api_key:
+        providers.append("openrouter")
+    if config.openai_api_key:
+        providers.append("openai")
+    if config.anthropic_api_key:
+        providers.append("anthropic")
+    if config.ollama_base_url:
+        providers.append("ollama")
+    if config.provider not in providers:
+        providers.append(config.provider)
+    return providers
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
