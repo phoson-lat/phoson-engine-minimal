@@ -110,6 +110,7 @@ class AttachmentManager:
 def _suffix_to_mime(suffix: str) -> str:
     """Map file extension to MIME type."""
     return {
+        # Images
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
@@ -117,4 +118,17 @@ def _suffix_to_mime(suffix: str) -> str:
         ".webp": "image/webp",
         ".svg": "image/svg+xml",
         ".bmp": "image/bmp",
+        # Audio
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".m4a": "audio/mp4",
+        ".aac": "audio/aac",
+        # Video
+        ".mp4": "video/mp4",
+        ".webm": "video/webm",
+        ".mov": "video/quicktime",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
     }.get(suffix, "application/octet-stream")
