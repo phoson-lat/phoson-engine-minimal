@@ -32,13 +32,13 @@ DEFAULT_TIMEOUT = 300.0
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
     """
-    Convierte el formato interno de Phoson al formato que espera Ollama.
+    Converts Phoson's internal format to the format expected by Ollama.
 
     Args:
-        messages (list[Message]): Lista de mensajes de Phoson.
+        messages (list[Message]): List of Phoson messages.
 
     Returns:
-        list[dict]: Lista de mensajes formateados para Ollama.
+        list[dict]: List of formatted messages for Ollama.
     """
     result = []
 

@@ -4,7 +4,15 @@ When the conversation exceeds a configurable threshold of the model's
 context window (default 80%), old messages are replaced with a generated
 summary to keep the conversation within limits.
 
-Uses tiktoken for accurate token estimation.
+Uses tiktoken for token estimation. Important caveats:
+
+- ``tiktoken`` only ships tokenizers for OpenAI models. Counts for
+  Claude (Anthropic) and Llama-family (Ollama) are *approximations*
+  based on cl100k_base, typically within ±10-15% of the real count.
+- For exact token counts on Anthropic models, callers should use
+  ``anthropic.Anthropic().messages.count_tokens()`` from the SDK.
+- The threshold default of 80% leaves enough margin to absorb this
+  imprecision; tighten it if you switch to a stricter tokenizer.
 """
 
 import json
@@ -22,12 +30,14 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 # Token estimation with tiktoken
 # ─────────────────────────────────────────────────────────────────────
 
-# tiktoken encoding mapping by provider
+# tiktoken encoding mapping by provider.
+# Note: cl100k_base / o200k_base are OpenAI-native. For non-OpenAI providers
+# we use them as a *best-effort approximation* — the real tokenizer differs.
 _ENCODINGS: dict[str, str] = {
-    "anthropic": "cl100k_base",  # Claude uses cl100k
-    "openai": "o200k_base",  # GPT-4o+ uses o200k
-    "openrouter": "cl100k_base",  # Depends on model, cl100k is safe
-    "ollama": "cl100k_base",  # Most Ollama models are Llama-based
+    "anthropic": "cl100k_base",  # Claude actual tokenizer differs (~10-15% off)
+    "openai": "o200k_base",      # GPT-4o+ uses o200k natively
+    "openrouter": "cl100k_base", # Mixed providers; cl100k is the safe default
+    "ollama": "cl100k_base",     # Most Ollama models are Llama-based (~10-15% off)
 }
 
 # Overhead tokens per message (role metadata, formatting)
