@@ -168,9 +168,8 @@ async def test_tool_runner_invokes_handler_and_records_step() -> None:
     )
 
     events = [
-        ev async for ev in runner.execute(
-            tool_calls=[call], history=history, steps=steps
-        )
+        ev
+        async for ev in runner.execute(tool_calls=[call], history=history, steps=steps)
     ]
 
     # Start + Done + StepDone = 3 events for a single tool.
@@ -217,9 +216,8 @@ async def test_tool_runner_blocks_when_middleware_returns_none() -> None:
     )
 
     events = [
-        ev async for ev in runner.execute(
-            tool_calls=[call], history=history, steps=steps
-        )
+        ev
+        async for ev in runner.execute(tool_calls=[call], history=history, steps=steps)
     ]
 
     assert len(events) == 2  # ToolDone + StepDone (no Start)

@@ -22,20 +22,20 @@ def create_example_config():
             "filesystem": {
                 "command": "npx",
                 "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-                "env": {}
+                "env": {},
             },
             "memory": {
                 "command": "npx",
                 "args": ["-y", "@modelcontextprotocol/server-memory"],
-                "env": {}
-            }
+                "env": {},
+            },
         }
     }
-    
+
     config_file = Path("phoson-mcp.json")
     with open(config_file, "w") as f:
         json.dump(config, f, indent=2)
-    
+
     print(f"✅ Created example config: {config_file}")
     return config_file
 
@@ -45,10 +45,10 @@ async def example_basic():
     print("\n" + "=" * 70)
     print("📦 Example 1: Load MCP Plugin from phoson-mcp.json")
     print("=" * 70)
-    
+
     # Create example config
     config_file = create_example_config()
-    
+
     try:
         # Create engine with MCP plugin
         # The plugin will automatically load phoson-mcp.json
@@ -56,16 +56,17 @@ async def example_basic():
             chat=None,  # No LLM needed for this demo
             plugins=["path:./phoson_plugin_mcp/plugin.py"],
         )
-        
+
         print(f"\n✅ Plugin loaded: {engine._loaded_plugins[0].name}")
         print(f"🔧 Tools available: {len(engine.tools)}")
-        
+
         for tool in engine.tools:
             print(f"   • {tool.name}: {tool.description}")
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         # Cleanup
@@ -79,23 +80,16 @@ async def example_custom_config():
     print("\n" + "=" * 70)
     print("📦 Example 2: Load MCP Plugin with Custom Config")
     print("=" * 70)
-    
+
     # Create custom config file
     custom_config = Path("custom-mcp.json")
-    config = {
-        "servers": {
-            "test": {
-                "command": "echo",
-                "args": ["test"]
-            }
-        }
-    }
-    
+    config = {"servers": {"test": {"command": "echo", "args": ["test"]}}}
+
     with open(custom_config, "w") as f:
         json.dump(config, f, indent=2)
-    
+
     print(f"✅ Created custom config: {custom_config}")
-    
+
     try:
         # Load plugin with custom config file
         engine = AgentEngine(
@@ -103,19 +97,17 @@ async def example_custom_config():
             plugins=[
                 {
                     "name": "path:./phoson_plugin_mcp/plugin.py",
-                    "config": {
-                        "config_file": str(custom_config)
-                    }
+                    "config": {"config_file": str(custom_config)},
                 }
             ],
         )
-        
+
         print(f"\n✅ Plugin loaded with custom config")
         print(f"🔧 Tools available: {len(engine.tools)}")
-        
+
         for tool in engine.tools:
             print(f"   • {tool.name}")
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
@@ -129,7 +121,7 @@ async def example_inline_config():
     print("\n" + "=" * 70)
     print("📦 Example 3: Configure MCP Servers Inline")
     print("=" * 70)
-    
+
     try:
         # Configure servers directly in code
         engine = AgentEngine(
@@ -139,22 +131,19 @@ async def example_inline_config():
                     "name": "path:./phoson_plugin_mcp/plugin.py",
                     "config": {
                         "servers": {
-                            "echo": {
-                                "command": "echo",
-                                "args": ["Hello from MCP!"]
-                            }
+                            "echo": {"command": "echo", "args": ["Hello from MCP!"]}
                         }
-                    }
+                    },
                 }
             ],
         )
-        
+
         print(f"✅ Plugin loaded with inline config")
         print(f"🔧 Tools available: {len(engine.tools)}")
-        
+
         for tool in engine.tools:
             print(f"   • {tool.name}")
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
 
@@ -164,7 +153,7 @@ async def example_no_config():
     print("\n" + "=" * 70)
     print("📦 Example 4: Load Plugin Without Configuration")
     print("=" * 70)
-    
+
     try:
         # Load plugin without config file (should work fine, just no tools)
         engine = AgentEngine(
@@ -172,19 +161,17 @@ async def example_no_config():
             plugins=[
                 {
                     "name": "path:./phoson_plugin_mcp/plugin.py",
-                    "config": {
-                        "config_file": "./nonexistent.json"
-                    }
+                    "config": {"config_file": "./nonexistent.json"},
                 }
             ],
         )
-        
+
         print(f"✅ Plugin loaded (no servers configured)")
         print(f"🔧 Tools available: {len(engine.tools)}")
-        
+
         if len(engine.tools) == 0:
             print("   (No tools - no MCP servers configured)")
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
 
@@ -194,22 +181,22 @@ async def main():
     print("\n" + "=" * 70)
     print("🔌 Phoson MCP Plugin - Examples")
     print("=" * 70)
-    
+
     print("\nNote: These examples demonstrate plugin loading.")
     print("To actually use MCP servers, you need:")
     print("  1. Node.js installed (for npx commands)")
     print("  2. MCP servers installed (e.g., @modelcontextprotocol/server-*)")
     print("  3. A real LLM chat instance")
-    
+
     await example_basic()
     await example_custom_config()
     await example_inline_config()
     await example_no_config()
-    
+
     print("\n" + "=" * 70)
     print("✨ Examples completed!")
     print("=" * 70)
-    
+
     print("\n💡 Next steps:")
     print("   1. Install MCP servers: npm install -g @modelcontextprotocol/server-*")
     print("   2. Configure phoson-mcp.json with your servers")

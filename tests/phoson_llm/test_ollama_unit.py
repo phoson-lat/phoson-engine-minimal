@@ -193,9 +193,7 @@ async def test_stream_emits_usage_on_done(monkeypatch: pytest.MonkeyPatch) -> No
 
     chat = OllamaChat()
     config = ModelConfig(model="llama3", max_tokens=128)
-    events = await _collect(
-        chat.stream([Message(role="user", content="hi")], config)
-    )
+    events = await _collect(chat.stream([Message(role="user", content="hi")], config))
 
     types = [type(e).__name__ for e in events]
     assert "LLMStartEvent" in types
@@ -233,9 +231,7 @@ async def test_stream_sends_system_in_messages_not_top_level(
 
     chat = OllamaChat()
     config = ModelConfig(model="llama3", max_tokens=64, system="be helpful")
-    await _collect(
-        chat.stream([Message(role="user", content="hi")], config)
-    )
+    await _collect(chat.stream([Message(role="user", content="hi")], config))
 
     payload = client.last_payload
     assert payload is not None
@@ -269,9 +265,7 @@ async def test_stream_forwards_max_tokens_via_options(
         _patch_httpx(monkeypatch, client)
         chat = OllamaChat()
         config = ModelConfig(model="llama3", max_tokens=max_tokens)
-        await _collect(
-            chat.stream([Message(role="user", content="hi")], config)
-        )
+        await _collect(chat.stream([Message(role="user", content="hi")], config))
         payload = client.last_payload
         assert payload is not None
         assert payload["options"]["num_predict"] == max_tokens
@@ -342,9 +336,7 @@ async def test_stream_yields_error_with_body_on_non_200(
 
     chat = OllamaChat()
     config = ModelConfig(model="missing", max_tokens=64)
-    events = await _collect(
-        chat.stream([Message(role="user", content="hi")], config)
-    )
+    events = await _collect(chat.stream([Message(role="user", content="hi")], config))
 
     types = [type(e).__name__ for e in events]
     assert "ErrorEvent" in types

@@ -54,7 +54,7 @@ async def test_bash_event_loop_stays_responsive() -> None:
             await asyncio.sleep(0.05)
             ticks += 1
 
-    sleep_cmd = f"{sys.executable} -c \"import time; time.sleep(0.4)\""
+    sleep_cmd = f'{sys.executable} -c "import time; time.sleep(0.4)"'
     bash_task = asyncio.create_task(_run_bash(sleep_cmd))
     tick_task = asyncio.create_task(ticker())
 
@@ -66,7 +66,7 @@ async def test_bash_event_loop_stays_responsive() -> None:
 
 @pytest.mark.asyncio
 async def test_bash_timeout_returns_message() -> None:
-    sleep_cmd = f"{sys.executable} -c \"import time; time.sleep(2)\""
+    sleep_cmd = f'{sys.executable} -c "import time; time.sleep(2)"'
     out = await _run_bash(sleep_cmd, timeout=0.2)
     assert "timed out" in out.lower()
 

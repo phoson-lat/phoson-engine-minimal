@@ -61,6 +61,7 @@ def test_parse_tool_args_maps_plain_string_to_command() -> None:
 
 def test_parse_tool_args_maps_invalid_json_to_command_fallback() -> None:
     import pytest
+
     with pytest.warns(UserWarning, match="Could not parse tool args JSON"):
         assert _parse_tool_args("git diff --stat") == {"command": "git diff --stat"}
 

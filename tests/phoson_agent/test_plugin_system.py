@@ -71,9 +71,7 @@ class TestPluginSpec:
         assert spec.instance is None
 
     def test_from_dict(self):
-        spec = PluginSpec.from_value(
-            {"name": "my-plugin", "config": {"key": "value"}}
-        )
+        spec = PluginSpec.from_value({"name": "my-plugin", "config": {"key": "value"}})
         assert spec.name == "my-plugin"
         assert spec.config == {"key": "value"}
 

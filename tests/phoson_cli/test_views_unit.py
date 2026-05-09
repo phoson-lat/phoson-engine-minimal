@@ -24,7 +24,9 @@ def test_render_tree_ascii_returns_placeholder_for_empty_tree() -> None:
 def test_render_tree_ascii_marks_current_node() -> None:
     tree = ConversationTree.new()
     root = tree.append(parent_id=None, message=Message(role="user", content="hi"))
-    child = tree.append(parent_id=root.id, message=Message(role="assistant", content="hi back"))
+    child = tree.append(
+        parent_id=root.id, message=Message(role="assistant", content="hi back")
+    )
 
     output = render_tree_ascii(tree, current_node_id=child.id)
 
@@ -48,8 +50,12 @@ def test_render_tree_ascii_uses_open_marker_for_current() -> None:
 def test_render_tree_ascii_handles_branching() -> None:
     tree = ConversationTree.new()
     root = tree.append(parent_id=None, message=Message(role="user", content="root"))
-    a = tree.append(parent_id=root.id, message=Message(role="assistant", content="branch a"))
-    b = tree.append(parent_id=root.id, message=Message(role="assistant", content="branch b"))
+    a = tree.append(
+        parent_id=root.id, message=Message(role="assistant", content="branch a")
+    )
+    b = tree.append(
+        parent_id=root.id, message=Message(role="assistant", content="branch b")
+    )
 
     out = render_tree_ascii(tree, current_node_id=None)
 

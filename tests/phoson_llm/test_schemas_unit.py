@@ -180,7 +180,9 @@ class TestLLMEvents:
         assert u.cache_read == 0
 
     def test_usage_event(self):
-        e = UsageEvent(model="gpt-4o", usage=TokenUsage(input=10, output=20), cost_usd=0.001)
+        e = UsageEvent(
+            model="gpt-4o", usage=TokenUsage(input=10, output=20), cost_usd=0.001
+        )
         assert e.usage.input == 10
         assert e.cost_usd == 0.001
 

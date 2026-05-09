@@ -114,7 +114,8 @@ async def test_passthrough_when_no_error() -> None:
     chat = RetryingChat(inner, _no_jitter_policy())
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -142,7 +143,8 @@ async def test_retries_on_retryable_error_before_tokens() -> None:
     chat = RetryingChat(inner, _no_jitter_policy(max_attempts=3))
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -161,7 +163,8 @@ async def test_does_not_retry_when_error_is_not_retryable() -> None:
     chat = RetryingChat(inner, _no_jitter_policy(max_attempts=5))
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -184,7 +187,8 @@ async def test_does_not_retry_after_user_visible_tokens() -> None:
     chat = RetryingChat(inner, _no_jitter_policy(max_attempts=5))
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -208,7 +212,8 @@ async def test_gives_up_after_max_attempts() -> None:
     chat = RetryingChat(inner, _no_jitter_policy(max_attempts=3))
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -226,7 +231,8 @@ async def test_with_retry_helper_returns_retrying_chat() -> None:
     assert isinstance(wrapped, RetryingChat)
 
     events = [
-        ev async for ev in wrapped.stream(
+        ev
+        async for ev in wrapped.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )
@@ -240,7 +246,8 @@ async def test_max_attempts_one_disables_retries() -> None:
     chat = RetryingChat(inner, _no_jitter_policy(max_attempts=1))
 
     events = [
-        ev async for ev in chat.stream(
+        ev
+        async for ev in chat.stream(
             [Message(role="user", content="hi")],
             ModelConfig(model="m", max_tokens=8),
         )

@@ -14,6 +14,7 @@ try:
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
@@ -22,12 +23,12 @@ except ImportError:
 class MCPPlugin(Plugin):
     """
     Plugin for integrating Model Context Protocol (MCP) servers.
-    
+
     Loads MCP server configurations from phoson-mcp.json and exposes
     their tools to the agent.
-    
+
     Configuration file format (phoson-mcp.json):
-    
+
     STDIO transport (default):
     {
         "mcpServers": {
@@ -41,7 +42,7 @@ class MCPPlugin(Plugin):
             }
         }
     }
-    
+
     SSE transport:
     {
         "mcpServers": {
@@ -54,7 +55,7 @@ class MCPPlugin(Plugin):
             }
         }
     }
-    
+
     HTTP transport:
     {
         "mcpServers": {
@@ -68,7 +69,7 @@ class MCPPlugin(Plugin):
         }
     }
     """
-    
+
     def __init__(self):
         self.config_file: Path = Path("phoson-mcp.json")
         self.servers: dict[str, dict[str, Any]] = {}
@@ -76,19 +77,19 @@ class MCPPlugin(Plugin):
         self.tools_cache: list[AgentTool] = []
         self.tool_name_prefix: str = "mcp"
         self._initialized = False
-    
+
     @property
     def name(self) -> str:
         return "phoson-plugin-mcp"
-    
+
     @property
     def version(self) -> str:
         return "0.1.0"
-    
+
     @property
     def description(self) -> str:
         return "Integrates Model Context Protocol (MCP) servers with Phoson Agent"
-    
+
     def configure(self, config: dict[str, Any]) -> None:
         """Configure the MCP plugin."""
         if "config_file" in config:
@@ -96,24 +97,24 @@ class MCPPlugin(Plugin):
 
         if "tool_name_prefix" in config:
             self.tool_name_prefix = str(config["tool_name_prefix"])
-        
+
         # Allow inline server configuration
         if "servers" in config:
             self.servers = config["servers"]
-    
+
     def initialize(self) -> None:
         """Initialize MCP servers from configuration file."""
         if not MCP_AVAILABLE:
             raise ImportError(
                 "MCP package not installed. Install with: pip install mcp"
             )
-        
+
         # Load configuration from file if it exists
         if self.config_file.exists():
             try:
                 with open(self.config_file) as f:
                     config_data = json.load(f)
-                    
+
                 # Support both formats: {"mcpServers": {...}} and {"servers": {...}}
                 if "mcpServers" in config_data:
                     self.servers.update(config_data["mcpServers"])
@@ -121,12 +122,12 @@ class MCPPlugin(Plugin):
                     self.servers.update(config_data["servers"])
                 else:
                     self.servers.update(config_data)
-                    
+
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON in {self.config_file}: {e}")
             except Exception as e:
                 raise RuntimeError(f"Failed to load MCP config: {e}")
-        
+
         if not self.servers:
             # No servers configured, that's okay
             return
@@ -141,7 +142,7 @@ class MCPPlugin(Plugin):
                 self.tools_cache.extend(self._create_proxy_tools(server_name))
 
         self._initialized = True
-    
+
     def _load_tools_from_servers(self) -> None:
         """Load and discover tools from all configured MCP servers.
 
@@ -300,7 +301,7 @@ class MCPPlugin(Plugin):
             )
 
         return agent_tools
-    
+
     async def _execute_mcp_tool(
         self,
         server_name: str,
@@ -424,63 +425,61 @@ class MCPPlugin(Plugin):
         finally:
             if http_client is not None:
                 await http_client.aclose()
-    
+
     async def _execute_stdio(
         self,
         server_name: str,
         server_config: dict[str, Any],
         tool_name: str,
-        arguments: dict[str, Any]
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
         """Execute tool via STDIO transport."""
         command = server_config.get("command", "node")
         args = server_config.get("args", [])
         env = server_config.get("env", {})
-        
+
         server_params = StdioServerParameters(
-            command=command,
-            args=args,
-            env=env if env else None
+            command=command, args=args, env=env if env else None
         )
-        
+
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 return await self._call_tool_on_session(
                     session, server_name, tool_name, arguments
                 )
-    
+
     async def _execute_sse(
         self,
         server_name: str,
         server_config: dict[str, Any],
         tool_name: str,
-        arguments: dict[str, Any]
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
         """Execute tool via SSE transport."""
         url = server_config.get("url")
         if not url:
             return {"error": "SSE transport requires 'url' in config"}
-        
+
         headers = server_config.get("headers", {})
-        
+
         async with sse_client(url, headers=headers) as (read, write):
             async with ClientSession(read, write) as session:
                 return await self._call_tool_on_session(
                     session, server_name, tool_name, arguments
                 )
-    
+
     async def _execute_http(
         self,
         server_name: str,
         server_config: dict[str, Any],
         tool_name: str,
-        arguments: dict[str, Any]
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
         """Execute tool via HTTP transport."""
         url = server_config.get("url")
         if not url:
             return {"error": "HTTP transport requires 'url' in config"}
-        
+
         headers = server_config.get("headers", {})
 
         import httpx
@@ -499,7 +498,7 @@ class MCPPlugin(Plugin):
         finally:
             if http_client is not None:
                 await http_client.aclose()
-    
+
     async def _call_tool_on_session(
         self,
         session: ClientSession,
@@ -539,7 +538,7 @@ class MCPPlugin(Plugin):
         return {
             "success": True,
             "result": self._serialize_mcp_value(
-                result.content if hasattr(result, 'content') else result
+                result.content if hasattr(result, "content") else result
             ),
             "tool": tool_name,
             "server": server_name,
@@ -558,8 +557,7 @@ class MCPPlugin(Plugin):
 
         if isinstance(value, dict):
             return {
-                str(key): self._serialize_mcp_value(item)
-                for key, item in value.items()
+                str(key): self._serialize_mcp_value(item) for key, item in value.items()
             }
 
         model_dump = getattr(value, "model_dump", None)
@@ -585,11 +583,11 @@ class MCPPlugin(Plugin):
         """Normalize a tool-name component for LLM provider compatibility."""
         normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
         return normalized or "tool"
-    
+
     def get_tools(self) -> list[AgentTool]:
         """Return tools from all configured MCP servers."""
         return self.tools_cache
-    
+
     def cleanup(self) -> None:
         """Cleanup MCP server connections."""
         # Close any open sessions
@@ -599,7 +597,7 @@ class MCPPlugin(Plugin):
                 pass
             except Exception:
                 pass
-        
+
         self.sessions.clear()
         self.tools_cache.clear()
         self._initialized = False

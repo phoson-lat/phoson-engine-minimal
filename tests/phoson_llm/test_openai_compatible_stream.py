@@ -172,9 +172,7 @@ async def test_max_tokens_key_is_forwarded() -> None:
 @pytest.mark.asyncio
 async def test_system_message_is_normalised_to_head() -> None:
     client = _FakeClient([])
-    config = ModelConfig(
-        model="gpt-4o-mini", max_tokens=64, system="be terse"
-    )
+    config = ModelConfig(model="gpt-4o-mini", max_tokens=64, system="be terse")
 
     await _collect(
         stream_chat_completions(
@@ -255,9 +253,7 @@ async def test_tool_call_emission_is_idempotent() -> None:
                 )
             ]
         ),
-        _Chunk(
-            choices=[_Choice(delta=_Delta(), finish_reason="tool_calls")]
-        ),
+        _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="tool_calls")]),
         _Chunk(usage=_Usage(prompt_tokens=10, completion_tokens=4)),
     ]
     client = _FakeClient(chunks)
@@ -291,19 +287,9 @@ async def test_tool_call_emission_is_idempotent() -> None:
 @pytest.mark.asyncio
 async def test_reasoning_channel_is_emitted_via_either_attribute() -> None:
     chunks_with_alias = [
+        _Chunk(choices=[_Choice(delta=_Delta(content="", reasoning_content="step "))]),
         _Chunk(
-            choices=[
-                _Choice(
-                    delta=_Delta(content="", reasoning_content="step ")
-                )
-            ]
-        ),
-        _Chunk(
-            choices=[
-                _Choice(
-                    delta=_Delta(content="", reasoning_content="by step")
-                )
-            ]
+            choices=[_Choice(delta=_Delta(content="", reasoning_content="by step"))]
         ),
         _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
         _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),

@@ -180,9 +180,7 @@ TESTS = {
 async def main() -> None:
     selected = [name for name, enabled in ENABLED.items() if enabled]
     if not selected:
-        print(
-            "No tests enabled. Edit ENABLED in this file to toggle providers."
-        )
+        print("No tests enabled. Edit ENABLED in this file to toggle providers.")
         return
     for name in selected:
         try:

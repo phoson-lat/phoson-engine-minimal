@@ -60,6 +60,7 @@ class TestAgentMiddlewareBase:
     @pytest.mark.asyncio
     async def test_on_before_tool_returns_call_unchanged(self):
         from phoson_llm.schemas import ToolCallEvent
+
         mw = AgentMiddleware()
         call = ToolCallEvent(tool_call_id="c1", tool_name="search")
         result = await mw.on_before_tool(call)
@@ -68,6 +69,7 @@ class TestAgentMiddlewareBase:
     @pytest.mark.asyncio
     async def test_on_after_tool_returns_result_unchanged(self):
         from phoson_llm.schemas import ToolCallEvent
+
         mw = AgentMiddleware()
         call = ToolCallEvent(tool_call_id="c1", tool_name="search")
         result = await mw.on_after_tool(call, "found it", False)
@@ -76,6 +78,7 @@ class TestAgentMiddlewareBase:
     @pytest.mark.asyncio
     async def test_on_agent_event_returns_none(self):
         from phoson_agent.models import AgentStartEvent
+
         mw = AgentMiddleware()
         result = await mw.on_agent_event(AgentStartEvent())
         assert result is None
@@ -164,6 +167,7 @@ class TestRetryMiddleware:
     @pytest.mark.asyncio
     async def test_backoff_delay_is_applied(self, monkeypatch):
         import asyncio
+
         delays = []
 
         async def fake_sleep(seconds):
@@ -181,7 +185,9 @@ class TestRetryMiddleware:
             else:
                 yield LLMDoneEvent()
 
-        mw = RetryMiddleware(max_retries=3, base_delay_seconds=1.0, backoff_multiplier=2.0)
+        mw = RetryMiddleware(
+            max_retries=3, base_delay_seconds=1.0, backoff_multiplier=2.0
+        )
         await _collect(mw.wrap_llm_call(call_next, _msgs(), _config()))
 
         assert len(delays) == 2

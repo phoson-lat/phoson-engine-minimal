@@ -107,10 +107,7 @@ def test_metrics_parse_ignores_garbage_blocks() -> None:
 
 
 def test_metrics_parse_handles_missing_metrics_line() -> None:
-    block = (
-        "=== Agent 0: solo ===\n"
-        "result without metrics"
-    )
+    block = "=== Agent 0: solo ===\nresult without metrics"
 
     metrics = parse_subagent_metrics(block)
 

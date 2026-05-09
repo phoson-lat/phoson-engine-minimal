@@ -92,7 +92,11 @@ class TestToolDecorator:
             """Greet someone."""
             return f"{greeting}, {name}"
 
-        props = my_tool.parameters["properties"] if False else greet.parameters["properties"]
+        props = (
+            my_tool.parameters["properties"]
+            if False
+            else greet.parameters["properties"]
+        )
         assert "name" in props
         assert "greeting" in props
         assert greet.parameters["required"] == ["name", "greeting"]
@@ -117,6 +121,7 @@ class TestToolDecorator:
 
     def test_kw_only_not_injected_emits_warning(self):
         with pytest.warns(UserWarning, match="keyword-only"):
+
             @tool
             def my_fn(x: str, *, debug: bool = False) -> str:
                 """A tool."""
@@ -150,6 +155,7 @@ class TestToolDecorator:
             return str(a + b)
 
         import asyncio
+
         result = add.handler({"a": 2, "b": 3})
         assert result == "5"
 
@@ -160,6 +166,7 @@ class TestToolDecorator:
             return f"fetched:{url}"
 
         import asyncio
+
         result = asyncio.get_event_loop().run_until_complete(
             fetch.handler({"url": "http://example.com"})
         )

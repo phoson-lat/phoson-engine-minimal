@@ -36,12 +36,12 @@ class MemoryPlugin(Plugin):
 
     def get_tools(self) -> list[AgentTool]:
         """Provide memory tools to the agent."""
-        
+
         @tool
         def store_memory(key: str, value: str) -> str:
             """
             Store information in memory for later retrieval.
-            
+
             Args:
                 key: Unique identifier for the memory
                 value: Information to store
@@ -50,7 +50,7 @@ class MemoryPlugin(Plugin):
                 # Remove oldest entry
                 oldest_key = next(iter(self._memory_store))
                 del self._memory_store[oldest_key]
-            
+
             self._memory_store[key] = value
             return f"Stored memory '{key}'"
 
@@ -58,7 +58,7 @@ class MemoryPlugin(Plugin):
         def retrieve_memory(key: str) -> str:
             """
             Retrieve information from memory.
-            
+
             Args:
                 key: Unique identifier for the memory
             """
@@ -76,13 +76,13 @@ class MemoryPlugin(Plugin):
 
     def get_middlewares(self) -> list[AgentMiddleware]:
         """Provide memory middleware."""
-        
+
         class MemoryMiddleware(AgentMiddleware):
             """Middleware to inject memory context into messages."""
-            
+
             def __init__(self, memory_store: dict[str, Any]):
                 self.memory_store = memory_store
-            
+
             async def on_before_llm(
                 self,
                 messages: list[Message],
@@ -91,22 +91,22 @@ class MemoryPlugin(Plugin):
                 """Inject memory summary if available."""
                 if not self.memory_store:
                     return messages
-                
+
                 # Add a system message with memory context
                 memory_summary = "\n".join(
                     f"- {k}: {v}" for k, v in list(self.memory_store.items())[:5]
                 )
-                
+
                 memory_msg = Message(
                     role="system",
                     content=f"Available memories:\n{memory_summary}",
                 )
-                
+
                 # Insert after the first message (usually system prompt)
                 if len(messages) > 0:
                     return [messages[0], memory_msg] + messages[1:]
                 return [memory_msg] + messages
-        
+
         return [MemoryMiddleware(self._memory_store)]
 
     def cleanup(self) -> None:

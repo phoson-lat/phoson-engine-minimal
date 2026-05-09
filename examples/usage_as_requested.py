@@ -11,7 +11,7 @@ from phoson_llm import OpenAIChat, ModelConfig, Message
 async def main():
     """
     Ejemplo del uso exacto que solicitaste:
-    
+
     engine = AgentEngine(
         chat=OpenAIChat(),
         plugins=[
@@ -21,14 +21,14 @@ async def main():
         ],
     )
     """
-    
+
     print("=" * 70)
     print("🔌 Phoson Agent - Uso del Sistema de Plugins")
     print("=" * 70)
-    
+
     # Nota: Como los plugins reales aún no existen, usaremos el ejemplo local
     # En producción, esto funcionaría con plugins instalados vía pip
-    
+
     print("\n📦 Ejemplo 1: Plugins como strings (cuando estén publicados)")
     print("-" * 70)
     print("""
@@ -41,7 +41,7 @@ engine = AgentEngine(
     ],
 )
 """)
-    
+
     print("\n📦 Ejemplo 2: Con configuración personalizada")
     print("-" * 70)
     print("""
@@ -67,7 +67,7 @@ engine = AgentEngine(
     ],
 )
 """)
-    
+
     print("\n📦 Ejemplo 3: Mezclando diferentes formatos")
     print("-" * 70)
     print("""
@@ -86,10 +86,10 @@ engine = AgentEngine(
     ],
 )
 """)
-    
+
     print("\n🚀 Demo funcional con plugin local")
     print("-" * 70)
-    
+
     # Demo real con el plugin de ejemplo
     engine = AgentEngine(
         chat=OpenAIChat(),
@@ -97,36 +97,30 @@ engine = AgentEngine(
             "path:./examples/plugin_example_memory.py",
         ],
     )
-    
+
     print(f"✅ Engine creado con {len(engine._loaded_plugins)} plugin(s)")
     print(f"🔧 Tools disponibles: {[t.name for t in engine.tools]}")
     print(f"🔀 Middlewares activos: {len(engine.middlewares)}")
-    
+
     # Probar las tools del plugin
     print("\n🧪 Probando tools del plugin de memoria:")
-    
+
     store_tool = engine._tools_by_name["store_memory"]
-    result = store_tool.handler(
-        {"key": "user_name", "value": "Alice"},
-        engine.context
-    )
+    result = store_tool.handler({"key": "user_name", "value": "Alice"}, engine.context)
     print(f"  → store_memory('user_name', 'Alice'): {result}")
-    
+
     retrieve_tool = engine._tools_by_name["retrieve_memory"]
-    result = retrieve_tool.handler(
-        {"key": "user_name"},
-        engine.context
-    )
+    result = retrieve_tool.handler({"key": "user_name"}, engine.context)
     print(f"  → retrieve_memory('user_name'): {result}")
-    
+
     list_tool = engine._tools_by_name["list_memories"]
     result = list_tool.handler({}, engine.context)
     print(f"  → list_memories(): {result}")
-    
+
     # Cleanup
     print("\n🧹 Limpiando recursos...")
     engine.cleanup()
-    
+
     print("\n✨ Demo completado!")
     print("\n" + "=" * 70)
     print("💡 Próximos pasos:")
