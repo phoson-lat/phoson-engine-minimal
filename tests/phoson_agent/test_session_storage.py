@@ -210,3 +210,62 @@ async def test_list_meta_is_alias_for_list_sessions(temp_dir, populated_tree):
 
     assert len(meta_list) == len(sessions_list)
     assert meta_list[0].id == sessions_list[0].id
+
+
+# ── Atomicity / robustness ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_save_is_atomic_no_tmp_files_left_behind(temp_dir, populated_tree):
+    storage = JsonlStorage(base_path=temp_dir)
+    await storage.save(populated_tree)
+
+    leftover = list(temp_dir.glob("*.tmp.*"))
+    assert leftover == []
+
+
+@pytest.mark.asyncio
+async def test_save_does_not_corrupt_existing_file_on_serialization_error(
+    temp_dir, populated_tree, monkeypatch
+):
+    """If serialization blows up mid-write, the previous file must survive intact."""
+    storage = JsonlStorage(base_path=temp_dir)
+    await storage.save(populated_tree)
+
+    # Capture the bytes of the good file.
+    good_bytes = (temp_dir / f"{populated_tree.session_id}.jsonl").read_bytes()
+
+    # Force ``node_to_dict`` to explode on the next save.
+    import phoson_agent.sessions.storage_jsonl as mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated serializer crash")
+
+    monkeypatch.setattr(mod, "node_to_dict", _boom)
+
+    with pytest.raises(RuntimeError):
+        await storage.save(populated_tree)
+
+    # The previous good file must still be there, unchanged.
+    survivor = (temp_dir / f"{populated_tree.session_id}.jsonl").read_bytes()
+    assert survivor == good_bytes
+    # And no orphaned tmp file.
+    assert list(temp_dir.glob("*.tmp.*")) == []
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_skips_malformed_lines(temp_dir):
+    storage = JsonlStorage(base_path=temp_dir)
+    bad_file = temp_dir / "broken.jsonl"
+    bad_file.write_text("this is not json\n{also broken\n", encoding="utf-8")
+
+    # No exception, file just gets skipped.
+    sessions = await storage.list_sessions()
+
+    assert all(s.id != "broken" for s in sessions)
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_session_does_not_raise(temp_dir):
+    storage = JsonlStorage(base_path=temp_dir)
+    await storage.delete("does-not-exist")  # must not raise
