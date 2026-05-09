@@ -45,9 +45,9 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 # we use them as a *best-effort approximation* — the real tokenizer differs.
 _ENCODINGS: dict[str, str] = {
     "anthropic": "cl100k_base",  # Claude actual tokenizer differs (~10-15% off)
-    "openai": "o200k_base",      # GPT-4o+ uses o200k natively
-    "openrouter": "cl100k_base", # Mixed providers; cl100k is the safe default
-    "ollama": "cl100k_base",     # Most Ollama models are Llama-based (~10-15% off)
+    "openai": "o200k_base",  # GPT-4o+ uses o200k natively
+    "openrouter": "cl100k_base",  # Mixed providers; cl100k is the safe default
+    "ollama": "cl100k_base",  # Most Ollama models are Llama-based (~10-15% off)
 }
 
 # Overhead tokens per message (role metadata, formatting)

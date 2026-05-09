@@ -165,7 +165,7 @@ def build_llm_call_chain(
         async for event in chat.stream(messages, config, tool_definitions):
             yield event
 
-    call_next: "LLMCallNext" = base_call
+    call_next: LLMCallNext = base_call
     for middleware in reversed(middlewares):
         previous = call_next
 

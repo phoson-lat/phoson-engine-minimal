@@ -11,7 +11,7 @@ configure the client and provide a cost callback.
 import json
 import base64
 import warnings
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, NotRequired
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
@@ -273,8 +273,8 @@ def _parse_tool_args(raw: str) -> dict[str, Any]:
         return {"command": parsed}
 
     warnings.warn(
-        f"Unexpected tool args type {type(parsed).__name__!r} from OpenAI-compatible stream; "
-        f"stored as _raw.",
+        f"Unexpected tool args type {type(parsed).__name__!r}"
+        f" from OpenAI-compatible stream; stored as _raw.",
         UserWarning,
         stacklevel=2,
     )

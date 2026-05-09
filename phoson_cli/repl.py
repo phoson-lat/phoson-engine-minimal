@@ -5,8 +5,6 @@ from typing import Any
 from pathlib import Path
 from collections.abc import Iterable
 
-_LOGGER = logging.getLogger("phoson_cli.repl")
-
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
@@ -14,10 +12,9 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
 from phoson_agent import (
+    Plugin,
     AgentEngine,
     AgentDoneEvent,
-    AgentErrorEvent,
-    Plugin,
 )
 from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
@@ -26,12 +23,13 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
 from ._views import print_banner, render_tree_ascii
-from ._session import SessionMetrics, SessionState
 from .config import PhosonConfig, build_chat
+from ._session import SessionState, SessionMetrics
 from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer
 from .attachments import AttachmentManager
 
+_LOGGER = logging.getLogger("phoson_cli.repl")
 
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
@@ -74,7 +72,9 @@ _SYSTEM_PROMPT_TEMPLATE = (
 class _SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
 
-    def get_completions(self, document: Document, complete_event: object) -> Iterable[Completion]:
+    def get_completions(
+        self, document: Document, complete_event: object
+    ) -> Iterable[Completion]:
         text = document.text_before_cursor
         if not text.startswith("/"):
             return
@@ -201,7 +201,9 @@ class PhosonRepl:
                 }
             ]
         except Exception as exc:
-            warnings.warn(f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2)
+            warnings.warn(
+                f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
+            )
             return []
 
     def _rebuild_engine(self) -> None:
@@ -304,9 +306,7 @@ class PhosonRepl:
         if self.attachments:
             pending_blocks = list(self.attachments.flush())
             for block in pending_blocks:
-                self.renderer.print_info(
-                    f"  📎 {block.source.split('file://', 1)[-1]}"
-                )
+                self.renderer.print_info(f"  📎 {block.source.split('file://', 1)[-1]}")
 
         if user_input:
             pending_blocks.insert(0, _text_block(user_input))
@@ -316,9 +316,7 @@ class PhosonRepl:
         )
         return Message(role="user", content=content)
 
-    def _append_user_turn(
-        self, message: Message
-    ) -> tuple[str, list[Message]]:
+    def _append_user_turn(self, message: Message) -> tuple[str, list[Message]]:
         """Append user message to the tree.
 
         Returns:
@@ -359,9 +357,7 @@ class PhosonRepl:
             raise RuntimeError("Agent stream ended without emitting AgentDoneEvent")
         return done_event
 
-    def _finalize_run(
-        self, done_event: AgentDoneEvent, base_count: int
-    ) -> None:
+    def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
         """Append new messages to tree, update metrics, save session."""
         new_messages = done_event.result.history[base_count:]
         if new_messages:
@@ -461,7 +457,10 @@ class PhosonRepl:
                 path = self.tree.get_path(self.current_node_id)
                 self.renderer.print_history(path, tail=6)
             except (ValueError, AttributeError, TypeError):
-                _LOGGER.debug("Could not replay session history — node may be corrupted", exc_info=True)
+                _LOGGER.debug(
+                    "Could not replay session history — node may be corrupted",
+                    exc_info=True,
+                )
 
             return True
         except FileNotFoundError:

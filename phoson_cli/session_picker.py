@@ -1,7 +1,7 @@
 """Interactive session picker with pagination."""
 
-from dataclasses import dataclass
 from typing import TypedDict
+from dataclasses import dataclass
 
 from phoson_agent.sessions.models import SessionMeta
 

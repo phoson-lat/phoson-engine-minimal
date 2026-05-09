@@ -206,8 +206,7 @@ class ToolRunner:
 
             if not isinstance(tool_result, (str, dict)):
                 raise TypeError(
-                    "Tool handler must return str, dict, "
-                    "or awaitable of those types."
+                    "Tool handler must return str, dict, or awaitable of those types."
                 )
 
             return to_result_text(tool_result), None, False

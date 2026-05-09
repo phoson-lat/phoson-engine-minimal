@@ -1,13 +1,14 @@
 """Provider picker — interactive selector for the active LLM provider."""
 
-from dataclasses import dataclass
 from typing import TypedDict
+from dataclasses import dataclass
 
 from .pickers import BasePicker, picker_style
 
 
 class _ProviderState(TypedDict):
     selected: int
+
 
 _PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
@@ -73,7 +74,9 @@ async def pick_provider(
     }
 
     picker: BasePicker[ProviderPickerResult] = BasePicker(
-        render=lambda: _render_providers(providers, current_provider, state["selected"]),
+        render=lambda: _render_providers(
+            providers, current_provider, state["selected"]
+        ),
         style=picker_style(),
     )
 
@@ -81,7 +84,9 @@ async def pick_provider(
         get_len=lambda: len(providers),
         get_sel=lambda: state["selected"],
         set_sel=lambda i: state.update(selected=i),
-        on_enter=lambda: picker.done(ProviderPickerResult(provider=providers[state["selected"]])),
+        on_enter=lambda: picker.done(
+            ProviderPickerResult(provider=providers[state["selected"]])
+        ),
         on_cancel=lambda: picker.done(ProviderPickerResult(cancelled=True)),
     )
 

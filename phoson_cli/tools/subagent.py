@@ -7,16 +7,16 @@ registry, default model and iteration budget) and emit results as
 plain strings so the parent agent can consume them as tool results.
 """
 
-import copy
 import os
+import copy
 import asyncio
 import logging
 from typing import Any
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
-from phoson_agent.models import AgentTool
 from phoson_llm.schemas import Message, ModelConfig
+from phoson_agent.models import AgentTool
 from phoson_llm.chats.base import BaseLLMChat
 
 from .subagent_panel import format_agent_block, format_metrics_line

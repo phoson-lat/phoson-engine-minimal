@@ -64,9 +64,7 @@ async def _run_bash(
         return f"Failed to spawn shell: {exc}"
 
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
         try:
             proc.kill()

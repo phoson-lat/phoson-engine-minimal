@@ -21,9 +21,9 @@ from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
 from .config import save_config, enabled_providers_from_config
-from ._mcp_commands import _MCPSubcommands
 from .installer import run_install_wizard
 from .model_picker import pick_model
+from ._mcp_commands import _MCPSubcommands
 from .model_selector import list_available_models
 from .provider_picker import pick_provider
 
@@ -406,9 +406,7 @@ class CommandHandler:
             return True
         session_id = cmd.args.strip()
         if session_id == self.repl.tree.session_id:
-            r.print_error(
-                "Cannot delete the current active session. Use /new first."
-            )
+            r.print_error("Cannot delete the current active session. Use /new first.")
             return True
         try:
             await self.repl.storage.delete(session_id)
@@ -446,4 +444,3 @@ class CommandHandler:
 
     async def _cmd_mcp(self, cmd: Command) -> bool:
         return await _MCPSubcommands(self).dispatch(cmd)
-

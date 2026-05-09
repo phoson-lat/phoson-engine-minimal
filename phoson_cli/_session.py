@@ -5,8 +5,7 @@ prompt_toolkit dependencies, so they live here rather than in the
 larger ``repl`` module.
 """
 
-from __future__ import annotations
-
+from typing import Self
 from dataclasses import field, dataclass
 
 from phoson_agent import RunStep
@@ -116,7 +115,7 @@ class SessionState:
     current_node_id: str | None = None
 
     @classmethod
-    def new(cls) -> SessionState:
+    def new(cls) -> Self:
         """Create a fresh session with a new tree and zeroed metrics."""
         return cls(tree=ConversationTree.new(), metrics=SessionMetrics())
 

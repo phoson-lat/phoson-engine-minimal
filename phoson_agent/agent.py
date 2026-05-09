@@ -26,7 +26,6 @@ from collections.abc import AsyncIterator
 from phoson_agent._loop import AgentLoop
 from phoson_llm.schemas import (
     Message,
-    LLMEvent,
     ModelConfig,
     ToolCallEvent,
     ToolDefinition,
@@ -49,8 +48,8 @@ from phoson_agent._internals import (
     IterationCost,
     IterationFinal,
     IterationFailed,
-    check_no_running_loop,
     build_llm_call_chain,
+    check_no_running_loop,
 )
 from phoson_agent.exceptions import (
     PhosonAgentError,
@@ -113,9 +112,7 @@ class AgentEngine:
     _running_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
-    _loaded_plugins: list[Plugin] = field(
-        default_factory=list, init=False, repr=False
-    )
+    _loaded_plugins: list[Plugin] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Load plugins and initialise the runner and loop."""

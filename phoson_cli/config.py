@@ -6,8 +6,8 @@ the LLM chat clients.
 """
 
 import os
-import warnings
 import tomllib
+import warnings
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
@@ -57,7 +57,8 @@ def _parse_int(value: str | None, default: int, *, env_var: str = "") -> int:
     except ValueError:
         source = f" (from {env_var})" if env_var else ""
         warnings.warn(
-            f"Ignoring invalid integer value {value!r}{source}; using default {default}.",
+            f"Ignoring invalid integer value {value!r}{source};"
+            f" using default {default}.",
             UserWarning,
             stacklevel=2,
         )
@@ -140,17 +141,35 @@ def load_config() -> PhosonConfig:
 
     cfg = PhosonConfig(
         model=_resolve_str("PHOSON_MODEL", "model", fd, d.model),
-        subagent_model=_resolve_optional_str("PHOSON_SUBAGENT_MODEL", "subagent_model", fd, d.subagent_model),
+        subagent_model=_resolve_optional_str(
+            "PHOSON_SUBAGENT_MODEL", "subagent_model", fd, d.subagent_model
+        ),
         provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
-        openrouter_api_key=_resolve_optional_str("OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key),
-        openai_api_key=_resolve_optional_str("OPENAI_API_KEY", "openai_api_key", fd, d.openai_api_key),
-        anthropic_api_key=_resolve_optional_str("ANTHROPIC_API_KEY", "anthropic_api_key", fd, d.anthropic_api_key),
-        ollama_base_url=_resolve_optional_str("OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url),
-        sessions_dir=Path(_resolve_str("PHOSON_SESSIONS_DIR", "sessions_dir", fd, str(d.sessions_dir))).expanduser(),
-        max_iterations=_resolve_int("PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations),
+        openrouter_api_key=_resolve_optional_str(
+            "OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key
+        ),
+        openai_api_key=_resolve_optional_str(
+            "OPENAI_API_KEY", "openai_api_key", fd, d.openai_api_key
+        ),
+        anthropic_api_key=_resolve_optional_str(
+            "ANTHROPIC_API_KEY", "anthropic_api_key", fd, d.anthropic_api_key
+        ),
+        ollama_base_url=_resolve_optional_str(
+            "OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url
+        ),
+        sessions_dir=Path(
+            _resolve_str("PHOSON_SESSIONS_DIR", "sessions_dir", fd, str(d.sessions_dir))
+        ).expanduser(),
+        max_iterations=_resolve_int(
+            "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
+        ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
-        mcp_config_file=Path(_resolve_str("PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file))).expanduser(),
+        mcp_config_file=Path(
+            _resolve_str(
+                "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
+            )
+        ).expanduser(),
     )
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg

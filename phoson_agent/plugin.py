@@ -14,7 +14,7 @@ from phoson_agent.middleware import AgentMiddleware
 class Plugin(ABC):
     """
     Base class for all phoson-agent plugins.
-    
+
     Plugins can provide:
     - Tools (functions that the agent can call)
     - Middlewares (hooks into the agent lifecycle)
@@ -55,7 +55,7 @@ class Plugin(ABC):
         """
         Configure the plugin with user-provided settings.
         Called before get_tools() and get_middlewares().
-        
+
         Args:
             config: Configuration dictionary for this plugin
         """

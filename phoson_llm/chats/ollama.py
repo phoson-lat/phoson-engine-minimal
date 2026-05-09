@@ -221,9 +221,7 @@ class OllamaChat(BaseLLMChat):
 
                                 if "id" in tc or idx not in tool_ids:
                                     tool_ids[idx] = tc.get("id", f"tool_{idx}")
-                                    tool_names[idx] = name or tool_names.get(
-                                        idx, ""
-                                    )
+                                    tool_names[idx] = name or tool_names.get(idx, "")
                                     tool_args_acc.setdefault(idx, "")
 
                                 if name and not tool_names.get(idx):
@@ -252,9 +250,7 @@ class OllamaChat(BaseLLMChat):
                             if "eval_count" in data or "prompt_eval_count" in data:
                                 final_usage = {
                                     "output": int(data.get("eval_count", 0) or 0),
-                                    "input": int(
-                                        data.get("prompt_eval_count", 0) or 0
-                                    ),
+                                    "input": int(data.get("prompt_eval_count", 0) or 0),
                                 }
 
         except httpx.ConnectError as e:
@@ -287,6 +283,7 @@ class OllamaChat(BaseLLMChat):
                     args = json.loads(raw) if raw else {}
                 except json.JSONDecodeError:
                     import warnings
+
                     warnings.warn(
                         f"Could not parse tool args JSON from Ollama stream "
                         f"(tool={tool_names.get(idx)!r}); stored as _raw.",

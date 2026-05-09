@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING
 from .config import save_config
 
 if TYPE_CHECKING:
+    from .repl import PhosonRepl
     from .commands import Command, CommandHandler
     from .renderer import Renderer
-    from .repl import PhosonRepl
 
 
 class _MCPSubcommands:

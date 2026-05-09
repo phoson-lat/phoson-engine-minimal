@@ -1,7 +1,7 @@
 """Model picker — interactive fuzzy-search selector for available models."""
 
-from dataclasses import dataclass
 from typing import TypedDict
+from dataclasses import dataclass
 
 from .pickers import BasePicker, picker_style
 from .model_selector import ModelOption
@@ -227,9 +227,7 @@ async def pick_model(
     def confirm() -> None:
         if not state["filtered"]:
             return
-        picker.done(
-            ModelPickerResult(model_id=state["filtered"][state["selected"]].id)
-        )
+        picker.done(ModelPickerResult(model_id=state["filtered"][state["selected"]].id))
 
     def backspace() -> None:
         if not state["query"]:

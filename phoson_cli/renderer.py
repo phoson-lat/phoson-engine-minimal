@@ -289,9 +289,7 @@ class Renderer:
                 self._max_steps = event.max_iterations
                 self._run_cost_usd = 0.0
                 self._on_start(event)
-                self.start_waiting(
-                    f"thinking  ·  step 0 / {event.max_iterations}"
-                )
+                self.start_waiting(f"thinking  ·  step 0 / {event.max_iterations}")
 
             case AgentTokenEvent():
                 self.stop_waiting()
@@ -365,7 +363,9 @@ class Renderer:
             label = _tool_label(event)
             spinner_text = f"⚙  {label}"
             if args_preview:
-                spinner_text += f"  ·  {args_preview[:50]}{'…' if len(args_preview) > 50 else ''}"
+                spinner_text += (
+                    f"  ·  {args_preview[:50]}{'…' if len(args_preview) > 50 else ''}"
+                )
             self.start_waiting(spinner_text)
 
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
@@ -490,18 +490,14 @@ class Renderer:
                 self.console.print(badge)
                 if isinstance(content, str) and content.strip():
                     self.console.print(Rule(style=_MUTED2))
-                    self.console.print(
-                        Markdown(content.strip(), code_theme="monokai")
-                    )
+                    self.console.print(Markdown(content.strip(), code_theme="monokai"))
                 elif not isinstance(content, str):
                     text_parts = [b.text for b in content if isinstance(b, TextBlock)]
                     tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
                     combined = "\n".join(text_parts).strip()
                     if combined:
                         self.console.print(Rule(style=_MUTED2))
-                        self.console.print(
-                            Markdown(combined, code_theme="monokai")
-                        )
+                        self.console.print(Markdown(combined, code_theme="monokai"))
                     for b in tool_uses:
                         t = Text()
                         t.append("  │ ", style=_ACCENT2)

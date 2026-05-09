@@ -242,10 +242,10 @@ _default_registry = PluginRegistry()
 def load_plugin(spec: str | dict[str, Any] | Plugin) -> Plugin:
     """
     Convenience function to load a plugin using the default registry.
-    
+
     Args:
         spec: Plugin specification (string, dict, or Plugin instance)
-        
+
     Returns:
         Loaded Plugin instance
     """
@@ -256,7 +256,7 @@ def load_plugin(spec: str | dict[str, Any] | Plugin) -> Plugin:
 def register_loader(prefix: str, loader: PluginLoader) -> None:
     """
     Register a custom plugin loader in the default registry.
-    
+
     Args:
         prefix: URL-like prefix (e.g., "github", "http")
         loader: Function that takes a plugin name and returns a Plugin instance

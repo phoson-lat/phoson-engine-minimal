@@ -17,9 +17,7 @@ from phoson_agent.sessions.models import ConversationTree
 
 # Loaded once at import time so the banner prints instantly on cold REPL start.
 _PHOS_ART = (
-    (Path(__file__).parent / "phos-ascii.txt")
-    .read_text(encoding="utf-8")
-    .rstrip("\n")
+    (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
 )
 
 

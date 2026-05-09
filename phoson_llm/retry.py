@@ -22,8 +22,8 @@ fully transparent to the rest of the engine.
 
 import random
 import asyncio
-from dataclasses import dataclass, field
-from collections.abc import AsyncIterator, Callable
+from dataclasses import field, dataclass
+from collections.abc import Callable, AsyncIterator
 
 from phoson_llm.schemas import (
     Message,

@@ -48,9 +48,9 @@ from phoson_agent._internals import (
     now_utc,
     duration_ms,
 )
+from phoson_agent.exceptions import PhosonAgentError
 from phoson_agent.middleware import LLMCallNext
 from phoson_agent._tool_runner import ToolRunner, PrepareEventFn
-from phoson_agent.exceptions import PhosonAgentError
 
 
 class AgentLoop:
@@ -165,9 +165,7 @@ class AgentLoop:
         """
         async for event in llm_call(history, config):
             if isinstance(event, TokenEvent):
-                yield await self._prepare_event(
-                    AgentTokenEvent(content=event.content)
-                )
+                yield await self._prepare_event(AgentTokenEvent(content=event.content))
             elif isinstance(event, ReasoningTokenEvent):
                 yield await self._prepare_event(
                     AgentReasoningEvent(content=event.content)

@@ -342,9 +342,11 @@ class AnthropicChat(BaseLLMChat):
                                 args = json.loads(raw) if raw else {}
                             except json.JSONDecodeError:
                                 import warnings
+
                                 warnings.warn(
-                                    f"Could not parse tool args JSON from Anthropic stream "
-                                    f"(tool={tool_names.get(idx)!r}); stored as _raw.",
+                                    "Could not parse tool args JSON from Anthropic"
+                                    f" stream (tool={tool_names.get(idx)!r});"
+                                    " stored as _raw.",
                                     UserWarning,
                                     stacklevel=2,
                                 )
