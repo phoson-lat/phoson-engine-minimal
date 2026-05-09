@@ -158,7 +158,7 @@ def test_renderer_shows_subagent_panel_on_start() -> None:
 
     output = capture.get()
     assert "spawning subagents" in output
-    assert renderer._subagent_live is not None
+    assert renderer._subagent_spinner._live is not None
     renderer.stop_subagent_waiting()
 
 
