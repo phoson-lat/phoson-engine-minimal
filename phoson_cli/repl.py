@@ -337,37 +337,119 @@ class PhosonRepl:
                     self.current_task.cancel()
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
+    # ── Agent execution ───────────────────────────────────────────────────────
+
+    def _build_user_message(self, user_input: str) -> Message:
+        """Flush pending attachments and construct the user Message."""
+        pending_blocks: list[ContentBlock] = []
+        if self.attachments:
+            pending_blocks = list(self.attachments.flush())
+            for block in pending_blocks:
+                self.renderer.print_info(
+                    f"  📎 {block.source.split('file://', 1)[-1]}"
+                )
+
+        if user_input:
+            pending_blocks.insert(0, _text_block(user_input))
+
+        content: str | list[ContentBlock] = (
+            pending_blocks if pending_blocks else user_input
+        )
+        return Message(role="user", content=content)
+
+    def _append_user_turn(
+        self, message: Message
+    ) -> tuple[str, list[Message]]:
+        """Append user message to the tree.
+
+        Returns:
+            Tuple of (new_node_id, full conversation path).
+        """
+        node = self.tree.append(
+            parent_id=self.current_node_id,
+            message=message,
+        )
+        self.current_node_id = node.id
+        path = self.tree.get_path(self.current_node_id)
+        return node.id, path
+
+    async def _consume_stream(
+        self, path: list[Message], config: ModelConfig
+    ) -> AgentDoneEvent:
+        """Run the agent stream loop via renderer.on_event().
+
+        Re-raises ``asyncio.CancelledError`` without catching — the caller
+        (``_run_agent``) handles it so that ``base_count`` stays in scope
+        for ``_save_partial``.
+        """
+        done_event: AgentDoneEvent | None = None
+
+        async def consume() -> None:
+            nonlocal done_event
+            async for event in self.engine.stream(path, config):
+                self.renderer.on_event(event)
+                if isinstance(event, AgentDoneEvent):
+                    done_event = event
+
+        self.current_task = asyncio.create_task(consume())
+        await self.current_task
+        self.current_task = None
+
+        # consume() always sets done_event before the task completes
+        assert done_event is not None
+        return done_event
+
+    def _finalize_run(
+        self, done_event: AgentDoneEvent, base_count: int
+    ) -> None:
+        """Append new messages to tree, update metrics, save session."""
+        new_messages = done_event.result.history[base_count:]
+        if new_messages:
+            created = self.tree.append_many(self.current_node_id, new_messages)
+            self.current_node_id = created[-1].id
+
+        self._context_tokens = self.summarizer.estimate_tokens(
+            done_event.result.history
+        )
+        for step in done_event.result.steps:
+            self.session_metrics.add_run_step(step)
+
+    def _save_partial(self, base_count: int) -> None:
+        """On CancelledError: save whatever the engine produced so far.
+
+        Slices the engine's partial history from ``base_count``, appends
+        new nodes to the tree (updating ``current_node_id``), and persists
+        both tree and metadata. Errors are surfaced as warnings, not raised.
+        """
+        try:
+            partial = self.engine.get_partial_history()
+            new_messages = partial[base_count:]
+            if new_messages:
+                created = self.tree.append_many(self.current_node_id, new_messages)
+                self.current_node_id = created[-1].id
+            asyncio.get_event_loop().run_until_complete(
+                asyncio.gather(
+                    self.storage.save(self.tree),
+                    self.storage.save_meta(
+                        self.tree.session_id, self.session_metrics.to_meta()
+                    ),
+                )
+            )
+        except Exception as exc:
+            self.renderer.print_warn(f"Could not save partial progress: {exc}")
+
     async def _run_agent(self, user_input: str) -> None:
         """Execute the agent with user input.
 
         Args:
             user_input: The user's message text.
         """
-        pending_blocks: list[ContentBlock] = []
-        if self.attachments:
-            pending_blocks = list(self.attachments.flush())
-            for block in pending_blocks:
-                self.renderer.print_info(f"  📎 {block.source.split('file://', 1)[-1]}")
-
-        if user_input:
-            pending_blocks.insert(0, _text_block(user_input))
-
-        if pending_blocks:
-            content: str | list[ContentBlock] = pending_blocks
-        else:
-            content = user_input
-
-        user_message = Message(role="user", content=content)
-        user_node = self.tree.append(
-            parent_id=self.current_node_id,
-            message=user_message,
-        )
-        self.current_node_id = user_node.id
+        user_message = self._build_user_message(user_input)
+        _node_id, path = self._append_user_turn(user_message)
+        base_count = len(path)
 
         self.renderer.print_user_turn(user_input)
 
-        path = self.tree.get_path(self.current_node_id)
-        base_count = len(path)
         config = ModelConfig(
             model=self.current_model,
             system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
@@ -379,53 +461,21 @@ class PhosonRepl:
         )
         self._context_tokens = self.summarizer.estimate_tokens(path)
 
-        done_event: AgentDoneEvent | None = None
-        had_error = False
-
-        async def consume() -> None:
-            nonlocal done_event, had_error
-            async for event in self.engine.stream(path, config):
-                self.renderer.on_event(event)
-                if isinstance(event, AgentDoneEvent):
-                    done_event = event
-                elif isinstance(event, AgentErrorEvent):
-                    had_error = True
-
-        self.current_task = asyncio.create_task(consume())
         try:
-            await self.current_task
+            done_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
-            partial = self.engine.get_partial_history()
-            new_messages = partial[base_count:]
-            if new_messages:
-                created = self.tree.append_many(self.current_node_id, new_messages)
-                self.current_node_id = created[-1].id
-            await self.storage.save(self.tree)
-            await self.storage.save_meta(
-                self.tree.session_id, self.session_metrics.to_meta()
-            )
             self.renderer.flush_line()
+            self._save_partial(base_count)
             self.renderer.print_warn("Partial progress saved.")
+            return
         finally:
             self.current_task = None
 
-        if done_event and not had_error:
-            new_messages = done_event.result.history[base_count:]
-            if new_messages:
-                created = self.tree.append_many(self.current_node_id, new_messages)
-                self.current_node_id = created[-1].id
-            # Update context tokens with the full history after the run
-            self._context_tokens = self.summarizer.estimate_tokens(
-                done_event.result.history
-            )
-            # Update session metrics from run steps
-            for step in done_event.result.steps:
-                self.session_metrics.add_run_step(step)
-            # Save both tree and metadata
-            await self.storage.save(self.tree)
-            await self.storage.save_meta(
-                self.tree.session_id, self.session_metrics.to_meta()
-            )
+        self._finalize_run(done_event, base_count)
+        await self.storage.save(self.tree)
+        await self.storage.save_meta(
+            self.tree.session_id, self.session_metrics.to_meta()
+        )
 
     # ── Session / model management ─────────────────────────────────────────────
 
@@ -438,24 +488,30 @@ class PhosonRepl:
         self.session_metrics.reset()
 
     async def load_session(self, session_id: str) -> bool:
-        """Load a session from storage. Returns True on success."""
+        """Load a session from storage and replay its tail. Returns True on success."""
         try:
             self.tree = await self.storage.load(session_id)
             self.current_node_id = self.find_latest_node_id()
             self.renderer.set_session(self.tree.session_id)
             self.session_metrics.reset()
-            # Try to load saved metrics
+
+            # Load saved metrics using the authoritative SessionMeta field names.
             metas = await self.storage.list_meta()
-            for m in metas:
-                if str(m.id) == session_id:
-                    if hasattr(m, "total_cost"):
-                        self.session_metrics.total_cost_usd = m.total_cost
-                    if hasattr(m, "total_tokens"):
-                        self.session_metrics.total_output_tokens = m.total_tokens
-                        self.session_metrics.total_input_tokens = 0
-                    if hasattr(m, "step_count"):
-                        self.session_metrics.step_count = m.step_count
+            for meta in metas:
+                if str(meta.id) == session_id:
+                    self.session_metrics.total_cost_usd = meta.total_cost
+                    self.session_metrics.total_output_tokens = meta.total_tokens
+                    self.session_metrics.step_count = meta.step_count
+                    self.session_metrics.last_model = meta.last_model or ""
                     break
+
+            # Replay the tail of the session so the user knows where they left off.
+            try:
+                path = self.tree.get_path(self.current_node_id)
+                self.renderer.print_history(path, tail=6)
+            except Exception:
+                pass  # corrupted node — session still loaded successfully
+
             return True
         except FileNotFoundError:
             self.renderer.print_error(f"Session {session_id[:8]} not found.")
@@ -488,21 +544,13 @@ class PhosonRepl:
         self._rebuild_engine()
 
     def label_current_node(self, text: str) -> None:
-        """Label the current node with text.
-
-        Args:
-            text: The label text to assign.
-        """
+        """Label the current node with text."""
         if self.current_node_id is None:
             return
         self.tree.label(self.current_node_id, text)
 
     def find_latest_node_id(self) -> str | None:
-        """Find the most recently created node.
-
-        Returns:
-            Node ID of the latest node, or None if tree is empty.
-        """
+        """Find the most recently created node."""
         if not self.tree.nodes:
             return None
         latest = max(self.tree.nodes.values(), key=lambda n: n.created_at)
@@ -511,11 +559,7 @@ class PhosonRepl:
     # ── Tree rendering ────────────────────────────────────────────────────────
 
     def render_tree_ascii(self) -> str:
-        """Render the conversation tree as an ASCII diagram.
-
-        Thin shim over :func:`phoson_cli._views.render_tree_ascii` kept on
-        the REPL because the ``/tree`` command calls it through ``self``.
-        """
+        """Render the conversation tree as an ASCII diagram."""
         return render_tree_ascii(self.tree, self.current_node_id)
 
     # ── Prompt ────────────────────────────────────────────────────────────────
@@ -563,7 +607,7 @@ class PhosonRepl:
     # ── Banner ────────────────────────────────────────────────────────────────
 
     def _print_banner(self) -> None:
-        """Render the welcome banner via :func:`phoson_cli._views.print_banner`."""
+        """Render the welcome banner."""
         print_banner(
             self.renderer.console,
             provider=self.config.provider,
@@ -576,7 +620,7 @@ class PhosonRepl:
 
 
 def _text_block(text: str) -> "ContentBlock":
-    """Helper para crear un TextBlock inline."""
+    """Create a TextBlock inline."""
     from phoson_llm.schemas import TextBlock
 
     return TextBlock(text=text)
