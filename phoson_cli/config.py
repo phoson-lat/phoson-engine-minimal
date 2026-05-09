@@ -83,82 +83,74 @@ def _load_file_defaults(config_path: Path) -> dict[str, Any]:
     return defaults if isinstance(defaults, dict) else {}
 
 
-def load_config() -> PhosonConfig:
-    """Load configuration from files and environment."""
-    defaults = PhosonConfig()
-    cfg_file = Path("~/.phoson/config.toml").expanduser()
-    file_defaults = _load_file_defaults(cfg_file)
+# ── Per-type resolution helpers (env → file → default) ───────────────────────
 
-    model = (
-        os.environ.get("PHOSON_MODEL") or file_defaults.get("model") or defaults.model
-    )
-    subagent_model = (
-        os.environ.get("PHOSON_SUBAGENT_MODEL")
-        or file_defaults.get("subagent_model")
-        or defaults.subagent_model
-    )
-    provider = (
-        os.environ.get("PHOSON_PROVIDER")
-        or file_defaults.get("provider")
-        or defaults.provider
-    )
-    sessions_dir_raw = (
-        os.environ.get("PHOSON_SESSIONS_DIR")
-        or file_defaults.get("sessions_dir")
-        or str(defaults.sessions_dir)
-    )
-    _max_iter_env = os.environ.get("PHOSON_MAX_ITERATIONS")
-    if _max_iter_env is not None:
-        max_iterations = _parse_int(_max_iter_env, defaults.max_iterations, env_var="PHOSON_MAX_ITERATIONS")
-    else:
-        max_iterations = int(file_defaults.get("max_iterations", defaults.max_iterations))
-    safe_mode = _parse_bool(
-        os.environ.get("PHOSON_SAFE_MODE")
-        if "PHOSON_SAFE_MODE" in os.environ
-        else (
-            str(file_defaults["safe_mode"])
-            if "safe_mode" in file_defaults
-            else str(defaults.safe_mode)
-        ),
-        defaults.safe_mode,
-    )
-    enable_mcp = _parse_bool(
-        os.environ.get("PHOSON_ENABLE_MCP")
-        if "PHOSON_ENABLE_MCP" in os.environ
-        else (
-            str(file_defaults["enable_mcp"])
-            if "enable_mcp" in file_defaults
-            else str(defaults.enable_mcp)
-        ),
-        defaults.enable_mcp,
-    )
-    mcp_config_file_raw = (
-        os.environ.get("PHOSON_MCP_CONFIG")
-        or file_defaults.get("mcp_config_file")
-        or "~/.phoson/mcps.json"
-    )
+
+def _resolve_str(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: str,
+) -> str:
+    return str(os.environ.get(env_var) or fd.get(file_key) or default)
+
+
+def _resolve_optional_str(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: str | None,
+) -> str | None:
+    value = os.environ.get(env_var) or fd.get(file_key) or default
+    return str(value) if value else None
+
+
+def _resolve_bool(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: bool,
+) -> bool:
+    if env_var in os.environ:
+        return _parse_bool(os.environ[env_var], default)
+    if file_key in fd:
+        return bool(fd[file_key])
+    return default
+
+
+def _resolve_int(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: int,
+) -> int:
+    if env_var in os.environ:
+        return _parse_int(os.environ[env_var], default, env_var=env_var)
+    return int(fd.get(file_key, default))
+
+
+def load_config() -> PhosonConfig:
+    """Load configuration from files and environment variables.
+
+    Resolution order for each setting: environment variable →
+    ``~/.phoson/config.toml`` ``[defaults]`` section → built-in default.
+    """
+    d = PhosonConfig()
+    fd = _load_file_defaults(Path("~/.phoson/config.toml").expanduser())
 
     cfg = PhosonConfig(
-        model=str(model),
-        subagent_model=str(subagent_model) if subagent_model else None,
-        provider=str(provider).lower(),
-        openrouter_api_key=(
-            os.environ.get("OPENROUTER_API_KEY")
-            or file_defaults.get("openrouter_api_key")
-        ),
-        openai_api_key=os.environ.get("OPENAI_API_KEY")
-        or file_defaults.get("openai_api_key"),
-        anthropic_api_key=(
-            os.environ.get("ANTHROPIC_API_KEY")
-            or file_defaults.get("anthropic_api_key")
-        ),
-        ollama_base_url=os.environ.get("OLLAMA_BASE_URL")
-        or file_defaults.get("ollama_base_url"),
-        sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
-        max_iterations=max_iterations,
-        safe_mode=safe_mode,
-        enable_mcp=enable_mcp,
-        mcp_config_file=Path(str(mcp_config_file_raw)).expanduser(),
+        model=_resolve_str("PHOSON_MODEL", "model", fd, d.model),
+        subagent_model=_resolve_optional_str("PHOSON_SUBAGENT_MODEL", "subagent_model", fd, d.subagent_model),
+        provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
+        openrouter_api_key=_resolve_optional_str("OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key),
+        openai_api_key=_resolve_optional_str("OPENAI_API_KEY", "openai_api_key", fd, d.openai_api_key),
+        anthropic_api_key=_resolve_optional_str("ANTHROPIC_API_KEY", "anthropic_api_key", fd, d.anthropic_api_key),
+        ollama_base_url=_resolve_optional_str("OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url),
+        sessions_dir=Path(_resolve_str("PHOSON_SESSIONS_DIR", "sessions_dir", fd, str(d.sessions_dir))).expanduser(),
+        max_iterations=_resolve_int("PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations),
+        safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
+        mcp_config_file=Path(_resolve_str("PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file))).expanduser(),
     )
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
