@@ -43,7 +43,9 @@ from phoson_agent.plugin import Plugin
 from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent.exceptions import (
+    PhosonAgentError,
     PhosonAgentRunningError,
+    PhosonMaxIterationsError,
     PhosonPluginCleanupError,
 )
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
@@ -170,16 +172,26 @@ class AgentEngine:
         """Executes the agent until completion and returns the result.
 
         Raises:
-            RuntimeError: If the agent emits an error or finishes without a
-                final AgentDoneEvent. The error code is included in the
-                message for diagnostics.
+            PhosonMaxIterationsError: If the agent exhausts its
+                ``max_iterations`` budget without producing a final answer.
+            PhosonAgentError: For any other agent-level failure surfaced as
+                an :class:`AgentErrorEvent` during the stream.
+            RuntimeError: Only if the stream ends without ever yielding a
+                terminal :class:`AgentDoneEvent` or :class:`AgentErrorEvent`,
+                which indicates a programming bug rather than an expected
+                error condition.
         """
         async for event in self.stream(messages, config):
             if isinstance(event, AgentDoneEvent):
                 return event.result
             if isinstance(event, AgentErrorEvent):
                 code = event.code or "unknown"
-                raise RuntimeError(f"Agent error ({code}): {event.message}")
+                if code == "max_iterations":
+                    raise PhosonMaxIterationsError(
+                        event.message,
+                        max_iterations=self.max_iterations,
+                    )
+                raise PhosonAgentError(f"Agent error ({code}): {event.message}")
 
         raise RuntimeError("Agent stream finished without AgentDoneEvent.")
 

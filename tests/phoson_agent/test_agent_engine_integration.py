@@ -212,10 +212,12 @@ async def test_stream_integration_emits_tool_and_done_events() -> None:
 
 @pytest.mark.asyncio
 async def test_run_raises_when_llm_emits_error() -> None:
+    from phoson_agent.exceptions import PhosonAgentError
+
     engine = AgentEngine(chat=FakeErrorChat(), tools=build_tools(), phoson_weight=1.2)
 
     with pytest.raises(
-        RuntimeError, match=r"Agent error \(timeout\): provider timeout"
+        PhosonAgentError, match=r"Agent error \(timeout\): provider timeout"
     ):
         await engine.run(
             messages=[Message(role="user", content="test")],
@@ -655,6 +657,33 @@ async def test_max_iterations_emits_error_event() -> None:
 
     error_event = next(event for event in events if isinstance(event, AgentErrorEvent))
     assert error_event.code == "max_iterations"
+
+
+@pytest.mark.asyncio
+async def test_run_raises_phoson_max_iterations_error() -> None:
+    """``engine.run()`` must surface max_iterations as a typed exception."""
+    from phoson_agent.exceptions import PhosonMaxIterationsError
+
+    class FakeLoopingChat(BaseLLMChat):
+        async def stream(self, messages, config, tools=None):
+            yield LLMStartEvent(model=config.model, message_count=len(messages))
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_loop_1",
+                tool_name="get_weather",
+                args={"city": "Qro"},
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+
+    engine = AgentEngine(chat=FakeLoopingChat(), tools=build_tools(), max_iterations=3)
+
+    with pytest.raises(PhosonMaxIterationsError) as exc_info:
+        await engine.run(
+            messages=[Message(role="user", content="loop")],
+            config=ModelConfig(model="fake", max_tokens=32),
+        )
+
+    assert exc_info.value.max_iterations == 3
 
 
 @pytest.mark.asyncio
