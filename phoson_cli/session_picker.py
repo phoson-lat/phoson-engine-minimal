@@ -1,10 +1,16 @@
 """Interactive session picker with pagination."""
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 from phoson_agent.sessions.models import SessionMeta
 
 from .pickers import BasePicker, picker_style
+
+
+class _SessionState(TypedDict):
+    selected: int
+    page: int
 
 
 @dataclass
@@ -88,66 +94,33 @@ async def pick_session(
     if not sessions:
         return SessionPickerResult(cancelled=True)
 
-    state = {"selected": 0, "page": 0}
-    total_pages = max(1, (len(sessions) + page_size - 1) // page_size)
-
-    def render() -> list[tuple[str, str]]:
-        return _render_sessions(
-            sessions, current_id, state["selected"], state["page"], page_size
-        )
+    state: _SessionState = {"selected": 0, "page": 0}
 
     picker: BasePicker[SessionPickerResult] = BasePicker(
-        render=render,
+        render=lambda: _render_sessions(
+            sessions, current_id, state["selected"], state["page"], page_size
+        ),
         style=picker_style(),
     )
 
-    def _sync_page_to_selection() -> None:
-        state["page"] = state["selected"] // page_size
-
-    def go_up() -> None:
-        if state["selected"] > 0:
-            state["selected"] -= 1
-            _sync_page_to_selection()
-            picker.refresh()
-
-    def go_down() -> None:
-        if state["selected"] < len(sessions) - 1:
-            state["selected"] += 1
-            _sync_page_to_selection()
-            picker.refresh()
-
-    def page_up() -> None:
-        if state["page"] > 0:
-            state["page"] -= 1
-            state["selected"] = state["page"] * page_size
-            picker.refresh()
-
-    def page_down() -> None:
-        if state["page"] < total_pages - 1:
-            state["page"] += 1
-            state["selected"] = min(
-                state["page"] * page_size, len(sessions) - 1
-            )
-            picker.refresh()
-
-    def confirm() -> None:
-        picker.done(
+    picker.bind_paged_nav(
+        get_len=lambda: len(sessions),
+        get_sel=lambda: state["selected"],
+        set_sel=lambda i: state.update(selected=i),
+        get_page=lambda: state["page"],
+        set_page=lambda p: state.update(page=p),
+        page_size=page_size,
+        on_enter=lambda: picker.done(
             SessionPickerResult(session_id=sessions[state["selected"]].id)
-        )
-
-    def cancel() -> None:
-        picker.done(SessionPickerResult(cancelled=True))
-
-    def delete_selected() -> None:
-        sid = sessions[state["selected"]].id
-        picker.done(SessionPickerResult(session_id=sid, delete=True))
-
-    picker.bind_default_nav(
-        on_up=go_up, on_down=go_down, on_enter=confirm, on_cancel=cancel
+        ),
+        on_cancel=lambda: picker.done(SessionPickerResult(cancelled=True)),
     )
-    picker.bind("pageup", page_up)
-    picker.bind("pagedown", page_down)
-    picker.bind("q", cancel)
-    picker.bind("d", delete_selected)
+    picker.bind("q", lambda: picker.done(SessionPickerResult(cancelled=True)))
+    picker.bind(
+        "d",
+        lambda: picker.done(
+            SessionPickerResult(session_id=sessions[state["selected"]].id, delete=True)
+        ),
+    )
 
     return await picker.run()

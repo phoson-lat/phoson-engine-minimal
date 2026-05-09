@@ -219,50 +219,10 @@ async def pick_model(
         filtered = _filter_models(models, state["query"])
         state["filtered"] = filtered
         if not filtered:
-            state["selected"] = 0
-            state["page"] = 0
+            state.update(selected=0, page=0)
             return
-        state["selected"] = next(
-            (i for i, m in enumerate(filtered) if m.id == current_model), 0
-        )
-        state["page"] = state["selected"] // page_size
-
-    def go_up() -> None:
-        if state["selected"] > 0:
-            state["selected"] -= 1
-            state["page"] = state["selected"] // page_size
-            picker.refresh()
-
-    def go_down() -> None:
-        if state["selected"] < len(state["filtered"]) - 1:
-            state["selected"] += 1
-            state["page"] = state["selected"] // page_size
-            picker.refresh()
-
-    def page_up() -> None:
-        if state["page"] > 0:
-            state["page"] -= 1
-            state["selected"] = state["page"] * page_size
-            picker.refresh()
-
-    def page_down() -> None:
-        total_pages = max(
-            1, (len(state["filtered"]) + page_size - 1) // page_size
-        )
-        if state["page"] < total_pages - 1:
-            state["page"] += 1
-            state["selected"] = min(
-                state["page"] * page_size,
-                len(state["filtered"]) - 1,
-            )
-            picker.refresh()
-
-    def backspace() -> None:
-        if not state["query"]:
-            return
-        state["query"] = state["query"][:-1]
-        _refresh_selection()
-        picker.refresh()
+        sel = next((i for i, m in enumerate(filtered) if m.id == current_model), 0)
+        state.update(selected=sel, page=sel // page_size)
 
     def confirm() -> None:
         if not state["filtered"]:
@@ -271,19 +231,28 @@ async def pick_model(
             ModelPickerResult(model_id=state["filtered"][state["selected"]].id)
         )
 
-    def cancel() -> None:
-        picker.done(ModelPickerResult(cancelled=True))
+    def backspace() -> None:
+        if not state["query"]:
+            return
+        state["query"] = state["query"][:-1]
+        _refresh_selection()
+        picker.refresh()
 
     def on_type(data: str) -> None:
         state["query"] += data
         _refresh_selection()
         picker.refresh()
 
-    picker.bind_default_nav(
-        on_up=go_up, on_down=go_down, on_enter=confirm, on_cancel=cancel
+    picker.bind_paged_nav(
+        get_len=lambda: len(state["filtered"]),
+        get_sel=lambda: state["selected"],
+        set_sel=lambda i: state.update(selected=i),
+        get_page=lambda: state["page"],
+        set_page=lambda p: state.update(page=p),
+        page_size=page_size,
+        on_enter=confirm,
+        on_cancel=lambda: picker.done(ModelPickerResult(cancelled=True)),
     )
-    picker.bind("pageup", page_up)
-    picker.bind("pagedown", page_down)
     picker.bind("backspace", backspace)
     picker.bind_typing(on_type)
 

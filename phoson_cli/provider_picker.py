@@ -1,8 +1,13 @@
 """Provider picker — interactive selector for the active LLM provider."""
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 from .pickers import BasePicker, picker_style
+
+
+class _ProviderState(TypedDict):
+    selected: int
 
 _PROVIDER_LABELS = {
     "openrouter": "OpenRouter",
@@ -61,39 +66,23 @@ async def pick_provider(
     if not providers:
         return ProviderPickerResult(cancelled=True)
 
-    state = {
+    state: _ProviderState = {
         "selected": next(
-            (i for i, p in enumerate(providers) if p == current_provider),
-            0,
+            (i for i, p in enumerate(providers) if p == current_provider), 0
         )
     }
 
-    def render() -> list[tuple[str, str]]:
-        return _render_providers(providers, current_provider, state["selected"])
-
     picker: BasePicker[ProviderPickerResult] = BasePicker(
-        render=render,
+        render=lambda: _render_providers(providers, current_provider, state["selected"]),
         style=picker_style(),
     )
 
-    def go_up() -> None:
-        if state["selected"] > 0:
-            state["selected"] -= 1
-            picker.refresh()
-
-    def go_down() -> None:
-        if state["selected"] < len(providers) - 1:
-            state["selected"] += 1
-            picker.refresh()
-
-    def confirm() -> None:
-        picker.done(ProviderPickerResult(provider=providers[state["selected"]]))
-
-    def cancel() -> None:
-        picker.done(ProviderPickerResult(cancelled=True))
-
-    picker.bind_default_nav(
-        on_up=go_up, on_down=go_down, on_enter=confirm, on_cancel=cancel
+    picker.bind_list_nav(
+        get_len=lambda: len(providers),
+        get_sel=lambda: state["selected"],
+        set_sel=lambda i: state.update(selected=i),
+        on_enter=lambda: picker.done(ProviderPickerResult(provider=providers[state["selected"]])),
+        on_cancel=lambda: picker.done(ProviderPickerResult(cancelled=True)),
     )
 
     return await picker.run()

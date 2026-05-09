@@ -149,6 +149,86 @@ class BasePicker[TResult]:
         self.bind("enter", on_enter)
         self.bind("escape", on_cancel)
 
+    def bind_list_nav(
+        self,
+        *,
+        get_len: Callable[[], int],
+        get_sel: Callable[[], int],
+        set_sel: Callable[[int], None],
+        on_enter: HandlerFn,
+        on_cancel: HandlerFn,
+    ) -> None:
+        """Register up/down/enter/escape for a simple linear list.
+
+        Eliminates the boilerplate go_up/go_down pair common to all pickers.
+        """
+
+        def go_up() -> None:
+            if get_sel() > 0:
+                set_sel(get_sel() - 1)
+                self.refresh()
+
+        def go_down() -> None:
+            if get_sel() < get_len() - 1:
+                set_sel(get_sel() + 1)
+                self.refresh()
+
+        self.bind_default_nav(
+            on_up=go_up, on_down=go_down, on_enter=on_enter, on_cancel=on_cancel
+        )
+
+    def bind_paged_nav(
+        self,
+        *,
+        get_len: Callable[[], int],
+        get_sel: Callable[[], int],
+        set_sel: Callable[[int], None],
+        get_page: Callable[[], int],
+        set_page: Callable[[int], None],
+        page_size: int,
+        on_enter: HandlerFn,
+        on_cancel: HandlerFn,
+        bind_page_keys: bool = True,
+    ) -> None:
+        """Register up/down/pageup/pagedown/enter/escape for a paged list.
+
+        Eliminates the four-function navigation block duplicated across pickers
+        that support pagination. Set ``bind_page_keys=False`` to skip the
+        ``pageup``/``pagedown`` bindings (e.g. when registering them manually).
+        """
+
+        def go_up() -> None:
+            if get_sel() > 0:
+                set_sel(get_sel() - 1)
+                set_page(get_sel() // page_size)
+                self.refresh()
+
+        def go_down() -> None:
+            if get_sel() < get_len() - 1:
+                set_sel(get_sel() + 1)
+                set_page(get_sel() // page_size)
+                self.refresh()
+
+        def page_up() -> None:
+            if get_page() > 0:
+                set_page(get_page() - 1)
+                set_sel(get_page() * page_size)
+                self.refresh()
+
+        def page_down() -> None:
+            total = max(1, (get_len() + page_size - 1) // page_size)
+            if get_page() < total - 1:
+                set_page(get_page() + 1)
+                set_sel(min(get_page() * page_size, get_len() - 1))
+                self.refresh()
+
+        self.bind_default_nav(
+            on_up=go_up, on_down=go_down, on_enter=on_enter, on_cancel=on_cancel
+        )
+        if bind_page_keys:
+            self.bind("pageup", page_up)
+            self.bind("pagedown", page_down)
+
     # ── Run ─────────────────────────────────────────────────────────────
 
     async def run(self) -> TResult:
