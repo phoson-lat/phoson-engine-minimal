@@ -22,8 +22,8 @@ fully transparent to the rest of the engine.
 
 import random
 import asyncio
-from dataclasses import dataclass
-from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Callable
 
 from phoson_llm.schemas import (
     Message,
@@ -61,6 +61,16 @@ class RetryPolicy:
         jitter: Fraction of the delay added as uniform random noise to
             avoid thundering-herd retries when many clients fail at once.
             ``0.25`` means up to ±25% of the base delay.
+        on_retry: Optional callback invoked before each retry sleep.
+            Receives ``(attempt, error)`` where ``attempt`` is 1-indexed
+            (1 = first retry) and ``error`` is the :class:`ErrorEvent` that
+            triggered it. Use this for observability without coupling to a
+            logging framework::
+
+                def log_retry(attempt: int, error: ErrorEvent) -> None:
+                    print(f"retry {attempt}: {error.message}")
+
+                policy = RetryPolicy(on_retry=log_retry)
     """
 
     max_attempts: int = 3
@@ -68,6 +78,9 @@ class RetryPolicy:
     max_delay: float = 30.0
     multiplier: float = 2.0
     jitter: float = 0.25
+    on_retry: Callable[[int, "ErrorEvent"], None] | None = field(
+        default=None, compare=False, hash=False
+    )
 
     def compute_delay(self, attempt: int) -> float:
         """Return the delay (seconds) before attempt ``attempt`` (1-indexed).
@@ -156,6 +169,9 @@ class RetryingChat(BaseLLMChat):
             if attempt >= self._policy.max_attempts:
                 break
 
+            if self._policy.on_retry is not None and last_error is not None:
+                self._policy.on_retry(attempt, last_error)
+
             # Skip the LLMStartEvent that the inner stream already emitted
             # for the failed attempt by waiting for the new stream to emit
             # its own. ``LLMStartEvent`` is informational so duplicate
@@ -174,6 +190,7 @@ def with_retry(
     max_delay: float = 30.0,
     multiplier: float = 2.0,
     jitter: float = 0.25,
+    on_retry: Callable[[int, ErrorEvent], None] | None = None,
 ) -> RetryingChat:
     """Wrap ``chat`` in a :class:`RetryingChat` with a one-shot policy.
 
@@ -182,7 +199,12 @@ def with_retry(
 
     Example:
 
-        chat = with_retry(OpenRouterChat(), max_attempts=5, initial_delay=0.5)
+        chat = with_retry(
+            OpenRouterChat(),
+            max_attempts=5,
+            initial_delay=0.5,
+            on_retry=lambda n, e: print(f"retry {n}: {e.message}"),
+        )
     """
     return RetryingChat(
         chat,
@@ -192,5 +214,6 @@ def with_retry(
             max_delay=max_delay,
             multiplier=multiplier,
             jitter=jitter,
+            on_retry=on_retry,
         ),
     )

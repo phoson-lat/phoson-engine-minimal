@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass
 
 # Prices are stored per million tokens for readability; we divide by this
@@ -66,6 +67,18 @@ _ALIASES: dict[str, str] = {
 }
 
 
+class UnknownModelWarning(UserWarning):
+    """Emitted when :func:`calculate_cost` encounters a model not in the price table.
+
+    Silence this for providers where unknown costs are expected (e.g. Ollama,
+    custom OpenRouter routes)::
+
+        import warnings
+        from phoson_llm.pricing import UnknownModelWarning
+        warnings.filterwarnings("ignore", category=UnknownModelWarning)
+    """
+
+
 def _resolve(model: str, provider: str | None = None) -> PriceEntry | None:
     """Resolves the model to the corresponding PriceEntry, with support for aliases."""
     key = _ALIASES.get(model, model)
@@ -108,6 +121,13 @@ def calculate_cost(
     entry = _resolve(model, provider=provider)
 
     if entry is None:
+        warnings.warn(
+            f"No price entry for model {model!r}; cost will be reported as 0. "
+            "Add it to phoson_llm.pricing.PRICES or suppress with "
+            "warnings.filterwarnings('ignore', category=UnknownModelWarning).",
+            UnknownModelWarning,
+            stacklevel=2,
+        )
         return 0.0, False
 
     cost = (

@@ -394,6 +394,7 @@ async def test_openrouter_adapter_integration_tool_loop(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("ignore::phoson_llm.pricing.UnknownModelWarning")
 async def test_anthropic_adapter_integration_tool_loop(monkeypatch) -> None:
     class _Delta:
         def __init__(self, delta_type, text=None, thinking=None, partial_json=None):
