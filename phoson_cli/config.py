@@ -11,6 +11,10 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
+
+
+class PhosonConfigError(Exception):
+    """Raised when the Phoson configuration file is malformed or invalid."""
 from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
@@ -53,11 +57,20 @@ def _parse_int(value: str | None, default: int) -> int:
 
 
 def _load_file_defaults(config_path: Path) -> dict:
-    """Load defaults from the config TOML file."""
+    """Load defaults from the config TOML file.
+
+    Raises:
+        PhosonConfigError: If the file exists but contains invalid TOML.
+    """
     if not config_path.exists():
         return {}
-    with config_path.open("rb") as f:
-        raw = tomllib.load(f)
+    try:
+        with config_path.open("rb") as f:
+            raw = tomllib.load(f)
+    except tomllib.TOMLDecodeError as exc:
+        raise PhosonConfigError(
+            f"Malformed configuration file {config_path}: {exc}"
+        ) from exc
     defaults = raw.get("defaults", {})
     return defaults if isinstance(defaults, dict) else {}
 
@@ -176,11 +189,8 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(config.sessions_dir)),
         _line("max_iterations", config.max_iterations),
         _line("safe_mode", config.safe_mode),
-        _line("enable_mcp", getattr(config, "enable_mcp", False)),
-        _line(
-            "mcp_config_file",
-            str(getattr(config, "mcp_config_file", PhosonConfig().mcp_config_file)),
-        ),
+        _line("enable_mcp", config.enable_mcp),
+        _line("mcp_config_file", str(config.mcp_config_file)),
     ]:
         if line:
             lines.append(line)

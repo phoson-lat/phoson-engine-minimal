@@ -32,6 +32,8 @@ class DummyRepl:
             sessions_dir="~/.phoson/sessions",
             max_iterations=50,
             safe_mode=False,
+            enable_mcp=False,
+            mcp_config_file="~/.phoson/mcps.json",
         )
         self.renderer = DummyRenderer()
         self.set_model_calls: list[str] = []

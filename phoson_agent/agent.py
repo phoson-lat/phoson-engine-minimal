@@ -28,6 +28,7 @@ from phoson_llm.schemas import (
     Message,
     LLMEvent,
     ModelConfig,
+    ToolCallEvent,
     ToolDefinition,
 )
 from phoson_agent.models import (
@@ -48,6 +49,7 @@ from phoson_agent._internals import (
     IterationCost,
     IterationFinal,
     IterationFailed,
+    check_no_running_loop,
 )
 from phoson_agent.exceptions import (
     PhosonAgentError,
@@ -216,16 +218,7 @@ class AgentEngine:
             RuntimeError: If called from within a running event loop, or if
                 the agent fails to produce a final result.
         """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            raise RuntimeError(
-                "run_sync() cannot be called from within a running event loop. "
-                "Use run() instead."
-            )
-
+        check_no_running_loop("run_sync")
         return asyncio.run(self.run(messages, config))
 
     def cleanup(self) -> None:
@@ -253,7 +246,12 @@ class AgentEngine:
     def __enter__(self) -> "AgentEngine":
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
         """Suppress :class:`PhosonPluginCleanupError` to honour the contextmanager
         protocol. Use :meth:`cleanup` explicitly if you need to handle failures.
         """
@@ -324,9 +322,9 @@ class AgentEngine:
 
     async def _apply_before_tool(
         self,
-        call: "Any",  # ToolCallEvent — kept loose to avoid import noise
-    ) -> Any:
-        current = call
+        call: ToolCallEvent,
+    ) -> ToolCallEvent | None:
+        current: ToolCallEvent | None = call
         for middleware in self.middlewares:
             if current is None:
                 return None
@@ -335,7 +333,7 @@ class AgentEngine:
 
     async def _apply_after_tool(
         self,
-        call: Any,  # ToolCallEvent
+        call: ToolCallEvent,
         result: str,
         error: bool,
     ) -> str:

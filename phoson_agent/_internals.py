@@ -7,6 +7,7 @@ the orchestration story.
 """
 
 import json
+import asyncio
 import datetime
 from typing import Any
 from dataclasses import field, dataclass
@@ -18,6 +19,28 @@ from phoson_llm.schemas import (
     ToolCallEvent,
 )
 from phoson_agent.models import AgentEvent, AgentErrorEvent
+
+# ─── Event-loop guard ────────────────────────────────────────────────────────
+
+
+def check_no_running_loop(method_name: str) -> None:
+    """Raise :exc:`RuntimeError` if called from inside a running event loop.
+
+    Args:
+        method_name: The sync method name to include in the error message.
+
+    Raises:
+        RuntimeError: If a running event loop is detected.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop running — safe to proceed
+    raise RuntimeError(
+        f"{method_name}() cannot be called from within a running event loop. "
+        f"Use the async version instead."
+    )
+
 
 # ─── Time / formatting helpers ───────────────────────────────────────────────
 
