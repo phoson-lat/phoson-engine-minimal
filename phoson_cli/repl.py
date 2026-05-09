@@ -20,6 +20,7 @@ from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
+from ._views import print_banner, render_tree_ascii
 from .config import PhosonConfig, build_chat
 from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer
@@ -169,10 +170,8 @@ class _SlashCompleter(Completer):
                 )
 
 
-# Load the phos ASCII art from the package file at import time
-_PHOS_ART = (
-    (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
-)
+# Banner ASCII art and tree-rendering live in ``_views`` so they can be
+# imported, replaced or tested without instantiating the REPL.
 
 
 class PhosonRepl:
@@ -514,46 +513,10 @@ class PhosonRepl:
     def render_tree_ascii(self) -> str:
         """Render the conversation tree as an ASCII diagram.
 
-        Returns:
-            String representation of the tree, or "(empty session)" if empty.
+        Thin shim over :func:`phoson_cli._views.render_tree_ascii` kept on
+        the REPL because the ``/tree`` command calls it through ``self``.
         """
-        if not self.tree.nodes:
-            return "(empty session)"
-
-        children: dict[str | None, list[str]] = {}
-        for node in self.tree.nodes.values():
-            children.setdefault(node.parent_id, []).append(node.id)
-            children.setdefault(node.id, [])
-        for child_ids in children.values():
-            child_ids.sort(key=lambda nid: self.tree.nodes[nid].created_at)
-
-        def render_node(node_id: str, prefix: str, is_last: bool) -> list[str]:
-            node = self.tree.nodes[node_id]
-            marker = "○" if node_id == self.current_node_id else "●"
-            preview = _message_preview(node.message.content)
-            tail = "  ← current" if node_id == self.current_node_id else ""
-            branch = "└─ " if is_last else "├─ "
-            lines = [f"{prefix}{branch}{marker} {node.id}  {preview}{tail}"]
-            next_prefix = prefix + ("   " if is_last else "│  ")
-            kids = children.get(node_id, [])
-            for i, child_id in enumerate(kids):
-                lines.extend(render_node(child_id, next_prefix, i == len(kids) - 1))
-            return lines
-
-        roots = children.get(None, [])
-        lines: list[str] = []
-        for i, root_id in enumerate(roots):
-            root = self.tree.nodes[root_id]
-            marker = "○" if root_id == self.current_node_id else "●"
-            preview = _message_preview(root.message.content)
-            tail = "  ← current" if root_id == self.current_node_id else ""
-            lines.append(f"{marker} {root.id}  {preview}{tail}")
-            kids = children.get(root_id, [])
-            for j, child_id in enumerate(kids):
-                lines.extend(render_node(child_id, "", j == len(kids) - 1))
-            if i < len(roots) - 1:
-                lines.append("")
-        return "\n".join(lines)
+        return render_tree_ascii(self.tree, self.current_node_id)
 
     # ── Prompt ────────────────────────────────────────────────────────────────
 
@@ -600,57 +563,16 @@ class PhosonRepl:
     # ── Banner ────────────────────────────────────────────────────────────────
 
     def _print_banner(self) -> None:
-        from rich.rule import Rule
-        from rich.text import Text
-        from rich.columns import Columns
-
-        c = self.renderer.console
-        c.print()
-
-        # Build art column (purple)
-        art = Text(_PHOS_ART, style="medium_purple1 bold")
-
-        # Build wordmark column — lines aligned to logo height
-        art_lines = _PHOS_ART.splitlines()
-        mid = len(art_lines) // 2
-        word_lines: list[str] = [""] * len(art_lines)
-        word_lines[mid - 1] = "phoson"
-        word_lines[mid] = "terminal agent"
-        wordmark = Text("\n".join(word_lines))
-        wordmark.highlight_words(["phoson"], style="bold medium_purple1")
-        wordmark.highlight_words(["terminal agent"], style="grey50")
-
-        c.print(Columns([art, wordmark], padding=(0, 4)))
-        c.print()
-
-        short_model = self.current_model.split("/")[-1]
-        c.print(
-            Text(
-                f"  provider {self.config.provider}  ·  model {short_model}"
-                f"  ·  session {self.tree.session_id[:8]}",
-                style="grey50",
-            )
+        """Render the welcome banner via :func:`phoson_cli._views.print_banner`."""
+        print_banner(
+            self.renderer.console,
+            provider=self.config.provider,
+            model=self.current_model,
+            session_id=self.tree.session_id,
         )
-        c.print(Rule(style="plum4"))
-        c.print(
-            Text(
-                "  /help for commands  ·  /sessions to resume work"
-                "  ·  /attach to add images  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
-                style="grey42",
-            )
-        )
-        c.print()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _message_preview(content: object, max_len: int = 56) -> str:
-    text = content if isinstance(content, str) else str(content)
-    text = " ".join(text.split())
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
 
 
 def _text_block(text: str) -> "ContentBlock":
