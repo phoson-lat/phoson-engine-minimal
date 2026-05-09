@@ -466,7 +466,7 @@ class _MCPSubcommands:
 
     @property
     def r(self) -> Any:
-        return self._parent._r
+        return self.repl.renderer
 
     async def dispatch(self, cmd: Command) -> bool:
         args = cmd.args.strip()

@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from pathlib import Path
 from dataclasses import field, dataclass
+
+_LOGGER = logging.getLogger("phoson_cli.repl")
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -510,6 +513,7 @@ class PhosonRepl:
             self.renderer.print_error(f"Session {session_id[:8]} not found.")
             return False
         except Exception as e:
+            _LOGGER.exception("Failed to load session %s", session_id[:8])
             self.renderer.print_error(f"Failed to load session: {e}")
             return False
 

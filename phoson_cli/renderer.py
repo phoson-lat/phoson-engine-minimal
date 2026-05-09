@@ -9,6 +9,11 @@ isolated in :class:`WaitingSpinner` and :class:`SubagentSpinner` so that
 import json
 import threading
 from time import sleep
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from phoson_llm.schemas import Message
+    from phoson_agent.sessions.models import SessionMeta
 
 from rich import box
 from rich.live import Live
@@ -435,7 +440,7 @@ class Renderer:
         """Print an error message."""
         self.console.print(Text(f"  ✗ {message}", style=_TOOL_ERR))
 
-    def print_history(self, messages: list, tail: int | None = None) -> None:
+    def print_history(self, messages: "list[Message]", tail: int | None = None) -> None:
         """Re-render a list of Message objects as a conversation replay.
 
         Args:
@@ -499,7 +504,7 @@ class Renderer:
 
         self.console.print(Rule(style=_MUTED2))
 
-    def print_sessions_table(self, sessions: list) -> None:
+    def print_sessions_table(self, sessions: "list[SessionMeta]") -> None:
         """Print a table of sessions."""
         table = Table(
             show_header=True,
