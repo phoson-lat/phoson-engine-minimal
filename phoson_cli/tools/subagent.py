@@ -7,6 +7,7 @@ registry, default model and iteration budget) and emit results as
 plain strings so the parent agent can consume them as tool results.
 """
 
+import copy
 import os
 import asyncio
 import logging
@@ -49,14 +50,10 @@ def _clone_chat(chat: BaseLLMChat) -> BaseLLMChat:
     """Return a shallow copy of ``chat`` so concurrent runs do not share state.
 
     Most ``BaseLLMChat`` implementations hold an HTTP client and a few
-    config fields. Cloning the dict preserves those without invoking the
-    original constructor (which would re-read env vars and might crash if
-    the user had injected a key directly).
+    config fields. ``copy.copy`` preserves those without bypassing
+    ``__init__`` or any dataclass post-init logic.
     """
-    cls = type(chat)
-    clone = cls.__new__(cls)
-    clone.__dict__ = dict(chat.__dict__)
-    return clone
+    return copy.copy(chat)
 
 
 def _aggregate_tokens(steps: list) -> tuple[int, int]:
