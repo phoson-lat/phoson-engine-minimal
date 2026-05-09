@@ -49,6 +49,11 @@ from phoson_llm.schemas import (
     ReasoningStartEvent,
     ReasoningTokenEvent,
 )
+from phoson_llm.exceptions import (
+    PhosonLLMError,
+    PhosonProviderError,
+    PhosonLLMProtocolError,
+)
 
 __all__ = [
     # chats
@@ -85,4 +90,8 @@ __all__ = [
     # pricing
     "calculate_cost",
     "PriceEntry",
+    # exceptions
+    "PhosonLLMError",
+    "PhosonLLMProtocolError",
+    "PhosonProviderError",
 ]

@@ -25,6 +25,20 @@ from .sessions import (
     ConversationNode,
     ConversationTree,
 )
+from .exceptions import (
+    PhosonToolError,
+    PhosonAgentError,
+    PhosonPluginError,
+    PhosonSessionError,
+    PhosonPluginLoadError,
+    PhosonAgentRunningError,
+    PhosonPluginConfigError,
+    PhosonMaxIterationsError,
+    PhosonPluginCleanupError,
+    PhosonSessionCorruptError,
+    PhosonToolReturnTypeError,
+    PhosonSessionNotFoundError,
+)
 from .middleware import AgentMiddleware, RetryMiddleware
 from .plugin_loader import PluginRegistry, load_plugin, register_loader
 
@@ -59,4 +73,17 @@ __all__ = [
     "JsonlStorage",
     "RunStep",
     "AgentRunResult",
+    # exceptions
+    "PhosonAgentError",
+    "PhosonAgentRunningError",
+    "PhosonMaxIterationsError",
+    "PhosonToolError",
+    "PhosonToolReturnTypeError",
+    "PhosonPluginError",
+    "PhosonPluginLoadError",
+    "PhosonPluginConfigError",
+    "PhosonPluginCleanupError",
+    "PhosonSessionError",
+    "PhosonSessionNotFoundError",
+    "PhosonSessionCorruptError",
 ]
