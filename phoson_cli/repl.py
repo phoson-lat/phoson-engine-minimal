@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Any
 from pathlib import Path
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
@@ -14,6 +15,7 @@ from phoson_agent import (
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
+    Plugin,
 )
 from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
@@ -168,7 +170,7 @@ class PhosonRepl:
 
     # ── Engine (re)construction ───────────────────────────────────────────────
 
-    def _build_mcp_plugins(self) -> list:
+    def _build_mcp_plugins(self) -> list[Plugin | dict[str, Any]]:
         """Resolve the MCP plugin specs for the current configuration.
 
         Returns an empty list when MCP is disabled. Tries the in-tree

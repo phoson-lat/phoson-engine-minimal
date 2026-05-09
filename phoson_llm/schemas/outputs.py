@@ -1,4 +1,5 @@
 import datetime
+from typing import Any
 from dataclasses import field, dataclass
 
 # ─── Base ────────────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ class ToolCallEvent(LLMEvent):
     index: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
-    args: dict = field(default_factory=dict)
+    args: dict[str, Any] = field(default_factory=dict)
 
 
 # ─── Usage ───────────────────────────────────────────────────────────────────

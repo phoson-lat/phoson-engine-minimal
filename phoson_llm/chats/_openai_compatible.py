@@ -373,7 +373,7 @@ async def stream_chat_completions(
     tool_names: dict[int, str] = {}
     tool_ids: dict[int, str] = {}
     has_tool_calls = False
-    final_usage: Any = None
+    final_usage: object = None
     tools_emitted = False
 
     yield LLMStartEvent(model=config.model, message_count=len(messages))

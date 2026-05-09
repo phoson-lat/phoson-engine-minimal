@@ -7,18 +7,19 @@ the LLM chat clients.
 
 import os
 import tomllib
+from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
-
-
-class PhosonConfigError(Exception):
-    """Raised when the Phoson configuration file is malformed or invalid."""
 from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.openrouter import OpenRouterChat
+
+
+class PhosonConfigError(Exception):
+    """Raised when the Phoson configuration file is malformed or invalid."""
 
 
 @dataclass
@@ -56,7 +57,7 @@ def _parse_int(value: str | None, default: int) -> int:
         return default
 
 
-def _load_file_defaults(config_path: Path) -> dict:
+def _load_file_defaults(config_path: Path) -> dict[str, Any]:
     """Load defaults from the config TOML file.
 
     Raises:
