@@ -10,6 +10,7 @@ configure the client and provide a cost callback.
 
 import json
 import base64
+import warnings
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 from collections.abc import AsyncIterator
 
@@ -249,7 +250,7 @@ def _extract_reasoning_delta(delta: object) -> str | None:
     return None
 
 
-def _parse_tool_args(raw: str) -> dict:
+def _parse_tool_args(raw: str) -> dict[str, Any]:
     """Safe parsing of tool arguments emitted by OpenAI-compatible APIs."""
     if not raw:
         return {}
@@ -257,6 +258,12 @@ def _parse_tool_args(raw: str) -> dict:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
+        warnings.warn(
+            f"Could not parse tool args JSON from OpenAI-compatible stream; "
+            f"falling back to raw string. Raw value: {raw!r:.120}",
+            UserWarning,
+            stacklevel=2,
+        )
         return {"command": raw} if raw.strip() else {}
 
     if isinstance(parsed, dict):
@@ -265,6 +272,12 @@ def _parse_tool_args(raw: str) -> dict:
     if isinstance(parsed, str):
         return {"command": parsed}
 
+    warnings.warn(
+        f"Unexpected tool args type {type(parsed).__name__!r} from OpenAI-compatible stream; "
+        f"stored as _raw.",
+        UserWarning,
+        stacklevel=2,
+    )
     return {"_raw": raw}
 
 

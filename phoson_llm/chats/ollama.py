@@ -286,6 +286,13 @@ class OllamaChat(BaseLLMChat):
                 try:
                     args = json.loads(raw) if raw else {}
                 except json.JSONDecodeError:
+                    import warnings
+                    warnings.warn(
+                        f"Could not parse tool args JSON from Ollama stream "
+                        f"(tool={tool_names.get(idx)!r}); stored as _raw.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
                     args = {"_raw": raw}
 
                 yield ToolCallEvent(

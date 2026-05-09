@@ -98,6 +98,7 @@ class JsonlStorage(SessionStorage):
         tmp_path = file_path.with_name(f"{file_path.name}.tmp.{os.getpid()}")
 
         nodes = sorted(tree.nodes.values(), key=lambda n: n.created_at)
+        wrote_ok = False
         try:
             with tmp_path.open("w", encoding="utf-8") as f:
                 f.write(json.dumps(tree_meta_to_dict(tree), ensure_ascii=True))
@@ -108,13 +109,14 @@ class JsonlStorage(SessionStorage):
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, file_path)
-        except BaseException:
-            # If anything goes wrong, do not leave a stale tmp file behind.
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+            wrote_ok = True
+        finally:
+            if not wrote_ok:
+                # Do not leave a stale tmp file behind on any failure path.
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _load_sync(self, session_id: str) -> ConversationTree:
         file_path = self._session_file(session_id)

@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any
 from pathlib import Path
+from collections.abc import Iterable
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
 
@@ -72,7 +73,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
 class _SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
 
-    def get_completions(self, document: Document, complete_event: object):
+    def get_completions(self, document: Document, complete_event: object) -> Iterable[Completion]:
         text = document.text_before_cursor
         if not text.startswith("/"):
             return
