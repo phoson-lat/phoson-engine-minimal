@@ -31,21 +31,21 @@ DEFAULT_TIMEOUT = 300.0
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
-    """
-    Converts Phoson's internal format to the format expected by Ollama.
+    """Converts Phoson's internal format to the format expected by Ollama.
+
+    The Ollama ``/api/chat`` endpoint expects the ``system`` prompt as a
+    regular message with ``role="system"``, **not** as a top-level field, so
+    we keep system messages here.
 
     Args:
-        messages (list[Message]): List of Phoson messages.
+        messages: List of Phoson messages.
 
     Returns:
-        list[dict]: List of formatted messages for Ollama.
+        List of formatted messages for Ollama.
     """
-    result = []
+    result: list[dict] = []
 
     for msg in messages:
-        if msg.role == "system":
-            continue
-
         if isinstance(msg.content, str):
             result.append({"role": msg.role, "content": msg.content})
             continue
@@ -75,21 +75,25 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
     ]
 
 
-def _extract_system(messages: list[Message]) -> str | None:
-    """Extracts the first system message from the list."""
-    for msg in messages:
-        if msg.role == "system":
-            return msg.content if isinstance(msg.content, str) else None
-    return None
+def _prepend_system(messages: list[dict], system: str) -> list[dict]:
+    """Prepend a system message to the converted message list.
+
+    If a system message is already present at the start, it is replaced.
+    """
+    if messages and messages[0].get("role") == "system":
+        return [{"role": "system", "content": system}, *messages[1:]]
+    return [{"role": "system", "content": system}, *messages]
 
 
 # ─── Adapter ─────────────────────────────────────────────────────────────────
 
 
 class OllamaChat(BaseLLMChat):
-    """Adapter for Ollama local LLM inference API (/api/chat).
+    """Adapter for Ollama local LLM inference API (``/api/chat``).
 
     Supports running Llama, Mistral, and other models locally.
+
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion
     """
 
     def __init__(
@@ -122,22 +126,27 @@ class OllamaChat(BaseLLMChat):
         Yields:
             LLMEvent objects representing the model's response stream.
         """
+        converted = _convert_messages(messages)
+        system = config.system or _extract_system_text(messages)
+        if system:
+            converted = _prepend_system(converted, system)
+
         payload: dict = {
             "model": config.model,
-            "messages": _convert_messages(messages),
+            "messages": converted,
             "stream": True,
         }
 
-        system = config.system or _extract_system(messages)
-        if system:
-            payload["system"] = system
-
+        options: dict = {}
         if config.temperature is not None:
-            payload["temperature"] = config.temperature
-
-        if config.max_tokens and config.max_tokens != 4096:
-            payload["options"] = payload.get("options", {})
-            payload["options"]["num_predict"] = config.max_tokens
+            options["temperature"] = config.temperature
+        if config.max_tokens:
+            # Ollama's `num_predict` controls max output tokens; -1 means
+            # "until EOS". We always forward the configured value because the
+            # caller already chose it deliberately.
+            options["num_predict"] = config.max_tokens
+        if options:
+            payload["options"] = options
 
         if tools:
             payload["tools"] = _convert_tools(tools)
@@ -147,7 +156,7 @@ class OllamaChat(BaseLLMChat):
         tool_names: dict[int, str] = {}
         tool_ids: dict[int, str] = {}
         has_tool_calls = False
-        final_usage = None
+        final_usage: dict | None = None
 
         yield LLMStartEvent(
             model=config.model,
@@ -160,10 +169,23 @@ class OllamaChat(BaseLLMChat):
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 async with client.stream("POST", url, json=payload) as response:
                     if response.status_code != 200:
+                        # Drain the body so the error message is helpful.
+                        body = b""
+                        try:
+                            async for chunk in response.aiter_bytes():
+                                body += chunk
+                                if len(body) > 4096:
+                                    break
+                        except Exception:  # noqa: BLE001
+                            pass
+                        detail = body.decode("utf-8", errors="replace").strip()
+                        msg = f"Ollama API error {response.status_code}"
+                        if detail:
+                            msg = f"{msg}: {detail}"
                         yield ErrorEvent(
-                            message=f"Ollama API error: {response.status_code}",
+                            message=msg,
                             code=map_error_code(response.status_code),
-                            retryable=response.status_code == 429,
+                            retryable=_is_retryable_status(response.status_code),
                         )
                         return
 
@@ -176,51 +198,63 @@ class OllamaChat(BaseLLMChat):
                         except json.JSONDecodeError:
                             continue
 
-                        msg = data.get("message", {})
-                        msg_type = msg.get("type", "message")
+                        # Ollama streams one JSON object per line. While the
+                        # response is in progress, ``done`` is false and
+                        # ``message`` carries an incremental delta. The final
+                        # line has ``done: true`` plus usage stats at the
+                        # top level (``eval_count``, ``prompt_eval_count``,
+                        # etc.) and an optional empty ``message``.
+                        msg = data.get("message") or {}
 
-                        if msg_type == "message":
-                            content = msg.get("content", "")
-                            if content:
-                                text_acc += content
-                                yield TokenEvent(content=content)
+                        content = msg.get("content", "")
+                        if content:
+                            text_acc += content
+                            yield TokenEvent(content=content)
 
-                            tool_calls = msg.get("tool_calls", [])
-                            if tool_calls:
-                                has_tool_calls = True
-                                for tc in tool_calls:
-                                    idx = tc.get("index", 0)
+                        tool_calls = msg.get("tool_calls", [])
+                        if tool_calls:
+                            has_tool_calls = True
+                            for tc_idx, tc in enumerate(tool_calls):
+                                idx = tc.get("index", tc_idx)
+                                func = tc.get("function", {}) or {}
+                                name = func.get("name", "")
 
-                                    if "id" in tc:
-                                        tool_ids[idx] = tc["id"]
-                                        tool_names[idx] = tc.get("function", {}).get(
-                                            "name", ""
-                                        )
-                                        tool_args_acc[idx] = ""
-
-                                    func_args = tc.get("function", {}).get(
-                                        "arguments", ""
+                                if "id" in tc or idx not in tool_ids:
+                                    tool_ids[idx] = tc.get("id", f"tool_{idx}")
+                                    tool_names[idx] = name or tool_names.get(
+                                        idx, ""
                                     )
-                                    if func_args:
-                                        chunk_str = (
-                                            func_args
-                                            if isinstance(func_args, str)
-                                            else json.dumps(func_args)
-                                        )
-                                        tool_args_acc[idx] = (
-                                            tool_args_acc.get(idx, "") + chunk_str
-                                        )
-                                        yield ToolCallDeltaEvent(
-                                            index=idx,
-                                            tool_name=tool_names.get(idx, ""),
-                                            args_chunk=chunk_str,
-                                        )
+                                    tool_args_acc.setdefault(idx, "")
 
-                        elif msg_type == "done":
-                            if "eval_count" in data:
+                                if name and not tool_names.get(idx):
+                                    tool_names[idx] = name
+
+                                func_args = func.get("arguments", "")
+                                if func_args:
+                                    chunk_str = (
+                                        func_args
+                                        if isinstance(func_args, str)
+                                        else json.dumps(func_args)
+                                    )
+                                    tool_args_acc[idx] = (
+                                        tool_args_acc.get(idx, "") + chunk_str
+                                    )
+                                    yield ToolCallDeltaEvent(
+                                        index=idx,
+                                        tool_name=tool_names.get(idx, ""),
+                                        args_chunk=chunk_str,
+                                    )
+
+                        if data.get("done"):
+                            # Final stats live at the top level of the last
+                            # message. ``eval_count`` is output tokens,
+                            # ``prompt_eval_count`` is input tokens.
+                            if "eval_count" in data or "prompt_eval_count" in data:
                                 final_usage = {
-                                    "output": data.get("eval_count", 0),
-                                    "input": data.get("prompt_eval_count", 0),
+                                    "output": int(data.get("eval_count", 0) or 0),
+                                    "input": int(
+                                        data.get("prompt_eval_count", 0) or 0
+                                    ),
                                 }
 
         except httpx.ConnectError as e:
@@ -243,7 +277,7 @@ class OllamaChat(BaseLLMChat):
             yield ErrorEvent(
                 message=str(e),
                 code=map_error_code(e.response.status_code),
-                retryable=e.response.status_code == 429,
+                retryable=_is_retryable_status(e.response.status_code),
             )
             return
 
@@ -277,3 +311,16 @@ class OllamaChat(BaseLLMChat):
             content=text_acc,
             has_tool_calls=has_tool_calls,
         )
+
+
+def _extract_system_text(messages: list[Message]) -> str | None:
+    """Extract the first system message's text content, if any."""
+    for msg in messages:
+        if msg.role == "system" and isinstance(msg.content, str):
+            return msg.content
+    return None
+
+
+def _is_retryable_status(status: int) -> bool:
+    """Return True for HTTP statuses that warrant a retry."""
+    return status == 429 or 500 <= status < 600
