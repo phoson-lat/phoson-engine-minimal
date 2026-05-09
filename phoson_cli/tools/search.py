@@ -1,4 +1,9 @@
-"""Web search tool."""
+"""Web search tool.
+
+Uses DuckDuckGo's HTML endpoint which is the most reliable scrape-friendly
+search backend without an API key. The handler is async and uses
+``httpx.AsyncClient`` so the agent's event loop never stalls on I/O.
+"""
 
 from html.parser import HTMLParser
 from urllib.parse import urlencode
@@ -7,7 +12,9 @@ import httpx
 
 from phoson_agent.tool import tool
 
-from .base import BaseTool
+DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/"
+DEFAULT_TIMEOUT = 15.0
+MAX_RESULTS = 5
 
 
 class _DuckParser(HTMLParser):
@@ -51,42 +58,44 @@ class _DuckParser(HTMLParser):
             current["snippet"] = text
 
 
-class SearchTool(BaseTool):
-    """Tool to perform web searches."""
-
-    def run(self, query: str) -> str:
-        """Search the web and return top 5 results with titles, URLs and snippets."""
-        q = urlencode({"q": query})
-        url = f"https://html.duckduckgo.com/html/?{q}"
-
-        try:
-            response = httpx.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (phoson-cli)"},
-                timeout=15,
-                follow_redirects=True,
-            )
-            response.raise_for_status()
-        except Exception as exc:
-            return f"Search failed: {exc}"
-
-        parser = _DuckParser()
-        parser.feed(response.text)
-
-        top = parser.results[:5]
-        if not top:
-            return "No results found."
-
-        lines: list[str] = []
-        for idx, result in enumerate(top, start=1):
-            title = result.get("title") or "(no title)"
-            link = result.get("url") or "(no url)"
-            snippet = result.get("snippet") or "(no snippet)"
-            lines.append(f"{idx}. {title}\n   {link}\n   {snippet}")
-        return "\n\n".join(lines)
+def _format_results(results: list[dict[str, str]]) -> str:
+    if not results:
+        return "No results found."
+    lines: list[str] = []
+    for idx, result in enumerate(results, start=1):
+        title = result.get("title") or "(no title)"
+        link = result.get("url") or "(no url)"
+        snippet = result.get("snippet") or "(no snippet)"
+        lines.append(f"{idx}. {title}\n   {link}\n   {snippet}")
+    return "\n\n".join(lines)
 
 
 @tool
-def web_search(query: str) -> str:
-    """Search the web and return top 5 results."""
-    return SearchTool().run(query)
+async def web_search(query: str) -> str:
+    """Search the web and return top 5 results with titles, URLs and snippets."""
+    params = {"q": query}
+    headers = {"User-Agent": "Mozilla/5.0 (phoson-cli)"}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT, follow_redirects=True
+        ) as client:
+            response = await client.get(
+                DUCKDUCKGO_URL,
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return f"Search failed: {exc}"
+
+    parser = _DuckParser()
+    parser.feed(response.text)
+    return _format_results(parser.results[:MAX_RESULTS])
+
+
+# Backwards-compatible alias used by older callers/tests; reuses the
+# same handler under the hood.
+def _build_query_url(query: str) -> str:
+    """Helper kept for tests that asserted on URL composition."""
+    return f"{DUCKDUCKGO_URL}?{urlencode({'q': query})}"

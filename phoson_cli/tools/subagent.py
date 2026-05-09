@@ -1,4 +1,11 @@
-"""Sub-agent tools for Phoson CLI."""
+"""Sub-agent tools for Phoson CLI.
+
+These tools spawn fresh ``AgentEngine`` instances to run isolated tasks
+either one at a time (``agent``) or in parallel (``agents``). The two
+helpers share the same set of injected dependencies (chat client, tool
+registry, default model and iteration budget) and emit results as
+plain strings so the parent agent can consume them as tool results.
+"""
 
 import os
 import asyncio
@@ -10,7 +17,6 @@ from phoson_agent.agent import AgentEngine
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_llm.chats.base import BaseLLMChat
 
-from .base import BaseTool
 from .subagent_panel import format_agent_block, format_metrics_line
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
@@ -40,6 +46,13 @@ def _log_debug(message: str, **fields: Any) -> None:
 
 
 def _clone_chat(chat: BaseLLMChat) -> BaseLLMChat:
+    """Return a shallow copy of ``chat`` so concurrent runs do not share state.
+
+    Most ``BaseLLMChat`` implementations hold an HTTP client and a few
+    config fields. Cloning the dict preserves those without invoking the
+    original constructor (which would re-read env vars and might crash if
+    the user had injected a key directly).
+    """
     cls = type(chat)
     clone = cls.__new__(cls)
     clone.__dict__ = dict(chat.__dict__)
@@ -57,52 +70,52 @@ def _aggregate_tokens(steps: list) -> tuple[int, int]:
     return input_tokens, output_tokens
 
 
-class SubAgentTool(BaseTool):
-    """Tool to execute sub-agents."""
+def _select_tools(
+    available_tools: dict[str, Any],
+    requested: list[str] | None,
+) -> tuple[dict[str, Any], str | None]:
+    """Resolve the tool subset for a sub-agent.
 
-    def run(self, *args: Any, **kwargs: Any) -> Any:
-        # This class acts as a wrapper; actual execution happens in the @tool methods.
-        pass
+    Returns a ``(selected, error)`` pair. ``error`` is non-None when the
+    request cannot be satisfied; in that case the caller should short-
+    circuit and surface the error to the parent agent.
+    """
+    allowed = {k: v for k, v in available_tools.items() if k != "agent"}
+    if requested is None:
+        if not allowed:
+            return ({}, "Error: No tools available for sub-agent.")
+        return (allowed, None)
 
-    async def execute_single(
-        self,
-        task: str,
-        tools: list[str] | None,
-        model: str | None,
-        chat: BaseLLMChat,
-        available_tools: dict[str, Any],
-        default_model: str,
-        max_iterations: int,
-    ) -> str:
-        """Logic for single sub-agent execution."""
-        allowed_tools = {k: v for k, v in available_tools.items() if k != "agent"}
-        if tools is not None:
-            selected = {
-                name: tool for name, tool in allowed_tools.items() if name in tools
-            }
-            missing = set(tools) - set(allowed_tools)
-            if missing:
-                return f"Error: Tools not found: {missing}"
-        else:
-            selected = allowed_tools
+    selected = {name: t for name, t in allowed.items() if name in requested}
+    missing = set(requested) - set(allowed)
+    if missing:
+        return ({}, f"Error: Tools not found: {missing}")
+    if not selected:
+        return ({}, "Error: No tools available for sub-agent.")
+    return (selected, None)
 
-        if not selected:
-            return "Error: No tools available for sub-agent."
 
-        sub_engine = AgentEngine(
-            chat=_clone_chat(chat),
-            tools=list(selected.values()),
-            max_iterations=max_iterations,
-        )
-
-        messages = [Message(role="user", content=task)]
-        config = ModelConfig(model=model or default_model)
-
-        try:
-            result = await sub_engine.run(messages, config)
-            return result.final_content
-        except Exception as e:
-            return f"Sub-agent error: {e}"
+async def _run_one_subagent(
+    *,
+    task: str,
+    chat: BaseLLMChat,
+    selected_tools: list[Any],
+    model: str,
+    max_iterations: int,
+) -> str:
+    """Run a single sub-agent and return its final string content."""
+    sub_engine = AgentEngine(
+        chat=_clone_chat(chat),
+        tools=selected_tools,
+        max_iterations=max_iterations,
+    )
+    messages = [Message(role="user", content=task)]
+    config = ModelConfig(model=model)
+    try:
+        result = await sub_engine.run(messages, config)
+        return result.final_content
+    except Exception as exc:
+        return f"Sub-agent error: {exc}"
 
 
 # Sub-agent tool injection parameters
@@ -125,12 +138,19 @@ async def agent(
     available_tools: dict[str, Any],
     default_model: str,
     max_iterations: int,
-    safe_mode: bool = False,
+    safe_mode: bool = False,  # noqa: ARG001 — propagated via context
 ) -> str:
     """Execute a task using a sub-agent with clean context."""
-    tool_inst = SubAgentTool()
-    return await tool_inst.execute_single(
-        task, tools, model, chat, available_tools, default_model, max_iterations
+    selected, err = _select_tools(available_tools, tools)
+    if err is not None:
+        return err
+
+    return await _run_one_subagent(
+        task=task,
+        chat=chat,
+        selected_tools=list(selected.values()),
+        model=model or default_model,
+        max_iterations=max_iterations,
     )
 
 
@@ -144,23 +164,15 @@ async def agents(
     available_tools: dict[str, Any],
     default_model: str,
     max_iterations: int,
-    safe_mode: bool = False,
+    safe_mode: bool = False,  # noqa: ARG001 — propagated via context
 ) -> str:
     """Execute multiple tasks in parallel using sub-agents."""
     if not tasks:
         return "Error: No tasks provided."
 
-    allowed_tools = {k: v for k, v in available_tools.items() if k != "agent"}
-    if tools is not None:
-        selected = {name: tool for name, tool in allowed_tools.items() if name in tools}
-        missing = set(tools) - set(allowed_tools)
-        if missing:
-            return f"Error: Tools not found: {missing}"
-    else:
-        selected = allowed_tools
-
-    if not selected:
-        return "Error: No tools available for sub-agents."
+    selected, err = _select_tools(available_tools, tools)
+    if err is not None:
+        return err
 
     effective_model = model or default_model
     selected_tools_list = list(selected.values())
@@ -188,13 +200,13 @@ async def agents(
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
             }
-        except Exception as e:
+        except Exception as exc:
             return {
                 "index": idx,
                 "task": task,
                 "task_preview": task[:40] + "..." if len(task) > 40 else task,
-                "result": f"Error: {e}",
-                "error": str(e),
+                "result": f"Error: {exc}",
+                "error": str(exc),
             }
 
     results: list[dict[str, Any]] = list(
