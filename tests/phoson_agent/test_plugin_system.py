@@ -13,6 +13,8 @@ from phoson_agent import (
     AgentEngine,
     PluginRegistry,
     AgentMiddleware,
+    PhosonPluginConfigError,
+    PhosonPluginCleanupError,
     tool,
 )
 
@@ -91,7 +93,7 @@ class TestPluginSpec:
             PluginSpec.from_value(123)  # type: ignore
 
     def test_from_dict_without_name(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(PhosonPluginConfigError):
             PluginSpec.from_value({"config": {}})
 
 
@@ -127,7 +129,7 @@ class TestPluginRegistry:
         registry = PluginRegistry()
         spec = PluginSpec.from_value("unknown:my-plugin")
 
-        with pytest.raises(ValueError, match="Unknown plugin loader"):
+        with pytest.raises(PhosonPluginConfigError, match="Unknown plugin loader"):
             registry.load(spec)
 
     def test_configure_and_initialize(self):
@@ -263,8 +265,12 @@ class TestPluginLifecycle:
         engine.cleanup()
         assert events == ["configure", "initialize", "cleanup"]
 
-    def test_cleanup_ignores_errors(self):
-        """Cleanup should not raise even if plugin cleanup fails."""
+    def test_cleanup_propagates_errors(self):
+        """Cleanup raises PhosonPluginCleanupError when plugins fail.
+
+        Library users may want to know about cleanup failures, so we propagate
+        them via a typed exception that carries every failure.
+        """
 
         class BrokenPlugin(Plugin):
             @property
@@ -277,8 +283,30 @@ class TestPluginLifecycle:
         plugin = BrokenPlugin()
         engine = AgentEngine(chat=Mock(), plugins=[plugin])
 
-        # Should not raise
-        engine.cleanup()
+        with pytest.raises(PhosonPluginCleanupError) as exc_info:
+            engine.cleanup()
+
+        assert len(exc_info.value.failures) == 1
+        name, error = exc_info.value.failures[0]
+        assert name == "broken"
+        assert isinstance(error, RuntimeError)
+
+    def test_context_manager_suppresses_cleanup_errors(self):
+        """The context manager protocol swallows cleanup failures.
+
+        Use cleanup() explicitly when you need to react to failures.
+        """
+
+        class BrokenPlugin(Plugin):
+            @property
+            def name(self) -> str:
+                return "broken"
+
+            def cleanup(self) -> None:
+                raise RuntimeError("Cleanup failed!")
+
+        with AgentEngine(chat=Mock(), plugins=[BrokenPlugin()]):
+            pass  # Should not raise on exit
 
 
 if __name__ == "__main__":
