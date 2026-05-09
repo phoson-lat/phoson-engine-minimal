@@ -64,14 +64,13 @@ _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇"
 class WaitingSpinner:
     """Braille-spinner animation that writes directly to the console file.
 
-    Thread-safety note: :meth:`update` writes ``_label`` from the calling
-    thread while the animation thread reads it. This relies on CPython GIL
-    atomicity for plain ``str`` assignment. Do not port to PyPy without
-    adding a ``threading.Lock`` around ``_label`` access.
+    Thread-safe: ``_label`` updates are serialised via ``_lock`` so the
+    animation thread always sees a consistent string.
     """
 
     def __init__(self, console: Console) -> None:
         self._console = console
+        self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
         self._label: str = ""
@@ -79,17 +78,18 @@ class WaitingSpinner:
 
     def start(self, label: str) -> None:
         """Start the spinner, or update the label if already running."""
-        if self._thread is not None and self._thread.is_alive():
+        with self._lock:
             self._label = label
+        if self._thread is not None and self._thread.is_alive():
             return
-        self._label = label
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def update(self, label: str) -> None:
         """Replace the displayed label without restarting the thread."""
-        self._label = label
+        with self._lock:
+            self._label = label
 
     def stop(self) -> None:
         """Stop animation and clear the spinner line."""
@@ -101,7 +101,8 @@ class WaitingSpinner:
         self._clear()
         self._thread = None
         self._stop = None
-        self._label = ""
+        with self._lock:
+            self._label = ""
         self._visible = False
 
     def _run(self) -> None:
@@ -111,7 +112,9 @@ class WaitingSpinner:
         idx = 0
         while not stop.is_set():
             frame = _SPINNER_FRAMES[idx % len(_SPINNER_FRAMES)]
-            self._console.file.write(f"\r\x1b[2K  {frame}  {self._label}")
+            with self._lock:
+                label = self._label
+            self._console.file.write(f"\r\x1b[2K  {frame}  {label}")
             self._console.file.flush()
             self._visible = True
             idx += 1
@@ -129,6 +132,7 @@ class SubagentSpinner:
 
     def __init__(self, console: Console) -> None:
         self._console = console
+        self._lock = threading.Lock()
         self._live: Live | None = None
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
@@ -137,7 +141,8 @@ class SubagentSpinner:
     def start(self, tasks: list[str]) -> None:
         """Start the subagent panel animation."""
         self.stop()
-        self._tasks = tasks
+        with self._lock:
+            self._tasks = tasks
         self._stop = threading.Event()
         self._live = Live(
             render_subagent_panel(tasks),
@@ -168,7 +173,9 @@ class SubagentSpinner:
             return
         frame = 0
         while not stop.is_set():
-            live.update(render_subagent_panel_frame(self._tasks, frame), refresh=True)
+            with self._lock:
+                tasks = self._tasks
+            live.update(render_subagent_panel_frame(tasks, frame), refresh=True)
             frame += 1
             sleep(0.08)
 

@@ -86,21 +86,3 @@ async def _run_bash(
 async def bash(command: str, safe_mode: bool = False) -> str:
     """Execute a bash command and return stdout+stderr combined."""
     return await _run_bash(command, safe_mode=safe_mode)
-
-
-# Backwards-compatible alias for tests and callers that imported the class.
-class BashTool:
-    """Thin shim around :func:`_run_bash` kept for backwards compatibility.
-
-    New code should call ``bash`` (the registered tool) or ``_run_bash``
-    directly. ``BashTool().run(...)`` exists so that tests written before
-    the refactor keep working without modification.
-    """
-
-    async def run(
-        self,
-        command: str,
-        safe_mode: bool = False,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    ) -> str:
-        return await _run_bash(command, safe_mode=safe_mode, timeout=timeout)

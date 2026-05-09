@@ -20,12 +20,12 @@ import pytest
 # we import it via ``importlib`` and keep a reference.
 bash_module = importlib.import_module("phoson_cli.tools.bash")
 MAX_BYTES = bash_module.MAX_BYTES
-BashTool = bash_module.BashTool
+_run_bash = bash_module._run_bash
 
 
 @pytest.mark.asyncio
 async def test_bash_runs_simple_command() -> None:
-    out = await BashTool().run("echo hola")
+    out = await _run_bash("echo hola")
     assert "hola" in out
 
 
@@ -37,10 +37,7 @@ async def test_bash_handler_is_coroutine() -> None:
     ``subprocess.run`` which blocked the event loop. The handler is now a
     coroutine and the @tool decorator preserves that.
     """
-    # The @tool decorator wraps the function; ``bash.handler`` expects the
-    # ``args, ctx`` signature. We call the underlying coroutine directly to
-    # check it's awaitable end-to-end.
-    coro = BashTool().run("echo hi", safe_mode=False)
+    coro = _run_bash("echo hi", safe_mode=False)
     assert asyncio.iscoroutine(coro)
     out = await coro
     assert "hi" in out
@@ -58,7 +55,7 @@ async def test_bash_event_loop_stays_responsive() -> None:
             ticks += 1
 
     sleep_cmd = f"{sys.executable} -c \"import time; time.sleep(0.4)\""
-    bash_task = asyncio.create_task(BashTool().run(sleep_cmd))
+    bash_task = asyncio.create_task(_run_bash(sleep_cmd))
     tick_task = asyncio.create_task(ticker())
 
     await asyncio.gather(bash_task, tick_task)
@@ -70,7 +67,7 @@ async def test_bash_event_loop_stays_responsive() -> None:
 @pytest.mark.asyncio
 async def test_bash_timeout_returns_message() -> None:
     sleep_cmd = f"{sys.executable} -c \"import time; time.sleep(2)\""
-    out = await BashTool().run(sleep_cmd, timeout=0.2)
+    out = await _run_bash(sleep_cmd, timeout=0.2)
     assert "timed out" in out.lower()
 
 
@@ -80,7 +77,7 @@ async def test_bash_truncates_long_output() -> None:
         f"{sys.executable} -c "
         f"\"import sys; sys.stdout.write('A' * {MAX_BYTES + 1024})\""
     )
-    out = await BashTool().run(cmd)
+    out = await _run_bash(cmd)
     assert "[...truncated]" in out
     # The total returned string is the truncated payload + the marker.
     assert len(out.encode()) <= MAX_BYTES + len("\n\n[...truncated]") + 16
@@ -103,7 +100,7 @@ async def test_bash_safe_mode_declined(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create)
     monkeypatch.setattr(bash_module, "_confirm_async", fake_confirm)
 
-    out = await BashTool().run("echo nope", safe_mode=True)
+    out = await _run_bash("echo nope", safe_mode=True)
 
     assert "Cancelled" in out
     assert spawned["count"] == 0
@@ -116,5 +113,5 @@ async def test_bash_safe_mode_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(bash_module, "_confirm_async", fake_confirm)
 
-    out = await BashTool().run("echo yes", safe_mode=True)
+    out = await _run_bash("echo yes", safe_mode=True)
     assert "yes" in out
