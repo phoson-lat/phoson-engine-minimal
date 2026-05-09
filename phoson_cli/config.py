@@ -186,8 +186,11 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(config.sessions_dir)),
         _line("max_iterations", config.max_iterations),
         _line("safe_mode", config.safe_mode),
-        _line("enable_mcp", config.enable_mcp),
-        _line("mcp_config_file", str(config.mcp_config_file)),
+        _line("enable_mcp", getattr(config, "enable_mcp", False)),
+        _line(
+            "mcp_config_file",
+            str(getattr(config, "mcp_config_file", PhosonConfig().mcp_config_file)),
+        ),
     ]:
         if line:
             lines.append(line)

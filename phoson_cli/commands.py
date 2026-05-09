@@ -401,7 +401,11 @@ class CommandHandler:
                     "filesystem": {
                         "transport": "stdio",
                         "command": "npx",
-                        "args": ["-y", "@modelcontextprotocol/server-filesystem", str(Path.home())],
+                        "args": [
+                            "-y",
+                            "@modelcontextprotocol/server-filesystem",
+                            str(Path.home()),
+                        ],
                         "env": {}
                     },
                     "memory": {
@@ -433,15 +437,55 @@ class CommandHandler:
             r.print_info(f"MCP: {status}")
             if self.repl.config.enable_mcp:
                 r.print_info(f"Config file: {self.repl.config.mcp_config_file}")
-                
-                # Show loaded MCP tools
-                mcp_tools = [t for t in self.repl.engine.tools if t.name.startswith("mcp_")]
+
+                mcp_server_names: set[str] = set()
+                mcp_servers_info: list[tuple[str, str, str]] = []
+                mcp_tool_prefixes: set[str] = set()
+                for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+                    if getattr(plugin, "name", "") == "phoson-plugin-mcp":
+                        prefix = str(getattr(plugin, "tool_name_prefix", "mcp"))
+                        mcp_tool_prefixes.add(f"{prefix}_")
+                        servers = getattr(plugin, "servers", {})
+                        mcp_server_names.update(servers.keys())
+                        for server_name, server_cfg in servers.items():
+                            transport = str(server_cfg.get("transport", "stdio"))
+                            target = (
+                                str(server_cfg.get("url"))
+                                if transport in {"sse", "http", "streamable_http"}
+                                else " ".join(
+                                    [
+                                        str(server_cfg.get("command", "")),
+                                        *[str(a) for a in server_cfg.get("args", [])],
+                                    ]
+                                ).strip()
+                            )
+                            mcp_servers_info.append((server_name, transport, target))
+
+                if mcp_servers_info:
+                    r.print_info(f"Configured {len(mcp_servers_info)} MCP server(s):")
+                    for server_name, transport, target in mcp_servers_info:
+                        r.print_info(f"  • {server_name} [{transport}] → {target}")
+
+                mcp_tools = (
+                    [
+                        t
+                        for t in self.repl.engine.tools
+                        if any(
+                            t.name.startswith(prefix)
+                            for prefix in mcp_tool_prefixes
+                        )
+                    ]
+                    if mcp_tool_prefixes
+                    else []
+                )
                 if mcp_tools:
                     r.print_info(f"Loaded {len(mcp_tools)} MCP tool(s):")
                     for tool in mcp_tools:
                         r.print_info(f"  • {tool.name}")
                 else:
-                    r.print_info("No MCP tools loaded (check config file)")
+                    r.print_info(
+                        "No MCP tools loaded (check config file / discovery mode)"
+                    )
             else:
                 r.print_info("Use '/mcp enable' to activate MCP support")
             return True
@@ -509,7 +553,10 @@ class CommandHandler:
             r.print_info('    "mcpServers": {')
             r.print_info('      "filesystem": {')
             r.print_info('        "command": "npx",')
-            r.print_info('        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]')
+            r.print_info(
+                '        "args": ['
+                '"-y", "@modelcontextprotocol/server-filesystem", "/tmp"]'
+            )
             r.print_info('      }')
             r.print_info('    }')
             r.print_info('  }')

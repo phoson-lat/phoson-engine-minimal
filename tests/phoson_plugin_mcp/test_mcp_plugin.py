@@ -2,15 +2,16 @@
 Unit tests for MCP plugin.
 """
 
+import sys
 import json
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
+
+import pytest
+
 from phoson_agent import AgentEngine
 
 # Import with fallback if mcp not installed
-import sys
-from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
@@ -163,9 +164,10 @@ class TestMCPPlugin:
         
         plugin.cleanup()
         
-        assert len(plugin.servers) == 0  # servers dict is preserved but sessions cleared
+        # servers dict is preserved but sessions cleared
+        assert len(plugin.servers) == 0
         assert len(plugin.tools_cache) == 0
-        assert plugin._initialized == False
+        assert not plugin._initialized
     
     def test_integration_with_agent_engine(self, tmp_path):
         """Test plugin integration with AgentEngine."""

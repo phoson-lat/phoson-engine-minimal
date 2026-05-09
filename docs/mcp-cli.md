@@ -34,8 +34,8 @@ MCP enabled  ·  saved
 > /mcp status
 MCP: enabled
 Loaded 2 MCP tool(s):
-  • mcp_filesystem_call
-  • mcp_memory_call
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
 ```
 
 ### Método 2: Crear configuración manualmente
@@ -72,8 +72,8 @@ MCP enabled  ·  saved
 MCP: enabled
 Config file: phoson-mcp.json
 Loaded 2 MCP tool(s):
-  • mcp_filesystem_call
-  • mcp_memory_call
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
 ```
 
 ### 4. ¡Usar!
@@ -83,7 +83,7 @@ Ahora el agente puede usar automáticamente las herramientas MCP:
 ```
 > List the files in /tmp
 
-[El agente automáticamente llamará a mcp_filesystem_call]
+[El agente automáticamente llamará a mcp_filesystem_read_file]
 ```
 
 ## 📋 Comandos Disponibles
@@ -105,15 +105,18 @@ Next steps:
 ```
 
 ### `/mcp status`
-Muestra el estado actual de MCP y las herramientas cargadas.
+Muestra el estado actual de MCP, los servidores configurados, su transporte/target y las herramientas cargadas.
 
 ```
 > /mcp status
 MCP: enabled
 Config file: ~/.phoson/mcps.json
+Configured 2 MCP server(s):
+  • github [http] → https://api.example.com/mcp
+  • filesystem [stdio] → npx -y @modelcontextprotocol/server-filesystem .
 Loaded 2 MCP tool(s):
-  • mcp_filesystem_call
-  • mcp_memory_call
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
 ```
 
 ### `/mcp enable`
@@ -518,14 +521,14 @@ MCP enabled  ·  saved
 > /mcp status
 MCP: enabled
 Loaded 2 MCP tool(s):
-  • mcp_filesystem_call
-  • mcp_memory_call
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
 
 > List all files in the current directory
-[El agente usa mcp_filesystem_call]
+[El agente usa mcp_filesystem_read_file]
 
 > Remember that this is a test project
-[El agente usa mcp_memory_call]
+[El agente usa mcp_memory_store_memory]
 
 > What did I just tell you to remember?
 [El agente recupera de la memoria]
@@ -622,6 +625,7 @@ Si necesitas deshabilitar MCP temporalmente sin perder la configuración:
 
 - MCP requiere Node.js instalado
 - Los servidores MCP se ejecutan como procesos separados
-- Cada herramienta MCP se expone como `mcp_{server_name}_call`
+- Cada herramienta MCP descubierta se expone como `mcp_{server_name}_{tool_name}`.
+- Si el descubrimiento falla, se mantiene un proxy fallback `mcp_{server_name}_call`.
 - La configuración se guarda en `~/.phoson/config.toml`
 - Los servidores MCP se reinician en cada uso (stateless)

@@ -76,21 +76,6 @@ chat = OllamaChat(base_url="http://localhost:11434")
 
 Local LLM inference. Supports: streaming, tools.
 
-## Build Chat Factory
-
-```python
-from phoson_llm import build_chat
-
-chat = build_chat("openai", api_key="sk-...")
-```
-
-| Provider   | Required Args              | Optional Args                     |
-|------------|----------------------------|-----------------------------------|
-| `"openai"` | `api_key`                  | `base_url`                        |
-| `"anthropic"` | `api_key` (or env var)   | —                                 |
-| `"openrouter"` | `api_key`               | `base_url`                        |
-| `"ollama"` | —                           | `base_url` (default: localhost)   |
-
 ## Schemas
 
 ### Message
@@ -224,7 +209,7 @@ cost = calculate_cost(
     input_tokens=1000,
     output_tokens=500,
 )
-# Returns: 0.015 (USD)
+# Returns: (0.015, True)  # (cost_usd, cost_known)
 ```
 
 Use `PriceEntry` to get detailed pricing information:
@@ -232,10 +217,13 @@ Use `PriceEntry` to get detailed pricing information:
 ```python
 from phoson_llm import PriceEntry
 
-entry = PriceEntry(model="gpt-4o")
-print(entry.cost_per_million_input_tokens)  # 2.50
-print(entry.cost_per_million_output_tokens)  # 10.00
+entry = PriceEntry(input=2.50, output=10.00, cache_read=1.25)
+print(entry.input)  # 2.50
+print(entry.output)  # 10.00
+print(entry.cache_read)  # 1.25
 ```
+
+Note: `PriceEntry` is a frozen dataclass with fields `input`, `output`, `cache_write`, and `cache_read` (prices per million tokens). It does not take a `model` argument directly — use `calculate_cost()` to look up pricing for a specific model.
 
 ## Public API
 
@@ -252,7 +240,5 @@ from phoson_llm import (
     ToolCallEvent, ToolCallDeltaEvent, UsageEvent, TokenUsage, ErrorEvent,
     # Pricing
     calculate_cost, PriceEntry,
-    # Factory
-    build_chat,
 )
 ```

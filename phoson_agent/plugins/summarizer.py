@@ -188,77 +188,13 @@ class SummarizationMiddleware(AgentMiddleware):
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
-        """Hook called before the LLM call to perform compaction if needed."""
-        current_tokens = self._estimator.count_messages(messages)
-        context_window = await self._resolver.resolve(self.provider, self.model)
-        threshold_tokens = int(context_window * self.threshold)
+        """Hook called before the LLM call.
 
-        if current_tokens <= threshold_tokens:
-            return messages
-
-        # Need to compact
-        compacted, summary_text = self._compact_messages(
-            messages, current_tokens, context_window, threshold_tokens
-        )
-
-        compacted_tokens = self._estimator.count_messages(compacted)
-        messages_removed = len(messages) - len(compacted)
-
-        self._pending_compact_events.append(
-            SummarizationEvent(
-                original_tokens=current_tokens,
-                compacted_tokens=compacted_tokens,
-                messages_removed=messages_removed,
-                summary_length=len(summary_text),
-            )
-        )
-
-        return compacted
-
-    def _compact_messages(
-        self,
-        messages: list[Message],
-        current_tokens: int,
-        context_window: int,
-        threshold_tokens: int,
-    ) -> tuple[list[Message], str]:
-        """Separate messages and return (compacted, summary_text).
-
-        Returns the compacted message list and the summary text itself.
-        NOTE: the actual summary LLM call must be done by the caller
-        (in wrap_llm_call) because we don't have async access here.
+        This middleware does not mutate messages here because real compaction
+        requires an async LLM call to generate the summary, which can only
+        be done in wrap_llm_call.
         """
-        # Separate: system | intermediates | recent
-        system_msgs: list[Message] = []
-        others: list[Message] = []
-
-        for msg in messages:
-            if msg.role == "system":
-                system_msgs.append(msg)
-            else:
-                others.append(msg)
-
-        # Keep the last N messages
-        if len(others) > self.min_keep_messages:
-            keep = others[-self.min_keep_messages :]
-        else:
-            keep = others
-        to_summarize = others[: len(others) - len(keep)]
-
-        if not to_summarize:
-            # Nothing to summarize — shouldn't happen if we're over threshold
-            return messages, ""
-
-        history_text = _format_messages_for_summary(to_summarize)
-        summary_prompt = self.summary_prompt_template.format(history=history_text)
-
-        # Build compacted list: system + summary placeholder + recent
-        compacted = list(system_msgs)
-        summary_content = f"[Conversation summary: {summary_prompt}]"
-        compacted.append(Message(role="user", content=summary_content))
-        compacted.extend(keep)
-
-        return compacted, summary_prompt
+        return messages
 
     async def on_agent_event(self, event: AgentEvent) -> None:
         """Hook executed on any agent event."""

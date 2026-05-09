@@ -16,6 +16,7 @@ from .models import (
     AgentSubagentResult,
     AgentToolStartEvent,
 )
+from .plugin import Plugin, PluginSpec, PluginLoader
 from .context import AgentContext
 from .sessions import (
     SessionMeta,
@@ -25,7 +26,6 @@ from .sessions import (
     ConversationTree,
 )
 from .middleware import AgentMiddleware, RetryMiddleware
-from .plugin import Plugin, PluginSpec, PluginLoader
 from .plugin_loader import PluginRegistry, load_plugin, register_loader
 
 __all__ = [

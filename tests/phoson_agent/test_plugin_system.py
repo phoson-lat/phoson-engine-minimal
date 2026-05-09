@@ -2,21 +2,22 @@
 Unit tests for the plugin system.
 """
 
+from unittest.mock import Mock
+
 import pytest
+
 from phoson_agent import (
     Plugin,
-    PluginSpec,
-    PluginRegistry,
-    AgentEngine,
     AgentTool,
+    PluginSpec,
+    AgentEngine,
+    PluginRegistry,
     AgentMiddleware,
     tool,
 )
-from phoson_llm.schemas import Message, ModelConfig
-from unittest.mock import Mock, AsyncMock
 
 
-class TestPlugin(Plugin):
+class DummyPlugin(Plugin):
     """Test plugin for unit tests."""
 
     def __init__(self):
@@ -80,7 +81,7 @@ class TestPluginSpec:
         assert spec.config == {}
 
     def test_from_plugin_instance(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         spec = PluginSpec.from_value(plugin)
         assert spec.name == "test-plugin"
         assert spec.instance is plugin
@@ -99,7 +100,7 @@ class TestPluginRegistry:
 
     def test_load_plugin_instance(self):
         registry = PluginRegistry()
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         spec = PluginSpec.from_value(plugin)
 
         loaded = registry.load(spec)
@@ -111,14 +112,14 @@ class TestPluginRegistry:
         registry = PluginRegistry()
 
         def custom_loader(name: str) -> Plugin:
-            return TestPlugin()
+            return DummyPlugin()
 
         registry.register_loader("custom", custom_loader)
 
         spec = PluginSpec.from_value("custom:my-plugin")
         loaded = registry.load(spec)
 
-        assert isinstance(loaded, TestPlugin)
+        assert isinstance(loaded, DummyPlugin)
         assert loaded.configured
         assert loaded.initialized
 
@@ -133,7 +134,7 @@ class TestPluginRegistry:
         registry = PluginRegistry()
 
         def loader(name: str) -> Plugin:
-            return TestPlugin()
+            return DummyPlugin()
 
         registry.register_loader("test", loader)
 
@@ -151,7 +152,7 @@ class TestAgentEngineWithPlugins:
     """Tests for AgentEngine plugin integration."""
 
     def test_load_plugins_on_init(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         engine = AgentEngine(
             chat=Mock(),
             plugins=[plugin],
@@ -161,7 +162,7 @@ class TestAgentEngineWithPlugins:
         assert engine._loaded_plugins[0] is plugin
 
     def test_plugins_provide_tools(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         engine = AgentEngine(
             chat=Mock(),
             plugins=[plugin],
@@ -172,7 +173,7 @@ class TestAgentEngineWithPlugins:
         assert engine.tools[0].name == "test_tool"
 
     def test_plugins_provide_middlewares(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         engine = AgentEngine(
             chat=Mock(),
             plugins=[plugin],
@@ -182,8 +183,8 @@ class TestAgentEngineWithPlugins:
         assert len(engine.middlewares) == 1
 
     def test_multiple_plugins(self):
-        plugin1 = TestPlugin()
-        plugin2 = TestPlugin()
+        plugin1 = DummyPlugin()
+        plugin2 = DummyPlugin()
 
         engine = AgentEngine(
             chat=Mock(),
@@ -195,7 +196,7 @@ class TestAgentEngineWithPlugins:
         assert len(engine.middlewares) == 2  # Each provides 1 middleware
 
     def test_cleanup(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
         engine = AgentEngine(
             chat=Mock(),
             plugins=[plugin],
@@ -206,15 +207,15 @@ class TestAgentEngineWithPlugins:
         assert plugin.cleaned_up
 
     def test_context_manager(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
 
-        with AgentEngine(chat=Mock(), plugins=[plugin]) as engine:
+        with AgentEngine(chat=Mock(), plugins=[plugin]) as _:
             assert not plugin.cleaned_up
 
         assert plugin.cleaned_up
 
     def test_mix_plugins_and_tools(self):
-        plugin = TestPlugin()
+        plugin = DummyPlugin()
 
         @tool
         def custom_tool(x: str) -> str:

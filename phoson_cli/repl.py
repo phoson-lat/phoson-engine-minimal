@@ -246,14 +246,18 @@ class PhosonRepl:
                 from phoson_plugin_mcp import MCPPlugin
                 # Add MCP plugin instance directly
                 mcp_plugin = MCPPlugin()
-                mcp_plugin.configure({"config_file": str(config.mcp_config_file)})
+                mcp_plugin.configure({
+                    "config_file": str(config.mcp_config_file),
+                    "tool_name_prefix": "mcp",
+                })
                 plugins.append(mcp_plugin)
             except ImportError:
                 # Fallback to path loading for development
                 mcp_plugin_config = {
                     "name": "path:./phoson_plugin_mcp/plugin.py",
                     "config": {
-                        "config_file": str(config.mcp_config_file)
+                        "config_file": str(config.mcp_config_file),
+                        "tool_name_prefix": "mcp",
                     }
                 }
                 plugins.append(mcp_plugin_config)
@@ -494,14 +498,18 @@ class PhosonRepl:
                 from phoson_plugin_mcp import MCPPlugin
                 # Add MCP plugin instance directly
                 mcp_plugin = MCPPlugin()
-                mcp_plugin.configure({"config_file": str(self.config.mcp_config_file)})
+                mcp_plugin.configure({
+                    "config_file": str(self.config.mcp_config_file),
+                    "tool_name_prefix": "mcp",
+                })
                 plugins.append(mcp_plugin)
             except ImportError:
                 # Fallback to path loading for development
                 mcp_plugin_config = {
                     "name": "path:./phoson_plugin_mcp/plugin.py",
                     "config": {
-                        "config_file": str(self.config.mcp_config_file)
+                        "config_file": str(self.config.mcp_config_file),
+                        "tool_name_prefix": "mcp",
                     }
                 }
                 plugins.append(mcp_plugin_config)

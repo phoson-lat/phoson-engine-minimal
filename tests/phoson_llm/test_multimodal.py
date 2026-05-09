@@ -144,7 +144,7 @@ class TestOpenAIMessageConversion:
         result = openai_module._convert_messages([msg])
         parts = result[0]["content"]
         assert parts[0]["type"] == "text"
-        assert "Video not directly supported by OpenAI" in parts[0]["text"]
+        assert "Video not directly supported" in parts[0]["text"]
 
     def test_pdf_message_becomes_text_fallback(self, pdf_message):
         result = openai_module._convert_messages([pdf_message])

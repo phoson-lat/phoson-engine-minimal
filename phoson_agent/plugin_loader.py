@@ -2,10 +2,10 @@
 Module for loading and managing plugins.
 """
 
-import importlib
 import sys
-from pathlib import Path
+import importlib
 from typing import Any
+from pathlib import Path
 
 from phoson_agent.plugin import Plugin, PluginSpec, PluginLoader
 

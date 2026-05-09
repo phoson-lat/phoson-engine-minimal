@@ -9,10 +9,9 @@ if TYPE_CHECKING:
     from phoson_agent.context import AgentContext
 
 ToolReturn = str | dict[str, Any]
-ToolHandler = (
-    Callable[[dict[str, Any]], ToolReturn | Awaitable[ToolReturn]]
-    | Callable[[dict[str, Any], "AgentContext"], ToolReturn | Awaitable[ToolReturn]]
-)
+ToolHandler = Callable[
+    [dict[str, Any], "AgentContext"], ToolReturn | Awaitable[ToolReturn]
+]
 
 
 @dataclass

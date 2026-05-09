@@ -281,12 +281,62 @@ print(result.final_content)
 
 ## Cómo Funcionan las Tools MCP
 
-El plugin expone las tools MCP con el siguiente formato:
+Ahora el plugin **descubre las tools reales** de cada servidor MCP y las expone como `AgentTool`s nativas.
 
-- **Nombre**: `mcp_{server_name}_call`
-- **Parámetros**:
-  - `tool_name`: Nombre de la tool del servidor MCP
-  - `arguments`: Argumentos para la tool (dict)
+### Antes
+
+Se exponía una tool wrapper genérica por servidor:
+
+- `mcp_github_call(tool_name="get_user_public_profile", arguments={...})`
+
+### Ahora
+
+Se exponen las tools reales con prefijo configurable para evitar colisiones:
+
+- `mcp_github_get_user_public_profile(username="phoson-lat")`
+- `mcp_filesystem_read_file(path="/tmp/test.txt")`
+- `mcp_memory_store_memory(key="x", value="y")`
+
+### Naming Convention
+
+Las tools se registran como:
+
+```text
+{tool_name_prefix}_{server_name}_{remote_tool_name}
+```
+
+Por default el prefijo es `mcp`. Esto evita colisiones con tools locales u otros plugins.
+
+### Configurar Prefijo
+
+Puedes cambiar el prefijo así:
+
+```python
+engine = AgentEngine(
+    chat=OpenAIChat(),
+    plugins=[
+        {
+            "name": "phoson-plugin-mcp",
+            "config": {
+                "tool_name_prefix": "remote"
+            }
+        }
+    ],
+)
+```
+
+Ejemplo de nombres resultantes:
+- `remote_github_get_user_public_profile`
+- `remote_filesystem_read_file`
+
+Esto evita colisiones entre servidores y hace que el modelo vea herramientas más naturales.
+
+### Beneficios
+
+- El modelo razona mejor sobre tools específicas
+- Los schemas de parámetros son los reales del servidor MCP
+- No necesitas wrapper `tool_name + arguments`
+- Mejor DX y mejor tool selection del LLM
 
 El agente puede llamar estas tools automáticamente según sea necesario.
 

@@ -1,5 +1,4 @@
 import os
-import json
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
@@ -8,124 +7,27 @@ from phoson_llm.utils import map_error_code
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
-    TextBlock,
     ErrorEvent,
     TokenEvent,
     TokenUsage,
     UsageEvent,
     ModelConfig,
     LLMDoneEvent,
-    ToolUseBlock,
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
-    ToolResultBlock,
     ReasoningDoneEvent,
     ToolCallDeltaEvent,
     ReasoningStartEvent,
     ReasoningTokenEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
-
-
-def _convert_messages(messages: list[Message]) -> list[dict]:
-    """Converts Phoson messages to OpenRouter/OpenAI format."""
-    result = []
-
-    for msg in messages:
-        if msg.role == "system":
-            content = msg.content if isinstance(msg.content, str) else ""
-            result.append({"role": "system", "content": content})
-            continue
-
-        if isinstance(msg.content, str):
-            result.append({"role": msg.role, "content": msg.content})
-            continue
-
-        text_blocks = [b for b in msg.content if isinstance(b, TextBlock)]
-        tool_uses = [b for b in msg.content if isinstance(b, ToolUseBlock)]
-        tool_results = [b for b in msg.content if isinstance(b, ToolResultBlock)]
-
-        if tool_uses:
-            result.append(
-                {
-                    "role": "assistant",
-                    "content": text_blocks[0].text if text_blocks else "",
-                    "tool_calls": [
-                        {
-                            "id": b.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": b.tool_name,
-                                "arguments": json.dumps(b.args),
-                            },
-                        }
-                        for b in tool_uses
-                    ],
-                }
-            )
-
-        for b in tool_results:
-            result.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": b.tool_call_id,
-                    "content": b.result,
-                }
-            )
-
-        if not tool_uses and not tool_results and text_blocks:
-            result.append(
-                {
-                    "role": msg.role,
-                    "content": " ".join(b.text for b in text_blocks),
-                }
-            )
-
-    return result
-
-
-def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
-    """Converts ToolDefinition to OpenRouter tools format."""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.parameters,
-            },
-        }
-        for t in tools
-    ]
-
-
-def _extract_reasoning_delta(delta: object) -> str | None:
-    """Extracts reasoning_content from an OpenAI delta."""
-    for attr in ("reasoning_content", "reasoning"):
-        value = getattr(delta, attr, None)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _parse_tool_args(raw: str) -> dict:
-    """Safe parsing of tool arguments."""
-    if not raw:
-        return {}
-
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {"command": raw} if raw.strip() else {}
-
-    if isinstance(parsed, dict):
-        return parsed
-
-    if isinstance(parsed, str):
-        return {"command": parsed}
-
-    return {"_raw": raw}
+from phoson_llm.chats._openai_compatible import (
+    _convert_tools,
+    _parse_tool_args,
+    _convert_messages,
+    _extract_reasoning_delta,
+)
 
 
 class OpenRouterChat(BaseLLMChat):

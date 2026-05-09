@@ -81,7 +81,7 @@ class FakeToolChat(BaseLLMChat):
         )
 
 
-def get_weather(args: dict) -> dict:
+def get_weather(args: dict, context: object = None) -> dict:
     """Gets the weather for a city and country."""
     city = args.get("city", "unknown")
     country = args.get("country", "unknown")

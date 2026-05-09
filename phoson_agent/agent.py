@@ -39,10 +39,10 @@ from phoson_agent.models import (
     AgentReasoningEvent,
     AgentToolStartEvent,
 )
+from phoson_agent.plugin import Plugin
 from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
-from phoson_agent.plugin import Plugin, PluginSpec
 from phoson_agent.plugin_loader import load_plugin
 
 
@@ -185,6 +185,17 @@ class AgentEngine:
             updated = await middleware.on_after_tool(call, updated, error)
         return updated
 
+    def _get_tool_definitions(self) -> list[ToolDefinition]:
+        """Builds tool definitions from registered tools."""
+        return [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.parameters,
+            )
+            for tool in self.tools
+        ]
+
     async def stream(
         self,
         messages: list[Message],
@@ -205,14 +216,7 @@ class AgentEngine:
         total_credits = 0.0
         final_content = ""
 
-        tool_definitions = [
-            ToolDefinition(
-                name=tool.name,
-                description=tool.description,
-                parameters=tool.parameters,
-            )
-            for tool in self.tools
-        ]
+        tool_definitions = self._get_tool_definitions()
         llm_call = self._build_llm_call_chain(tool_definitions)
 
         try:
