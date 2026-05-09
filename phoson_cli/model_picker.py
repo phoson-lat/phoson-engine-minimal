@@ -1,9 +1,17 @@
 """Model picker — interactive fuzzy-search selector for available models."""
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 from .pickers import BasePicker, picker_style
 from .model_selector import ModelOption
+
+
+class _PickerState(TypedDict):
+    query: str
+    filtered: list[ModelOption]
+    selected: int
+    page: int
 
 
 @dataclass
@@ -182,23 +190,24 @@ async def pick_model(
     if not models:
         return ModelPickerResult(cancelled=True)
 
-    state = {
+    initial_selected = next(
+        (i for i, m in enumerate(models) if m.id == current_model), 0
+    )
+    state: _PickerState = {
         "query": "",
         "filtered": list(models),
-        "selected": next(
-            (i for i, m in enumerate(models) if m.id == current_model), 0
-        ),
+        "selected": initial_selected,
+        "page": initial_selected // page_size,
     }
-    state["page"] = state["selected"] // page_size  # type: ignore[operator]
 
     def render() -> list[tuple[str, str]]:
         return _render_models(
-            state["filtered"],  # type: ignore[arg-type]
+            state["filtered"],
             current_model,
-            state["selected"],  # type: ignore[arg-type]
-            state["page"],  # type: ignore[arg-type]
+            state["selected"],
+            state["page"],
             page_size,
-            state["query"],  # type: ignore[arg-type]
+            state["query"],
         )
 
     picker: BasePicker[ModelPickerResult] = BasePicker(
@@ -207,7 +216,7 @@ async def pick_model(
     )
 
     def _refresh_selection() -> None:
-        filtered = _filter_models(models, state["query"])  # type: ignore[arg-type]
+        filtered = _filter_models(models, state["query"])
         state["filtered"] = filtered
         if not filtered:
             state["selected"] = 0
@@ -216,42 +225,42 @@ async def pick_model(
         state["selected"] = next(
             (i for i, m in enumerate(filtered) if m.id == current_model), 0
         )
-        state["page"] = state["selected"] // page_size  # type: ignore[operator]
+        state["page"] = state["selected"] // page_size
 
     def go_up() -> None:
         if state["selected"] > 0:
-            state["selected"] -= 1  # type: ignore[operator]
-            state["page"] = state["selected"] // page_size  # type: ignore[operator]
+            state["selected"] -= 1
+            state["page"] = state["selected"] // page_size
             picker.refresh()
 
     def go_down() -> None:
-        if state["selected"] < len(state["filtered"]) - 1:  # type: ignore[arg-type]
-            state["selected"] += 1  # type: ignore[operator]
-            state["page"] = state["selected"] // page_size  # type: ignore[operator]
+        if state["selected"] < len(state["filtered"]) - 1:
+            state["selected"] += 1
+            state["page"] = state["selected"] // page_size
             picker.refresh()
 
     def page_up() -> None:
         if state["page"] > 0:
-            state["page"] -= 1  # type: ignore[operator]
-            state["selected"] = state["page"] * page_size  # type: ignore[operator]
+            state["page"] -= 1
+            state["selected"] = state["page"] * page_size
             picker.refresh()
 
     def page_down() -> None:
         total_pages = max(
-            1, (len(state["filtered"]) + page_size - 1) // page_size  # type: ignore[arg-type]
+            1, (len(state["filtered"]) + page_size - 1) // page_size
         )
         if state["page"] < total_pages - 1:
-            state["page"] += 1  # type: ignore[operator]
+            state["page"] += 1
             state["selected"] = min(
-                state["page"] * page_size,  # type: ignore[operator]
-                len(state["filtered"]) - 1,  # type: ignore[arg-type]
+                state["page"] * page_size,
+                len(state["filtered"]) - 1,
             )
             picker.refresh()
 
     def backspace() -> None:
         if not state["query"]:
             return
-        state["query"] = state["query"][:-1]  # type: ignore[index]
+        state["query"] = state["query"][:-1]
         _refresh_selection()
         picker.refresh()
 
@@ -259,16 +268,14 @@ async def pick_model(
         if not state["filtered"]:
             return
         picker.done(
-            ModelPickerResult(
-                model_id=state["filtered"][state["selected"]].id  # type: ignore[index]
-            )
+            ModelPickerResult(model_id=state["filtered"][state["selected"]].id)
         )
 
     def cancel() -> None:
         picker.done(ModelPickerResult(cancelled=True))
 
     def on_type(data: str) -> None:
-        state["query"] += data  # type: ignore[operator]
+        state["query"] += data
         _refresh_selection()
         picker.refresh()
 

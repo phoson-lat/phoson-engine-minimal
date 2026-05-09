@@ -446,7 +446,7 @@ class PhosonRepl:
                 path = self.tree.get_path(self.current_node_id)
                 self.renderer.print_history(path, tail=6)
             except Exception:
-                pass  # corrupted node — session still loaded successfully
+                _LOGGER.debug("Could not replay session history — node may be corrupted", exc_info=True)
 
             return True
         except FileNotFoundError:

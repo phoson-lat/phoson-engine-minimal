@@ -35,7 +35,8 @@ async def test_list_available_models_ollama_falls_back_on_error(monkeypatch) -> 
         "phoson_cli.model_selector.httpx.AsyncClient", lambda timeout: DummyClient()
     )
 
-    models = await list_available_models(config)
+    with pytest.warns(UserWarning, match="Failed to fetch Ollama models"):
+        models = await list_available_models(config)
 
     assert [m.id for m in models] == ["llama3.2"]
 
