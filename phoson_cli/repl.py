@@ -377,7 +377,7 @@ class PhosonRepl:
         self._context_window = await self._cw_resolver.resolve(
             self.config.provider, self.current_model
         )
-        self._context_tokens = self.summarizer._estimator.count_messages(path)
+        self._context_tokens = self.summarizer.estimate_tokens(path)
 
         done_event: AgentDoneEvent | None = None
         had_error = False
@@ -415,7 +415,7 @@ class PhosonRepl:
                 created = self.tree.append_many(self.current_node_id, new_messages)
                 self.current_node_id = created[-1].id
             # Update context tokens with the full history after the run
-            self._context_tokens = self.summarizer._estimator.count_messages(
+            self._context_tokens = self.summarizer.estimate_tokens(
                 done_event.result.history
             )
             # Update session metrics from run steps
@@ -524,7 +524,7 @@ class PhosonRepl:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
         short_model = self.current_model.split("/")[-1][:22]
         short_node = (self.current_node_id or "new")[:8]
-        # Mostrar indicador de attachments pendientes
+        # Show pending attachments indicator
         attach_indicator = f" 📎{len(self.attachments)}" if self.attachments else ""
 
         # Token context indicator

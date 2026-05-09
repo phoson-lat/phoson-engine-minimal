@@ -208,6 +208,20 @@ class SummarizationMiddleware(AgentMiddleware):
         )
         self._estimator = TokenEstimator.for_provider(self.provider)
 
+    def estimate_tokens(self, messages: list[Message]) -> int:
+        """Estimate the token count for a list of messages.
+
+        Delegates to the internal :class:`TokenEstimator` so callers never
+        need to reach into private attributes.
+
+        Args:
+            messages: The conversation messages to estimate.
+
+        Returns:
+            Estimated token count.
+        """
+        return self._estimator.count_messages(messages)
+
     # ── Core logic ────────────────────────────────────────────────────
 
     async def on_before_llm(
