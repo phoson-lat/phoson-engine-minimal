@@ -171,6 +171,13 @@ class OpenAIChat(BaseLLMChat):
                             args=args,
                         )
 
+                    # Clear buffers so any subsequent tool_calls in the same
+                    # response (unusual but possible) start fresh.
+                    tool_args_acc.clear()
+                    tool_ids.clear()
+                    tool_names.clear()
+                    tools_emitted = False
+
         except APIStatusError as e:
             code = map_error_code(e.status_code)
             yield ErrorEvent(
