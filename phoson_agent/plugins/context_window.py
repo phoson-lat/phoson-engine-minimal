@@ -107,6 +107,9 @@ class ContextWindowResolver:
         if model in self._ollama_cache:
             return self._ollama_cache[model]
 
+        # Fallback to default if Ollama is unreachable or returns an unexpected
+        # payload. We treat this as a soft-fail because the caller already
+        # accepts that resolution may be best-effort.
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
@@ -120,8 +123,10 @@ class ContextWindowResolver:
                     if num_ctx:
                         self._ollama_cache[model] = num_ctx
                         return num_ctx
-        except Exception:
-            pass  # Fall through to default
+        except (httpx.HTTPError, ValueError):
+            # httpx.HTTPError covers connect/timeout/protocol issues.
+            # ValueError covers JSON decoding problems.
+            pass
 
         self._ollama_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
@@ -159,6 +164,8 @@ class ContextWindowResolver:
         if model in self._openrouter_cache:
             return self._openrouter_cache[model]
 
+        # Same soft-fail policy as Ollama: best-effort lookup with default
+        # fallback. See _resolve_ollama for rationale.
         try:
             headers: dict[str, str] = {}
             if self._openrouter_api_key:
@@ -186,8 +193,8 @@ class ContextWindowResolver:
                                 val = int(ctx)
                                 self._openrouter_cache[model] = val
                                 return val
-        except Exception:
-            pass  # Fall through to default
+        except (httpx.HTTPError, ValueError):
+            pass
 
         self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW

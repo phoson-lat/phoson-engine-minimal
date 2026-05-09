@@ -8,6 +8,7 @@ from typing import Any
 from pathlib import Path
 
 from phoson_agent.plugin import Plugin, PluginSpec, PluginLoader
+from phoson_agent.exceptions import PhosonPluginLoadError, PhosonPluginConfigError
 
 
 class PluginRegistry:
@@ -33,7 +34,7 @@ class PluginRegistry:
     def register_loader(self, prefix: str, loader: PluginLoader) -> None:
         """
         Register a custom plugin loader.
-        
+
         Args:
             prefix: URL-like prefix (e.g., "github", "http")
             loader: Function that takes a plugin name and returns a Plugin instance
@@ -43,18 +44,22 @@ class PluginRegistry:
     def load(self, spec: PluginSpec) -> Plugin:
         """
         Load a plugin from a specification.
-        
+
         Supports formats:
         - "phoson-plugin-mcp" -> package loader
         - "package:phoson-plugin-mcp" -> explicit package loader
         - "path:/path/to/plugin.py" -> local file
         - "entrypoint:my-plugin" -> setuptools entry point
-        
+
         Args:
             spec: Plugin specification
-            
+
         Returns:
             Loaded and configured Plugin instance
+
+        Raises:
+            PhosonPluginConfigError: If the loader prefix is unknown.
+            PhosonPluginLoadError: If the plugin cannot be loaded.
         """
         if spec.instance:
             plugin = spec.instance
@@ -68,7 +73,7 @@ class PluginRegistry:
 
             loader = self._loaders.get(loader_name)
             if not loader:
-                raise ValueError(
+                raise PhosonPluginConfigError(
                     f"Unknown plugin loader '{loader_name}'. "
                     f"Available: {list(self._loaders.keys())}"
                 )
@@ -84,25 +89,29 @@ class PluginRegistry:
     def _load_from_package(self, name: str) -> Plugin:
         """
         Load plugin from an installed Python package.
-        
+
         Convention: package must have a `plugin` attribute at top level
         that is a Plugin instance or a callable that returns one.
-        
+
         Example:
             # phoson_plugin_mcp/__init__.py
             from .plugin import MCPPlugin
             plugin = MCPPlugin()
+
+        Raises:
+            PhosonPluginLoadError: If the package cannot be imported or has
+                no valid ``plugin`` attribute.
         """
         try:
             module = importlib.import_module(name.replace("-", "_"))
         except ImportError as exc:
-            raise ImportError(
+            raise PhosonPluginLoadError(
                 f"Failed to import plugin package '{name}'. "
                 f"Is it installed? (pip install {name})"
             ) from exc
 
         if not hasattr(module, "plugin"):
-            raise AttributeError(
+            raise PhosonPluginLoadError(
                 f"Plugin package '{name}' must have a 'plugin' attribute"
             )
 
@@ -114,28 +123,32 @@ class PluginRegistry:
         if callable(plugin_attr):
             result = plugin_attr()
             if not isinstance(result, Plugin):
-                raise TypeError(
+                raise PhosonPluginLoadError(
                     f"Plugin factory in '{name}' must return a Plugin instance"
                 )
             return result
 
-        raise TypeError(
+        raise PhosonPluginLoadError(
             f"Plugin attribute in '{name}' must be a Plugin instance or factory"
         )
 
     def _load_from_path(self, path_str: str) -> Plugin:
         """
         Load plugin from a local Python file.
-        
+
         The file must have a `plugin` variable or `create_plugin()` function.
+
+        Raises:
+            PhosonPluginLoadError: If the path is invalid or the plugin
+                cannot be loaded.
         """
         path = Path(path_str).expanduser().resolve()
 
         if not path.exists():
-            raise FileNotFoundError(f"Plugin file not found: {path}")
+            raise PhosonPluginLoadError(f"Plugin file not found: {path}")
 
         if not path.is_file():
-            raise ValueError(f"Plugin path must be a file: {path}")
+            raise PhosonPluginLoadError(f"Plugin path must be a file: {path}")
 
         # Add parent directory to sys.path temporarily
         parent_dir = str(path.parent)
@@ -144,7 +157,7 @@ class PluginRegistry:
         try:
             spec = importlib.util.spec_from_file_location(path.stem, path)
             if not spec or not spec.loader:
-                raise ImportError(f"Failed to load plugin from {path}")
+                raise PhosonPluginLoadError(f"Failed to load plugin from {path}")
 
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
@@ -161,7 +174,7 @@ class PluginRegistry:
                 factory = getattr(module, "create_plugin")
                 return factory()
 
-            raise AttributeError(
+            raise PhosonPluginLoadError(
                 f"Plugin file '{path}' must have 'plugin' or 'create_plugin()'"
             )
         finally:
@@ -170,10 +183,13 @@ class PluginRegistry:
     def _load_from_entrypoint(self, name: str) -> Plugin:
         """
         Load plugin from a setuptools entry point.
-        
+
         Entry points should be registered in pyproject.toml:
         [project.entry-points."phoson.plugins"]
         my-plugin = "my_package.plugin:create_plugin"
+
+        Raises:
+            PhosonPluginLoadError: If the entry point is missing or invalid.
         """
         try:
             from importlib.metadata import entry_points
@@ -191,7 +207,7 @@ class PluginRegistry:
             matches = [ep for ep in matches if ep.name == name]
 
         if not matches:
-            raise ValueError(
+            raise PhosonPluginLoadError(
                 f"No entry point found for plugin '{name}' in group '{group}'"
             )
 
@@ -204,10 +220,14 @@ class PluginRegistry:
         if callable(factory):
             result = factory()
             if not isinstance(result, Plugin):
-                raise TypeError(f"Entry point '{name}' must return a Plugin instance")
+                raise PhosonPluginLoadError(
+                    f"Entry point '{name}' must return a Plugin instance"
+                )
             return result
 
-        raise TypeError(f"Entry point '{name}' must be a Plugin or factory")
+        raise PhosonPluginLoadError(
+            f"Entry point '{name}' must be a Plugin or factory"
+        )
 
 
 # Global plugin registry

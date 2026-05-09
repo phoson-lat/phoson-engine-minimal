@@ -7,6 +7,7 @@ from typing import Any
 from collections.abc import Callable
 
 from phoson_agent.models import AgentTool
+from phoson_agent.exceptions import PhosonPluginConfigError
 from phoson_agent.middleware import AgentMiddleware
 
 
@@ -98,23 +99,29 @@ class PluginSpec:
         - str: plugin name/path
         - dict: {"name": "plugin-name", "config": {...}}
         - Plugin: already instantiated plugin
+
+        Raises:
+            PhosonPluginConfigError: If the dict has no 'name' key.
+            TypeError: If value is none of str, dict, or Plugin.
         """
-        if isinstance(value, Plugin):
-            return cls(name=value.name, instance=value)
-
-        if isinstance(value, str):
-            return cls(name=value)
-
-        if isinstance(value, dict):
-            name = value.get("name")
-            if not name:
-                raise ValueError("Plugin dict must have 'name' key")
-            config = value.get("config", {})
-            return cls(name=name, config=config)
-
-        raise TypeError(
-            f"Plugin must be str, dict, or Plugin instance, got {type(value)}"
-        )
+        match value:
+            case Plugin():
+                return cls(name=value.name, instance=value)
+            case str():
+                return cls(name=value)
+            case {"name": str(name), **rest}:
+                config = rest.get("config", {})
+                if not isinstance(config, dict):
+                    raise PhosonPluginConfigError(
+                        "Plugin config must be a dict if provided"
+                    )
+                return cls(name=name, config=config)
+            case dict():
+                raise PhosonPluginConfigError("Plugin dict must have 'name' key")
+            case _:
+                raise TypeError(
+                    f"Plugin must be str, dict, or Plugin instance, got {type(value)}"
+                )
 
 
 PluginLoader = Callable[[str], Plugin]

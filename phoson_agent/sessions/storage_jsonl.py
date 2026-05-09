@@ -3,6 +3,7 @@ import datetime
 from pathlib import Path
 from dataclasses import dataclass
 
+from phoson_agent.exceptions import PhosonSessionNotFoundError
 from phoson_agent.sessions.models import SessionMeta, SessionStorage, ConversationTree
 from phoson_agent.sessions.serialization import (
     node_to_dict,
@@ -63,11 +64,14 @@ class JsonlStorage(SessionStorage):
             The loaded ConversationTree.
 
         Raises:
-            FileNotFoundError: If session file doesn't exist.
+            PhosonSessionNotFoundError: If session file doesn't exist.
         """
         file_path = self._session_file(session_id)
         if not file_path.exists():
-            raise FileNotFoundError(f"Session {session_id} does not exist.")
+            raise PhosonSessionNotFoundError(
+                f"Session {session_id} does not exist.",
+                session_id=session_id,
+            )
 
         tree = ConversationTree.new(session_id=session_id)
         with file_path.open("r", encoding="utf-8") as f:
