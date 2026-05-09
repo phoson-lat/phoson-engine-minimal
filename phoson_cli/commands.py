@@ -16,7 +16,7 @@ To add a new command:
 That's it; the dispatch table picks it up automatically.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
@@ -28,6 +28,7 @@ from .provider_picker import pick_provider
 
 if TYPE_CHECKING:
     from .repl import PhosonRepl
+    from .renderer import Renderer
 
 
 # ─── Command spec ─────────────────────────────────────────────────────────────
@@ -166,7 +167,7 @@ class CommandHandler:
     # ── Helpers ─────────────────────────────────────────────────────────
 
     @property
-    def _r(self) -> Any:
+    def _r(self) -> "Renderer":
         """Shortcut to the renderer."""
         return self.repl.renderer
 
@@ -465,7 +466,7 @@ class _MCPSubcommands:
         return self._parent.repl
 
     @property
-    def r(self) -> Any:
+    def r(self) -> "Renderer":
         return self.repl.renderer
 
     async def dispatch(self, cmd: Command) -> bool:

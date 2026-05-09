@@ -12,6 +12,40 @@ from phoson_agent.plugin import Plugin, PluginSpec, PluginLoader
 from phoson_agent.exceptions import PhosonPluginLoadError, PhosonPluginConfigError
 
 
+def _resolve_plugin(attr: Any, source: str) -> Plugin:
+    """Resolve a module attribute to a :class:`Plugin` instance.
+
+    Accepts either a :class:`Plugin` instance directly or a zero-argument
+    callable (factory) that returns one.
+
+    Args:
+        attr: The object to resolve — either a Plugin or a factory.
+        source: Human-readable description of the origin (package/path/entry
+                point name) used in error messages.
+
+    Returns:
+        A :class:`Plugin` instance.
+
+    Raises:
+        PhosonPluginLoadError: If ``attr`` is neither a Plugin nor a callable,
+            or if the callable returns a non-Plugin value.
+    """
+    if isinstance(attr, Plugin):
+        return attr
+    if callable(attr):
+        result = attr()
+        if not isinstance(result, Plugin):
+            raise PhosonPluginLoadError(
+                f"Plugin factory from '{source}' must return a Plugin instance, "
+                f"got {type(result).__name__}"
+            )
+        return result
+    raise PhosonPluginLoadError(
+        f"Plugin from '{source}' must be a Plugin instance or factory, "
+        f"got {type(attr).__name__}"
+    )
+
+
 class PluginRegistry:
     """
     Registry for plugin loaders.
@@ -117,21 +151,7 @@ class PluginRegistry:
             )
 
         plugin_attr = getattr(module, "plugin")
-
-        if isinstance(plugin_attr, Plugin):
-            return plugin_attr
-
-        if callable(plugin_attr):
-            result = plugin_attr()
-            if not isinstance(result, Plugin):
-                raise PhosonPluginLoadError(
-                    f"Plugin factory in '{name}' must return a Plugin instance"
-                )
-            return result
-
-        raise PhosonPluginLoadError(
-            f"Plugin attribute in '{name}' must be a Plugin instance or factory"
-        )
+        return _resolve_plugin(plugin_attr, name)
 
     def _load_from_path(self, path_str: str) -> Plugin:
         """
@@ -165,27 +185,10 @@ class PluginRegistry:
 
             # Try to get plugin
             if hasattr(module, "plugin"):
-                plugin_attr = getattr(module, "plugin")
-                if isinstance(plugin_attr, Plugin):
-                    return plugin_attr
-                if callable(plugin_attr):
-                    instance = plugin_attr()
-                    if not isinstance(instance, Plugin):
-                        raise PhosonPluginLoadError(
-                            f"'plugin' callable in {path} returned "
-                            f"{type(instance).__name__}, expected Plugin"
-                        )
-                    return instance
+                return _resolve_plugin(getattr(module, "plugin"), str(path))
 
             if hasattr(module, "create_plugin"):
-                factory = getattr(module, "create_plugin")
-                instance = factory()
-                if not isinstance(instance, Plugin):
-                    raise PhosonPluginLoadError(
-                        f"'create_plugin()' in {path} returned "
-                        f"{type(instance).__name__}, expected Plugin"
-                    )
-                return instance
+                return _resolve_plugin(getattr(module, "create_plugin"), str(path))
 
             raise PhosonPluginLoadError(
                 f"Plugin file '{path}' must have 'plugin' or 'create_plugin()'"
@@ -229,22 +232,7 @@ class PluginRegistry:
             )
 
         ep = matches[0]
-        factory = ep.load()
-
-        if isinstance(factory, Plugin):
-            return factory
-
-        if callable(factory):
-            result = factory()
-            if not isinstance(result, Plugin):
-                raise PhosonPluginLoadError(
-                    f"Entry point '{name}' must return a Plugin instance"
-                )
-            return result
-
-        raise PhosonPluginLoadError(
-            f"Entry point '{name}' must be a Plugin or factory"
-        )
+        return _resolve_plugin(ep.load(), name)
 
 
 # Global plugin registry

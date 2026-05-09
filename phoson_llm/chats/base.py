@@ -13,6 +13,25 @@ from phoson_llm.schemas import (
 from phoson_llm.exceptions import PhosonProviderError, PhosonLLMProtocolError
 
 
+def _check_no_running_loop(method_name: str) -> None:
+    """Raise RuntimeError if called from within a running event loop.
+
+    Args:
+        method_name: The sync method name to include in the error message.
+
+    Raises:
+        RuntimeError: If a running event loop is detected.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop running — safe to proceed
+    raise RuntimeError(
+        f"{method_name}() cannot be called from within a running event loop. "
+        f"Use the async version instead."
+    )
+
+
 class BaseLLMChat(ABC):
     """
     Base contract for all provider adapters (Anthropic, OpenAI, Google, ...).
@@ -116,15 +135,7 @@ class BaseLLMChat(ABC):
         Raises:
             RuntimeError: If called from within a running event loop.
         """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            raise RuntimeError(
-                "stream_sync() cannot be called from within a running event loop. "
-                "Use stream() instead."
-            )
+        _check_no_running_loop("stream_sync")
 
         async def _collect() -> list[LLMEvent]:
             return [event async for event in self.stream(messages, config, tools)]
@@ -159,14 +170,5 @@ class BaseLLMChat(ABC):
             PhosonLLMProtocolError: If the stream did not emit LLMDoneEvent.
             RuntimeError: If called from within a running event loop.
         """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            pass
-        else:
-            raise RuntimeError(
-                "complete_sync() cannot be called from within a running event loop. "
-                "Use complete() instead."
-            )
-
+        _check_no_running_loop("complete_sync")
         return asyncio.run(self.complete(messages, config, tools))
