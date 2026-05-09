@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 
+# Prices are stored per million tokens for readability; we divide by this
+# constant when computing the cost of an actual call.
+_TOKENS_PER_MILLION = 1_000_000
+
 
 @dataclass(frozen=True)
 class PriceEntry:
@@ -12,11 +16,6 @@ class PriceEntry:
     output: float
     cache_write: float = 0.0
     cache_read: float = 0.0
-
-
-def _per_million(n: float) -> float:
-    """Converts an absolute value to cost per million."""
-    return n / 1_000_000
 
 
 # ─── Price table (per million tokens, USD) ────────────────────────────────────
@@ -112,10 +111,10 @@ def calculate_cost(
         return 0.0, False
 
     cost = (
-        input_tokens * _per_million(entry.input)
-        + output_tokens * _per_million(entry.output)
-        + cache_write_tokens * _per_million(entry.cache_write)
-        + cache_read_tokens * _per_million(entry.cache_read)
-    )
+        input_tokens * entry.input
+        + output_tokens * entry.output
+        + cache_write_tokens * entry.cache_write
+        + cache_read_tokens * entry.cache_read
+    ) / _TOKENS_PER_MILLION
 
     return round(cost, 8), True
