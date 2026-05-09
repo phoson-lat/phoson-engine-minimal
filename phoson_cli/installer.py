@@ -35,15 +35,38 @@ _PHOS_ART = (
 
 
 class SetupWizard:
+    """Interactive terminal wizard that guides the user through initial setup.
+
+    Prompts for provider credentials, default models, and runtime options,
+    then writes the result to ``~/.phoson/config.toml`` via
+    :func:`~phoson_cli.config.save_config`.
+    """
+
     def __init__(
         self, config: PhosonConfig | None = None, console: Console | None = None
     ):
+        """Initialize the wizard.
+
+        Args:
+            config: Existing configuration to pre-populate prompts with.
+                    Defaults to a fresh :class:`~phoson_cli.config.PhosonConfig`.
+            console: Rich console for output. Defaults to a plain Console.
+        """
         self.console = console or Console(highlight=False)
         self.config = config or PhosonConfig()
         self.enabled_providers = self._infer_enabled_providers(self.config)
         self.session = PromptSession(style=_PROMPT_STYLE)
 
     async def run(self) -> PhosonConfig:
+        """Run the full wizard and return the final configuration.
+
+        Steps through banner, provider selection, credentials, defaults, and
+        runtime options. Offers to save when complete.
+
+        Returns:
+            The configured :class:`~phoson_cli.config.PhosonConfig` (saved or
+            unsaved, depending on the user's choice).
+        """
         self._print_banner()
         self._print_intro()
         await self._pick_enabled_providers()
@@ -68,6 +91,7 @@ class SetupWizard:
         return self.config
 
     def _print_banner(self) -> None:
+        """Render the ASCII art banner and wizard title."""
         art = Text(_PHOS_ART, style="medium_purple1 bold")
         subtitle = Text()
         subtitle.append("phoson setup wizard\n", style="bold medium_purple1")
@@ -81,6 +105,7 @@ class SetupWizard:
         self.console.print(Rule(style="plum4"))
 
     def _print_intro(self) -> None:
+        """Print the introductory welcome panel."""
         welcome = (
             "[bold]Welcome[/bold] — this wizard lets you enable one or more "
             "providers,\n"
@@ -96,6 +121,11 @@ class SetupWizard:
         )
 
     async def _pick_enabled_providers(self) -> None:
+        """Interactively toggle which providers are enabled.
+
+        Displays a numbered list and lets the user toggle entries by typing
+        their numbers. Updates ``self.enabled_providers`` in place.
+        """
         providers = ["openrouter", "openai", "anthropic", "ollama"]
         selected = set(self.enabled_providers)
 
@@ -135,6 +165,14 @@ class SetupWizard:
                         selected.add(provider)
 
     async def _configure_providers(self, config: PhosonConfig) -> PhosonConfig:
+        """Prompt for API credentials for each enabled provider.
+
+        Args:
+            config: Configuration object to mutate with the collected credentials.
+
+        Returns:
+            The updated configuration.
+        """
         self.console.print()
         self.console.print(Text("Provider credentials", style="bold medium_purple1"))
 
@@ -161,6 +199,17 @@ class SetupWizard:
         return config
 
     async def _configure_defaults(self, config: PhosonConfig) -> PhosonConfig:
+        """Prompt for default provider, main model, and sub-agent model.
+
+        Fetches available models from the provider's API and shows the top 8
+        as suggestions.
+
+        Args:
+            config: Configuration object to mutate.
+
+        Returns:
+            The updated configuration.
+        """
         self.console.print()
         self.console.print(
             Text("Default runtime selection", style="bold medium_purple1")
@@ -190,6 +239,14 @@ class SetupWizard:
         return config
 
     async def _configure_runtime(self, config: PhosonConfig) -> PhosonConfig:
+        """Prompt for runtime settings: sessions directory, iteration budget, safe mode.
+
+        Args:
+            config: Configuration object to mutate.
+
+        Returns:
+            The updated configuration.
+        """
         self.console.print()
         self.console.print(Text("Runtime options", style="bold medium_purple1"))
         config.sessions_dir = Path(
@@ -206,6 +263,11 @@ class SetupWizard:
         return config
 
     def _print_summary(self, config: PhosonConfig) -> None:
+        """Render a Rich table summarizing all collected configuration values.
+
+        Args:
+            config: The configuration to display.
+        """
         table = Table(title="Phoson configuration summary", box=box.ROUNDED)
         table.add_column("Setting", style="medium_purple1 bold")
         table.add_column("Value", style="white")
@@ -224,6 +286,16 @@ class SetupWizard:
         self.console.print(table)
 
     async def _choose_default_provider(self, current: str) -> str:
+        """Prompt the user to select the default provider from enabled ones.
+
+        Accepts a number, a provider name, or Enter to keep ``current``.
+
+        Args:
+            current: The currently active provider name.
+
+        Returns:
+            The selected provider name.
+        """
         while True:
             self.console.print(
                 Text(
@@ -248,6 +320,17 @@ class SetupWizard:
             self.console.print("[indian_red1]Invalid provider selection.[/indian_red1]")
 
     async def _prompt_text(self, label: str, default: str | None = None) -> str:
+        """Display a labeled text prompt and return the user's input.
+
+        Returns ``default`` when the user submits an empty response.
+
+        Args:
+            label: The prompt label shown to the user.
+            default: Value returned on empty input.
+
+        Returns:
+            The entered text, or ``default`` if nothing was typed.
+        """
         suffix = f" [{default}]" if default else ""
         result = await self.session.prompt_async(
             [
@@ -260,6 +343,15 @@ class SetupWizard:
         return result.strip() or (default or "")
 
     async def _int_prompt(self, label: str, default: int) -> int:
+        """Prompt for an integer value, retrying until a valid integer is entered.
+
+        Args:
+            label: The prompt label shown to the user.
+            default: Value used when the user submits an empty response.
+
+        Returns:
+            The parsed integer.
+        """
         while True:
             value = await self._prompt_text(label, str(default))
             try:
@@ -272,6 +364,18 @@ class SetupWizard:
     async def _secret_prompt(
         self, label: str, default: str | None = None
     ) -> str | None:
+        """Prompt for a secret value (e.g. API key) with masked input.
+
+        Displays a masked version of the current value as the default hint.
+        Returns the existing value unchanged when the user submits nothing.
+
+        Args:
+            label: The prompt label shown to the user.
+            default: Existing secret value; shown masked, returned on empty input.
+
+        Returns:
+            The entered secret, or ``default`` if nothing was typed.
+        """
         masked = self._mask_secret(default)
         suffix = f" [{masked}]" if default else ""
         result = await self.session.prompt_async(
@@ -286,6 +390,15 @@ class SetupWizard:
         return result or default
 
     async def _confirm(self, label: str, default: bool = True) -> bool:
+        """Prompt for a yes/no confirmation.
+
+        Args:
+            label: Question text shown to the user.
+            default: Value returned when the user submits an empty response.
+
+        Returns:
+            ``True`` for affirmative responses, ``False`` otherwise.
+        """
         suffix = "Y/n" if default else "y/N"
         result = await self._prompt_text(f"{label} ({suffix})", "")
         value = result.strip().lower()
@@ -294,6 +407,17 @@ class SetupWizard:
         return value in {"y", "yes", "1", "true", "on"}
 
     def _mask_secret(self, value: str | None) -> str:
+        """Return a masked representation of a secret string.
+
+        Shows the first and last 4 characters for secrets longer than 8
+        characters; replaces everything else with bullet characters.
+
+        Args:
+            value: The secret to mask, or ``None``.
+
+        Returns:
+            A masked string, or ``"—"`` when ``value`` is absent.
+        """
         if not value:
             return "—"
         if len(value) <= 8:
@@ -301,6 +425,18 @@ class SetupWizard:
         return f"{value[:4]}{'•' * (len(value) - 8)}{value[-4:]}"
 
     def _infer_enabled_providers(self, config: PhosonConfig) -> list[str]:
+        """Infer which providers are likely enabled from the config.
+
+        A provider is considered enabled when its credential is present *or*
+        it is the currently configured active provider (so the wizard always
+        shows at least one entry pre-selected).
+
+        Args:
+            config: The current configuration to inspect.
+
+        Returns:
+            Ordered list of enabled provider names.
+        """
         enabled: list[str] = []
         if config.openrouter_api_key or config.provider == "openrouter":
             enabled.append("openrouter")
