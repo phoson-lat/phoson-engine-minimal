@@ -6,6 +6,7 @@ the LLM chat clients.
 """
 
 import os
+import warnings
 import tomllib
 from typing import Any
 from pathlib import Path
@@ -47,13 +48,19 @@ def _parse_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _parse_int(value: str | None, default: int) -> int:
-    """Parse string to integer."""
+def _parse_int(value: str | None, default: int, *, env_var: str = "") -> int:
+    """Parse string to integer, warning on malformed input."""
     if value is None:
         return default
     try:
         return int(value)
     except ValueError:
+        source = f" (from {env_var})" if env_var else ""
+        warnings.warn(
+            f"Ignoring invalid integer value {value!r}{source}; using default {default}.",
+            UserWarning,
+            stacklevel=2,
+        )
         return default
 
 
@@ -100,11 +107,11 @@ def load_config() -> PhosonConfig:
         or file_defaults.get("sessions_dir")
         or str(defaults.sessions_dir)
     )
-    max_iterations = _parse_int(
-        os.environ.get("PHOSON_MAX_ITERATIONS")
-        or str(file_defaults.get("max_iterations", defaults.max_iterations)),
-        defaults.max_iterations,
-    )
+    _max_iter_env = os.environ.get("PHOSON_MAX_ITERATIONS")
+    if _max_iter_env is not None:
+        max_iterations = _parse_int(_max_iter_env, defaults.max_iterations, env_var="PHOSON_MAX_ITERATIONS")
+    else:
+        max_iterations = int(file_defaults.get("max_iterations", defaults.max_iterations))
     safe_mode = _parse_bool(
         os.environ.get("PHOSON_SAFE_MODE")
         if "PHOSON_SAFE_MODE" in os.environ
