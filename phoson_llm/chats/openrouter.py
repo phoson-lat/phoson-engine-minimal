@@ -1,55 +1,53 @@
+"""OpenRouter adapter.
+
+OpenRouter speaks the OpenAI Chat Completions protocol with a different
+base URL and a few optional analytics headers. The streaming loop is
+the shared one in :mod:`phoson_llm.chats._openai_compatible`; this
+module just configures the client.
+
+The cost callback returns ``(0.0, False)`` because OpenRouter charges
+based on the upstream provider it routes to and the price table here
+would never be authoritative. Consumers that need a cost reading for
+OpenRouter should subscribe to OpenRouter's own ``/credits`` endpoint
+or pass a custom ``cost_calculator`` through a thin subclass.
+"""
+
 import os
 from collections.abc import AsyncIterator
 
-from openai import AsyncOpenAI, APIStatusError, APIConnectionError
+from openai import AsyncOpenAI
 
-from phoson_llm.utils import map_error_code
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
-    ErrorEvent,
-    TokenEvent,
-    TokenUsage,
-    UsageEvent,
     ModelConfig,
-    LLMDoneEvent,
-    LLMStartEvent,
-    ToolCallEvent,
     ToolDefinition,
-    ReasoningDoneEvent,
-    ToolCallDeltaEvent,
-    ReasoningStartEvent,
-    ReasoningTokenEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_llm.chats._openai_compatible import (
-    _convert_tools,
-    _parse_tool_args,
-    _convert_messages,
-    _extract_reasoning_delta,
-)
+from phoson_llm.chats._openai_compatible import stream_chat_completions
+
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class OpenRouterChat(BaseLLMChat):
-    """Adapter for OpenRouter API (multi-provider aggregation).
-
-    Provides unified interface to various LLM providers through OpenRouter.
-    """
+    """Adapter for the OpenRouter API (multi-provider aggregation)."""
 
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = "https://openrouter.ai/api/v1",
+        base_url: str = DEFAULT_BASE_URL,
         http_referer: str | None = None,
         app_title: str | None = None,
     ) -> None:
         """Initialize the OpenRouter client.
 
         Args:
-            api_key: OpenRouter API key. Defaults to OPENROUTER_API_KEY env var.
+            api_key: OpenRouter API key. Defaults to ``OPENROUTER_API_KEY``.
             base_url: OpenRouter API base URL.
-            http_referer: Optional HTTP referer for API calls.
-            app_title: Optional application title for OpenRouter analytics.
+            http_referer: Optional ``HTTP-Referer`` header for OpenRouter
+                analytics and ranked routing.
+            app_title: Optional ``X-OpenRouter-Title`` header for
+                OpenRouter analytics.
         """
         default_headers: dict[str, str] = {}
         if http_referer:
@@ -69,156 +67,15 @@ class OpenRouterChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        """Stream a response from the OpenRouter model.
-
-        Args:
-            messages: List of conversation messages.
-            config: Model configuration (model, max_tokens, temperature, etc.).
-            tools: Optional list of tool definitions.
-
-        Yields:
-            LLMEvent objects representing the model's response stream.
-        """
-        kwargs: dict = {
-            "model": config.model,
-            "max_tokens": config.max_tokens,
-            "messages": _convert_messages(messages),
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-
-        if config.system:
-            kwargs["messages"] = [
-                m for m in kwargs["messages"] if m.get("role") != "system"
-            ]
-            kwargs["messages"].insert(
-                0,
-                {
-                    "role": "system",
-                    "content": config.system,
-                },
-            )
-
-        if config.temperature is not None:
-            kwargs["temperature"] = config.temperature
-
-        if tools:
-            kwargs["tools"] = _convert_tools(tools)
-
-        if config.reasoning_effort:
-            kwargs["reasoning_effort"] = config.reasoning_effort
-            kwargs.pop("temperature", None)
-
-        text_acc = ""
-        reasoning_acc = ""
-        tool_args_acc: dict[int, str] = {}
-        tool_names: dict[int, str] = {}
-        tool_ids: dict[int, str] = {}
-        has_tool_calls = False
-        final_usage = None
-        tools_emitted = False
-
-        yield LLMStartEvent(model=config.model, message_count=len(messages))
-
-        try:
-            async for chunk in await self._client.chat.completions.create(**kwargs):
-                if not chunk.choices:
-                    if chunk.usage:
-                        final_usage = chunk.usage
-                    continue
-
-                delta = chunk.choices[0].delta
-
-                if delta.content:
-                    text_acc += delta.content
-                    yield TokenEvent(content=delta.content)
-
-                reasoning_chunk = _extract_reasoning_delta(delta)
-                if reasoning_chunk:
-                    if not reasoning_acc:
-                        yield ReasoningStartEvent()
-                    reasoning_acc += reasoning_chunk
-                    yield ReasoningTokenEvent(content=reasoning_chunk)
-
-                if delta.tool_calls:
-                    has_tool_calls = True
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-
-                        tool_args_acc.setdefault(idx, "")
-
-                        if tc.id:
-                            tool_ids[idx] = tc.id
-
-                        if tc.function and tc.function.name:
-                            tool_names[idx] = tc.function.name
-
-                        if tc.function and tc.function.arguments:
-                            chunk_str = tc.function.arguments
-                            tool_args_acc[idx] += chunk_str
-                            yield ToolCallDeltaEvent(
-                                index=idx,
-                                tool_name=tool_names.get(idx, ""),
-                                args_chunk=chunk_str,
-                            )
-
-                finish = chunk.choices[0].finish_reason
-                if finish == "tool_calls" and not tools_emitted:
-                    tools_emitted = True
-                    for idx, raw in tool_args_acc.items():
-                        if idx not in tool_ids or idx not in tool_names:
-                            continue
-
-                        yield ToolCallEvent(
-                            index=idx,
-                            tool_call_id=tool_ids[idx],
-                            tool_name=tool_names[idx],
-                            args=_parse_tool_args(raw),
-                        )
-
-                    # Clear buffers so any subsequent tool_calls in the same
-                    # response (unusual but possible) start fresh.
-                    tool_args_acc.clear()
-                    tool_ids.clear()
-                    tool_names.clear()
-                    tools_emitted = False
-
-        except APIStatusError as e:
-            code = map_error_code(e.status_code)
-            yield ErrorEvent(
-                message=str(e.message),
-                code=code,
-                retryable=code == "rate_limit",
-            )
-            return
-
-        except APIConnectionError as e:
-            yield ErrorEvent(
-                message=str(e),
-                code="connection_error",
-                retryable=True,
-            )
-            return
-
-        if reasoning_acc:
-            yield ReasoningDoneEvent(content=reasoning_acc)
-
-        if final_usage:
-            usage = TokenUsage(
-                input=getattr(final_usage, "prompt_tokens", 0) or 0,
-                output=getattr(final_usage, "completion_tokens", 0) or 0,
-                cache_read=getattr(
-                    getattr(final_usage, "prompt_tokens_details", None),
-                    "cached_tokens",
-                    0,
-                )
-                or 0,
-            )
-            yield UsageEvent(
-                model=config.model,
-                usage=usage,
-                cost_usd=0.0,
-                cost_known=False,
-            )
-
-        yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
+        """Stream a response from the OpenRouter model."""
+        async for event in stream_chat_completions(
+            self._client,
+            messages=messages,
+            config=config,
+            tools=tools,
+            # OpenRouter still accepts the legacy `max_tokens` field across
+            # all providers it routes to, so we keep using it.
+            max_tokens_key="max_tokens",
+            # Cost is unknown — OpenRouter mediates many providers.
+        ):
+            yield event

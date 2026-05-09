@@ -2,7 +2,7 @@
 
 import pytest
 
-from phoson_llm.chats import openai as openai_module
+from phoson_llm.chats import _openai_compatible as openai_module
 from phoson_llm.chats import anthropic as anthropic_module
 from phoson_llm.schemas import (
     Message,
