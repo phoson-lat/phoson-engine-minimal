@@ -21,7 +21,14 @@ from collections.abc import AsyncIterator
 
 import tiktoken
 
-from phoson_llm.schemas import Message, LLMEvent, TokenEvent, ModelConfig
+from phoson_llm.schemas import (
+    Message,
+    LLMEvent,
+    ErrorEvent,
+    TokenEvent,
+    UsageEvent,
+    ModelConfig,
+)
 from phoson_agent.models import AgentEvent
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
@@ -176,9 +183,11 @@ class SummarizationMiddleware(AgentMiddleware):
     openrouter_api_key: str | None = None
     summary_prompt_template: str = SUMMARY_PROMPT_TEMPLATE
 
-    # Internal state
-    _resolver: ContextWindowResolver = field(default=None, repr=False)  # type: ignore
-    _estimator: TokenEstimator | None = field(default=None, repr=False)
+    # Internal state. Both are constructed in ``__post_init__``; using
+    # ``init=False`` keeps them out of the dataclass constructor and out of
+    # ``repr()``. They are non-Optional after ``__post_init__`` runs.
+    _resolver: ContextWindowResolver = field(init=False, repr=False)
+    _estimator: TokenEstimator = field(init=False, repr=False)
     _pending_compact_events: list[SummarizationEvent] = field(
         default_factory=list, repr=False
     )
@@ -263,9 +272,19 @@ class SummarizationMiddleware(AgentMiddleware):
 
         summary_text = ""
         async for event in call_next(summary_messages, summary_config):
-            # We consume the summary call silently — don't yield these events
+            # We swallow visual events (start/token/done) from the
+            # internal summary call to keep the UX clean, but we MUST
+            # forward UsageEvent so the caller can account for the cost
+            # of the summarization itself, and ErrorEvent so failures
+            # are visible.
             if isinstance(event, TokenEvent):
                 summary_text += event.content
+                continue
+            if isinstance(event, (UsageEvent, ErrorEvent)):
+                yield event
+                continue
+            # Drop LLMStart/LLMDone/Reasoning/ToolCall events — they
+            # belong to the internal summary turn, not to the user's.
 
         # Build compacted messages
         compacted = list(system_msgs)
