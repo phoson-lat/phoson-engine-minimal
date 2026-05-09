@@ -7,6 +7,8 @@ the LLM chat clients.
 
 import os
 import tomllib
+import warnings
+from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -15,6 +17,10 @@ from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.openrouter import OpenRouterChat
+
+
+class PhosonConfigError(Exception):
+    """Raised when the Phoson configuration file is malformed or invalid."""
 
 
 @dataclass
@@ -31,6 +37,8 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    enable_mcp: bool = False
+    mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -40,85 +48,128 @@ def _parse_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _parse_int(value: str | None, default: int) -> int:
-    """Parse string to integer."""
+def _parse_int(value: str | None, default: int, *, env_var: str = "") -> int:
+    """Parse string to integer, warning on malformed input."""
     if value is None:
         return default
     try:
         return int(value)
     except ValueError:
+        source = f" (from {env_var})" if env_var else ""
+        warnings.warn(
+            f"Ignoring invalid integer value {value!r}{source};"
+            f" using default {default}.",
+            UserWarning,
+            stacklevel=2,
+        )
         return default
 
 
-def _load_file_defaults(config_path: Path) -> dict:
-    """Load defaults from the config TOML file."""
+def _load_file_defaults(config_path: Path) -> dict[str, Any]:
+    """Load defaults from the config TOML file.
+
+    Raises:
+        PhosonConfigError: If the file exists but contains invalid TOML.
+    """
     if not config_path.exists():
         return {}
-    with config_path.open("rb") as f:
-        raw = tomllib.load(f)
+    try:
+        with config_path.open("rb") as f:
+            raw = tomllib.load(f)
+    except tomllib.TOMLDecodeError as exc:
+        raise PhosonConfigError(
+            f"Malformed configuration file {config_path}: {exc}"
+        ) from exc
     defaults = raw.get("defaults", {})
     return defaults if isinstance(defaults, dict) else {}
 
 
-def load_config() -> PhosonConfig:
-    """Load configuration from files and environment."""
-    defaults = PhosonConfig()
-    cfg_file = Path("~/.phoson/config.toml").expanduser()
-    file_defaults = _load_file_defaults(cfg_file)
+# ── Per-type resolution helpers (env → file → default) ───────────────────────
 
-    model = (
-        os.environ.get("PHOSON_MODEL") or file_defaults.get("model") or defaults.model
-    )
-    subagent_model = (
-        os.environ.get("PHOSON_SUBAGENT_MODEL")
-        or file_defaults.get("subagent_model")
-        or defaults.subagent_model
-    )
-    provider = (
-        os.environ.get("PHOSON_PROVIDER")
-        or file_defaults.get("provider")
-        or defaults.provider
-    )
-    sessions_dir_raw = (
-        os.environ.get("PHOSON_SESSIONS_DIR")
-        or file_defaults.get("sessions_dir")
-        or str(defaults.sessions_dir)
-    )
-    max_iterations = _parse_int(
-        os.environ.get("PHOSON_MAX_ITERATIONS")
-        or str(file_defaults.get("max_iterations", defaults.max_iterations)),
-        defaults.max_iterations,
-    )
-    safe_mode = _parse_bool(
-        os.environ.get("PHOSON_SAFE_MODE")
-        if "PHOSON_SAFE_MODE" in os.environ
-        else (
-            str(file_defaults["safe_mode"])
-            if "safe_mode" in file_defaults
-            else str(defaults.safe_mode)
-        ),
-        defaults.safe_mode,
-    )
+
+def _resolve_str(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: str,
+) -> str:
+    return str(os.environ.get(env_var) or fd.get(file_key) or default)
+
+
+def _resolve_optional_str(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: str | None,
+) -> str | None:
+    value = os.environ.get(env_var) or fd.get(file_key) or default
+    return str(value) if value else None
+
+
+def _resolve_bool(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: bool,
+) -> bool:
+    if env_var in os.environ:
+        return _parse_bool(os.environ[env_var], default)
+    if file_key in fd:
+        return bool(fd[file_key])
+    return default
+
+
+def _resolve_int(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: int,
+) -> int:
+    if env_var in os.environ:
+        return _parse_int(os.environ[env_var], default, env_var=env_var)
+    return int(fd.get(file_key, default))
+
+
+def load_config() -> PhosonConfig:
+    """Load configuration from files and environment variables.
+
+    Resolution order for each setting: environment variable →
+    ``~/.phoson/config.toml`` ``[defaults]`` section → built-in default.
+    """
+    d = PhosonConfig()
+    fd = _load_file_defaults(Path("~/.phoson/config.toml").expanduser())
 
     cfg = PhosonConfig(
-        model=str(model),
-        subagent_model=str(subagent_model) if subagent_model else None,
-        provider=str(provider).lower(),
-        openrouter_api_key=(
-            os.environ.get("OPENROUTER_API_KEY")
-            or file_defaults.get("openrouter_api_key")
+        model=_resolve_str("PHOSON_MODEL", "model", fd, d.model),
+        subagent_model=_resolve_optional_str(
+            "PHOSON_SUBAGENT_MODEL", "subagent_model", fd, d.subagent_model
         ),
-        openai_api_key=os.environ.get("OPENAI_API_KEY")
-        or file_defaults.get("openai_api_key"),
-        anthropic_api_key=(
-            os.environ.get("ANTHROPIC_API_KEY")
-            or file_defaults.get("anthropic_api_key")
+        provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
+        openrouter_api_key=_resolve_optional_str(
+            "OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key
         ),
-        ollama_base_url=os.environ.get("OLLAMA_BASE_URL")
-        or file_defaults.get("ollama_base_url"),
-        sessions_dir=Path(str(sessions_dir_raw)).expanduser(),
-        max_iterations=max_iterations,
-        safe_mode=safe_mode,
+        openai_api_key=_resolve_optional_str(
+            "OPENAI_API_KEY", "openai_api_key", fd, d.openai_api_key
+        ),
+        anthropic_api_key=_resolve_optional_str(
+            "ANTHROPIC_API_KEY", "anthropic_api_key", fd, d.anthropic_api_key
+        ),
+        ollama_base_url=_resolve_optional_str(
+            "OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url
+        ),
+        sessions_dir=Path(
+            _resolve_str("PHOSON_SESSIONS_DIR", "sessions_dir", fd, str(d.sessions_dir))
+        ).expanduser(),
+        max_iterations=_resolve_int(
+            "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
+        ),
+        safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
+        mcp_config_file=Path(
+            _resolve_str(
+                "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
+            )
+        ).expanduser(),
     )
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
@@ -142,17 +193,7 @@ def save_config(config: PhosonConfig) -> Path:
             rendered = f'"{escaped}"'
         return f"{key} = {rendered}"
 
-    enabled_providers: list[str] = []
-    if config.openrouter_api_key:
-        enabled_providers.append("openrouter")
-    if config.openai_api_key:
-        enabled_providers.append("openai")
-    if config.anthropic_api_key:
-        enabled_providers.append("anthropic")
-    if config.ollama_base_url:
-        enabled_providers.append("ollama")
-    if config.provider not in enabled_providers:
-        enabled_providers.append(config.provider)
+    enabled_providers = enabled_providers_from_config(config)
 
     lines = ["[defaults]"]
     for line in [
@@ -167,12 +208,35 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(config.sessions_dir)),
         _line("max_iterations", config.max_iterations),
         _line("safe_mode", config.safe_mode),
+        _line("enable_mcp", config.enable_mcp),
+        _line("mcp_config_file", str(config.mcp_config_file)),
     ]:
         if line:
             lines.append(line)
 
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config_path
+
+
+def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
+    """Return the list of usable providers derived from ``config``.
+
+    A provider is considered enabled when its credential (API key or base URL)
+    is present. The active ``config.provider`` is always included so the REPL
+    never ends up with an empty list.
+    """
+    providers: list[str] = []
+    if config.openrouter_api_key:
+        providers.append("openrouter")
+    if config.openai_api_key:
+        providers.append("openai")
+    if config.anthropic_api_key:
+        providers.append("anthropic")
+    if config.ollama_base_url:
+        providers.append("ollama")
+    if config.provider not in providers:
+        providers.append(config.provider)
+    return providers
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:

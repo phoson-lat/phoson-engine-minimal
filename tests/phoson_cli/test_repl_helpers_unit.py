@@ -1,4 +1,4 @@
-from phoson_cli.repl import _message_preview
+from phoson_cli._views import _message_preview
 
 
 def test_message_preview_string_short() -> None:

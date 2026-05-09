@@ -1,6 +1,7 @@
 """Entry point for the Phoson CLI application."""
 
 import sys
+import shutil
 import asyncio
 import subprocess
 from pathlib import Path
@@ -10,13 +11,14 @@ from phoson_cli.config import load_config
 from phoson_cli.installer import run_install_wizard
 
 
-async def self_update() -> None:
+def self_update() -> None:
     """Upgrade phoson-cli to the latest version via uv."""
     print("Updating phoson-cli...")
     result = subprocess.run(
         ["uv", "tool", "upgrade", "phoson-engine-minimal"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode == 0:
         print("Update complete!")
@@ -25,16 +27,15 @@ async def self_update() -> None:
         sys.exit(1)
 
 
-async def uninstall() -> None:
+def uninstall() -> None:
     """Remove phoson-cli and optionally config."""
-    import shutil
-
     print("Uninstalling phoson-cli...")
 
     result = subprocess.run(
         ["uv", "tool", "uninstall", "phoson-engine-minimal"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode == 0:
         print("Package uninstalled.")
@@ -54,11 +55,11 @@ def main() -> None:
     args = sys.argv[1:]
 
     if "--self-update" in args:
-        asyncio.run(self_update())
+        self_update()
         return
 
     if "--uninstall" in args:
-        asyncio.run(uninstall())
+        uninstall()
         return
 
     if any(arg in {"--install", "--setup"} for arg in args):

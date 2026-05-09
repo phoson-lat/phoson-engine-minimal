@@ -1,3 +1,4 @@
+import warnings
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 
@@ -42,7 +43,10 @@ async def _list_openai_models(config: PhosonConfig) -> list[ModelOption]:
             )
             response.raise_for_status()
             data = response.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError) as exc:
+        warnings.warn(
+            f"Failed to fetch OpenAI models: {exc}", UserWarning, stacklevel=2
+        )
         return [ModelOption(id=config.model, label=config.model, provider="openai")]
 
     options = [
@@ -74,7 +78,10 @@ async def _list_anthropic_models(config: PhosonConfig) -> list[ModelOption]:
             )
             response.raise_for_status()
             data = response.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError) as exc:
+        warnings.warn(
+            f"Failed to fetch Anthropic models: {exc}", UserWarning, stacklevel=2
+        )
         return [ModelOption(id=config.model, label=config.model, provider="anthropic")]
 
     options = [
@@ -104,7 +111,10 @@ async def _list_openrouter_models(config: PhosonConfig) -> list[ModelOption]:
             )
             response.raise_for_status()
             data = response.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError) as exc:
+        warnings.warn(
+            f"Failed to fetch OpenRouter models: {exc}", UserWarning, stacklevel=2
+        )
         return [ModelOption(id=config.model, label=config.model, provider="openrouter")]
 
     items = data.get("data") or data.get("models") or []
@@ -140,7 +150,10 @@ async def _list_ollama_models(config: PhosonConfig) -> list[ModelOption]:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
-    except Exception:
+    except (httpx.HTTPError, ValueError) as exc:
+        warnings.warn(
+            f"Failed to fetch Ollama models: {exc}", UserWarning, stacklevel=2
+        )
         return [ModelOption(id=config.model, label=config.model, provider="ollama")]
 
     options = []

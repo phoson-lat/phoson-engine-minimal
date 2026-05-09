@@ -2,11 +2,14 @@
 Module for the definition of agent tools.
 """
 
+import enum
 import typing
 import inspect
+import warnings
 import functools
 from types import UnionType
-from typing import Any, Annotated, get_args, get_origin, get_type_hints
+from typing import Any, Literal, Annotated, get_args, get_origin, get_type_hints
+from collections.abc import Callable
 
 from phoson_agent.models import AgentTool
 
@@ -20,7 +23,7 @@ _TYPE_MAP: dict[type, str] = {
 }
 
 
-def _context_values(context: Any | None) -> dict[str, Any]:
+def _context_values(context: object | None) -> dict[str, Any]:
     """Extracts relevant values from a context object."""
     if context is None:
         return {}
@@ -53,7 +56,7 @@ def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]
 
     if origin in (list, tuple):
         item_type = get_args(python_type)
-        items_schema = {"type": "string"}
+        items_schema: dict[str, Any] = {"type": "string"}
         if item_type:
             items_schema, _ = _json_schema_for_type(item_type[0])
         return {"type": "array", "items": items_schema}, description
@@ -65,12 +68,29 @@ def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]
         args = [arg for arg in get_args(python_type) if arg is not type(None)]
         if len(args) == 1:
             return _json_schema_for_type(args[0])
+        # Multi-arg union: use anyOf with each variant's schema
+        schemas = [_json_schema_for_type(a)[0] for a in args]
+        return {"anyOf": schemas}, description
+
+    # Literal[v1, v2, ...] → enum constraint
+    if origin is Literal:
+        values = list(get_args(python_type))
+        # Derive JSON type from the first literal value
+        first = values[0]
+        json_type = _TYPE_MAP.get(type(first), "string")
+        return {"type": json_type, "enum": values}, description
+
+    # Enum subclasses → enum constraint
+    if isinstance(python_type, type) and issubclass(python_type, enum.Enum):
+        values = [m.value for m in python_type]
+        json_type = _TYPE_MAP.get(type(values[0]), "string") if values else "string"
+        return {"type": json_type, "enum": values}, description
 
     json_type = _TYPE_MAP.get(python_type, "string")
     return {"type": json_type}, description
 
 
-def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
+def _build_parameters(fn: Callable[..., Any], exclude: set[str]) -> dict[str, Any]:
     """Builds the JSON parameter schema for a function."""
     hints = get_type_hints(fn, include_extras=True)
     sig = inspect.signature(fn)
@@ -103,12 +123,16 @@ def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
     return schema
 
 
-def tool(_fn: Any = None, *, inject: list[str] | None = None) -> Any:
+def tool(
+    _fn: Callable[..., Any] | None = None,
+    *,
+    inject: list[str] | None = None,
+) -> AgentTool | Callable[[Callable[..., Any]], AgentTool]:
     """
     Decorator to register a function as an agent tool.
     """
 
-    def decorator(fn: Any) -> AgentTool:
+    def decorator(fn: Callable[..., Any]) -> AgentTool:
         injected = set(inject or [])
 
         sig = inspect.signature(fn)
@@ -118,6 +142,18 @@ def tool(_fn: Any = None, *, inject: list[str] | None = None) -> Any:
             if param.kind == inspect.Parameter.KEYWORD_ONLY
         }
         excluded = injected | kw_only
+
+        # Keyword-only params not listed in inject= are excluded from the
+        # tool schema and won't be forwarded. Warn so users aren't surprised.
+        uninjected_kw = kw_only - injected
+        if uninjected_kw:
+            warnings.warn(
+                f"@tool: {fn.__name__!r} has keyword-only parameter(s) "
+                f"{sorted(uninjected_kw)} that are not listed in inject= and "
+                "will be excluded from the tool schema.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         parameters = _build_parameters(fn, excluded)
         description = (fn.__doc__ or "").strip()

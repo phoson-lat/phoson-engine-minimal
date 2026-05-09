@@ -4,7 +4,15 @@ When the conversation exceeds a configurable threshold of the model's
 context window (default 80%), old messages are replaced with a generated
 summary to keep the conversation within limits.
 
-Uses tiktoken for accurate token estimation.
+Uses tiktoken for token estimation. Important caveats:
+
+- ``tiktoken`` only ships tokenizers for OpenAI models. Counts for
+  Claude (Anthropic) and Llama-family (Ollama) are *approximations*
+  based on cl100k_base, typically within ±10-15% of the real count.
+- For exact token counts on Anthropic models, callers should use
+  ``anthropic.Anthropic().messages.count_tokens()`` from the SDK.
+- The threshold default of 80% leaves enough margin to absorb this
+  imprecision; tighten it if you switch to a stricter tokenizer.
 """
 
 import json
@@ -13,7 +21,17 @@ from collections.abc import AsyncIterator
 
 import tiktoken
 
-from phoson_llm.schemas import Message, LLMEvent, TokenEvent, ModelConfig
+from phoson_llm.schemas import (
+    Message,
+    LLMEvent,
+    TextBlock,
+    ErrorEvent,
+    TokenEvent,
+    UsageEvent,
+    ModelConfig,
+    ToolUseBlock,
+    ToolResultBlock,
+)
 from phoson_agent.models import AgentEvent
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
@@ -22,12 +40,14 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 # Token estimation with tiktoken
 # ─────────────────────────────────────────────────────────────────────
 
-# tiktoken encoding mapping by provider
+# tiktoken encoding mapping by provider.
+# Note: cl100k_base / o200k_base are OpenAI-native. For non-OpenAI providers
+# we use them as a *best-effort approximation* — the real tokenizer differs.
 _ENCODINGS: dict[str, str] = {
-    "anthropic": "cl100k_base",  # Claude uses cl100k
-    "openai": "o200k_base",  # GPT-4o+ uses o200k
-    "openrouter": "cl100k_base",  # Depends on model, cl100k is safe
-    "ollama": "cl100k_base",  # Most Ollama models are Llama-based
+    "anthropic": "cl100k_base",  # Claude actual tokenizer differs (~10-15% off)
+    "openai": "o200k_base",  # GPT-4o+ uses o200k natively
+    "openrouter": "cl100k_base",  # Mixed providers; cl100k is the safe default
+    "ollama": "cl100k_base",  # Most Ollama models are Llama-based (~10-15% off)
 }
 
 # Overhead tokens per message (role metadata, formatting)
@@ -61,14 +81,18 @@ class TokenEstimator:
             total += _MSG_OVERHEAD
             if isinstance(msg.content, str):
                 total += self.count_text(msg.content)
-            else:
-                for block in msg.content:
-                    if hasattr(block, "text"):
-                        total += self.count_text(block.text)
-                    if hasattr(block, "args"):
-                        total += self.count_text(json.dumps(block.args))
-                    if hasattr(block, "result"):
-                        total += self.count_text(block.result)
+                continue
+
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    total += self.count_text(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    total += self.count_text(json.dumps(block.args))
+                elif isinstance(block, ToolResultBlock):
+                    total += self.count_text(block.result)
+                # Multimodal blocks (image/audio/video/document) carry no
+                # text payload tiktoken can score; we skip them and let the
+                # _MSG_OVERHEAD constant absorb their structural cost.
         return total
 
     @classmethod
@@ -106,18 +130,19 @@ def _format_messages_for_summary(messages: list[Message]) -> str:
         role = msg.role.upper()
         if isinstance(msg.content, str):
             parts.append(f"[{role}] {msg.content}")
-        else:
-            text_parts: list[str] = []
-            for block in msg.content:
-                if hasattr(block, "text"):
-                    text_parts.append(block.text)
-                if hasattr(block, "tool_name"):
-                    args_str = json.dumps(block.args)
-                    text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
-                if hasattr(block, "result"):
-                    error_tag = " [ERROR]" if block.error else ""
-                    text_parts.append(f"[Result{error_tag}] {block.result}")
-            parts.append(f"[{role}] {' '.join(text_parts)}")
+            continue
+
+        text_parts: list[str] = []
+        for block in msg.content:
+            if isinstance(block, TextBlock):
+                text_parts.append(block.text)
+            elif isinstance(block, ToolUseBlock):
+                args_str = json.dumps(block.args)
+                text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
+            elif isinstance(block, ToolResultBlock):
+                error_tag = " [ERROR]" if block.error else ""
+                text_parts.append(f"[Result{error_tag}] {block.result}")
+        parts.append(f"[{role}] {' '.join(text_parts)}")
     return "\n\n".join(parts)
 
 
@@ -166,9 +191,11 @@ class SummarizationMiddleware(AgentMiddleware):
     openrouter_api_key: str | None = None
     summary_prompt_template: str = SUMMARY_PROMPT_TEMPLATE
 
-    # Internal state
-    _resolver: ContextWindowResolver = field(default=None, repr=False)  # type: ignore
-    _estimator: TokenEstimator | None = field(default=None, repr=False)
+    # Internal state. Both are constructed in ``__post_init__``; using
+    # ``init=False`` keeps them out of the dataclass constructor and out of
+    # ``repr()``. They are non-Optional after ``__post_init__`` runs.
+    _resolver: ContextWindowResolver = field(init=False, repr=False)
+    _estimator: TokenEstimator = field(init=False, repr=False)
     _pending_compact_events: list[SummarizationEvent] = field(
         default_factory=list, repr=False
     )
@@ -181,6 +208,20 @@ class SummarizationMiddleware(AgentMiddleware):
         )
         self._estimator = TokenEstimator.for_provider(self.provider)
 
+    def estimate_tokens(self, messages: list[Message]) -> int:
+        """Estimate the token count for a list of messages.
+
+        Delegates to the internal :class:`TokenEstimator` so callers never
+        need to reach into private attributes.
+
+        Args:
+            messages: The conversation messages to estimate.
+
+        Returns:
+            Estimated token count.
+        """
+        return self._estimator.count_messages(messages)
+
     # ── Core logic ────────────────────────────────────────────────────
 
     async def on_before_llm(
@@ -188,77 +229,13 @@ class SummarizationMiddleware(AgentMiddleware):
         messages: list[Message],
         config: ModelConfig,
     ) -> list[Message]:
-        """Hook called before the LLM call to perform compaction if needed."""
-        current_tokens = self._estimator.count_messages(messages)
-        context_window = await self._resolver.resolve(self.provider, self.model)
-        threshold_tokens = int(context_window * self.threshold)
+        """Hook called before the LLM call.
 
-        if current_tokens <= threshold_tokens:
-            return messages
-
-        # Need to compact
-        compacted, summary_text = self._compact_messages(
-            messages, current_tokens, context_window, threshold_tokens
-        )
-
-        compacted_tokens = self._estimator.count_messages(compacted)
-        messages_removed = len(messages) - len(compacted)
-
-        self._pending_compact_events.append(
-            SummarizationEvent(
-                original_tokens=current_tokens,
-                compacted_tokens=compacted_tokens,
-                messages_removed=messages_removed,
-                summary_length=len(summary_text),
-            )
-        )
-
-        return compacted
-
-    def _compact_messages(
-        self,
-        messages: list[Message],
-        current_tokens: int,
-        context_window: int,
-        threshold_tokens: int,
-    ) -> tuple[list[Message], str]:
-        """Separate messages and return (compacted, summary_text).
-
-        Returns the compacted message list and the summary text itself.
-        NOTE: the actual summary LLM call must be done by the caller
-        (in wrap_llm_call) because we don't have async access here.
+        This middleware does not mutate messages here because real compaction
+        requires an async LLM call to generate the summary, which can only
+        be done in wrap_llm_call.
         """
-        # Separate: system | intermediates | recent
-        system_msgs: list[Message] = []
-        others: list[Message] = []
-
-        for msg in messages:
-            if msg.role == "system":
-                system_msgs.append(msg)
-            else:
-                others.append(msg)
-
-        # Keep the last N messages
-        if len(others) > self.min_keep_messages:
-            keep = others[-self.min_keep_messages :]
-        else:
-            keep = others
-        to_summarize = others[: len(others) - len(keep)]
-
-        if not to_summarize:
-            # Nothing to summarize — shouldn't happen if we're over threshold
-            return messages, ""
-
-        history_text = _format_messages_for_summary(to_summarize)
-        summary_prompt = self.summary_prompt_template.format(history=history_text)
-
-        # Build compacted list: system + summary placeholder + recent
-        compacted = list(system_msgs)
-        summary_content = f"[Conversation summary: {summary_prompt}]"
-        compacted.append(Message(role="user", content=summary_content))
-        compacted.extend(keep)
-
-        return compacted, summary_prompt
+        return messages
 
     async def on_agent_event(self, event: AgentEvent) -> None:
         """Hook executed on any agent event."""
@@ -317,9 +294,19 @@ class SummarizationMiddleware(AgentMiddleware):
 
         summary_text = ""
         async for event in call_next(summary_messages, summary_config):
-            # We consume the summary call silently — don't yield these events
+            # We swallow visual events (start/token/done) from the
+            # internal summary call to keep the UX clean, but we MUST
+            # forward UsageEvent so the caller can account for the cost
+            # of the summarization itself, and ErrorEvent so failures
+            # are visible.
             if isinstance(event, TokenEvent):
                 summary_text += event.content
+                continue
+            if isinstance(event, (UsageEvent, ErrorEvent)):
+                yield event
+                continue
+            # Drop LLMStart/LLMDone/Reasoning/ToolCall events — they
+            # belong to the internal summary turn, not to the user's.
 
         # Build compacted messages
         compacted = list(system_msgs)

@@ -66,11 +66,11 @@ Context object passed to tool handlers, containing conversation state.
 ```python
 from phoson_agent import AgentContext
 
-ctx = AgentContext(
-    session_id="abc123",
-    tools={...},  # Tool definitions
-)
+ctx = AgentContext(extra={"session_id": "abc123"})
+value = ctx.get("session_id")  # "abc123"
 ```
+
+The `AgentContext` class holds arbitrary key-value pairs in its `extra` attribute and provides dictionary-like access via `get()`, `__getitem__`, and `__contains__`.
 
 ## Tool Decorator
 
@@ -155,9 +155,8 @@ from phoson_agent import RetryMiddleware
 
 middleware = RetryMiddleware(
     max_retries=3,
-    retryable_codes={"rate_limit", "timeout"},
-    initial_delay=1.0,
-    backoff_factor=2.0,
+    base_delay_seconds=1.0,
+    backoff_multiplier=2.0,
 )
 ```
 
@@ -228,8 +227,9 @@ JSONL-based session persistence.
 
 ```python
 from phoson_agent import JsonlStorage
+from pathlib import Path
 
-storage = JsonlStorage(session_dir="/path/to/sessions")
+storage = JsonlStorage(base_path=Path("/path/to/sessions"))
 await storage.save(tree)
 loaded = await storage.load("session_id")
 sessions = await storage.list_sessions()

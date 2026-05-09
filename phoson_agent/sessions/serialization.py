@@ -1,24 +1,39 @@
 import datetime
 from typing import Any
 
-from phoson_llm.schemas import Message, TextBlock, ToolUseBlock, ToolResultBlock
+from phoson_llm.schemas import (
+    Message,
+    TextBlock,
+    AudioBlock,
+    ImageBlock,
+    VideoBlock,
+    ContentBlock,
+    ToolUseBlock,
+    DocumentBlock,
+    ToolResultBlock,
+)
 from phoson_agent.sessions.models import ConversationNode, ConversationTree
 
 
-def block_to_dict(block: TextBlock | ToolUseBlock | ToolResultBlock) -> dict[str, Any]:
+def block_to_dict(block: ContentBlock) -> dict[str, Any]:
     """Serialize a content block to a dictionary.
 
+    Multimodal blocks (image/audio/video/document) are persisted with
+    their full source spec so an attached file or remote URL can be
+    re-loaded when the session is replayed.
+
     Args:
-        block: The content block to serialize.
+        block: Any content block from :data:`phoson_llm.schemas.ContentBlock`.
 
     Returns:
         Dictionary representation of the block.
+
+    Raises:
+        TypeError: For unrecognised block types — this should be unreachable
+            because ``ContentBlock`` is a closed union.
     """
     if isinstance(block, TextBlock):
-        return {
-            "type": "text",
-            "text": block.text,
-        }
+        return {"type": "text", "text": block.text}
     if isinstance(block, ToolUseBlock):
         return {
             "type": "tool_use",
@@ -26,19 +41,48 @@ def block_to_dict(block: TextBlock | ToolUseBlock | ToolResultBlock) -> dict[str
             "tool_name": block.tool_name,
             "args": block.args,
         }
-    return {
-        "type": "tool_result",
-        "tool_call_id": block.tool_call_id,
-        "result": block.result,
-        "error": block.error,
-    }
+    if isinstance(block, ToolResultBlock):
+        return {
+            "type": "tool_result",
+            "tool_call_id": block.tool_call_id,
+            "result": block.result,
+            "error": block.error,
+        }
+    if isinstance(block, ImageBlock):
+        return {
+            "type": "image",
+            "source": block.source,
+            "detail": block.detail,
+            "media_type": block.media_type,
+        }
+    if isinstance(block, AudioBlock):
+        return {
+            "type": "audio",
+            "source": block.source,
+            "format": block.format,
+            "duration_ms": block.duration_ms,
+        }
+    if isinstance(block, VideoBlock):
+        return {
+            "type": "video",
+            "source": block.source,
+            "sampling_interval_ms": block.sampling_interval_ms,
+        }
+    if isinstance(block, DocumentBlock):
+        return {
+            "type": "document",
+            "source": block.source,
+            "pages": block.pages,
+        }
+    raise TypeError(f"Unsupported content block type: {type(block).__name__}")
 
 
-def block_from_dict(data: dict[str, Any]) -> TextBlock | ToolUseBlock | ToolResultBlock:
+def block_from_dict(data: dict[str, Any]) -> ContentBlock:
     """Deserialize a content block from a dictionary.
 
     Args:
-        data: Dictionary representation of a content block.
+        data: Dictionary representation of a content block, as produced by
+            :func:`block_to_dict`.
 
     Returns:
         The deserialized content block.
@@ -61,18 +105,33 @@ def block_from_dict(data: dict[str, Any]) -> TextBlock | ToolUseBlock | ToolResu
             result=data.get("result", ""),
             error=bool(data.get("error", False)),
         )
+    if btype == "image":
+        return ImageBlock(
+            source=data["source"],
+            detail=data.get("detail", "auto"),
+            media_type=data.get("media_type"),
+        )
+    if btype == "audio":
+        return AudioBlock(
+            source=data["source"],
+            format=data.get("format", "wav"),
+            duration_ms=data.get("duration_ms"),
+        )
+    if btype == "video":
+        return VideoBlock(
+            source=data["source"],
+            sampling_interval_ms=int(data.get("sampling_interval_ms", 2000)),
+        )
+    if btype == "document":
+        return DocumentBlock(
+            source=data["source"],
+            pages=data.get("pages"),
+        )
     raise ValueError(f"Unknown content block type: {btype}")
 
 
 def message_to_dict(message: Message) -> dict[str, Any]:
-    """Serialize a Message to a dictionary.
-
-    Args:
-        message: The Message to serialize.
-
-    Returns:
-        Dictionary representation of the message.
-    """
+    """Serialize a Message to a dictionary."""
     if isinstance(message.content, str):
         content: str | list[dict[str, Any]] = message.content
     else:
@@ -84,31 +143,17 @@ def message_to_dict(message: Message) -> dict[str, Any]:
 
 
 def message_from_dict(data: dict[str, Any]) -> Message:
-    """Deserialize a Message from a dictionary.
-
-    Args:
-        data: Dictionary representation of a message.
-
-    Returns:
-        The deserialized Message.
-    """
+    """Deserialize a Message from a dictionary."""
     raw_content = data["content"]
     if isinstance(raw_content, str):
-        content: str | list[TextBlock | ToolUseBlock | ToolResultBlock] = raw_content
+        content: str | list[ContentBlock] = raw_content
     else:
         content = [block_from_dict(block) for block in raw_content]
     return Message(role=data["role"], content=content)
 
 
 def node_to_dict(node: ConversationNode) -> dict[str, Any]:
-    """Serialize a ConversationNode to a dictionary.
-
-    Args:
-        node: The ConversationNode to serialize.
-
-    Returns:
-        Dictionary representation of the node.
-    """
+    """Serialize a ConversationNode to a dictionary."""
     return {
         "id": node.id,
         "parent_id": node.parent_id,
@@ -119,14 +164,7 @@ def node_to_dict(node: ConversationNode) -> dict[str, Any]:
 
 
 def node_from_dict(data: dict[str, Any]) -> ConversationNode:
-    """Deserialize a ConversationNode from a dictionary.
-
-    Args:
-        data: Dictionary representation of a node.
-
-    Returns:
-        The deserialized ConversationNode.
-    """
+    """Deserialize a ConversationNode from a dictionary."""
     return ConversationNode(
         id=data["id"],
         parent_id=data.get("parent_id"),
@@ -137,14 +175,7 @@ def node_from_dict(data: dict[str, Any]) -> ConversationNode:
 
 
 def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
-    """Serialize session metadata from a ConversationTree.
-
-    Args:
-        tree: The ConversationTree to extract metadata from.
-
-    Returns:
-        Dictionary containing session metadata.
-    """
+    """Serialize session metadata from a ConversationTree."""
     return {
         "type": "session_meta",
         "session_id": tree.session_id,
@@ -156,12 +187,7 @@ def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
 
 
 def apply_tree_meta(tree: ConversationTree, data: dict[str, Any]) -> None:
-    """Apply session metadata to a ConversationTree.
-
-    Args:
-        tree: The ConversationTree to update.
-        data: Dictionary containing session metadata.
-    """
+    """Apply session metadata to a ConversationTree."""
     tree.update_session_meta(
         total_cost=float(data.get("total_cost", 0.0)),
         total_tokens=int(data.get("total_tokens", 0)),

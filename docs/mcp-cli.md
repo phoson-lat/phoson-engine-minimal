@@ -1,0 +1,631 @@
+# MCP Support in Phoson CLI
+
+El CLI de Phoson ahora soporta Model Context Protocol (MCP) para integrar servidores MCP directamente en tus conversaciones.
+
+## 🔌 Transportes Soportados
+
+Phoson soporta **tres tipos de transporte MCP**:
+
+- **STDIO** (default): Servidores locales ejecutados como procesos
+- **SSE** (Server-Sent Events): Servidores remotos con streaming
+- **HTTP**: Servidores HTTP estándar
+
+Esto te permite conectar tanto servidores locales como remotos.
+
+## 🚀 Inicio Rápido
+
+### Método 1: Usando `/mcp init` (Recomendado)
+
+```bash
+phoson-cli
+```
+
+Dentro del CLI:
+```
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+Configured servers:
+  • filesystem (STDIO) - Access to home directory
+  • memory (STDIO) - Knowledge storage
+
+> /mcp enable
+MCP enabled  ·  saved
+
+> /mcp status
+MCP: enabled
+Loaded 2 MCP tool(s):
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
+```
+
+### Método 2: Crear configuración manualmente
+
+Crea un archivo `~/.phoson/mcps.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {}
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {}
+    }
+  }
+}
+```
+
+Luego en el CLI:
+```
+> /mcp enable
+MCP enabled  ·  saved
+```
+
+### 3. Verificar estado
+
+```
+> /mcp status
+MCP: enabled
+Config file: ~/.phoson/mcps.json
+Loaded 2 MCP tool(s):
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
+```
+
+### 4. ¡Usar!
+
+Ahora el agente puede usar automáticamente las herramientas MCP:
+
+```
+> List the files in /tmp
+
+[El agente automáticamente llamará a mcp_filesystem_read_file]
+```
+
+## 📋 Comandos Disponibles
+
+### `/mcp init`
+Crea un archivo de configuración de ejemplo en `~/.phoson/mcps.json`.
+
+```
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+Configured servers:
+  • filesystem (STDIO) - Access to home directory
+  • memory (STDIO) - Knowledge storage
+
+Next steps:
+  1. Edit the file to add your servers
+  2. Run: /mcp enable
+  3. Run: /mcp status
+```
+
+### `/mcp status`
+Muestra el estado actual de MCP, los servidores configurados, su transporte/target y las herramientas cargadas.
+
+```
+> /mcp status
+MCP: enabled
+Config file: ~/.phoson/mcps.json
+Configured 2 MCP server(s):
+  • github [http] → https://api.example.com/mcp
+  • filesystem [stdio] → npx -y @modelcontextprotocol/server-filesystem .
+Loaded 2 MCP tool(s):
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
+```
+
+### `/mcp enable`
+Habilita el soporte MCP y recarga el engine.
+
+```
+> /mcp enable
+MCP enabled  ·  saved
+```
+
+### `/mcp disable`
+Deshabilita el soporte MCP.
+
+```
+> /mcp disable
+MCP disabled  ·  saved
+```
+
+### `/mcp config <path>`
+Cambia la ruta del archivo de configuración MCP.
+
+```
+> /mcp config ./my-custom-mcp.json
+MCP config file → ./my-custom-mcp.json  ·  saved
+```
+
+### `/mcp help`
+Muestra ayuda sobre los comandos MCP.
+
+```
+> /mcp help
+MCP (Model Context Protocol) commands:
+  /mcp status          Show MCP status and loaded tools
+  /mcp enable          Enable MCP support
+  /mcp disable         Disable MCP support
+  /mcp config <path>   Set MCP config file path
+  /mcp help            Show this help
+```
+
+## ⚙️ Configuración
+
+### Ubicación del Archivo MCP
+
+Por defecto, el CLI busca la configuración MCP en:
+
+**`~/.phoson/mcps.json`**
+
+Puedes cambiar esta ubicación de tres formas:
+
+1. **Variable de entorno** (temporal):
+   ```bash
+   export PHOSON_MCP_CONFIG=./my-mcps.json
+   phoson-cli
+   ```
+
+2. **Archivo de configuración** (persistente):
+   ```toml
+   # ~/.phoson/config.toml
+   [defaults]
+   enable_mcp = true
+   mcp_config_file = "~/.phoson/mcps.json"
+   ```
+
+3. **Comando en runtime** (persistente):
+   ```
+   > /mcp config ./project-mcps.json
+   ```
+
+### Variables de Entorno
+
+```bash
+# Habilitar MCP al iniciar
+export PHOSON_ENABLE_MCP=true
+
+# Especificar archivo de configuración personalizado
+export PHOSON_MCP_CONFIG=~/.phoson/mcps.json
+
+# Iniciar CLI
+phoson-cli
+```
+
+### Archivo de Configuración Persistente
+
+Edita `~/.phoson/config.toml`:
+
+```toml
+[defaults]
+enable_mcp = true
+mcp_config_file = "~/.phoson/mcps.json"
+```
+
+## 🔌 Tipos de Transporte
+
+### STDIO Transport (Default)
+
+Para servidores que se ejecutan como procesos locales:
+
+```json
+{
+  "mcpServers": {
+    "local-server": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": {
+        "API_KEY": "value"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Ejecuta el servidor como proceso hijo
+- Comunicación vía stdin/stdout
+- Ideal para servidores Node.js, Python locales
+- No requiere red
+
+### SSE Transport
+
+Para servidores remotos con Server-Sent Events:
+
+```json
+{
+  "mcpServers": {
+    "remote-sse": {
+      "transport": "sse",
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "Authorization": "Bearer token",
+        "X-API-Key": "key"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Conexión a servidores remotos
+- Streaming bidireccional
+- Ideal para servicios en la nube
+- Soporta autenticación vía headers
+
+### HTTP Transport
+
+Para servidores HTTP estándar:
+
+```json
+{
+  "mcpServers": {
+    "remote-http": {
+      "transport": "http",
+      "url": "http://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    }
+  }
+}
+```
+
+**Características:**
+- Protocolo HTTP estándar
+- Request/response
+- Compatible con APIs REST
+- Soporta autenticación
+
+### Mezclando Transportes
+
+Puedes usar múltiples transportes en la misma configuración:
+
+```json
+{
+  "mcpServers": {
+    "local-fs": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "remote-api": {
+      "transport": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer token"
+      }
+    },
+    "streaming-service": {
+      "transport": "sse",
+      "url": "https://stream.example.com/sse"
+    }
+  }
+}
+```
+
+## 📦 Servidores MCP Disponibles
+
+### Oficiales de Anthropic
+
+#### 1. Filesystem
+Acceso al sistema de archivos.
+
+```json
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/directory"]
+  }
+}
+```
+
+**Uso:**
+```
+> List all Python files in the current directory
+> Read the contents of main.py
+> Create a new file called test.txt with "Hello World"
+```
+
+#### 2. GitHub
+Interacción con GitHub.
+
+```json
+{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."
+    }
+  }
+}
+```
+
+**Uso:**
+```
+> Show me the open issues in my repository
+> Create a new issue titled "Bug fix needed"
+> List recent commits
+```
+
+#### 3. Brave Search
+Búsqueda web.
+
+```json
+{
+  "brave-search": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+    "env": {
+      "BRAVE_API_KEY": "..."
+    }
+  }
+}
+```
+
+**Uso:**
+```
+> Search the web for "latest Python features"
+> Find news about AI developments
+```
+
+#### 4. Memory
+Almacenamiento de conocimiento.
+
+```json
+{
+  "memory": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  }
+}
+```
+
+**Uso:**
+```
+> Remember that my favorite color is blue
+> What's my favorite color?
+> Store this: The project deadline is next Friday
+```
+
+#### 5. PostgreSQL
+Base de datos.
+
+```json
+{
+  "postgres": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@localhost/db"]
+  }
+}
+```
+
+**Uso:**
+```
+> Query the users table
+> Show me all orders from last week
+> Create a new table for products
+```
+
+#### 6. Puppeteer
+Automatización de navegador.
+
+```json
+{
+  "puppeteer": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+  }
+}
+```
+
+**Uso:**
+```
+> Take a screenshot of example.com
+> Navigate to google.com and search for "AI"
+> Fill out the form on this website
+```
+
+#### 7. Slack
+Integración con Slack.
+
+```json
+{
+  "slack": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-slack"],
+    "env": {
+      "SLACK_BOT_TOKEN": "xoxb-...",
+      "SLACK_TEAM_ID": "T..."
+    }
+  }
+}
+```
+
+**Uso:**
+```
+> Send a message to #general channel
+> List recent messages in #dev
+> Create a new channel called #project-x
+```
+
+## 🔧 Ejemplo Completo
+
+### 1. Instalar servidores MCP
+
+```bash
+# Instalar Node.js si no lo tienes
+# Ubuntu/Debian:
+sudo apt install nodejs npm
+
+# macOS:
+brew install node
+
+# Instalar servidor filesystem
+npm install -g @modelcontextprotocol/server-filesystem
+
+# Instalar servidor memory
+npm install -g @modelcontextprotocol/server-memory
+```
+
+### 2. Crear configuración
+
+**Opción A: Usar el comando init (Fácil)**
+
+```bash
+phoson-cli
+
+> /mcp init
+✅ Created MCP config: ~/.phoson/mcps.json
+```
+
+**Opción B: Crear manualmente**
+
+```bash
+cat > ~/.phoson/mcps.json << 'EOF'
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": {}
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {}
+    }
+  }
+}
+EOF
+```
+
+### 3. Iniciar CLI y habilitar MCP
+
+```bash
+phoson-cli
+```
+
+```
+> /mcp enable
+MCP enabled  ·  saved
+
+> /mcp status
+MCP: enabled
+Loaded 2 MCP tool(s):
+  • mcp_filesystem_read_file
+  • mcp_memory_store_memory  # example names; depends on server discovery
+
+> List all files in the current directory
+[El agente usa mcp_filesystem_read_file]
+
+> Remember that this is a test project
+[El agente usa mcp_memory_store_memory]
+
+> What did I just tell you to remember?
+[El agente recupera de la memoria]
+```
+
+## 🐛 Troubleshooting
+
+### MCP no se habilita
+
+**Problema:** `/mcp enable` no carga herramientas.
+
+**Solución:**
+1. Verifica que `~/.phoson/mcps.json` existe
+2. Verifica que el JSON es válido
+3. Verifica que Node.js está instalado: `node --version`
+4. Verifica que los servidores MCP están instalados
+
+### Herramientas no aparecen
+
+**Problema:** `/mcp status` muestra 0 herramientas.
+
+**Solución:**
+1. Verifica la configuración en `~/.phoson/mcps.json`
+2. Prueba manualmente: `npx -y @modelcontextprotocol/server-filesystem /tmp`
+3. Revisa los logs de errores en la consola
+
+### Comandos MCP fallan
+
+**Problema:** El agente intenta usar herramientas MCP pero fallan.
+
+**Solución:**
+1. Verifica que los servidores tienen los permisos necesarios
+2. Verifica variables de entorno (API keys, tokens, etc)
+3. Prueba con un servidor simple primero (memory o filesystem)
+
+## 💡 Tips
+
+### 1. Empezar simple
+Comienza con servidores simples como `memory` o `filesystem` antes de configurar servicios externos.
+
+### 2. Variables de entorno
+Usa variables de entorno para API keys en lugar de hardcodearlas:
+
+```json
+{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+    }
+  }
+}
+```
+
+Luego:
+```bash
+export GITHUB_TOKEN=ghp_...
+phoson-cli
+```
+
+### 3. Múltiples configuraciones
+Crea diferentes archivos de configuración para diferentes contextos:
+
+```bash
+# Desarrollo
+phoson-cli
+> /mcp config ./mcp-dev.json
+
+# Producción
+phoson-cli
+> /mcp config ./mcp-prod.json
+```
+
+### 4. Deshabilitar temporalmente
+Si necesitas deshabilitar MCP temporalmente sin perder la configuración:
+
+```
+> /mcp disable
+[Trabaja sin MCP]
+> /mcp enable
+[MCP vuelve con la misma configuración]
+```
+
+## 🔗 Recursos
+
+- [MCP Documentation](https://modelcontextprotocol.io/)
+- [MCP Specification](https://spec.modelcontextprotocol.io/)
+- [Official MCP Servers](https://github.com/modelcontextprotocol/servers)
+- [Plugin System Documentation](./plugins.md)
+- [MCP Plugin README](../phoson_plugin_mcp/README.md)
+
+## 📝 Notas
+
+- MCP requiere Node.js instalado
+- Los servidores MCP se ejecutan como procesos separados
+- Cada herramienta MCP descubierta se expone como `mcp_{server_name}_{tool_name}`.
+- Si el descubrimiento falla, se mantiene un proxy fallback `mcp_{server_name}_call`.
+- La configuración se guarda en `~/.phoson/config.toml`
+- Los servidores MCP se reinician en cada uso (stateless)

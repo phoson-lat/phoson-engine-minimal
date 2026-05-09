@@ -1,6 +1,9 @@
 import asyncio
+import logging
+import warnings
+from typing import Any
 from pathlib import Path
-from dataclasses import field, dataclass
+from collections.abc import Iterable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -9,10 +12,9 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
 from phoson_agent import (
-    RunStep,
+    Plugin,
     AgentEngine,
     AgentDoneEvent,
-    AgentErrorEvent,
 )
 from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
@@ -20,93 +22,14 @@ from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
+from ._views import print_banner, render_tree_ascii
 from .config import PhosonConfig, build_chat
-from .commands import COMMANDS, CommandHandler, parse_command
+from ._session import SessionState, SessionMetrics
+from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer
 from .attachments import AttachmentManager
 
-
-@dataclass
-class SessionMetrics:
-    """Accumulated metrics for the current session."""
-
-    total_cost_usd: float = 0.0
-    total_credits: float = 0.0
-    total_input_tokens: int = 0
-    total_output_tokens: int = 0
-    total_cache_write_tokens: int = 0
-    total_cache_read_tokens: int = 0
-    step_count: int = 0
-    last_model: str = ""
-    steps: list[RunStep] = field(default_factory=list)
-
-    # For phoson_weight calculation
-    phoson_weight: float = 1.0
-
-    def add_run_step(self, step: RunStep) -> None:
-        """Add a run step and update totals."""
-        self.steps.append(step)
-        self.step_count += 1
-
-        if step.usage:
-            self.total_input_tokens += step.usage.input
-            self.total_output_tokens += step.usage.output
-            if step.usage.cache_write:
-                self.total_cache_write_tokens += step.usage.cache_write
-            if step.usage.cache_read:
-                self.total_cache_read_tokens += step.usage.cache_read
-
-        self.total_cost_usd += step.cost_usd
-        self.total_credits += step.credits
-        if step.model:
-            self.last_model = step.model
-
-    def reset(self) -> None:
-        """Reset all metrics for a new session."""
-        self.total_cost_usd = 0.0
-        self.total_credits = 0.0
-        self.total_input_tokens = 0
-        self.total_output_tokens = 0
-        self.total_cache_write_tokens = 0
-        self.total_cache_read_tokens = 0
-        self.step_count = 0
-        self.last_model = ""
-        self.steps.clear()
-
-    @property
-    def total_tokens(self) -> int:
-        return self.total_input_tokens + self.total_output_tokens
-
-    @property
-    def avg_cost_per_message(self) -> float:
-        if self.step_count == 0:
-            return 0.0
-        return self.total_cost_usd / self.step_count
-
-    def load_from_meta(self, meta: dict) -> None:
-        """Load metrics from session metadata dict."""
-        self.total_cost_usd = meta.get("total_cost_usd", 0.0)
-        self.total_credits = meta.get("total_credits", 0.0)
-        self.total_input_tokens = meta.get("total_input_tokens", 0)
-        self.total_output_tokens = meta.get("total_output_tokens", 0)
-        self.total_cache_write_tokens = meta.get("total_cache_write_tokens", 0)
-        self.total_cache_read_tokens = meta.get("total_cache_read_tokens", 0)
-        self.step_count = meta.get("step_count", 0)
-        self.last_model = meta.get("last_model", "")
-
-    def to_meta(self) -> dict:
-        """Convert to metadata dict for storage."""
-        return {
-            "total_cost_usd": self.total_cost_usd,
-            "total_credits": self.total_credits,
-            "total_input_tokens": self.total_input_tokens,
-            "total_output_tokens": self.total_output_tokens,
-            "total_cache_write_tokens": self.total_cache_write_tokens,
-            "total_cache_read_tokens": self.total_cache_read_tokens,
-            "step_count": self.step_count,
-            "last_model": self.last_model,
-        }
-
+_LOGGER = logging.getLogger("phoson_cli.repl")
 
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
@@ -132,26 +55,10 @@ _PROMPT_STYLE = Style.from_dict(
     }
 )
 
-# ── Command descriptions shown in the meta column ──────────────────────────────
+# Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
+# completer's meta column stays in sync with /help and the dispatch table.
 _CMD_META: dict[str, str] = {
-    "/exit": "quit phoson_cli",
-    "/quit": "quit phoson_cli",
-    "/new": "start a new session",
-    "/clear": "alias for /new",
-    "/model": "show, list, or switch model",
-    "/subagent-model": "show or set the LLM model for sub-agents",
-    "/env": "show environment variables",
-    "/cost": "show session cost breakdown",
-    "/tokens": "show token usage stats",
-    "/steps": "show execution steps",
-    "/tree": "show conversation tree",
-    "/sessions": "interactive session picker (navigate, select, delete)",
-    "/delete": "delete a saved session by id",
-    "/branch": "branch from current node",
-    "/label": "label current node",
-    "/attach": "attach image/audio/video/pdf",
-    "/attachments": "list or clear attachments",
-    "/help": "show command reference",
+    name: spec.help for spec in COMMAND_SPECS for name in spec.names
 }
 
 _SYSTEM_PROMPT_TEMPLATE = (
@@ -165,7 +72,9 @@ _SYSTEM_PROMPT_TEMPLATE = (
 class _SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
 
-    def get_completions(self, document: Document, complete_event: object):
+    def get_completions(
+        self, document: Document, complete_event: object
+    ) -> Iterable[Completion]:
         text = document.text_before_cursor
         if not text.startswith("/"):
             return
@@ -185,10 +94,8 @@ class _SlashCompleter(Completer):
                 )
 
 
-# Load the phos ASCII art from the package file at import time
-_PHOS_ART = (
-    (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
-)
+# Banner ASCII art and tree-rendering live in ``_views`` so they can be
+# imported, replaced or tested without instantiating the REPL.
 
 
 class PhosonRepl:
@@ -205,21 +112,16 @@ class PhosonRepl:
         """
         self.config = config
         self.storage = JsonlStorage(base_path=config.sessions_dir)
-        self.tree = ConversationTree.new()
-        self.current_node_id: str | None = None
+        self._session = SessionState.new()
         self.renderer = Renderer()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
-        self.session_metrics = SessionMetrics()
+        self.attachments = AttachmentManager()
 
-        # Build tools and registry for sub-agents
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
+        # Sub-agent model: explicit override or fallback to main model.
+        self.subagent_model: str = config.subagent_model or config.model
 
-        # Create chat instance for sub-agents
-        self.chat = build_chat(config)
-
-        # Context window resolver + token estimator for prompt display
+        # Context window resolver + token estimator for prompt display.
         self._cw_resolver = ContextWindowResolver(
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
@@ -227,7 +129,8 @@ class PhosonRepl:
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
 
-        # Summarization middleware
+        # Summarization middleware. The provider/model fields are kept in
+        # sync with the active config every time ``_rebuild_engine`` runs.
         self.summarizer = SummarizationMiddleware(
             threshold=0.80,
             min_keep_messages=4,
@@ -236,27 +139,113 @@ class PhosonRepl:
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
         )
-        self.attachments = AttachmentManager()
+
+        # Build the runtime (chat client, tools, plugins, engine).
+        self._rebuild_engine()
+
+        self.renderer.set_session(self._session.tree.session_id)
+
+    # ── Session state properties ──────────────────────────────────────────────
+
+    @property
+    def tree(self) -> "ConversationTree":
+        """The active conversation tree."""
+        return self._session.tree
+
+    @tree.setter
+    def tree(self, value: "ConversationTree") -> None:
+        self._session.tree = value
+
+    @property
+    def current_node_id(self) -> str | None:
+        """ID of the most recently active tree node."""
+        return self._session.current_node_id
+
+    @current_node_id.setter
+    def current_node_id(self, value: str | None) -> None:
+        self._session.current_node_id = value
+
+    @property
+    def session_metrics(self) -> SessionMetrics:
+        """Accumulated metrics for the current session."""
+        return self._session.metrics
+
+    # ── Engine (re)construction ───────────────────────────────────────────────
+
+    def _build_mcp_plugins(self) -> list[Plugin | dict[str, Any]]:
+        """Resolve the MCP plugin specs for the current configuration.
+
+        Returns an empty list when MCP is disabled. Tries the in-tree
+        ``phoson_plugin_mcp`` first; falls back to the path-based loader
+        used during local development if the package is not installed.
+        """
+        if not self.config.enable_mcp:
+            return []
+
+        mcp_config = {
+            "config_file": str(self.config.mcp_config_file),
+            "tool_name_prefix": "mcp",
+        }
+
+        try:
+            from phoson_plugin_mcp import MCPPlugin
+
+            plugin = MCPPlugin()
+            plugin.configure(mcp_config)
+            return [plugin]
+        except ImportError:
+            return [
+                {
+                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "config": mcp_config,
+                }
+            ]
+        except Exception as exc:
+            warnings.warn(
+                f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
+            )
+            return []
+
+    def _rebuild_engine(self) -> None:
+        """(Re)build chat client, tool registry, plugins and the engine.
+
+        Called from ``__init__`` and from every command that mutates
+        provider/model/MCP state. The summarizer's provider/model fields
+        are also refreshed so token estimation and context-window
+        resolution stay accurate.
+        """
+        old_chat = getattr(self, "chat", None)
+        self.chat = build_chat(self.config)
+        # Release the old client's connection pool (e.g. Anthropic SDK holds
+        # a persistent httpx.AsyncClient). Schedule on the running loop;
+        # no-op on the first call from __init__ where there is no old client.
+        if old_chat is not None and hasattr(old_chat, "aclose"):
+            try:
+                asyncio.get_running_loop().create_task(old_chat.aclose())
+            except RuntimeError:
+                pass
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
+        self.summarizer.provider = self.config.provider
+        self.summarizer.model = self.config.model
+
+        plugins = self._build_mcp_plugins()
 
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
             middlewares=[self.summarizer],
-            max_iterations=config.max_iterations,
+            plugins=plugins,
+            max_iterations=self.config.max_iterations,
         )
 
-        # Sub-agent model: explicit override or fallback to main model
-        self.subagent_model: str = config.subagent_model or config.model
-
-        # Inject context for sub-agents
-        self.engine.context.extra["safe_mode"] = config.safe_mode
+        # Inject runtime context for sub-agents.
+        self.engine.context.extra["safe_mode"] = self.config.safe_mode
         self.engine.context.extra["available_tools"] = self.tools_dict
         self.engine.context.extra["default_model"] = self.subagent_model
-
-        self.engine.context.extra["max_iterations"] = config.max_iterations
+        self.engine.context.extra["max_iterations"] = self.config.max_iterations
         self.engine.context.extra["chat"] = self.chat
-
-        self.renderer.set_session(self.tree.session_id)
 
     async def run(self) -> None:
         """Run the REPL main loop.
@@ -309,12 +298,10 @@ class PhosonRepl:
                     self.current_task.cancel()
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
-    async def _run_agent(self, user_input: str) -> None:
-        """Execute the agent with user input.
+    # ── Agent execution ───────────────────────────────────────────────────────
 
-        Args:
-            user_input: The user's message text.
-        """
+    def _build_user_message(self, user_input: str) -> Message:
+        """Flush pending attachments and construct the user Message."""
         pending_blocks: list[ContentBlock] = []
         if self.attachments:
             pending_blocks = list(self.attachments.flush())
@@ -324,22 +311,90 @@ class PhosonRepl:
         if user_input:
             pending_blocks.insert(0, _text_block(user_input))
 
-        if pending_blocks:
-            content: str | list[ContentBlock] = pending_blocks
-        else:
-            content = user_input
-
-        user_message = Message(role="user", content=content)
-        user_node = self.tree.append(
-            parent_id=self.current_node_id,
-            message=user_message,
+        content: str | list[ContentBlock] = (
+            pending_blocks if pending_blocks else user_input
         )
-        self.current_node_id = user_node.id
+        return Message(role="user", content=content)
+
+    def _append_user_turn(self, message: Message) -> tuple[str, list[Message]]:
+        """Append user message to the tree.
+
+        Returns:
+            Tuple of (new_node_id, full conversation path).
+        """
+        node = self.tree.append(
+            parent_id=self.current_node_id,
+            message=message,
+        )
+        self.current_node_id = node.id
+        path = self.tree.get_path(self.current_node_id)
+        return node.id, path
+
+    async def _consume_stream(
+        self, path: list[Message], config: ModelConfig
+    ) -> AgentDoneEvent:
+        """Run the agent stream loop via renderer.on_event().
+
+        Re-raises ``asyncio.CancelledError`` without catching — the caller
+        (``_run_agent``) handles it so that ``base_count`` stays in scope
+        for ``_save_partial``.
+        """
+        done_event: AgentDoneEvent | None = None
+
+        async def consume() -> None:
+            nonlocal done_event
+            async for event in self.engine.stream(path, config):
+                self.renderer.on_event(event)
+                if isinstance(event, AgentDoneEvent):
+                    done_event = event
+
+        self.current_task = asyncio.create_task(consume())
+        await self.current_task
+        self.current_task = None
+
+        # consume() always sets done_event before the task completes.
+        if done_event is None:
+            raise RuntimeError("Agent stream ended without emitting AgentDoneEvent")
+        return done_event
+
+    def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
+        """Append new messages to tree, update metrics, save session."""
+        new_messages = done_event.result.history[base_count:]
+        if new_messages:
+            created = self.tree.append_many(self.current_node_id, new_messages)
+            self.current_node_id = created[-1].id
+
+        self._context_tokens = self.summarizer.estimate_tokens(
+            done_event.result.history
+        )
+        for step in done_event.result.steps:
+            self.session_metrics.add_run_step(step)
+
+    def _append_partial_history(self, base_count: int) -> None:
+        """Slice engine partial history and append new nodes to the tree.
+
+        Updates ``current_node_id`` to the last appended node.
+        Called synchronously from the ``CancelledError`` handler in
+        ``_run_agent`` before the async saves.
+        """
+        partial = self.engine.get_partial_history()
+        new_messages = partial[base_count:]
+        if new_messages:
+            created = self.tree.append_many(self.current_node_id, new_messages)
+            self.current_node_id = created[-1].id
+
+    async def _run_agent(self, user_input: str) -> None:
+        """Execute the agent with user input.
+
+        Args:
+            user_input: The user's message text.
+        """
+        user_message = self._build_user_message(user_input)
+        _node_id, path = self._append_user_turn(user_message)
+        base_count = len(path)
 
         self.renderer.print_user_turn(user_input)
 
-        path = self.tree.get_path(self.current_node_id)
-        base_count = len(path)
         config = ModelConfig(
             model=self.current_model,
             system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
@@ -349,90 +404,70 @@ class PhosonRepl:
         self._context_window = await self._cw_resolver.resolve(
             self.config.provider, self.current_model
         )
-        self._context_tokens = self.summarizer._estimator.count_messages(path)
+        self._context_tokens = self.summarizer.estimate_tokens(path)
 
-        done_event: AgentDoneEvent | None = None
-        had_error = False
-
-        async def consume() -> None:
-            nonlocal done_event, had_error
-            async for event in self.engine.stream(path, config):
-                self.renderer.on_event(event)
-                if isinstance(event, AgentDoneEvent):
-                    done_event = event
-                elif isinstance(event, AgentErrorEvent):
-                    had_error = True
-
-        self.current_task = asyncio.create_task(consume())
         try:
-            await self.current_task
+            done_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
-            partial = self.engine.get_partial_history()
-            new_messages = partial[base_count:]
-            if new_messages:
-                created = self.tree.append_many(self.current_node_id, new_messages)
-                self.current_node_id = created[-1].id
+            self.renderer.flush_line()
+            self._append_partial_history(base_count)
             await self.storage.save(self.tree)
             await self.storage.save_meta(
                 self.tree.session_id, self.session_metrics.to_meta()
             )
-            self.renderer.flush_line()
             self.renderer.print_warn("Partial progress saved.")
+            return
         finally:
             self.current_task = None
 
-        if done_event and not had_error:
-            new_messages = done_event.result.history[base_count:]
-            if new_messages:
-                created = self.tree.append_many(self.current_node_id, new_messages)
-                self.current_node_id = created[-1].id
-            # Update context tokens with the full history after the run
-            self._context_tokens = self.summarizer._estimator.count_messages(
-                done_event.result.history
-            )
-            # Update session metrics from run steps
-            for step in done_event.result.steps:
-                self.session_metrics.add_run_step(step)
-            # Save both tree and metadata
-            await self.storage.save(self.tree)
-            await self.storage.save_meta(
-                self.tree.session_id, self.session_metrics.to_meta()
-            )
+        self._finalize_run(done_event, base_count)
+        await self.storage.save(self.tree)
+        await self.storage.save_meta(
+            self.tree.session_id, self.session_metrics.to_meta()
+        )
 
     # ── Session / model management ─────────────────────────────────────────────
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
-        self.tree = ConversationTree.new()
-        self.current_node_id = None
+        self._session.reset()
         self.attachments.clear()
-        self.renderer.set_session(self.tree.session_id)
-        self.session_metrics.reset()
+        self.renderer.set_session(self._session.tree.session_id)
 
     async def load_session(self, session_id: str) -> bool:
-        """Load a session from storage. Returns True on success."""
+        """Load a session from storage and replay its tail. Returns True on success."""
         try:
-            self.tree = await self.storage.load(session_id)
-            self.current_node_id = self.find_latest_node_id()
-            self.renderer.set_session(self.tree.session_id)
-            self.session_metrics.reset()
-            # Try to load saved metrics
+            self._session.tree = await self.storage.load(session_id)
+            self._session.current_node_id = self.find_latest_node_id()
+            self._session.metrics = SessionMetrics()
+            self.renderer.set_session(self._session.tree.session_id)
+
+            # Load saved metrics using the authoritative SessionMeta field names.
             metas = await self.storage.list_meta()
-            for m in metas:
-                if str(m.id) == session_id:
-                    if hasattr(m, "total_cost"):
-                        self.session_metrics.total_cost_usd = m.total_cost
-                    if hasattr(m, "total_tokens"):
-                        self.session_metrics.total_output_tokens = m.total_tokens
-                        self.session_metrics.total_input_tokens = 0
-                    if hasattr(m, "step_count"):
-                        self.session_metrics.step_count = m.step_count
+            for meta in metas:
+                if str(meta.id) == session_id:
+                    self.session_metrics.total_cost_usd = meta.total_cost
+                    self.session_metrics.total_output_tokens = meta.total_tokens
+                    self.session_metrics.step_count = meta.step_count
+                    self.session_metrics.last_model = meta.last_model or ""
                     break
+
+            # Replay the tail of the session so the user knows where they left off.
+            try:
+                path = self.tree.get_path(self.current_node_id)
+                self.renderer.print_history(path, tail=6)
+            except (ValueError, AttributeError, TypeError):
+                _LOGGER.debug(
+                    "Could not replay session history — node may be corrupted",
+                    exc_info=True,
+                )
+
             return True
         except FileNotFoundError:
             self.renderer.print_error(f"Session {session_id[:8]} not found.")
             return False
         except Exception as e:
+            _LOGGER.exception("Failed to load session %s", session_id[:8])
             self.renderer.print_error(f"Failed to load session: {e}")
             return False
 
@@ -448,55 +483,25 @@ class PhosonRepl:
         self.set_model(self.config.model)
 
     def set_model(self, model: str) -> None:
-        """Switch to a different model.
+        """Switch to a different model and rebuild the engine.
 
         Args:
             model: The new model name to use.
         """
         self.current_model = model
         self.config.model = model
-
-        # Rebuild chat and tools for new model/provider
-        self.chat = build_chat(self.config)
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
-
-        # Update summarizer with new provider/model
-        self.summarizer.provider = self.config.provider
-        self.summarizer.model = model
-
-        self.engine = AgentEngine(
-            chat=self.chat,
-            tools=self.tools,
-            middlewares=[self.summarizer],
-            max_iterations=self.config.max_iterations,
-        )
-
-        # Re-inject context for sub-agents
+        # Sub-agent model follows the main model unless explicitly overridden.
         self.subagent_model = self.config.subagent_model or model
-        self.engine.context.extra["safe_mode"] = self.config.safe_mode
-        self.engine.context.extra["available_tools"] = self.tools_dict
-        self.engine.context.extra["default_model"] = self.subagent_model
-
-        self.engine.context.extra["max_iterations"] = self.config.max_iterations
-        self.engine.context.extra["chat"] = self.chat
+        self._rebuild_engine()
 
     def label_current_node(self, text: str) -> None:
-        """Label the current node with text.
-
-        Args:
-            text: The label text to assign.
-        """
+        """Label the current node with text."""
         if self.current_node_id is None:
             return
         self.tree.label(self.current_node_id, text)
 
     def find_latest_node_id(self) -> str | None:
-        """Find the most recently created node.
-
-        Returns:
-            Node ID of the latest node, or None if tree is empty.
-        """
+        """Find the most recently created node."""
         if not self.tree.nodes:
             return None
         latest = max(self.tree.nodes.values(), key=lambda n: n.created_at)
@@ -505,48 +510,8 @@ class PhosonRepl:
     # ── Tree rendering ────────────────────────────────────────────────────────
 
     def render_tree_ascii(self) -> str:
-        """Render the conversation tree as an ASCII diagram.
-
-        Returns:
-            String representation of the tree, or "(empty session)" if empty.
-        """
-        if not self.tree.nodes:
-            return "(empty session)"
-
-        children: dict[str | None, list[str]] = {}
-        for node in self.tree.nodes.values():
-            children.setdefault(node.parent_id, []).append(node.id)
-            children.setdefault(node.id, [])
-        for child_ids in children.values():
-            child_ids.sort(key=lambda nid: self.tree.nodes[nid].created_at)
-
-        def render_node(node_id: str, prefix: str, is_last: bool) -> list[str]:
-            node = self.tree.nodes[node_id]
-            marker = "○" if node_id == self.current_node_id else "●"
-            preview = _message_preview(node.message.content)
-            tail = "  ← current" if node_id == self.current_node_id else ""
-            branch = "└─ " if is_last else "├─ "
-            lines = [f"{prefix}{branch}{marker} {node.id}  {preview}{tail}"]
-            next_prefix = prefix + ("   " if is_last else "│  ")
-            kids = children.get(node_id, [])
-            for i, child_id in enumerate(kids):
-                lines.extend(render_node(child_id, next_prefix, i == len(kids) - 1))
-            return lines
-
-        roots = children.get(None, [])
-        lines: list[str] = []
-        for i, root_id in enumerate(roots):
-            root = self.tree.nodes[root_id]
-            marker = "○" if root_id == self.current_node_id else "●"
-            preview = _message_preview(root.message.content)
-            tail = "  ← current" if root_id == self.current_node_id else ""
-            lines.append(f"{marker} {root.id}  {preview}{tail}")
-            kids = children.get(root_id, [])
-            for j, child_id in enumerate(kids):
-                lines.extend(render_node(child_id, "", j == len(kids) - 1))
-            if i < len(roots) - 1:
-                lines.append("")
-        return "\n".join(lines)
+        """Render the conversation tree as an ASCII diagram."""
+        return render_tree_ascii(self.tree, self.current_node_id)
 
     # ── Prompt ────────────────────────────────────────────────────────────────
 
@@ -554,7 +519,7 @@ class PhosonRepl:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
         short_model = self.current_model.split("/")[-1][:22]
         short_node = (self.current_node_id or "new")[:8]
-        # Mostrar indicador de attachments pendientes
+        # Show pending attachments indicator
         attach_indicator = f" 📎{len(self.attachments)}" if self.attachments else ""
 
         # Token context indicator
@@ -593,61 +558,20 @@ class PhosonRepl:
     # ── Banner ────────────────────────────────────────────────────────────────
 
     def _print_banner(self) -> None:
-        from rich.rule import Rule
-        from rich.text import Text
-        from rich.columns import Columns
-
-        c = self.renderer.console
-        c.print()
-
-        # Build art column (purple)
-        art = Text(_PHOS_ART, style="medium_purple1 bold")
-
-        # Build wordmark column — lines aligned to logo height
-        art_lines = _PHOS_ART.splitlines()
-        mid = len(art_lines) // 2
-        word_lines: list[str] = [""] * len(art_lines)
-        word_lines[mid - 1] = "phoson"
-        word_lines[mid] = "terminal agent"
-        wordmark = Text("\n".join(word_lines))
-        wordmark.highlight_words(["phoson"], style="bold medium_purple1")
-        wordmark.highlight_words(["terminal agent"], style="grey50")
-
-        c.print(Columns([art, wordmark], padding=(0, 4)))
-        c.print()
-
-        short_model = self.current_model.split("/")[-1]
-        c.print(
-            Text(
-                f"  provider {self.config.provider}  ·  model {short_model}"
-                f"  ·  session {self.tree.session_id[:8]}",
-                style="grey50",
-            )
+        """Render the welcome banner."""
+        print_banner(
+            self.renderer.console,
+            provider=self.config.provider,
+            model=self.current_model,
+            session_id=self.tree.session_id,
         )
-        c.print(Rule(style="plum4"))
-        c.print(
-            Text(
-                "  /help for commands  ·  /sessions to resume work"
-                "  ·  /attach to add images  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
-                style="grey42",
-            )
-        )
-        c.print()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _message_preview(content: object, max_len: int = 56) -> str:
-    text = content if isinstance(content, str) else str(content)
-    text = " ".join(text.split())
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 1] + "…"
-
-
 def _text_block(text: str) -> "ContentBlock":
-    """Helper para crear un TextBlock inline."""
+    """Create a TextBlock inline."""
     from phoson_llm.schemas import TextBlock
 
     return TextBlock(text=text)

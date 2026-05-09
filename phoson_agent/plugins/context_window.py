@@ -4,6 +4,8 @@ Provides a single entry point to look up the context_window (in tokens)
 for any model, using a mix of static registry and dynamic API queries.
 """
 
+import warnings
+
 import httpx
 
 # ─────────────────────────────────────────────────────────────────────
@@ -107,6 +109,9 @@ class ContextWindowResolver:
         if model in self._ollama_cache:
             return self._ollama_cache[model]
 
+        # Fallback to default if Ollama is unreachable or returns an unexpected
+        # payload. We treat this as a soft-fail because the caller already
+        # accepts that resolution may be best-effort.
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(
@@ -120,8 +125,18 @@ class ContextWindowResolver:
                     if num_ctx:
                         self._ollama_cache[model] = num_ctx
                         return num_ctx
-        except Exception:
-            pass  # Fall through to default
+                    warnings.warn(
+                        f"Ollama /api/show response for {model!r} contained no"
+                        f" num_ctx; using default ({DEFAULT_CONTEXT_WINDOW} tokens)",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.warn(
+                f"Failed to fetch Ollama context window for {model!r}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self._ollama_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
@@ -139,7 +154,12 @@ class ContextWindowResolver:
                     try:
                         return int(parts[1])
                     except ValueError:
-                        pass
+                        warnings.warn(
+                            f"Could not parse Ollama num_ctx value {parts[1]!r};"
+                            " falling back to default context window",
+                            UserWarning,
+                            stacklevel=3,
+                        )
         elif isinstance(params, dict):
             val = params.get("num_ctx")
             if val is not None:
@@ -159,6 +179,8 @@ class ContextWindowResolver:
         if model in self._openrouter_cache:
             return self._openrouter_cache[model]
 
+        # Same soft-fail policy as Ollama: best-effort lookup with default
+        # fallback. See _resolve_ollama for rationale.
         try:
             headers: dict[str, str] = {}
             if self._openrouter_api_key:
@@ -186,8 +208,12 @@ class ContextWindowResolver:
                                 val = int(ctx)
                                 self._openrouter_cache[model] = val
                                 return val
-        except Exception:
-            pass  # Fall through to default
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.warn(
+                f"Failed to fetch OpenRouter context window for {model!r}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW

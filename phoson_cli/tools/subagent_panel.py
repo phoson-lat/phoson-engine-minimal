@@ -1,13 +1,18 @@
-"""Subagent panel tools for managing and rendering parallel agent tasks."""
+"""Subagent panel rendering and metrics wire format.
+
+This module is **not** an agent tool: it is the renderer for the
+sub-agent live panel and the home of the wire format used between
+``phoson_cli.tools.subagent`` (which emits the metrics blob) and the
+panel renderer that consumes it. Keeping both producer and consumer in
+the same module prevents the previous drift where the producer used
+``key=value`` separated by spaces while the parser expected ``|``.
+"""
 
 from enum import Enum
-from typing import Any
 from dataclasses import dataclass
 
 from rich import box
 from rich.table import Table
-
-from .base import BaseTool
 
 
 class AgentStatus(Enum):
@@ -34,6 +39,59 @@ _MUTED = "grey50"
 _TOOL_OK = "medium_spring_green"
 _TOOL_ERR = "indian_red1"
 
+# ─── Wire format ──────────────────────────────────────────────────────────────
+# Producer: ``phoson_cli.tools.subagent.agents``.
+# Consumer: ``parse_subagent_metrics`` below.
+# Format (one line):
+#   --- METRICS: k1=v1 k2=v2 ... ---
+# Keys are space-separated ``key=value`` pairs. Values must not contain
+# whitespace; numeric values are emitted in canonical Python repr.
+
+AGENT_HEADER_PREFIX = "=== Agent "
+AGENT_HEADER_SUFFIX = " ==="
+METRICS_PREFIX = "--- METRICS:"
+METRICS_SUFFIX = "---"
+
+
+def format_metrics_line(
+    *,
+    duration_ms: int,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    credits: float | int = 0,
+) -> str:
+    """Build the canonical metrics line consumed by ``parse_subagent_metrics``."""
+    return (
+        f"{METRICS_PREFIX} "
+        f"duration_ms={duration_ms} "
+        f"input_tokens={input_tokens} "
+        f"output_tokens={output_tokens} "
+        f"cost_usd={cost_usd} "
+        f"credits={credits} "
+        f"{METRICS_SUFFIX}"
+    )
+
+
+def format_agent_block(
+    *,
+    index: int,
+    task_preview: str,
+    body: str,
+    metrics_line: str | None = None,
+    error: str | None = None,
+) -> str:
+    """Build a full ``=== Agent N: <preview> === ...`` block.
+
+    Mirrors the producer in ``phoson_cli.tools.subagent``.
+    """
+    header = f"{AGENT_HEADER_PREFIX}{index}: {task_preview}{AGENT_HEADER_SUFFIX}"
+    if error is not None:
+        return f"{header} Error: {error}"
+    if metrics_line:
+        return f"{header}\n{body}\n{metrics_line}"
+    return f"{header}\n{body}"
+
 
 @dataclass
 class SubagentMetrics:
@@ -49,45 +107,34 @@ class SubagentMetrics:
     error: str | None = None
 
 
-class SubagentPanelTool(BaseTool):
-    """Tool to manage subagent panel rendering."""
+def _build_running_table(tasks: list[str], frame_index: int) -> Table:
+    """Build the live "running parallel agents" table for a spinner frame."""
+    table = Table(
+        box=box.ROUNDED,
+        title="Running parallel agents",
+        title_style=f"bold {_ACCENT}",
+        padding=(0, 1),
+        show_lines=False,
+    )
 
-    def run(self, *args: Any, **kwargs: Any) -> Any:
-        # Panel logic is primarily UI-driven
-        pass
+    table.add_column("#", style=_MUTED, width=3, justify="right")
+    table.add_column("Status", style=_ACCENT2, width=8)
+    table.add_column("Task", style="white")
+    table.add_column("Time", style=_MUTED, width=8)
+    table.add_column("Tokens", style=_MUTED, width=14)
+    table.add_column("Cost", style=_MUTED, width=10)
 
-    def render_panel(self, tasks: list[str]) -> Table:
-        """Render initial subagent panel with pending tasks."""
-        return self.render_panel_frame(tasks, 0)
-
-    def render_panel_frame(self, tasks: list[str], frame_index: int) -> Table:
-        """Render live subagent panel for a spinner frame."""
-        table = Table(
-            box=box.ROUNDED,
-            title="Running parallel agents",
-            title_style=f"bold {_ACCENT}",
-            padding=(0, 1),
-            show_lines=False,
+    for idx, task in enumerate(tasks):
+        task_preview = task[:35] + "..." if len(task) > 35 else task
+        table.add_row(
+            str(idx),
+            _SPINNER_FRAMES[(frame_index + idx) % len(_SPINNER_FRAMES)],
+            task_preview,
+            "waiting",
+            "—",
+            "—",
         )
-
-        table.add_column("#", style=_MUTED, width=3, justify="right")
-        table.add_column("Status", style=_ACCENT2, width=8)
-        table.add_column("Task", style="white")
-        table.add_column("Time", style=_MUTED, width=8)
-        table.add_column("Tokens", style=_MUTED, width=14)
-        table.add_column("Cost", style=_MUTED, width=10)
-
-        for idx, task in enumerate(tasks):
-            task_preview = task[:35] + "..." if len(task) > 35 else task
-            table.add_row(
-                str(idx),
-                _SPINNER_FRAMES[(frame_index + idx) % len(_SPINNER_FRAMES)],
-                task_preview,
-                "waiting",
-                "—",
-                "—",
-            )
-        return table
+    return table
 
 
 def _format_duration(ms: int) -> str:
@@ -111,43 +158,60 @@ def _format_cost(cost: float) -> str:
     return f"${cost:.5f}"
 
 
+def _parse_kv_pairs(line: str) -> dict[str, str]:
+    """Parse ``k1=v1 k2=v2 ...`` into a dict. Values without ``=`` are skipped."""
+    out: dict[str, str] = {}
+    for token in line.split():
+        if "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
 def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
-    """Parse metrics from subagent output string."""
+    """Parse metrics from a subagent output string.
+
+    The producer is :func:`phoson_cli.tools.subagent.agents` (via
+    :func:`format_agent_block`/:func:`format_metrics_line`). Both ends
+    live in this module to keep the wire format honest.
+    """
     metrics: list[SubagentMetrics] = []
-    parts = output.split("=== Agent ")
+    parts = output.split(AGENT_HEADER_PREFIX)
     for part in parts[1:]:
         try:
             lines = part.split("\n")
             if not lines:
                 continue
             header_line = lines[0]
-            idx = int(header_line.split(":")[0])
-            task = header_line.split(":", 1)[1].replace("===", "").strip()
-            metrics_line = ""
-            for line in lines:
-                if "--- METRICS:" in line:
-                    metrics_line = line
-                    break
+            # Header: ``N: <preview> === [Error: ...]``
+            idx_str, _, rest = header_line.partition(":")
+            idx = int(idx_str.strip())
+            task_segment, _, after = rest.partition(AGENT_HEADER_SUFFIX)
+            task = task_segment.strip()
+
             m = SubagentMetrics(index=idx, task=task, status=AgentStatus.DONE)
-            if "Error:" in header_line:
+
+            if "Error:" in after:
                 m.status = AgentStatus.ERROR
-                m.error = header_line.split("Error:")[1].strip()
-            elif metrics_line:
-                parts2 = (
-                    metrics_line.replace("--- METRICS:", "")
-                    .replace("---", "")
-                    .split("|")
-                )
-                if len(parts2) >= 3:
-                    m.duration_ms = int(parts2[0].strip().replace("ms", ""))
-                    tok_str = parts2[1].strip()
-                    if "in/" in tok_str and tok_str.endswith("out"):
-                        in_tok, out_tok = tok_str[:-3].split("in/")
-                        m.input_tokens = int(in_tok)
-                        m.output_tokens = int(out_tok)
-                    cost_str = parts2[2].strip()
-                    if cost_str.startswith("$"):
-                        m.cost_usd = float(cost_str.replace("$", ""))
+                m.error = after.split("Error:", 1)[1].strip()
+                metrics.append(m)
+                continue
+
+            for line in lines[1:]:
+                if METRICS_PREFIX in line:
+                    payload = (
+                        line.split(METRICS_PREFIX, 1)[1]
+                        .rsplit(METRICS_SUFFIX, 1)[0]
+                        .strip()
+                    )
+                    kv = _parse_kv_pairs(payload)
+                    m.duration_ms = int(float(kv.get("duration_ms", "0")))
+                    m.input_tokens = int(float(kv.get("input_tokens", "0")))
+                    m.output_tokens = int(float(kv.get("output_tokens", "0")))
+                    m.cost_usd = float(kv.get("cost_usd", "0") or 0)
+                    break
+
             metrics.append(m)
         except (ValueError, IndexError):
             continue
@@ -155,30 +219,13 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
 
 
 def render_subagent_panel(tasks: list[str]) -> Table:
-    """Render initial subagent panel with pending tasks.
-
-    Args:
-        tasks: List of task descriptions to display.
-
-    Returns:
-        A Rich Table representing the initial panel state.
-    """
-    panel_tool = SubagentPanelTool()
-    return panel_tool.render_panel(tasks)
+    """Render the initial subagent panel with pending tasks."""
+    return _build_running_table(tasks, frame_index=0)
 
 
 def render_subagent_panel_frame(tasks: list[str], frame_index: int) -> Table:
-    """Render live subagent panel for a spinner frame.
-
-    Args:
-        tasks: List of task descriptions.
-        frame_index: Current frame index for spinner animation.
-
-    Returns:
-        A Rich Table with animated spinner.
-    """
-    panel_tool = SubagentPanelTool()
-    return panel_tool.render_panel_frame(tasks, frame_index)
+    """Render the live subagent panel for a given spinner frame."""
+    return _build_running_table(tasks, frame_index)
 
 
 def render_subagent_summary(metrics: list[SubagentMetrics]) -> Table | None:

@@ -27,11 +27,14 @@ def test_calculate_cost_resolves_alias() -> None:
 
 
 def test_calculate_cost_unknown_model_returns_not_known() -> None:
-    cost_usd, cost_known = calculate_cost(
-        model="local/unknown-model",
-        input_tokens=1000,
-        output_tokens=500,
-    )
+    from phoson_llm.pricing import UnknownModelWarning
+
+    with pytest.warns(UnknownModelWarning, match="local/unknown-model"):
+        cost_usd, cost_known = calculate_cost(
+            model="local/unknown-model",
+            input_tokens=1000,
+            output_tokens=500,
+        )
 
     assert cost_known is False
     assert cost_usd == 0.0

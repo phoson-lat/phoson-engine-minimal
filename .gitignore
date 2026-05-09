@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Summary and completion files
+SUMMARY.md
+PLUGIN_COMPLETION_SUMMARY.txt
+FINAL_SUMMARY.txt
+docs/superpowers

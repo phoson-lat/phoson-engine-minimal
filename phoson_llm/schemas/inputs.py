@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 from dataclasses import dataclass
 from collections.abc import Sequence
 
@@ -18,7 +18,7 @@ class ToolUseBlock:
 
     tool_call_id: str
     tool_name: str
-    args: dict
+    args: dict[str, Any]
 
 
 @dataclass
@@ -141,7 +141,7 @@ class ToolDefinition:
 
     name: str
     description: str
-    parameters: dict
+    parameters: dict[str, Any]
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────

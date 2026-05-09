@@ -6,9 +6,9 @@ This module provides a unified interface for interacting with various LLM provid
 multimodal inputs.
 
 Example:
-    >>> from phoson_llm import build_chat, ModelConfig
+    >>> from phoson_llm import OpenAIChat, ModelConfig, Message
     >>>
-    >>> chat = build_chat("openai", api_key="sk-...")
+    >>> chat = OpenAIChat(api_key="sk-...")
     >>> config = ModelConfig(model="gpt-4o", max_tokens=1024)
     >>>
     >>> messages = [Message(role="user", content="Hello!")]
@@ -49,6 +49,11 @@ from phoson_llm.schemas import (
     ReasoningStartEvent,
     ReasoningTokenEvent,
 )
+from phoson_llm.exceptions import (
+    PhosonLLMError,
+    PhosonProviderError,
+    PhosonLLMProtocolError,
+)
 
 __all__ = [
     # chats
@@ -85,4 +90,8 @@ __all__ = [
     # pricing
     "calculate_cost",
     "PriceEntry",
+    # exceptions
+    "PhosonLLMError",
+    "PhosonLLMProtocolError",
+    "PhosonProviderError",
 ]

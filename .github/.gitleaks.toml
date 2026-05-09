@@ -1,0 +1,11 @@
+title = "gitleaks config"
+
+[allowlist]
+  description = "Allowlist for documentation examples"
+  
+  # Ignore Slack bot token in documentation files (examples only)
+  [[allowlist.rules]]
+  description = "Slack token in documentation"
+  regex = '''xoxb-[0-9a-zA-Z]+'''
+  files = ['''.*\.md$''']
+  tags = ["key", "Slack"]

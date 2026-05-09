@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from phoson_cli.model_selector import list_available_models, _format_openrouter_pricing
@@ -26,7 +27,7 @@ async def test_list_available_models_ollama_falls_back_on_error(monkeypatch) -> 
 
     class DummyClient:
         async def __aenter__(self):
-            raise RuntimeError("boom")
+            raise httpx.ConnectError("boom")
 
         async def __aexit__(self, exc_type, exc, tb):
             return False
@@ -35,7 +36,8 @@ async def test_list_available_models_ollama_falls_back_on_error(monkeypatch) -> 
         "phoson_cli.model_selector.httpx.AsyncClient", lambda timeout: DummyClient()
     )
 
-    models = await list_available_models(config)
+    with pytest.warns(UserWarning, match="Failed to fetch Ollama models"):
+        models = await list_available_models(config)
 
     assert [m.id for m in models] == ["llama3.2"]
 

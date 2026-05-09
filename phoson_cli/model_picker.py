@@ -1,13 +1,17 @@
+"""Model picker — interactive fuzzy-search selector for available models."""
+
+from typing import TypedDict
 from dataclasses import dataclass
 
-from prompt_toolkit.styles import Style
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.containers import HSplit, Window
-
+from .pickers import BasePicker, picker_style
 from .model_selector import ModelOption
+
+
+class _PickerState(TypedDict):
+    query: str
+    filtered: list[ModelOption]
+    selected: int
+    page: int
 
 
 @dataclass
@@ -16,20 +20,7 @@ class ModelPickerResult:
     cancelled: bool = False
 
 
-_MODEL_PICKER_STYLE = Style.from_dict(
-    {
-        "title": "bold #b57bee",
-        "header": "#808080",
-        "row.selected": "bg:#3d2b6e bold #ffffff",
-        "row": "#9a8faa",
-        "row.active": "bold #00ff9c",
-        "footer": "#5a5a5a",
-        "search": "bold #e0d0ff",
-        "search.label": "#b57bee bold",
-        "search.hint": "#6f6780",
-        "empty": "#ff9aa2",
-    }
-)
+# ─── Formatting helpers ──────────────────────────────────────────────────────
 
 
 def _truncate(value: str, width: int) -> str:
@@ -57,6 +48,9 @@ def _format_meta(model: ModelOption) -> str:
     elif model.provider:
         parts.append(model.provider)
     return " · ".join(parts)
+
+
+# ─── Fuzzy search ────────────────────────────────────────────────────────────
 
 
 def _fuzzy_score(query: str, text: str) -> int | None:
@@ -106,6 +100,9 @@ def _filter_models(models: list[ModelOption], query: str) -> list[ModelOption]:
 
     scored.sort(key=lambda item: (-item[0], item[1].id.lower()))
     return [model for _, model in scored]
+
+
+# ─── Renderer ────────────────────────────────────────────────────────────────
 
 
 def _render_models(
@@ -181,122 +178,80 @@ def _render_models(
     return lines
 
 
+# ─── Public entry point ──────────────────────────────────────────────────────
+
+
 async def pick_model(
     models: list[ModelOption],
     current_model: str,
     page_size: int = 12,
 ) -> ModelPickerResult:
+    """Show an interactive picker over ``models`` with fuzzy search."""
     if not models:
         return ModelPickerResult(cancelled=True)
 
-    query = ""
-    filtered_models = list(models)
-    selected = next(
-        (i for i, model in enumerate(filtered_models) if model.id == current_model),
-        0,
+    initial_selected = next(
+        (i for i, m in enumerate(models) if m.id == current_model), 0
     )
-    page = selected // page_size
+    state: _PickerState = {
+        "query": "",
+        "filtered": list(models),
+        "selected": initial_selected,
+        "page": initial_selected // page_size,
+    }
+
+    def render() -> list[tuple[str, str]]:
+        return _render_models(
+            state["filtered"],
+            current_model,
+            state["selected"],
+            state["page"],
+            page_size,
+            state["query"],
+        )
+
+    picker: BasePicker[ModelPickerResult] = BasePicker(
+        render=render,
+        style=picker_style(),
+    )
 
     def _refresh_selection() -> None:
-        nonlocal filtered_models, selected, page
-        filtered_models = _filter_models(models, query)
-        if not filtered_models:
-            selected = 0
-            page = 0
+        filtered = _filter_models(models, state["query"])
+        state["filtered"] = filtered
+        if not filtered:
+            state.update(selected=0, page=0)
             return
-        selected = next(
-            (i for i, model in enumerate(filtered_models) if model.id == current_model),
-            0,
-        )
-        page = selected // page_size
+        sel = next((i for i, m in enumerate(filtered) if m.id == current_model), 0)
+        state.update(selected=sel, page=sel // page_size)
 
-    def _rerender() -> None:
-        info_window.content = FormattedTextControl(get_text)
-
-    def get_text() -> list[tuple[str, str]]:
-        return _render_models(
-            filtered_models,
-            current_model,
-            selected,
-            page,
-            page_size,
-            query,
-        )
-
-    kb = KeyBindings()
-
-    @kb.add("up")
-    def _up(_event) -> None:
-        nonlocal selected, page
-        if selected > 0:
-            selected -= 1
-            page = selected // page_size
-            _rerender()
-
-    @kb.add("down")
-    def _down(_event) -> None:
-        nonlocal selected, page
-        if selected < len(filtered_models) - 1:
-            selected += 1
-            page = selected // page_size
-            _rerender()
-
-    @kb.add("pageup")
-    def _pageup(_event) -> None:
-        nonlocal selected, page
-        if page > 0:
-            page -= 1
-            selected = page * page_size
-            _rerender()
-
-    @kb.add("pagedown")
-    def _pagedown(_event) -> None:
-        nonlocal selected, page
-        total_pages = max(1, (len(filtered_models) + page_size - 1) // page_size)
-        if page < total_pages - 1:
-            page += 1
-            selected = min(page * page_size, len(filtered_models) - 1)
-            _rerender()
-
-    @kb.add("backspace")
-    def _backspace(_event) -> None:
-        nonlocal query
-        if not query:
+    def confirm() -> None:
+        if not state["filtered"]:
             return
-        query = query[:-1]
+        picker.done(ModelPickerResult(model_id=state["filtered"][state["selected"]].id))
+
+    def backspace() -> None:
+        if not state["query"]:
+            return
+        state["query"] = state["query"][:-1]
         _refresh_selection()
-        _rerender()
+        picker.refresh()
 
-    @kb.add("enter")
-    def _select(_event) -> None:
-        if not filtered_models:
-            return
-        app.exit(result=ModelPickerResult(model_id=filtered_models[selected].id))
-
-    @kb.add("escape")
-    def _quit(_event) -> None:
-        app.exit(result=ModelPickerResult(cancelled=True))
-
-    @kb.add("<any>")
-    def _type(_event) -> None:
-        nonlocal query
-        data = _event.data
-        if not data or not data.isprintable() or data in {"\r", "\n"}:
-            return
-        query += data
+    def on_type(data: str) -> None:
+        state["query"] += data
         _refresh_selection()
-        _rerender()
+        picker.refresh()
 
-    info_window = Window(
-        content=FormattedTextControl(get_text),
-        always_hide_cursor=True,
+    picker.bind_paged_nav(
+        get_len=lambda: len(state["filtered"]),
+        get_sel=lambda: state["selected"],
+        set_sel=lambda i: state.update(selected=i),
+        get_page=lambda: state["page"],
+        set_page=lambda p: state.update(page=p),
+        page_size=page_size,
+        on_enter=confirm,
+        on_cancel=lambda: picker.done(ModelPickerResult(cancelled=True)),
     )
+    picker.bind("backspace", backspace)
+    picker.bind_typing(on_type)
 
-    app: Application = Application(
-        layout=Layout(HSplit([info_window])),
-        key_bindings=kb,
-        full_screen=True,
-        style=_MODEL_PICKER_STYLE,
-        mouse_support=False,
-    )
-    return await app.run_async()
+    return await picker.run()

@@ -1,4 +1,9 @@
+import warnings
 from dataclasses import dataclass
+
+# Prices are stored per million tokens for readability; we divide by this
+# constant when computing the cost of an actual call.
+_TOKENS_PER_MILLION = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -12,11 +17,6 @@ class PriceEntry:
     output: float
     cache_write: float = 0.0
     cache_read: float = 0.0
-
-
-def _per_million(n: float) -> float:
-    """Converts an absolute value to cost per million."""
-    return n / 1_000_000
 
 
 # ─── Price table (per million tokens, USD) ────────────────────────────────────
@@ -67,6 +67,18 @@ _ALIASES: dict[str, str] = {
 }
 
 
+class UnknownModelWarning(UserWarning):
+    """Emitted when :func:`calculate_cost` encounters a model not in the price table.
+
+    Silence this for providers where unknown costs are expected (e.g. Ollama,
+    custom OpenRouter routes)::
+
+        import warnings
+        from phoson_llm.pricing import UnknownModelWarning
+        warnings.filterwarnings("ignore", category=UnknownModelWarning)
+    """
+
+
 def _resolve(model: str, provider: str | None = None) -> PriceEntry | None:
     """Resolves the model to the corresponding PriceEntry, with support for aliases."""
     key = _ALIASES.get(model, model)
@@ -109,13 +121,20 @@ def calculate_cost(
     entry = _resolve(model, provider=provider)
 
     if entry is None:
+        warnings.warn(
+            f"No price entry for model {model!r}; cost will be reported as 0. "
+            "Add it to phoson_llm.pricing.PRICES or suppress with "
+            "warnings.filterwarnings('ignore', category=UnknownModelWarning).",
+            UnknownModelWarning,
+            stacklevel=2,
+        )
         return 0.0, False
 
     cost = (
-        input_tokens * _per_million(entry.input)
-        + output_tokens * _per_million(entry.output)
-        + cache_write_tokens * _per_million(entry.cache_write)
-        + cache_read_tokens * _per_million(entry.cache_read)
-    )
+        input_tokens * entry.input
+        + output_tokens * entry.output
+        + cache_write_tokens * entry.cache_write
+        + cache_read_tokens * entry.cache_read
+    ) / _TOKENS_PER_MILLION
 
     return round(cost, 8), True
