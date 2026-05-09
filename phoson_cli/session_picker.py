@@ -3,12 +3,7 @@
 from typing import Any
 from dataclasses import dataclass
 
-from prompt_toolkit.styles import Style
-from prompt_toolkit.application import Application
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.containers import HSplit, Window
+from .pickers import BasePicker, picker_style
 
 
 @dataclass
@@ -17,19 +12,6 @@ class SessionPickerResult:
     cancelled: bool = False
     delete: bool = False
 
-
-# ── Style ─────────────────────────────────────────────────────────────────────
-_SESSION_PICKER_STYLE = Style.from_dict(
-    {
-        "title": "bold #b57bee",
-        "header": "#808080",
-        "row.selected": "bg:#3d2b6e bold #ffffff",
-        "row": "#9a8faa",
-        "row.active": "bold #00ff9c",
-        "footer": "#5a5a5a",
-        "key-hint": "bold #b57bee",
-    }
-)
 
 _HEADER = (
     f"  {'#':>3}  {'Session ID':<10} {'Msgs':>5}"
@@ -105,77 +87,66 @@ async def pick_session(
     if not sessions:
         return SessionPickerResult(cancelled=True)
 
-    selected = 0
-    page = 0
+    state = {"selected": 0, "page": 0}
     total_pages = max(1, (len(sessions) + page_size - 1) // page_size)
 
-    def get_text() -> list[tuple[str, str]]:
-        return _render_sessions(sessions, current_id, selected, page, page_size)
+    def render() -> list[tuple[str, str]]:
+        return _render_sessions(
+            sessions, current_id, state["selected"], state["page"], page_size
+        )
 
-    kb = KeyBindings()
-
-    @kb.add("up")
-    def _up(_event: Any) -> None:
-        nonlocal selected, page
-        if selected > 0:
-            selected -= 1
-            new_page = selected // page_size
-            if new_page != page:
-                page = new_page
-            info_window.content = FormattedTextControl(get_text)
-
-    @kb.add("down")
-    def _down(_event: Any) -> None:
-        nonlocal selected, page
-        if selected < len(sessions) - 1:
-            selected += 1
-            new_page = selected // page_size
-            if new_page != page:
-                page = new_page
-            info_window.content = FormattedTextControl(get_text)
-
-    @kb.add("pageup")
-    def _pageup(_event: Any) -> None:
-        nonlocal selected, page
-        if page > 0:
-            page -= 1
-            selected = page * page_size
-            info_window.content = FormattedTextControl(get_text)
-
-    @kb.add("pagedown")
-    def _pagedown(_event: Any) -> None:
-        nonlocal selected, page
-        if page < total_pages - 1:
-            page += 1
-            selected = min(page * page_size, len(sessions) - 1)
-            info_window.content = FormattedTextControl(get_text)
-
-    @kb.add("enter")
-    def _select(_event: Any) -> None:
-        app.exit(result=SessionPickerResult(session_id=sessions[selected].id))
-
-    @kb.add("q")
-    @kb.add("escape")
-    def _quit(_event: Any) -> None:
-        app.exit(result=SessionPickerResult(cancelled=True))
-
-    @kb.add("d")
-    def _delete(_event: Any) -> None:
-        sid = sessions[selected].id
-        app.exit(result=SessionPickerResult(session_id=sid, delete=True))
-
-    info_window = Window(
-        content=FormattedTextControl(get_text),
-        always_hide_cursor=True,
+    picker: BasePicker[SessionPickerResult] = BasePicker(
+        render=render,
+        style=picker_style(),
     )
 
-    layout = Layout(HSplit([info_window]))
-    app: Application = Application(
-        layout=layout,
-        key_bindings=kb,
-        full_screen=True,
-        style=_SESSION_PICKER_STYLE,
-        mouse_support=False,
-    )
+    def _sync_page_to_selection() -> None:
+        state["page"] = state["selected"] // page_size
 
-    return await app.run_async()
+    def go_up() -> None:
+        if state["selected"] > 0:
+            state["selected"] -= 1
+            _sync_page_to_selection()
+            picker.refresh()
+
+    def go_down() -> None:
+        if state["selected"] < len(sessions) - 1:
+            state["selected"] += 1
+            _sync_page_to_selection()
+            picker.refresh()
+
+    def page_up() -> None:
+        if state["page"] > 0:
+            state["page"] -= 1
+            state["selected"] = state["page"] * page_size
+            picker.refresh()
+
+    def page_down() -> None:
+        if state["page"] < total_pages - 1:
+            state["page"] += 1
+            state["selected"] = min(
+                state["page"] * page_size, len(sessions) - 1
+            )
+            picker.refresh()
+
+    def confirm() -> None:
+        picker.done(
+            SessionPickerResult(session_id=sessions[state["selected"]].id)
+        )
+
+    def cancel() -> None:
+        picker.done(SessionPickerResult(cancelled=True))
+
+    def delete_selected() -> None:
+        sid = sessions[state["selected"]].id
+        picker.done(SessionPickerResult(session_id=sid, delete=True))
+
+    picker.bind_default_nav(
+        on_up=go_up, on_down=go_down, on_enter=confirm, on_cancel=cancel
+    )
+    picker.bind("pageup", page_up)
+    picker.bind("pagedown", page_down)
+    picker.bind("q", cancel)
+    picker.bind("d", delete_selected)
+
+    return await picker.run()
