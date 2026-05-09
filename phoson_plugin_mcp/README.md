@@ -15,10 +15,10 @@ pip install mcp
 
 ### Ubicación del Archivo
 
-El plugin busca la configuración MCP en estas ubicaciones (en orden):
-1. Ruta especificada en la configuración del plugin
-2. `~/.phoson/mcps.json` (default para CLI)
-3. `phoson-mcp.json` (directorio actual)
+El plugin usa la ruta indicada en su configuración.
+
+- En el CLI, Phoson le pasa `~/.phoson/mcps.json` por defecto.
+- Si usas el plugin directamente sin configurar `config_file`, usa `phoson-mcp.json` en el directorio actual.
 
 ### Crear Configuración
 
@@ -51,7 +51,7 @@ Crea el archivo `~/.phoson/mcps.json` (recomendado para CLI):
 from phoson_agent import AgentEngine
 from phoson_llm import OpenAIChat
 
-# El plugin cargará automáticamente phoson-mcp.json
+# Sin config_file, el plugin cargará phoson-mcp.json del directorio actual
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=["phoson-plugin-mcp"],
@@ -109,7 +109,7 @@ engine = AgentEngine(
 
 ## Formato del Archivo de Configuración
 
-El archivo `phoson-mcp.json` soporta tres tipos de transporte: **STDIO**, **SSE** y **HTTP**.
+El archivo de configuración MCP soporta tres tipos de transporte: **STDIO**, **SSE** y **HTTP**.
 
 ### STDIO Transport (Default)
 

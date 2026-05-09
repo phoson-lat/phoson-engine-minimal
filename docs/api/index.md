@@ -22,7 +22,7 @@ pip install phoson-engine-minimal
 import asyncio
 
 from phoson_agent import AgentEngine, tool
-from phoson_llm import Message, ModelConfig
+from phoson_llm import Message, ModelConfig, OpenAIChat
 
 @tool
 def get_weather(location: str) -> str:
@@ -31,11 +31,12 @@ def get_weather(location: str) -> str:
 
 async def main() -> None:
     agent = AgentEngine(
-        chat=ModelConfig(provider="openai", api_key="sk-..."),
+        chat=OpenAIChat(api_key="sk-..."),
         tools=[get_weather],
     )
     result = await agent.run(
         messages=[Message(role="user", content="What's the weather in NYC?")],
+        config=ModelConfig(model="gpt-4o-mini"),
     )
     print(result.final_content)
 

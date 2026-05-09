@@ -70,7 +70,7 @@ MCP enabled  ·  saved
 ```
 > /mcp status
 MCP: enabled
-Config file: phoson-mcp.json
+Config file: ~/.phoson/mcps.json
 Loaded 2 MCP tool(s):
   • mcp_filesystem_read_file
   • mcp_memory_store_memory  # example names; depends on server discovery
@@ -541,7 +541,7 @@ Loaded 2 MCP tool(s):
 **Problema:** `/mcp enable` no carga herramientas.
 
 **Solución:**
-1. Verifica que `phoson-mcp.json` existe
+1. Verifica que `~/.phoson/mcps.json` existe
 2. Verifica que el JSON es válido
 3. Verifica que Node.js está instalado: `node --version`
 4. Verifica que los servidores MCP están instalados
@@ -551,7 +551,7 @@ Loaded 2 MCP tool(s):
 **Problema:** `/mcp status` muestra 0 herramientas.
 
 **Solución:**
-1. Verifica la configuración en `phoson-mcp.json`
+1. Verifica la configuración en `~/.phoson/mcps.json`
 2. Prueba manualmente: `npx -y @modelcontextprotocol/server-filesystem /tmp`
 3. Revisa los logs de errores en la consola
 
