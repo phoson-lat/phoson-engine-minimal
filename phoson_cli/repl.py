@@ -112,6 +112,38 @@ class SessionMetrics:
         }
 
 
+@dataclass
+class SessionState:
+    """Mutable per-session fields that reset together on new/load/branch.
+
+    Grouping these three fields makes the session lifecycle explicit:
+    every operation that starts a fresh session (new, load, branch)
+    operates on this struct rather than scattering assignments across
+    ``PhosonRepl``.
+
+    Attributes:
+        tree: The active :class:`ConversationTree`.
+        metrics: Accumulated cost, token and step counters.
+        current_node_id: ID of the most recently active tree node,
+            or ``None`` for an empty session.
+    """
+
+    tree: "ConversationTree"
+    metrics: SessionMetrics
+    current_node_id: str | None = None
+
+    @classmethod
+    def new(cls) -> "SessionState":
+        """Create a fresh session with a new tree and zeroed metrics."""
+        return cls(tree=ConversationTree.new(), metrics=SessionMetrics())
+
+    def reset(self) -> None:
+        """Replace tree and metrics in-place for a brand-new session."""
+        self.tree = ConversationTree.new()
+        self.metrics = SessionMetrics()
+        self.current_node_id = None
+
+
 # ── Prompt style ──────────────────────────────────────────────────────────────
 # purple accent on prefix/arrow, muted elsewhere; completion menu purple
 _PROMPT_STYLE = Style.from_dict(
@@ -191,12 +223,10 @@ class PhosonRepl:
         """
         self.config = config
         self.storage = JsonlStorage(base_path=config.sessions_dir)
-        self.tree = ConversationTree.new()
-        self.current_node_id: str | None = None
+        self._session = SessionState.new()
         self.renderer = Renderer()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
-        self.session_metrics = SessionMetrics()
         self.attachments = AttachmentManager()
 
         # Sub-agent model: explicit override or fallback to main model.
@@ -224,7 +254,32 @@ class PhosonRepl:
         # Build the runtime (chat client, tools, plugins, engine).
         self._rebuild_engine()
 
-        self.renderer.set_session(self.tree.session_id)
+        self.renderer.set_session(self._session.tree.session_id)
+
+    # ── Session state properties ──────────────────────────────────────────────
+
+    @property
+    def tree(self) -> "ConversationTree":
+        """The active conversation tree."""
+        return self._session.tree
+
+    @tree.setter
+    def tree(self, value: "ConversationTree") -> None:
+        self._session.tree = value
+
+    @property
+    def current_node_id(self) -> str | None:
+        """ID of the most recently active tree node."""
+        return self._session.current_node_id
+
+    @current_node_id.setter
+    def current_node_id(self, value: str | None) -> None:
+        self._session.current_node_id = value
+
+    @property
+    def session_metrics(self) -> SessionMetrics:
+        """Accumulated metrics for the current session."""
+        return self._session.metrics
 
     # ── Engine (re)construction ───────────────────────────────────────────────
 
@@ -477,19 +532,17 @@ class PhosonRepl:
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
-        self.tree = ConversationTree.new()
-        self.current_node_id = None
+        self._session.reset()
         self.attachments.clear()
-        self.renderer.set_session(self.tree.session_id)
-        self.session_metrics.reset()
+        self.renderer.set_session(self._session.tree.session_id)
 
     async def load_session(self, session_id: str) -> bool:
         """Load a session from storage and replay its tail. Returns True on success."""
         try:
-            self.tree = await self.storage.load(session_id)
-            self.current_node_id = self.find_latest_node_id()
-            self.renderer.set_session(self.tree.session_id)
-            self.session_metrics.reset()
+            self._session.tree = await self.storage.load(session_id)
+            self._session.current_node_id = self.find_latest_node_id()
+            self._session.metrics = SessionMetrics()
+            self.renderer.set_session(self._session.tree.session_id)
 
             # Load saved metrics using the authoritative SessionMeta field names.
             metas = await self.storage.list_meta()

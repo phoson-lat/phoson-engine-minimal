@@ -117,7 +117,16 @@ class AgentEngine:
     )
 
     def __post_init__(self) -> None:
-        """Load plugins and build the tool index."""
+        """Load plugins and initialise the runner and loop."""
+        self._setup()
+
+    def _setup(self) -> None:
+        """Resolve plugins, build the tool index, ToolRunner and AgentLoop.
+
+        Separated from ``__post_init__`` so the initialisation sequence is
+        explicitly named. Subclasses and test fixtures can call it directly
+        without relying on dataclass construction mechanics.
+        """
         self._loaded_plugins = []
         for plugin_spec in self.plugins:
             plugin = load_plugin(plugin_spec)

@@ -10,7 +10,7 @@ configure the client and provide a cost callback.
 
 import json
 import base64
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
@@ -65,6 +65,22 @@ def _no_cost(
 ) -> tuple[float, bool]:
     """Cost callback that always reports unknown cost. Default for aggregators."""
     return (0.0, False)
+
+
+# ─── Message dict types ──────────────────────────────────────────────────────
+
+
+class _MessageDict(TypedDict):
+    """Top-level shape of a single OpenAI-compatible message dict.
+
+    Return element type of :func:`_convert_messages`. All optional keys use
+    ``NotRequired`` to accurately reflect which fields each variant carries.
+    """
+
+    role: str
+    content: NotRequired[str | list[dict]]
+    tool_calls: NotRequired[list[dict]]
+    tool_call_id: NotRequired[str]
 
 
 # ─── Message / tool conversion ──────────────────────────────────────────────
@@ -132,11 +148,11 @@ def _convert_content_block(block: "ContentBlock") -> dict:
     }
 
 
-def _convert_messages(messages: list["Message"]) -> list[dict]:
+def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
     """Converts Phoson messages to OpenAI-compatible format."""
     from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
-    result = []
+    result: list[_MessageDict] = []
 
     for msg in messages:
         if msg.role == "system":
