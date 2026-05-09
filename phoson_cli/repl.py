@@ -414,29 +414,18 @@ class PhosonRepl:
         for step in done_event.result.steps:
             self.session_metrics.add_run_step(step)
 
-    def _save_partial(self, base_count: int) -> None:
-        """On CancelledError: save whatever the engine produced so far.
+    def _append_partial_history(self, base_count: int) -> None:
+        """Slice engine partial history and append new nodes to the tree.
 
-        Slices the engine's partial history from ``base_count``, appends
-        new nodes to the tree (updating ``current_node_id``), and persists
-        both tree and metadata. Errors are surfaced as warnings, not raised.
+        Updates ``current_node_id`` to the last appended node.
+        Called synchronously from the ``CancelledError`` handler in
+        ``_run_agent`` before the async saves.
         """
-        try:
-            partial = self.engine.get_partial_history()
-            new_messages = partial[base_count:]
-            if new_messages:
-                created = self.tree.append_many(self.current_node_id, new_messages)
-                self.current_node_id = created[-1].id
-            asyncio.get_event_loop().run_until_complete(
-                asyncio.gather(
-                    self.storage.save(self.tree),
-                    self.storage.save_meta(
-                        self.tree.session_id, self.session_metrics.to_meta()
-                    ),
-                )
-            )
-        except Exception as exc:
-            self.renderer.print_warn(f"Could not save partial progress: {exc}")
+        partial = self.engine.get_partial_history()
+        new_messages = partial[base_count:]
+        if new_messages:
+            created = self.tree.append_many(self.current_node_id, new_messages)
+            self.current_node_id = created[-1].id
 
     async def _run_agent(self, user_input: str) -> None:
         """Execute the agent with user input.
@@ -465,7 +454,11 @@ class PhosonRepl:
             done_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
             self.renderer.flush_line()
-            self._save_partial(base_count)
+            self._append_partial_history(base_count)
+            await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
             self.renderer.print_warn("Partial progress saved.")
             return
         finally:
