@@ -170,7 +170,10 @@ class RetryingChat(BaseLLMChat):
                 break
 
             if self._policy.on_retry is not None and last_error is not None:
-                self._policy.on_retry(attempt, last_error)
+                try:
+                    self._policy.on_retry(attempt, last_error)
+                except Exception:  # noqa: BLE001
+                    pass  # callback errors must not abort the retry loop
 
             # Skip the LLMStartEvent that the inner stream already emitted
             # for the failed attempt by waiting for the new stream to emit

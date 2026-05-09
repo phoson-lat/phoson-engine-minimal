@@ -176,7 +176,7 @@ class OllamaChat(BaseLLMChat):
                                 body += chunk
                                 if len(body) > 4096:
                                     break
-                        except Exception:  # noqa: BLE001
+                        except httpx.ReadError:
                             pass
                         detail = body.decode("utf-8", errors="replace").strip()
                         msg = f"Ollama API error {response.status_code}"

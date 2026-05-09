@@ -208,7 +208,16 @@ class PhosonRepl:
         are also refreshed so token estimation and context-window
         resolution stay accurate.
         """
+        old_chat = getattr(self, "chat", None)
         self.chat = build_chat(self.config)
+        # Release the old client's connection pool (e.g. Anthropic SDK holds
+        # a persistent httpx.AsyncClient). Schedule on the running loop;
+        # no-op on the first call from __init__ where there is no old client.
+        if old_chat is not None and hasattr(old_chat, "aclose"):
+            try:
+                asyncio.get_running_loop().create_task(old_chat.aclose())
+            except RuntimeError:
+                pass
         self.tools = build_tools()
         self.tools_dict = build_tools_dict()
 
@@ -341,8 +350,9 @@ class PhosonRepl:
         await self.current_task
         self.current_task = None
 
-        # consume() always sets done_event before the task completes
-        assert done_event is not None
+        # consume() always sets done_event before the task completes.
+        if done_event is None:
+            raise RuntimeError("Agent stream ended without emitting AgentDoneEvent")
         return done_event
 
     def _finalize_run(

@@ -222,6 +222,10 @@ class AnthropicChat(BaseLLMChat):
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
         )
 
+    async def aclose(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        await self._client.aclose()
+
     async def stream(
         self,
         messages: list[Message],

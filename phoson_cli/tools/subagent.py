@@ -113,6 +113,7 @@ async def _run_one_subagent(
         result = await sub_engine.run(messages, config)
         return result.final_content
     except Exception as exc:
+        _LOGGER.debug("Sub-agent raised: %s", exc, exc_info=True)
         return f"Sub-agent error: {exc}"
 
 
@@ -199,6 +200,7 @@ async def agents(
                 "output_tokens": output_tokens,
             }
         except Exception as exc:
+            _LOGGER.debug("Parallel sub-agent %d raised: %s", idx, exc, exc_info=True)
             return {
                 "index": idx,
                 "task": task,

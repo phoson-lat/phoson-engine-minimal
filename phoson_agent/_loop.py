@@ -50,6 +50,7 @@ from phoson_agent._internals import (
 )
 from phoson_agent.middleware import LLMCallNext
 from phoson_agent._tool_runner import ToolRunner, PrepareEventFn
+from phoson_agent.exceptions import PhosonAgentError
 
 
 class AgentLoop:
@@ -221,7 +222,8 @@ class AgentLoop:
 
 def _build_assistant_message(outcome: LLMStepOutcome) -> Message:
     """Build the assistant message containing text + tool_use blocks."""
-    assert outcome.done_event is not None  # checked by caller
+    if outcome.done_event is None:
+        raise PhosonAgentError("_build_assistant_message called without a done_event")
     blocks: list[TextBlock | ToolUseBlock] = []
     if outcome.done_event.content:
         blocks.append(TextBlock(text=outcome.done_event.content))
