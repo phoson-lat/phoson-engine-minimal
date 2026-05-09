@@ -4,14 +4,13 @@ from io import StringIO
 
 from rich.console import Console
 
-from phoson_llm.schemas import Message
 from phoson_cli._views import (
     print_banner,
-    render_tree_ascii,
     _message_preview,
+    render_tree_ascii,
 )
+from phoson_llm.schemas import Message
 from phoson_agent.sessions.models import ConversationTree
-
 
 # ─── render_tree_ascii ───────────────────────────────────────────────────────
 

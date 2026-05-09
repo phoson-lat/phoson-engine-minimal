@@ -1,23 +1,20 @@
 """Unit tests for phoson_cli.renderer."""
 
 import datetime
-import threading
-import time
 
-import pytest
 from rich.console import Console
 
 from phoson_agent.models import (
+    RunStep,
     AgentStartEvent,
     AgentStepDoneEvent,
-    AgentToolStartEvent,
     AgentToolDoneEvent,
     AgentReasoningEvent,
-    RunStep,
+    AgentToolStartEvent,
 )
 from phoson_cli.renderer import Renderer, WaitingSpinner, SubagentSpinner
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -114,7 +111,7 @@ def test_renderer_step_counter() -> None:
 
 
 def test_renderer_tool_start_no_print() -> None:
-    """_on_tool_start for a regular tool updates the spinner label but does NOT print."""
+    """_on_tool_start for a regular tool updates the spinner label; does not print."""
     renderer, console = _renderer_with_capture()
 
     with console.capture() as cap:
@@ -176,7 +173,7 @@ def test_renderer_tool_done_compact_error() -> None:
 
 
 def test_renderer_reasoning_buffered() -> None:
-    """AgentReasoningEvent chunks accumulate; finish_turn() prints summary and clears."""
+    """AgentReasoningEvent chunks accumulate; finish_turn prints summary and clears."""
     renderer, console = _renderer_with_capture()
 
     # Send reasoning events — nothing should print yet.

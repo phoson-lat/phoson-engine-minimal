@@ -1,10 +1,10 @@
 from phoson_cli.commands import (
-    COMMAND_SPECS,
     COMMANDS,
+    COMMAND_SPECS,
     Command,
     CommandHandler,
-    get_command_help,
     parse_command,
+    get_command_help,
 )
 
 

@@ -2,33 +2,30 @@
 
 import datetime
 
-import pytest
-
 from phoson_llm.schemas import (
     Message,
-    ModelConfig,
     TextBlock,
-    ToolUseBlock,
-    ToolResultBlock,
-    ImageBlock,
     AudioBlock,
-    VideoBlock,
-    DocumentBlock,
-    ToolDefinition,
-    LLMStartEvent,
-    LLMDoneEvent,
+    ErrorEvent,
+    ImageBlock,
     TokenEvent,
-    ReasoningStartEvent,
-    ReasoningTokenEvent,
-    ReasoningDoneEvent,
-    ToolCallEvent,
-    ToolCallDeltaEvent,
     TokenUsage,
     UsageEvent,
-    ErrorEvent,
+    VideoBlock,
+    ModelConfig,
+    LLMDoneEvent,
+    ToolUseBlock,
+    DocumentBlock,
+    LLMStartEvent,
+    ToolCallEvent,
+    ToolDefinition,
+    ToolResultBlock,
     LLMModalitiesEvent,
+    ReasoningDoneEvent,
+    ToolCallDeltaEvent,
+    ReasoningStartEvent,
+    ReasoningTokenEvent,
 )
-
 
 # ── inputs ───────────────────────────────────────────────────────────────────
 

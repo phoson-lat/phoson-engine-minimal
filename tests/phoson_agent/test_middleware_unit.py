@@ -4,13 +4,12 @@ import pytest
 
 from phoson_llm.schemas import (
     Message,
-    ModelConfig,
-    TokenEvent,
-    LLMDoneEvent,
     ErrorEvent,
+    TokenEvent,
+    ModelConfig,
+    LLMDoneEvent,
 )
 from phoson_agent.middleware import AgentMiddleware, RetryMiddleware
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

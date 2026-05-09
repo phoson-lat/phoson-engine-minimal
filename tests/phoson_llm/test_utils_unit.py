@@ -2,8 +2,6 @@
 
 import base64
 
-import pytest
-
 from phoson_llm.utils import guess_mime, map_error_code, load_file_as_base64
 
 

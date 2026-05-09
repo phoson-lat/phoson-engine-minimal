@@ -5,16 +5,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from phoson_cli.repl import PhosonRepl, SessionMetrics
+from phoson_cli.config import PhosonConfig
 from phoson_agent.models import (
+    RunStep,
     AgentDoneEvent,
     AgentRunResult,
-    RunStep,
 )
 from phoson_agent.sessions.models import SessionMeta
-from phoson_cli.config import PhosonConfig
-from phoson_cli.repl import PhosonRepl, SessionMetrics
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ def test_session_metrics_to_meta_round_trip() -> None:
 
 
 def test_build_user_message_plain_text(repl: PhosonRepl) -> None:
-    """_build_user_message('hello') returns a user Message whose content contains the text."""
+    """_build_user_message wraps plain text in a user Message."""
     msg = repl._build_user_message("hello")
 
     assert msg.role == "user"
@@ -107,7 +107,7 @@ def test_build_user_message_plain_text(repl: PhosonRepl) -> None:
 
 
 def test_append_user_turn_adds_node(repl: PhosonRepl) -> None:
-    """_append_user_turn grows the tree by one node and returns a path ending with the message."""
+    """_append_user_turn grows the tree by one node; path ends with the new message."""
     from phoson_llm.schemas import Message
 
     before = len(repl.tree.nodes)

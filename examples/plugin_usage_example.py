@@ -3,8 +3,9 @@ Example of using the plugin system with AgentEngine.
 """
 
 import asyncio
-from phoson_agent import AgentEngine, Plugin, AgentTool, tool
-from phoson_llm import OpenAIChat, ModelConfig, Message
+
+from phoson_llm import Message, OpenAIChat, ModelConfig
+from phoson_agent import Plugin, AgentTool, AgentEngine, tool
 
 
 # Example 1: Using a plugin from a local file

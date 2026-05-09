@@ -1,14 +1,12 @@
-"""Unit tests for phoson_agent.tool — decorator, schema generation, context injection."""
+"""Unit tests for phoson_agent.tool: decorator, schema generation, context injection."""
 
 import enum
-import warnings
-from typing import Annotated, Literal
+from typing import Literal, Annotated
 
 import pytest
 
-from phoson_agent.tool import tool, _json_schema_for_type, _context_values
+from phoson_agent.tool import tool, _context_values, _json_schema_for_type
 from phoson_agent.models import AgentTool
-
 
 # ── _json_schema_for_type ────────────────────────────────────────────────────
 
@@ -92,11 +90,7 @@ class TestToolDecorator:
             """Greet someone."""
             return f"{greeting}, {name}"
 
-        props = (
-            my_tool.parameters["properties"]
-            if False
-            else greet.parameters["properties"]
-        )
+        props = greet.parameters["properties"]
         assert "name" in props
         assert "greeting" in props
         assert greet.parameters["required"] == ["name", "greeting"]
@@ -153,8 +147,6 @@ class TestToolDecorator:
         def add(a: int, b: int) -> str:
             """Add two numbers."""
             return str(a + b)
-
-        import asyncio
 
         result = add.handler({"a": 2, "b": 3})
         assert result == "5"
@@ -227,8 +219,6 @@ class TestContextValues:
         class Ctx:
             def __init__(self):
                 self.user_id = "alice"
-
-        import asyncio
 
         class FakeLoop:
             pass

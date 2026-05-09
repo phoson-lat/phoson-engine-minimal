@@ -4,8 +4,9 @@ Ejemplo de uso exactamente como lo solicitaste.
 """
 
 import asyncio
+
+from phoson_llm import OpenAIChat
 from phoson_agent import AgentEngine
-from phoson_llm import OpenAIChat, ModelConfig, Message
 
 
 async def main():
@@ -35,9 +36,9 @@ async def main():
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
-        "phoson-plugin-mcp",        # Se instalaría con: pip install phoson-plugin-mcp
-        "phoson-plugin-memory",     # Se instalaría con: pip install phoson-plugin-memory
-        "phoson-plugin-checkpoint", # Se instalaría con: pip install phoson-plugin-checkpoint
+        "phoson-plugin-mcp",  # pip install phoson-plugin-mcp
+        "phoson-plugin-memory",  # pip install phoson-plugin-memory
+        "phoson-plugin-checkpoint",  # pip install phoson-plugin-checkpoint
     ],
 )
 """)

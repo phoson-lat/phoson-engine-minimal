@@ -11,8 +11,8 @@ This example shows how to:
 import json
 import asyncio
 from pathlib import Path
+
 from phoson_agent import AgentEngine
-from phoson_llm import ModelConfig, Message
 
 
 def create_example_config():
@@ -102,7 +102,7 @@ async def example_custom_config():
             ],
         )
 
-        print(f"\n✅ Plugin loaded with custom config")
+        print("\n✅ Plugin loaded with custom config")
         print(f"🔧 Tools available: {len(engine.tools)}")
 
         for tool in engine.tools:
@@ -138,7 +138,7 @@ async def example_inline_config():
             ],
         )
 
-        print(f"✅ Plugin loaded with inline config")
+        print("✅ Plugin loaded with inline config")
         print(f"🔧 Tools available: {len(engine.tools)}")
 
         for tool in engine.tools:
@@ -166,7 +166,7 @@ async def example_no_config():
             ],
         )
 
-        print(f"✅ Plugin loaded (no servers configured)")
+        print("✅ Plugin loaded (no servers configured)")
         print(f"🔧 Tools available: {len(engine.tools)}")
 
         if len(engine.tools) == 0:

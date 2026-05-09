@@ -8,40 +8,36 @@ end-to-end behaviour. Instead we lock in the contracts that each
 module exposes so future refactors don't accidentally drop a hook.
 """
 
-import asyncio
 import datetime
 from collections.abc import AsyncIterator
 
 import pytest
 
+from phoson_agent.tool import tool
+from phoson_agent.agent import AgentEngine
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
-    ErrorEvent,
     TokenEvent,
     TokenUsage,
     UsageEvent,
     ModelConfig,
     LLMDoneEvent,
     LLMStartEvent,
-    ReasoningTokenEvent,
 )
-from phoson_agent.tool import tool
-from phoson_agent.agent import AgentEngine
 from phoson_agent.context import AgentContext
+from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent._internals import (
-    LLMStepOutcome,
     IterationCost,
     IterationFinal,
+    LLMStepOutcome,
     IterationFailed,
     now_utc,
     duration_ms,
     subagent_label,
     to_result_text,
 )
-from phoson_llm.chats.base import BaseLLMChat
 from phoson_agent._tool_runner import ToolRunner
-
 
 # ─── _internals helpers ──────────────────────────────────────────────────────
 

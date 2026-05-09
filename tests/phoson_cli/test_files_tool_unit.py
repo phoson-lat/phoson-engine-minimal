@@ -1,8 +1,6 @@
 """Unit tests for phoson_cli.tools.files — read, write, patch, list_dir."""
 
-import pytest
-
-from phoson_cli.tools.files import _read_file, _write_file, _patch_file, _list_dir
+from phoson_cli.tools.files import _list_dir, _read_file, _patch_file, _write_file
 
 
 class TestReadFile:

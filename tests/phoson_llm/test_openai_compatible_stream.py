@@ -7,9 +7,8 @@ client so the protocol-level behaviour is locked in regardless of which
 adapter calls it.
 """
 
-import json
-from collections.abc import AsyncIterator
 from dataclasses import field, dataclass
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -17,20 +16,14 @@ from phoson_llm.schemas import (
     Message,
     LLMEvent,
     ErrorEvent,
-    TokenEvent,
     UsageEvent,
     ModelConfig,
     LLMDoneEvent,
-    LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
     ReasoningDoneEvent,
-    ToolCallDeltaEvent,
-    ReasoningStartEvent,
-    ReasoningTokenEvent,
 )
 from phoson_llm.chats._openai_compatible import stream_chat_completions
-
 
 # ─── Fake OpenAI SDK objects ─────────────────────────────────────────────────
 

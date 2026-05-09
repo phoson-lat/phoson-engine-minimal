@@ -9,6 +9,7 @@ Example demonstrating all three MCP transport types:
 import json
 import asyncio
 from pathlib import Path
+
 from phoson_agent import AgentEngine
 
 
@@ -135,7 +136,7 @@ async def example_stdio():
             ],
         )
 
-        print(f"\n✅ Plugin loaded with STDIO transport")
+        print("\n✅ Plugin loaded with STDIO transport")
         print(f"🔧 Tools available: {len(engine.tools)}")
         for tool in engine.tools:
             print(f"   • {tool.name}")
@@ -171,7 +172,7 @@ async def example_sse():
             ],
         )
 
-        print(f"\n✅ Plugin loaded with SSE transport")
+        print("\n✅ Plugin loaded with SSE transport")
         print(f"🔧 Tools available: {len(engine.tools)}")
         for tool in engine.tools:
             print(f"   • {tool.name}")
@@ -208,7 +209,7 @@ async def example_http():
             ],
         )
 
-        print(f"\n✅ Plugin loaded with HTTP transport")
+        print("\n✅ Plugin loaded with HTTP transport")
         print(f"🔧 Tools available: {len(engine.tools)}")
         for tool in engine.tools:
             print(f"   • {tool.name}")
@@ -245,7 +246,7 @@ async def example_mixed():
             ],
         )
 
-        print(f"\n✅ Plugin loaded with mixed transports")
+        print("\n✅ Plugin loaded with mixed transports")
         print(f"🔧 Tools available: {len(engine.tools)}")
         for tool in engine.tools:
             print(f"   • {tool.name}")

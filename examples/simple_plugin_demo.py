@@ -5,8 +5,8 @@ Muestra cómo crear y usar un plugin inline.
 """
 
 import asyncio
-from phoson_agent import AgentEngine, Plugin, AgentTool, tool
-from phoson_llm import ModelConfig, Message
+
+from phoson_agent import Plugin, AgentTool, AgentEngine, tool
 
 
 # Definir un plugin simple inline
