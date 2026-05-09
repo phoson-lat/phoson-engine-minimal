@@ -4,6 +4,8 @@ Provides a single entry point to look up the context_window (in tokens)
 for any model, using a mix of static registry and dynamic API queries.
 """
 
+import warnings
+
 import httpx
 
 # ─────────────────────────────────────────────────────────────────────
@@ -123,10 +125,12 @@ class ContextWindowResolver:
                     if num_ctx:
                         self._ollama_cache[model] = num_ctx
                         return num_ctx
-        except (httpx.HTTPError, ValueError):
-            # httpx.HTTPError covers connect/timeout/protocol issues.
-            # ValueError covers JSON decoding problems.
-            pass
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.warn(
+                f"Failed to fetch Ollama context window for {model!r}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self._ollama_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
@@ -193,8 +197,12 @@ class ContextWindowResolver:
                                 val = int(ctx)
                                 self._openrouter_cache[model] = val
                                 return val
-        except (httpx.HTTPError, ValueError):
-            pass
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.warn(
+                f"Failed to fetch OpenRouter context window for {model!r}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
