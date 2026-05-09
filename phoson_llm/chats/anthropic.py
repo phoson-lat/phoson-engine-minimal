@@ -1,8 +1,14 @@
 import os
 import json
+from typing import cast
 from collections.abc import AsyncIterator
 
 import anthropic
+from anthropic.types import (
+    TextDelta,
+    ThinkingDelta,
+    InputJSONDelta,
+)
 
 from phoson_llm.utils import guess_mime, map_error_code, load_file_as_base64
 from phoson_llm.pricing import calculate_cost
@@ -271,35 +277,45 @@ class AnthropicChat(BaseLLMChat):
         try:
             async with self._client.messages.stream(**kwargs) as s:
                 async for event in s:
+                    # We dispatch on event.type (the discriminator field of
+                    # the RawMessageStreamEvent union) and cast the relevant
+                    # payloads. This keeps the code resilient to SDK
+                    # additions of new event variants.
                     etype = event.type
 
                     if etype == "content_block_delta":
-                        delta = event.delta  # type: ignore
+                        # Narrow to RawContentBlockDeltaEvent payload shape.
+                        delta = event.delta  # type: ignore[union-attr]
+                        idx = event.index  # type: ignore[union-attr]
+                        dtype = delta.type
 
-                        if delta.type == "text_delta":  # type: ignore
-                            text_acc += delta.text  # type: ignore
-                            yield TokenEvent(content=delta.text)  # type: ignore
+                        if dtype == "text_delta":
+                            text_delta = cast(TextDelta, delta)
+                            text_acc += text_delta.text
+                            yield TokenEvent(content=text_delta.text)
 
-                        elif delta.type == "thinking_delta":  # type: ignore
+                        elif dtype == "thinking_delta":
+                            thinking_delta = cast(ThinkingDelta, delta)
                             if not reasoning_acc:
                                 yield ReasoningStartEvent()
-                            reasoning_acc += delta.thinking  # type: ignore
-                            yield ReasoningTokenEvent(content=delta.thinking)
+                            reasoning_acc += thinking_delta.thinking
+                            yield ReasoningTokenEvent(content=thinking_delta.thinking)
 
-                        elif delta.type == "input_json_delta":  # type: ignore
-                            idx = event.index  # type: ignore
+                        elif dtype == "input_json_delta":
+                            json_delta = cast(InputJSONDelta, delta)
                             tool_args_acc[idx] = (
-                                tool_args_acc.get(idx, "") + delta.partial_json
-                            )  # type: ignore
+                                tool_args_acc.get(idx, "") + json_delta.partial_json
+                            )
                             yield ToolCallDeltaEvent(
                                 index=idx,
                                 tool_name=tool_names.get(idx, ""),
-                                args_chunk=delta.partial_json,  # type: ignore
+                                args_chunk=json_delta.partial_json,
                             )
 
                     elif etype == "content_block_start":
-                        block = event.content_block  # type: ignore
-                        idx = event.index  # type: ignore
+                        # Narrow to RawContentBlockStartEvent payload shape.
+                        block = event.content_block  # type: ignore[union-attr]
+                        idx = event.index  # type: ignore[union-attr]
 
                         if block.type == "tool_use":
                             has_tool_calls = True
@@ -308,7 +324,7 @@ class AnthropicChat(BaseLLMChat):
                             tool_args_acc[idx] = ""
 
                     elif etype == "content_block_stop":
-                        idx = event.index  # type: ignore
+                        idx = event.index  # type: ignore[union-attr]
 
                         if reasoning_acc and idx == 0:
                             yield ReasoningDoneEvent(content=reasoning_acc)
