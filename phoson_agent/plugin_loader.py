@@ -4,6 +4,7 @@ Module for loading and managing plugins.
 
 import sys
 import importlib
+import importlib.util
 from typing import Any
 from pathlib import Path
 
@@ -168,11 +169,23 @@ class PluginRegistry:
                 if isinstance(plugin_attr, Plugin):
                     return plugin_attr
                 if callable(plugin_attr):
-                    return plugin_attr()
+                    instance = plugin_attr()
+                    if not isinstance(instance, Plugin):
+                        raise PhosonPluginLoadError(
+                            f"'plugin' callable in {path} returned "
+                            f"{type(instance).__name__}, expected Plugin"
+                        )
+                    return instance
 
             if hasattr(module, "create_plugin"):
                 factory = getattr(module, "create_plugin")
-                return factory()
+                instance = factory()
+                if not isinstance(instance, Plugin):
+                    raise PhosonPluginLoadError(
+                        f"'create_plugin()' in {path} returned "
+                        f"{type(instance).__name__}, expected Plugin"
+                    )
+                return instance
 
             raise PhosonPluginLoadError(
                 f"Plugin file '{path}' must have 'plugin' or 'create_plugin()'"
@@ -200,18 +213,22 @@ class PluginRegistry:
         eps = entry_points()
 
         # Handle both old and new entry_points() API
+        # Modern (3.10+) ``entry_points`` returns an ``EntryPoints`` object
+        # with a ``select`` method. We only target Python 3.12+ in this
+        # project, but we keep a fallback for the legacy dict-based shape
+        # in case ``importlib_metadata`` is in use.
         if hasattr(eps, "select"):
-            matches = eps.select(group=group, name=name)
+            matches = list(eps.select(group=group, name=name))
         else:
-            matches = eps.get(group, [])
-            matches = [ep for ep in matches if ep.name == name]
+            legacy = eps.get(group, []) if hasattr(eps, "get") else []  # type: ignore[union-attr]
+            matches = [ep for ep in legacy if ep.name == name]
 
         if not matches:
             raise PhosonPluginLoadError(
                 f"No entry point found for plugin '{name}' in group '{group}'"
             )
 
-        ep = list(matches)[0]
+        ep = matches[0]
         factory = ep.load()
 
         if isinstance(factory, Plugin):

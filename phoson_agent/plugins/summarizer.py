@@ -24,10 +24,13 @@ import tiktoken
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
+    TextBlock,
     ErrorEvent,
     TokenEvent,
     UsageEvent,
     ModelConfig,
+    ToolUseBlock,
+    ToolResultBlock,
 )
 from phoson_agent.models import AgentEvent
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
@@ -78,14 +81,18 @@ class TokenEstimator:
             total += _MSG_OVERHEAD
             if isinstance(msg.content, str):
                 total += self.count_text(msg.content)
-            else:
-                for block in msg.content:
-                    if hasattr(block, "text"):
-                        total += self.count_text(block.text)
-                    if hasattr(block, "args"):
-                        total += self.count_text(json.dumps(block.args))
-                    if hasattr(block, "result"):
-                        total += self.count_text(block.result)
+                continue
+
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    total += self.count_text(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    total += self.count_text(json.dumps(block.args))
+                elif isinstance(block, ToolResultBlock):
+                    total += self.count_text(block.result)
+                # Multimodal blocks (image/audio/video/document) carry no
+                # text payload tiktoken can score; we skip them and let the
+                # _MSG_OVERHEAD constant absorb their structural cost.
         return total
 
     @classmethod
@@ -123,18 +130,19 @@ def _format_messages_for_summary(messages: list[Message]) -> str:
         role = msg.role.upper()
         if isinstance(msg.content, str):
             parts.append(f"[{role}] {msg.content}")
-        else:
-            text_parts: list[str] = []
-            for block in msg.content:
-                if hasattr(block, "text"):
-                    text_parts.append(block.text)
-                if hasattr(block, "tool_name"):
-                    args_str = json.dumps(block.args)
-                    text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
-                if hasattr(block, "result"):
-                    error_tag = " [ERROR]" if block.error else ""
-                    text_parts.append(f"[Result{error_tag}] {block.result}")
-            parts.append(f"[{role}] {' '.join(text_parts)}")
+            continue
+
+        text_parts: list[str] = []
+        for block in msg.content:
+            if isinstance(block, TextBlock):
+                text_parts.append(block.text)
+            elif isinstance(block, ToolUseBlock):
+                args_str = json.dumps(block.args)
+                text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
+            elif isinstance(block, ToolResultBlock):
+                error_tag = " [ERROR]" if block.error else ""
+                text_parts.append(f"[Result{error_tag}] {block.result}")
+        parts.append(f"[{role}] {' '.join(text_parts)}")
     return "\n\n".join(parts)
 
 

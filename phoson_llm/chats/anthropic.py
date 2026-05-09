@@ -287,7 +287,10 @@ class AnthropicChat(BaseLLMChat):
                         # Narrow to RawContentBlockDeltaEvent payload shape.
                         delta = event.delta  # type: ignore[union-attr]
                         idx = event.index  # type: ignore[union-attr]
-                        dtype = delta.type
+                        # ``Delta`` in the SDK is a union of several payload
+                        # classes; ``getattr`` keeps the dispatch open without
+                        # requiring a static `.type` on every member.
+                        dtype = getattr(delta, "type", None)
 
                         if dtype == "text_delta":
                             text_delta = cast(TextDelta, delta)
