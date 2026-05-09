@@ -125,6 +125,12 @@ class ContextWindowResolver:
                     if num_ctx:
                         self._ollama_cache[model] = num_ctx
                         return num_ctx
+                    warnings.warn(
+                        f"Ollama /api/show response for {model!r} contained no"
+                        f" num_ctx; using default ({DEFAULT_CONTEXT_WINDOW} tokens)",
+                        UserWarning,
+                        stacklevel=2,
+                    )
         except (httpx.HTTPError, ValueError) as exc:
             warnings.warn(
                 f"Failed to fetch Ollama context window for {model!r}: {exc}",
@@ -148,7 +154,12 @@ class ContextWindowResolver:
                     try:
                         return int(parts[1])
                     except ValueError:
-                        pass
+                        warnings.warn(
+                            f"Could not parse Ollama num_ctx value {parts[1]!r};"
+                            " falling back to default context window",
+                            UserWarning,
+                            stacklevel=3,
+                        )
         elif isinstance(params, dict):
             val = params.get("num_ctx")
             if val is not None:

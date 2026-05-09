@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import warnings
 from typing import Any
 from pathlib import Path
 from collections.abc import Iterable
@@ -199,6 +200,9 @@ class PhosonRepl:
                     "config": mcp_config,
                 }
             ]
+        except Exception as exc:
+            warnings.warn(f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2)
+            return []
 
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
