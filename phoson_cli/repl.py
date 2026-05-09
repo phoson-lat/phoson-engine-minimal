@@ -21,7 +21,7 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
 from .config import PhosonConfig, build_chat
-from .commands import COMMANDS, CommandHandler, parse_command
+from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer
 from .attachments import AttachmentManager
 
@@ -132,26 +132,10 @@ _PROMPT_STYLE = Style.from_dict(
     }
 )
 
-# ── Command descriptions shown in the meta column ──────────────────────────────
+# Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
+# completer's meta column stays in sync with /help and the dispatch table.
 _CMD_META: dict[str, str] = {
-    "/exit": "quit phoson_cli",
-    "/quit": "quit phoson_cli",
-    "/new": "start a new session",
-    "/clear": "alias for /new",
-    "/model": "show, list, or switch model",
-    "/subagent-model": "show or set the LLM model for sub-agents",
-    "/env": "show environment variables",
-    "/cost": "show session cost breakdown",
-    "/tokens": "show token usage stats",
-    "/steps": "show execution steps",
-    "/tree": "show conversation tree",
-    "/sessions": "interactive session picker (navigate, select, delete)",
-    "/delete": "delete a saved session by id",
-    "/branch": "branch from current node",
-    "/label": "label current node",
-    "/attach": "attach image/audio/video/pdf",
-    "/attachments": "list or clear attachments",
-    "/help": "show command reference",
+    name: spec.help for spec in COMMAND_SPECS for name in spec.names
 }
 
 _SYSTEM_PROMPT_TEMPLATE = (
@@ -211,15 +195,12 @@ class PhosonRepl:
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
         self.session_metrics = SessionMetrics()
+        self.attachments = AttachmentManager()
 
-        # Build tools and registry for sub-agents
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
+        # Sub-agent model: explicit override or fallback to main model.
+        self.subagent_model: str = config.subagent_model or config.model
 
-        # Create chat instance for sub-agents
-        self.chat = build_chat(config)
-
-        # Context window resolver + token estimator for prompt display
+        # Context window resolver + token estimator for prompt display.
         self._cw_resolver = ContextWindowResolver(
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
@@ -227,7 +208,8 @@ class PhosonRepl:
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
 
-        # Summarization middleware
+        # Summarization middleware. The provider/model fields are kept in
+        # sync with the active config every time ``_rebuild_engine`` runs.
         self.summarizer = SummarizationMiddleware(
             threshold=0.80,
             min_keep_messages=4,
@@ -236,52 +218,74 @@ class PhosonRepl:
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
         )
-        self.attachments = AttachmentManager()
 
-        # Load plugins
-        plugins = []
-        if config.enable_mcp:
-            # Try to import MCP plugin
-            try:
-                from phoson_plugin_mcp import MCPPlugin
-                # Add MCP plugin instance directly
-                mcp_plugin = MCPPlugin()
-                mcp_plugin.configure({
-                    "config_file": str(config.mcp_config_file),
-                    "tool_name_prefix": "mcp",
-                })
-                plugins.append(mcp_plugin)
-            except ImportError:
-                # Fallback to path loading for development
-                mcp_plugin_config = {
+        # Build the runtime (chat client, tools, plugins, engine).
+        self._rebuild_engine()
+
+        self.renderer.set_session(self.tree.session_id)
+
+    # ── Engine (re)construction ───────────────────────────────────────────────
+
+    def _build_mcp_plugins(self) -> list:
+        """Resolve the MCP plugin specs for the current configuration.
+
+        Returns an empty list when MCP is disabled. Tries the in-tree
+        ``phoson_plugin_mcp`` first; falls back to the path-based loader
+        used during local development if the package is not installed.
+        """
+        if not self.config.enable_mcp:
+            return []
+
+        mcp_config = {
+            "config_file": str(self.config.mcp_config_file),
+            "tool_name_prefix": "mcp",
+        }
+
+        try:
+            from phoson_plugin_mcp import MCPPlugin
+
+            plugin = MCPPlugin()
+            plugin.configure(mcp_config)
+            return [plugin]
+        except ImportError:
+            return [
+                {
                     "name": "path:./phoson_plugin_mcp/plugin.py",
-                    "config": {
-                        "config_file": str(config.mcp_config_file),
-                        "tool_name_prefix": "mcp",
-                    }
+                    "config": mcp_config,
                 }
-                plugins.append(mcp_plugin_config)
+            ]
+
+    def _rebuild_engine(self) -> None:
+        """(Re)build chat client, tool registry, plugins and the engine.
+
+        Called from ``__init__`` and from every command that mutates
+        provider/model/MCP state. The summarizer's provider/model fields
+        are also refreshed so token estimation and context-window
+        resolution stay accurate.
+        """
+        self.chat = build_chat(self.config)
+        self.tools = build_tools()
+        self.tools_dict = build_tools_dict()
+
+        self.summarizer.provider = self.config.provider
+        self.summarizer.model = self.config.model
+
+        plugins = self._build_mcp_plugins()
 
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
             middlewares=[self.summarizer],
             plugins=plugins,
-            max_iterations=config.max_iterations,
+            max_iterations=self.config.max_iterations,
         )
 
-        # Sub-agent model: explicit override or fallback to main model
-        self.subagent_model: str = config.subagent_model or config.model
-
-        # Inject context for sub-agents
-        self.engine.context.extra["safe_mode"] = config.safe_mode
+        # Inject runtime context for sub-agents.
+        self.engine.context.extra["safe_mode"] = self.config.safe_mode
         self.engine.context.extra["available_tools"] = self.tools_dict
         self.engine.context.extra["default_model"] = self.subagent_model
-
-        self.engine.context.extra["max_iterations"] = config.max_iterations
+        self.engine.context.extra["max_iterations"] = self.config.max_iterations
         self.engine.context.extra["chat"] = self.chat
-
-        self.renderer.set_session(self.tree.session_id)
 
     async def run(self) -> None:
         """Run the REPL main loop.
@@ -473,63 +477,16 @@ class PhosonRepl:
         self.set_model(self.config.model)
 
     def set_model(self, model: str) -> None:
-        """Switch to a different model.
+        """Switch to a different model and rebuild the engine.
 
         Args:
             model: The new model name to use.
         """
         self.current_model = model
         self.config.model = model
-
-        # Rebuild chat and tools for new model/provider
-        self.chat = build_chat(self.config)
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
-
-        # Update summarizer with new provider/model
-        self.summarizer.provider = self.config.provider
-        self.summarizer.model = model
-
-        # Load plugins
-        plugins = []
-        if self.config.enable_mcp:
-            # Try to import MCP plugin
-            try:
-                from phoson_plugin_mcp import MCPPlugin
-                # Add MCP plugin instance directly
-                mcp_plugin = MCPPlugin()
-                mcp_plugin.configure({
-                    "config_file": str(self.config.mcp_config_file),
-                    "tool_name_prefix": "mcp",
-                })
-                plugins.append(mcp_plugin)
-            except ImportError:
-                # Fallback to path loading for development
-                mcp_plugin_config = {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
-                    "config": {
-                        "config_file": str(self.config.mcp_config_file),
-                        "tool_name_prefix": "mcp",
-                    }
-                }
-                plugins.append(mcp_plugin_config)
-
-        self.engine = AgentEngine(
-            chat=self.chat,
-            tools=self.tools,
-            middlewares=[self.summarizer],
-            plugins=plugins,
-            max_iterations=self.config.max_iterations,
-        )
-
-        # Re-inject context for sub-agents
+        # Sub-agent model follows the main model unless explicitly overridden.
         self.subagent_model = self.config.subagent_model or model
-        self.engine.context.extra["safe_mode"] = self.config.safe_mode
-        self.engine.context.extra["available_tools"] = self.tools_dict
-        self.engine.context.extra["default_model"] = self.subagent_model
-
-        self.engine.context.extra["max_iterations"] = self.config.max_iterations
-        self.engine.context.extra["chat"] = self.chat
+        self._rebuild_engine()
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text.

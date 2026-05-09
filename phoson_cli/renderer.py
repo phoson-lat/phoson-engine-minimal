@@ -492,19 +492,14 @@ class Renderer:
             table.add_row(str(i), s.id, str(s.message_count), updated, state)
         self.console.print(table)
 
-    def print_help(self, commands: set[str]) -> None:
-        _desc = {
-            "/exit": "Quit phoson_cli",
-            "/quit": "Quit phoson_cli",
-            "/new": "Start a new conversation session",
-            "/clear": "Alias for /new",
-            "/model": "Show or switch model  (/model <name>)",
-            "/tree": "Display conversation tree for current session",
-            "/sessions": "List and load saved sessions",
-            "/branch": "Branch conversation from current node",
-            "/label": "Label current node  (/label <text>)",
-            "/help": "Show this help",
-        }
+    def print_help(self, entries: list[tuple[str, str]]) -> None:
+        """Render the ``/help`` table.
+
+        Args:
+            entries: ``(name, description)`` pairs as returned by
+                :func:`phoson_cli.commands.get_command_help`. Caller owns
+                ordering so that aliases display together.
+        """
         table = Table(
             show_header=False,
             border_style=_MUTED2,
@@ -513,8 +508,8 @@ class Renderer:
         )
         table.add_column("cmd", style=f"bold {_ACCENT}", no_wrap=True)
         table.add_column("desc", style=_MUTED)
-        for cmd in sorted(commands):
-            table.add_row(cmd, _desc.get(cmd, ""))
+        for name, description in entries:
+            table.add_row(name, description)
         self.console.print(table)
 
 

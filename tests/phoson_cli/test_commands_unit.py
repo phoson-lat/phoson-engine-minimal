@@ -1,4 +1,11 @@
-from phoson_cli.commands import Command, parse_command
+from phoson_cli.commands import (
+    COMMAND_SPECS,
+    COMMANDS,
+    Command,
+    CommandHandler,
+    get_command_help,
+    parse_command,
+)
 
 
 def test_parse_command_returns_none_for_non_slash() -> None:
@@ -86,3 +93,58 @@ def test_command_dataclass() -> None:
     cmd = Command(name="/test", args="arg1 arg2")
     assert cmd.name == "/test"
     assert cmd.args == "arg1 arg2"
+
+
+# ─── Dispatch table ──────────────────────────────────────────────────────────
+
+
+def test_command_specs_have_implemented_methods() -> None:
+    """Every CommandSpec.method must exist on CommandHandler."""
+    missing = [
+        spec.method
+        for spec in COMMAND_SPECS
+        if not hasattr(CommandHandler, spec.method)
+    ]
+    assert missing == [], f"Missing handlers: {missing}"
+
+
+def test_commands_set_matches_command_specs() -> None:
+    """The flat COMMANDS frozenset must include every alias from COMMAND_SPECS."""
+    expected = {name for spec in COMMAND_SPECS for name in spec.names}
+    assert set(COMMANDS) == expected
+
+
+def test_get_command_help_returns_one_entry_per_spec() -> None:
+    entries = get_command_help()
+    assert len(entries) == len(COMMAND_SPECS)
+    for (name, help_text), spec in zip(entries, COMMAND_SPECS, strict=True):
+        assert help_text == spec.help
+        # When there are aliases the entry shows them joined together.
+        if len(spec.names) == 1:
+            assert name == spec.primary
+        else:
+            for alias in spec.names:
+                assert alias in name
+
+
+def test_command_handler_dispatch_table_covers_all_aliases() -> None:
+    """The handler's internal dispatch must register every alias."""
+    # We build the handler with a stub repl object — it never reads it.
+    handler = CommandHandler.__new__(CommandHandler)
+    handler.repl = None  # type: ignore[assignment]
+    handler._dispatch = {}
+    for spec in COMMAND_SPECS:
+        method = getattr(CommandHandler, spec.method)
+        for name in spec.names:
+            handler._dispatch[name] = method
+
+    expected = {name for spec in COMMAND_SPECS for name in spec.names}
+    assert set(handler._dispatch) == expected
+
+
+def test_command_specs_have_no_duplicate_names() -> None:
+    seen: set[str] = set()
+    for spec in COMMAND_SPECS:
+        for name in spec.names:
+            assert name not in seen, f"duplicate command name: {name}"
+            seen.add(name)
