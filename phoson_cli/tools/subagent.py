@@ -15,6 +15,7 @@ from typing import Any
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
+from phoson_agent.models import AgentTool
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_llm.chats.base import BaseLLMChat
 
@@ -68,9 +69,9 @@ def _aggregate_tokens(steps: list) -> tuple[int, int]:
 
 
 def _select_tools(
-    available_tools: dict[str, Any],
+    available_tools: dict[str, AgentTool],
     requested: list[str] | None,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, AgentTool], str | None]:
     """Resolve the tool subset for a sub-agent.
 
     Returns a ``(selected, error)`` pair. ``error`` is non-None when the
@@ -96,7 +97,7 @@ async def _run_one_subagent(
     *,
     task: str,
     chat: BaseLLMChat,
-    selected_tools: list[Any],
+    selected_tools: list[AgentTool],
     model: str,
     max_iterations: int,
 ) -> str:
@@ -132,7 +133,7 @@ async def agent(
     model: str | None = None,
     *,
     chat: BaseLLMChat,
-    available_tools: dict[str, Any],
+    available_tools: dict[str, AgentTool],
     default_model: str,
     max_iterations: int,
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context
@@ -158,7 +159,7 @@ async def agents(
     model: str | None = None,
     *,
     chat: BaseLLMChat,
-    available_tools: dict[str, Any],
+    available_tools: dict[str, AgentTool],
     default_model: str,
     max_iterations: int,
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context

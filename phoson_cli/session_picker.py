@@ -1,7 +1,8 @@
 """Interactive session picker with pagination."""
 
-from typing import Any
 from dataclasses import dataclass
+
+from phoson_agent.sessions.models import SessionMeta
 
 from .pickers import BasePicker, picker_style
 
@@ -20,7 +21,7 @@ _HEADER = (
 
 
 def _render_sessions(
-    sessions: list[Any],
+    sessions: list[SessionMeta],
     current_id: str,
     selected: int,
     page: int,
@@ -79,7 +80,7 @@ def _render_sessions(
 
 
 async def pick_session(
-    sessions: list[Any],
+    sessions: list[SessionMeta],
     current_id: str,
     page_size: int = 15,
 ) -> SessionPickerResult:

@@ -7,6 +7,7 @@ import inspect
 import functools
 from types import UnionType
 from typing import Any, Annotated, get_args, get_origin, get_type_hints
+from collections.abc import Callable
 
 from phoson_agent.models import AgentTool
 
@@ -20,7 +21,7 @@ _TYPE_MAP: dict[type, str] = {
 }
 
 
-def _context_values(context: Any | None) -> dict[str, Any]:
+def _context_values(context: object | None) -> dict[str, Any]:
     """Extracts relevant values from a context object."""
     if context is None:
         return {}
@@ -70,7 +71,7 @@ def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]
     return {"type": json_type}, description
 
 
-def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
+def _build_parameters(fn: Callable[..., Any], exclude: set[str]) -> dict[str, Any]:
     """Builds the JSON parameter schema for a function."""
     hints = get_type_hints(fn, include_extras=True)
     sig = inspect.signature(fn)
@@ -103,12 +104,16 @@ def _build_parameters(fn: Any, exclude: set[str]) -> dict[str, Any]:
     return schema
 
 
-def tool(_fn: Any = None, *, inject: list[str] | None = None) -> Any:
+def tool(
+    _fn: Callable[..., Any] | None = None,
+    *,
+    inject: list[str] | None = None,
+) -> AgentTool | Callable[[Callable[..., Any]], AgentTool]:
     """
     Decorator to register a function as an agent tool.
     """
 
-    def decorator(fn: Any) -> AgentTool:
+    def decorator(fn: Callable[..., Any]) -> AgentTool:
         injected = set(inject or [])
 
         sig = inspect.signature(fn)
