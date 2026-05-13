@@ -54,7 +54,7 @@ def test_load_config_env_subagent_model(monkeypatch, tmp_path) -> None:
 
 
 def test_save_config_safely_handles_missing_attributes(monkeypatch, tmp_path) -> None:
-    from phoson_cli.config import PhosonConfig, save_config
+    from phoson_cli.config import save_config
 
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))

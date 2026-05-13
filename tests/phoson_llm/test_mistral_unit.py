@@ -1,4 +1,8 @@
 import pytest
+
+from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.mistral import MistralChat
+
 try:
     import mistralai
 except ImportError:
@@ -6,8 +10,6 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(mistralai is None, reason="mistralai not installed")
 
-from phoson_llm.chats.mistral import MistralChat
-from phoson_llm.chats.base import BaseLLMChat
 
 def test_is_base_llm_chat_subclass():
     chat = MistralChat(api_key="test-key")

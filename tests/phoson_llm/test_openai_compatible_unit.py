@@ -1,5 +1,13 @@
-from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
+import pytest
+
+from phoson_llm import build_chat
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.exceptions import PhosonLLMError
+from phoson_llm.chats.ollama import OllamaChat
+from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.openrouter import OpenRouterChat
+from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
 DEFAULT_URL = "https://api.example.com/v1"
 
@@ -61,14 +69,6 @@ def test_repr_includes_provider_name():
 def test_repr_defaults_to_openai_compatible():
     chat = OpenAICompatibleChat(base_url=DEFAULT_URL, api_key="test-key")
     assert "OpenAICompatible" in repr(chat)
-
-from phoson_llm import build_chat
-from phoson_llm.chats.openai import OpenAIChat
-from phoson_llm.chats.anthropic import AnthropicChat
-from phoson_llm.chats.openrouter import OpenRouterChat
-from phoson_llm.chats.ollama import OllamaChat
-from phoson_llm.exceptions import PhosonLLMError
-import pytest
 
 def test_build_chat_openai():
     chat = build_chat("openai", api_key="test-key")

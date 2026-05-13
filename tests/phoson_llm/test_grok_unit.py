@@ -1,6 +1,6 @@
+from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.grok import GrokChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
-from phoson_llm.chats.base import BaseLLMChat
 
 GROK_BASE = "https://api.x.ai/v1"
 

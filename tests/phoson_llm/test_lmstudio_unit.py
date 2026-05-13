@@ -1,5 +1,6 @@
-from phoson_llm.chats.lmstudio import LMStudioChat, LMSTUDIO_DEFAULT_BASE_URL
+from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
+
 
 def test_default_base_url():
     chat = LMStudioChat()

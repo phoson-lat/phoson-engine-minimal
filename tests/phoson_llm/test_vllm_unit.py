@@ -1,5 +1,6 @@
-from phoson_llm.chats.vllm import VLLMChat, VLLM_DEFAULT_BASE_URL
+from phoson_llm.chats.vllm import VLLM_DEFAULT_BASE_URL, VLLMChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
+
 
 def test_vllm_defaults():
     chat = VLLMChat()

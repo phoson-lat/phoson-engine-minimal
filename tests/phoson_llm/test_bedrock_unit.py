@@ -1,4 +1,8 @@
 import pytest
+
+from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.bedrock import BedrockChat
+
 try:
     import boto3
 except ImportError:
@@ -6,8 +10,6 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(boto3 is None, reason="boto3 not installed")
 
-from phoson_llm.chats.bedrock import BedrockChat
-from phoson_llm.chats.base import BaseLLMChat
 
 def test_is_base_llm_chat_subclass():
     chat = BedrockChat(region_name="us-east-1")

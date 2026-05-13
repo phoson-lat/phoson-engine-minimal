@@ -1,6 +1,6 @@
+from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.nvidia import NVIDIAChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
-from phoson_llm.chats.base import BaseLLMChat
 
 NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
 

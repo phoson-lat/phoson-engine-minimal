@@ -1,13 +1,15 @@
 import pytest
+
+from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.gemini import GeminiChat
+
 try:
-    import google.genai
+    import google.genai as google
 except ImportError:
     google = None
 
 pytestmark = pytest.mark.skipif(google is None, reason="google-genai not installed")
 
-from phoson_llm.chats.gemini import GeminiChat
-from phoson_llm.chats.base import BaseLLMChat
 
 def test_is_base_llm_chat_subclass():
     chat = GeminiChat(api_key="test-key")

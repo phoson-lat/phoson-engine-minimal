@@ -1,6 +1,6 @@
+from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.github_models import GitHubModelsChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
-from phoson_llm.chats.base import BaseLLMChat
 
 GITHUB_BASE = "https://models.inference.ai.azure.com"
 

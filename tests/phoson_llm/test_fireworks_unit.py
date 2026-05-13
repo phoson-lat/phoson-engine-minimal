@@ -1,6 +1,7 @@
 from phoson_llm.chats.fireworks import FireworksChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
+
 def test_fireworks_defaults():
     chat = FireworksChat(api_key="test-key")
     assert isinstance(chat, OpenAICompatibleChat)

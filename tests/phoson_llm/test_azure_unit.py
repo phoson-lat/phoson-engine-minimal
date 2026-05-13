@@ -1,6 +1,7 @@
 from phoson_llm.chats.azure import AzureChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
+
 def test_is_openai_compatible_subclass():
     chat = AzureChat(
         azure_endpoint="https://my-resource.openai.azure.com",
