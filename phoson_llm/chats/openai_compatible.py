@@ -1,16 +1,15 @@
 """Generic adapter for any OpenAI-compatible Chat Completions API."""
 
-from __future__ import annotations
-
 import os
-from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
+from __future__ import annotations
 
-from phoson_llm.chats._openai_compatible import stream_chat_completions
+from phoson_llm.schemas import Message, LLMEvent, ModelConfig, ToolDefinition
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_llm.schemas import LLMEvent, Message, ModelConfig, ToolDefinition
+from phoson_llm.chats._openai_compatible import stream_chat_completions
 
 if TYPE_CHECKING:
     from phoson_llm.chats._openai_compatible import CostCalculator
