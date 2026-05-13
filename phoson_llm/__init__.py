@@ -33,6 +33,7 @@ from phoson_llm.chats import (
     LMStudioChat,
     VLLMChat,
     AzureChat,
+    GeminiChat,
 )
 from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost
@@ -85,6 +86,7 @@ __all__ = [
     "LMStudioChat",
     "VLLMChat",
     "AzureChat",
+    "GeminiChat",
     "build_chat",
     # schemas - inputs
     "Message",

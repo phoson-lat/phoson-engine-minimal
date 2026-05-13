@@ -14,6 +14,7 @@ from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.vllm import VLLMChat
 from phoson_llm.chats.azure import AzureChat
+from phoson_llm.chats.gemini import GeminiChat
 
 __all__ = [
     "BaseLLMChat",
@@ -32,4 +33,5 @@ __all__ = [
     "LMStudioChat",
     "VLLMChat",
     "AzureChat",
+    "GeminiChat",
 ]
