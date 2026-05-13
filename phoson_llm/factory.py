@@ -20,6 +20,8 @@ from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.vllm import VLLMChat
 from phoson_llm.chats.azure import AzureChat
 from phoson_llm.chats.gemini import GeminiChat
+from phoson_llm.chats.mistral import MistralChat
+from phoson_llm.chats.bedrock import BedrockChat
 from phoson_llm.exceptions import PhosonLLMError
 
 
@@ -61,6 +63,9 @@ def build_chat(
         "azure": AzureChat,
         "gemini": GeminiChat,
         "google": GeminiChat,
+        "mistral": MistralChat,
+        "bedrock": BedrockChat,
+        "aws": BedrockChat,
     }
 
     cls = _PROVIDERS.get(provider.lower())

@@ -67,6 +67,13 @@ PRICES: dict[str, PriceEntry] = {
     # ── Perplexity ────────────────────────────────────────────────────────────
     "perplexity/sonar-pro": PriceEntry(input=1.00, output=5.00),
     "perplexity/sonar": PriceEntry(input=0.20, output=1.00),
+    # ── Mistral ───────────────────────────────────────────────────────────────
+    "mistral/mistral-large-latest": PriceEntry(input=2.00, output=6.00),
+    "mistral/mistral-small-latest": PriceEntry(input=0.50, output=1.50),
+    "mistral/codestral-latest": PriceEntry(input=1.00, output=3.00),
+    # ── AWS Bedrock ───────────────────────────────────────────────────────────
+    "bedrock/claude-sonnet-4-6": PriceEntry(input=3.00, output=15.00),
+    "bedrock/claude-haiku-4-5": PriceEntry(input=1.00, output=5.00),
 }
 
 # Aliases — the SDK may send strings with version suffixes
