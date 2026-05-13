@@ -22,7 +22,9 @@ from phoson_llm.chats import (
     BaseLLMChat,
     AnthropicChat,
     OpenRouterChat,
+    OpenAICompatibleChat,
 )
+from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -62,6 +64,8 @@ __all__ = [
     "AnthropicChat",
     "OllamaChat",
     "OpenRouterChat",
+    "OpenAICompatibleChat",
+    "build_chat",
     # schemas - inputs
     "Message",
     "TextBlock",
