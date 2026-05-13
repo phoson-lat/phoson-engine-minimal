@@ -52,6 +52,11 @@ PRICES: dict[str, PriceEntry] = {
         input=0.10, output=0.40, cache_read=0.01
     ),
     "google/gemini-2.0-flash": PriceEntry(input=0.10, output=0.40, cache_read=0.01),
+    # ── xAI (Grok) ────────────────────────────────────────────────────────────
+    "xai/grok-3": PriceEntry(input=3.00, output=15.00),
+    "xai/grok-3-mini": PriceEntry(input=0.30, output=0.60),
+    # ── NVIDIA ─────────────────────────────────────────────────────────────────
+    "nvidia/llama-3.1-nemotron": PriceEntry(input=0.10, output=0.40),
 }
 
 # Aliases — the SDK may send strings with version suffixes

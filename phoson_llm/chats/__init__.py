@@ -4,6 +4,9 @@ from phoson_llm.chats.openai import OpenAIChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
+from phoson_llm.chats.github_models import GitHubModelsChat
+from phoson_llm.chats.nvidia import NVIDIAChat
+from phoson_llm.chats.grok import GrokChat
 
 __all__ = [
     "BaseLLMChat",
@@ -12,4 +15,7 @@ __all__ = [
     "OllamaChat",
     "OpenRouterChat",
     "OpenAICompatibleChat",
+    "GitHubModelsChat",
+    "NVIDIAChat",
+    "GrokChat",
 ]

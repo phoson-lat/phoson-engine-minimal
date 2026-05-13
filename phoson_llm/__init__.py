@@ -23,6 +23,9 @@ from phoson_llm.chats import (
     AnthropicChat,
     OpenRouterChat,
     OpenAICompatibleChat,
+    GitHubModelsChat,
+    NVIDIAChat,
+    GrokChat,
 )
 from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost
@@ -65,6 +68,9 @@ __all__ = [
     "OllamaChat",
     "OpenRouterChat",
     "OpenAICompatibleChat",
+    "GitHubModelsChat",
+    "NVIDIAChat",
+    "GrokChat",
     "build_chat",
     # schemas - inputs
     "Message",
