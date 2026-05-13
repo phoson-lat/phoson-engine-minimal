@@ -3,9 +3,9 @@
 Constructs the endpoint URL from resource, deployment, and api-version.
 """
 
-from __future__ import annotations
-
 import os
+
+from __future__ import annotations
 
 from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
