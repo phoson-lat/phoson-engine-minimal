@@ -2,26 +2,27 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from collections.abc import AsyncIterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    Message,
+    LLMDoneEvent,
     LLMEvent,
+    LLMStartEvent,
+    Message,
+    ModelConfig,
     TokenEvent,
     TokenUsage,
+    ToolDefinition,
     UsageEvent,
-    ModelConfig,
-    LLMDoneEvent,
-    LLMStartEvent,
 )
 
 if TYPE_CHECKING:
-    import boto3
+    pass
 
 
 class BedrockChat(BaseLLMChat):
@@ -32,13 +33,18 @@ class BedrockChat(BaseLLMChat):
     """
 
     def __init__(self, region_name: str | None = None) -> None:
-        self._region_name = region_name or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        self._region_name = region_name or os.environ.get(
+            "AWS_DEFAULT_REGION", "us-east-1"
+        )
         self._client = None
 
     def _get_client(self) -> Any:
         if self._client is None:
             import boto3
-            self._client = boto3.client("bedrock-runtime", region_name=self._region_name)
+
+            self._client = boto3.client(
+                "bedrock-runtime", region_name=self._region_name
+            )
         return self._client
 
     def __repr__(self) -> str:
@@ -57,9 +63,12 @@ class BedrockChat(BaseLLMChat):
         for msg in messages:
             if msg.role == "system":
                 continue
+            content = (
+                msg.content if isinstance(msg.content, str) else str(msg.content)
+            )
             bedrock_messages.append({
                 "role": "user" if msg.role == "user" else "assistant",
-                "content": [{"text": msg.content if isinstance(msg.content, str) else str(msg.content)}]
+                "content": [{"text": content}]
             })
 
         system = []

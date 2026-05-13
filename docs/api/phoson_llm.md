@@ -10,6 +10,16 @@ Unified LLM chat interface providing a normalized API across multiple providers.
 - **Anthropic** — Claude 3.5, Claude 3, Claude 2 (with extended thinking, tool use, prompt caching)
 - **OpenRouter** — Multi-provider aggregation with unified pricing
 - **Ollama** — Local LLM inference (Llama, Mistral, etc.)
+- **GitHub Models** — Free access to Llama 3, Mistral, Phi-3, GPT-4o for developers
+- **NVIDIA** — GPU-accelerated inference for open models (Llama 3, Nemotron, Mistral)
+- **Groq** — Ultra-fast LPU inference (Llama 3, Mixtral)
+- **DeepSeek** — High-performance Chinese LLMs (DeepSeek-V3, DeepSeek-Coder)
+- **xAI (Grok)** — Grok-1, Grok-2, Grok-2 Vision
+- **Google Gemini** — Gemini 1.5 Pro, Flash, 2.0 Flash (Native SDK support)
+- **Mistral AI** — Mistral Large, Mistral Small, Codestral (Native SDK support)
+- **AWS Bedrock** — Enterprise-grade access to Anthropic, Meta, Mistral models (Native SDK support)
+- **Azure OpenAI** — Enterprise OpenAI deployments with custom URL support
+- **And many others** — Together AI, Perplexity, Fireworks, Cohere, LM Studio, vLLM
 
 ## Chat Adapters
 
@@ -75,6 +85,81 @@ chat = OllamaChat(base_url="http://localhost:11434")
 ```
 
 Local LLM inference. Supports: streaming, tools.
+
+### OpenAI-Compatible Adapters
+
+Many providers use the OpenAI API format. Phoson provides dedicated classes for these for better discoverability and environment variable mapping.
+
+| Class | Provider | Default Env Var |
+|-------|----------|-----------------|
+| `GitHubModelsChat` | GitHub Models | `GITHUB_TOKEN` |
+| `NVIDIAChat` | NVIDIA NIM | `NVIDIA_API_KEY` |
+| `GrokChat` | xAI Grok | `XAI_API_KEY` |
+| `GroqChat` | Groq | `GROQ_API_KEY` |
+| `DeepSeekChat` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `TogetherChat` | Together AI | `TOGETHER_API_KEY` |
+| `PerplexityChat` | Perplexity | `PERPLEXITY_API_KEY` |
+| `FireworksChat` | Fireworks AI | `FIREWORKS_API_KEY` |
+| `CohereChat` | Cohere | `COHERE_API_KEY` |
+| `LMStudioChat` | LM Studio | N/A (local) |
+| `VLLMChat` | vLLM | N/A (local) |
+
+Example:
+```python
+from phoson_llm.chats import GroqChat
+
+chat = GroqChat(api_key="gsk-...")
+```
+
+### AzureChat
+
+```python
+from phoson_llm.chats import AzureChat
+
+chat = AzureChat(
+    api_key="...",
+    base_url="https://RESOURCE_NAME.openai.azure.com",
+    api_version="2024-05-01-preview"
+)
+```
+
+### Native SDK Adapters
+
+These adapters use native provider SDKs instead of the OpenAI compatibility layer. They may require optional dependencies.
+
+#### GeminiChat (Google)
+
+Requires `google-genai`. Install with `pip install "phoson-llm[gemini]"`.
+
+```python
+from phoson_llm.chats import GeminiChat
+
+chat = GeminiChat(api_key="...")
+```
+
+#### MistralChat
+
+Requires `mistralai`. Install with `pip install "phoson-llm[mistral]"`.
+
+```python
+from phoson_llm.chats import MistralChat
+
+chat = MistralChat(api_key="...")
+```
+
+#### BedrockChat (AWS)
+
+Requires `boto3`. Install with `pip install "phoson-llm[aws]"`.
+
+```python
+from phoson_llm.chats import BedrockChat
+
+chat = BedrockChat(
+    region_name="us-east-1",
+    aws_access_key_id="...",
+    aws_secret_access_key="..."
+)
+```
 
 ## Schemas
 
@@ -231,6 +316,12 @@ Note: `PriceEntry` is a frozen dataclass with fields `input`, `output`, `cache_w
 from phoson_llm import (
     # Chat adapters
     BaseLLMChat, OpenAIChat, AnthropicChat, OllamaChat, OpenRouterChat,
+    GitHubModelsChat, NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
+    TogetherChat, PerplexityChat, FireworksChat, CohereChat,
+    LMStudioChat, VLLMChat, AzureChat,
+    GeminiChat, MistralChat, BedrockChat,
+    # Factory
+    build_chat,
     # Schemas
     Message, TextBlock, ImageBlock, AudioBlock, VideoBlock, DocumentBlock,
     ToolDefinition, ToolUseBlock, ToolResultBlock, ModelConfig, ContentBlock,

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openai import AsyncOpenAI
 
-from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats._openai_compatible import stream_chat_completions
-from phoson_llm.schemas import Message, LLMEvent, ModelConfig, ToolDefinition
+from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.schemas import LLMEvent, Message, ModelConfig, ToolDefinition
+
+if TYPE_CHECKING:
+    from phoson_llm.chats._openai_compatible import CostCalculator
 
 
 class OpenAICompatibleChat(BaseLLMChat):
@@ -35,7 +38,7 @@ class OpenAICompatibleChat(BaseLLMChat):
         api_key_env: str = "API_KEY",
         max_tokens_key: str = "max_tokens",
         default_headers: dict[str, str] | None = None,
-        cost_calculator: Any | None = None,
+        cost_calculator: CostCalculator | None = None,
         extra_kwargs: dict[str, Any] | None = None,
         provider_name: str | None = None,
     ) -> None:
@@ -61,13 +64,16 @@ class OpenAICompatibleChat(BaseLLMChat):
         config: ModelConfig,
         tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        async for event in stream_chat_completions(
-            self._client,
-            messages=messages,
-            config=config,
-            tools=tools,
-            max_tokens_key=self._max_tokens_key,
-            cost_calculator=self._cost_calculator,
-            extra_kwargs=self._extra_kwargs,
-        ):
+        kwargs: dict[str, Any] = {
+            "client": self._client,
+            "messages": messages,
+            "config": config,
+            "tools": tools,
+            "max_tokens_key": self._max_tokens_key,
+            "extra_kwargs": self._extra_kwargs,
+        }
+        if self._cost_calculator is not None:
+            kwargs["cost_calculator"] = self._cost_calculator
+
+        async for event in stream_chat_completions(**kwargs):
             yield event

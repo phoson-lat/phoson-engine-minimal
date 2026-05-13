@@ -3,31 +3,24 @@
 from __future__ import annotations
 
 import os
-import json
 from collections.abc import AsyncIterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    Message,
-    LLMEvent,
-    TextBlock,
     ImageBlock,
-    AudioBlock,
-    VideoBlock,
-    DocumentBlock,
+    LLMDoneEvent,
+    LLMEvent,
+    LLMStartEvent,
+    Message,
+    ModelConfig,
+    TextBlock,
     TokenEvent,
     TokenUsage,
-    UsageEvent,
-    ModelConfig,
-    LLMDoneEvent,
-    LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
-    ReasoningDoneEvent,
-    ReasoningStartEvent,
-    ReasoningTokenEvent,
+    UsageEvent,
 )
 
 if TYPE_CHECKING:
@@ -54,10 +47,21 @@ def _convert_messages(messages: list[Message]) -> list[types.Content]:
                 elif isinstance(block, ImageBlock):
                     if block.source.startswith("file://"):
                         # In a real implementation, we'd read the file.
-                        # For now, we assume URL or base64 handling by the SDK if supported.
-                        parts.append(types.Part.from_uri(uri=block.source[7:], mime_type=block.media_type or "image/jpeg"))
+                        # For now, we assume URL or base64 handling by the SDK
+                        # if supported.
+                        parts.append(
+                            types.Part.from_uri(
+                                uri=block.source[7:],
+                                mime_type=block.media_type or "image/jpeg",
+                            )
+                        )
                     else:
-                        parts.append(types.Part.from_uri(uri=block.source, mime_type=block.media_type or "image/jpeg"))
+                        parts.append(
+                            types.Part.from_uri(
+                                uri=block.source,
+                                mime_type=block.media_type or "image/jpeg",
+                            )
+                        )
                 # Add other block types as needed
         
         role = "user" if msg.role == "user" else "model"
@@ -116,7 +120,9 @@ class GeminiChat(BaseLLMChat):
         if not system_instruction:
             for msg in messages:
                 if msg.role == "system":
-                    system_instruction = msg.content if isinstance(msg.content, str) else None
+                    system_instruction = (
+                        msg.content if isinstance(msg.content, str) else None
+                    )
                     break
 
         generate_config = types.GenerateContentConfig(
@@ -152,8 +158,8 @@ class GeminiChat(BaseLLMChat):
                             
                             if part.function_call:
                                 has_tool_calls = True
-                                # Note: Gemini SDK handles tool calls slightly differently in stream.
-                                # This is a simplified version.
+                                # Note: Gemini SDK handles tool calls slightly
+                                # differently in stream. This is a simplified version.
                                 yield ToolCallEvent(
                                     index=0, # Simplified
                                     tool_call_id=part.function_call.id or "call",
@@ -181,7 +187,9 @@ class GeminiChat(BaseLLMChat):
             )
             yield UsageEvent(
                 model=config.model,
-                usage=TokenUsage(input=input_tokens, output=output_tokens, cache_read=cache_read),
+                usage=TokenUsage(
+                    input=input_tokens, output=output_tokens, cache_read=cache_read
+                ),
                 cost_usd=cost_usd,
                 cost_known=cost_known,
             )

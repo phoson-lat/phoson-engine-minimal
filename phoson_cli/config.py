@@ -13,10 +13,25 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_llm.chats.grok import GrokChat
+from phoson_llm.chats.groq import GroqChat
+from phoson_llm.chats.vllm import VLLMChat
+from phoson_llm.chats.azure import AzureChat
+from phoson_llm.chats.cohere import CohereChat
+from phoson_llm.chats.gemini import GeminiChat
+from phoson_llm.chats.nvidia import NVIDIAChat
 from phoson_llm.chats.ollama import OllamaChat
 from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm.chats.bedrock import BedrockChat
+from phoson_llm.chats.mistral import MistralChat
+from phoson_llm.chats.deepseek import DeepSeekChat
+from phoson_llm.chats.lmstudio import LMStudioChat
+from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.anthropic import AnthropicChat
+from phoson_llm.chats.fireworks import FireworksChat
 from phoson_llm.chats.openrouter import OpenRouterChat
+from phoson_llm.chats.perplexity import PerplexityChat
+from phoson_llm.chats.github_models import GitHubModelsChat
 
 
 class PhosonConfigError(Exception):
@@ -34,6 +49,23 @@ class PhosonConfig:
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     ollama_base_url: str | None = None
+    github_token: str | None = None
+    nvidia_api_key: str | None = None
+    xai_api_key: str | None = None
+    groq_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    together_api_key: str | None = None
+    perplexity_api_key: str | None = None
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_key: str | None = None
+    azure_openai_deployment: str | None = None
+    gemini_api_key: str | None = None
+    mistral_api_key: str | None = None
+    fireworks_api_key: str | None = None
+    cohere_api_key: str | None = None
+    vllm_base_url: str | None = None
+    vllm_api_key: str | None = None
+    lmstudio_base_url: str | None = None
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
@@ -157,6 +189,66 @@ def load_config() -> PhosonConfig:
         ollama_base_url=_resolve_optional_str(
             "OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url
         ),
+        github_token=_resolve_optional_str(
+            "GITHUB_TOKEN", "github_token", fd, d.github_token
+        ),
+        nvidia_api_key=_resolve_optional_str(
+            "NVIDIA_API_KEY", "nvidia_api_key", fd, d.nvidia_api_key
+        ),
+        xai_api_key=_resolve_optional_str(
+            "XAI_API_KEY", "xai_api_key", fd, d.xai_api_key
+        ),
+        groq_api_key=_resolve_optional_str(
+            "GROQ_API_KEY", "groq_api_key", fd, d.groq_api_key
+        ),
+        deepseek_api_key=_resolve_optional_str(
+            "DEEPSEEK_API_KEY", "deepseek_api_key", fd, d.deepseek_api_key
+        ),
+        together_api_key=_resolve_optional_str(
+            "TOGETHER_API_KEY", "together_api_key", fd, d.together_api_key
+        ),
+        perplexity_api_key=_resolve_optional_str(
+            "PERPLEXITY_API_KEY", "perplexity_api_key", fd, d.perplexity_api_key
+        ),
+        azure_openai_endpoint=_resolve_optional_str(
+            "AZURE_OPENAI_ENDPOINT",
+            "azure_openai_endpoint",
+            fd,
+            d.azure_openai_endpoint,
+        ),
+        azure_openai_api_key=_resolve_optional_str(
+            "AZURE_OPENAI_API_KEY",
+            "azure_openai_api_key",
+            fd,
+            d.azure_openai_api_key,
+        ),
+        azure_openai_deployment=_resolve_optional_str(
+            "AZURE_OPENAI_DEPLOYMENT",
+            "azure_openai_deployment",
+            fd,
+            d.azure_openai_deployment,
+        ),
+        gemini_api_key=_resolve_optional_str(
+            "GEMINI_API_KEY", "gemini_api_key", fd, d.gemini_api_key
+        ),
+        mistral_api_key=_resolve_optional_str(
+            "MISTRAL_API_KEY", "mistral_api_key", fd, d.mistral_api_key
+        ),
+        fireworks_api_key=_resolve_optional_str(
+            "FIREWORKS_API_KEY", "fireworks_api_key", fd, d.fireworks_api_key
+        ),
+        cohere_api_key=_resolve_optional_str(
+            "COHERE_API_KEY", "cohere_api_key", fd, d.cohere_api_key
+        ),
+        vllm_base_url=_resolve_optional_str(
+            "VLLM_BASE_URL", "vllm_base_url", fd, d.vllm_base_url
+        ),
+        vllm_api_key=_resolve_optional_str(
+            "VLLM_API_KEY", "vllm_api_key", fd, d.vllm_api_key
+        ),
+        lmstudio_base_url=_resolve_optional_str(
+            "LMSTUDIO_BASE_URL", "lmstudio_base_url", fd, d.lmstudio_base_url
+        ),
         sessions_dir=Path(
             _resolve_str("PHOSON_SESSIONS_DIR", "sessions_dir", fd, str(d.sessions_dir))
         ).expanduser(),
@@ -197,19 +289,38 @@ def save_config(config: PhosonConfig) -> Path:
 
     lines = ["[defaults]"]
     for line in [
-        _line("provider", config.provider),
+        _line("provider", getattr(config, "provider", None)),
         _line("enabled_providers", ",".join(enabled_providers)),
-        _line("model", config.model),
-        _line("subagent_model", config.subagent_model),
-        _line("openrouter_api_key", config.openrouter_api_key),
-        _line("openai_api_key", config.openai_api_key),
-        _line("anthropic_api_key", config.anthropic_api_key),
-        _line("ollama_base_url", config.ollama_base_url),
-        _line("sessions_dir", str(config.sessions_dir)),
-        _line("max_iterations", config.max_iterations),
-        _line("safe_mode", config.safe_mode),
-        _line("enable_mcp", config.enable_mcp),
-        _line("mcp_config_file", str(config.mcp_config_file)),
+        _line("model", getattr(config, "model", None)),
+        _line("subagent_model", getattr(config, "subagent_model", None)),
+        _line("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
+        _line("openai_api_key", getattr(config, "openai_api_key", None)),
+        _line("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
+        _line("ollama_base_url", getattr(config, "ollama_base_url", None)),
+        _line("github_token", getattr(config, "github_token", None)),
+        _line("nvidia_api_key", getattr(config, "nvidia_api_key", None)),
+        _line("xai_api_key", getattr(config, "xai_api_key", None)),
+        _line("groq_api_key", getattr(config, "groq_api_key", None)),
+        _line("deepseek_api_key", getattr(config, "deepseek_api_key", None)),
+        _line("together_api_key", getattr(config, "together_api_key", None)),
+        _line("perplexity_api_key", getattr(config, "perplexity_api_key", None)),
+        _line("azure_openai_endpoint", getattr(config, "azure_openai_endpoint", None)),
+        _line("azure_openai_api_key", getattr(config, "azure_openai_api_key", None)),
+        _line(
+            "azure_openai_deployment", getattr(config, "azure_openai_deployment", None)
+        ),
+        _line("gemini_api_key", getattr(config, "gemini_api_key", None)),
+        _line("mistral_api_key", getattr(config, "mistral_api_key", None)),
+        _line("fireworks_api_key", getattr(config, "fireworks_api_key", None)),
+        _line("cohere_api_key", getattr(config, "cohere_api_key", None)),
+        _line("vllm_base_url", getattr(config, "vllm_base_url", None)),
+        _line("vllm_api_key", getattr(config, "vllm_api_key", None)),
+        _line("lmstudio_base_url", getattr(config, "lmstudio_base_url", None)),
+        _line("sessions_dir", str(getattr(config, "sessions_dir", ""))),
+        _line("max_iterations", getattr(config, "max_iterations", None)),
+        _line("safe_mode", getattr(config, "safe_mode", None)),
+        _line("enable_mcp", getattr(config, "enable_mcp", None)),
+        _line("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
     ]:
         if line:
             lines.append(line)
@@ -226,15 +337,45 @@ def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
     never ends up with an empty list.
     """
     providers: list[str] = []
-    if config.openrouter_api_key:
+    if getattr(config, "openrouter_api_key", None):
         providers.append("openrouter")
-    if config.openai_api_key:
+    if getattr(config, "openai_api_key", None):
         providers.append("openai")
-    if config.anthropic_api_key:
+    if getattr(config, "anthropic_api_key", None):
         providers.append("anthropic")
-    if config.ollama_base_url:
+    if getattr(config, "ollama_base_url", None):
         providers.append("ollama")
-    if config.provider not in providers:
+    if getattr(config, "github_token", None):
+        providers.append("github")
+    if getattr(config, "nvidia_api_key", None):
+        providers.append("nvidia")
+    if getattr(config, "xai_api_key", None):
+        providers.append("xai")
+        providers.append("grok")
+    if getattr(config, "groq_api_key", None):
+        providers.append("groq")
+    if getattr(config, "deepseek_api_key", None):
+        providers.append("deepseek")
+    if getattr(config, "together_api_key", None):
+        providers.append("together")
+    if getattr(config, "perplexity_api_key", None):
+        providers.append("perplexity")
+    if getattr(config, "azure_openai_api_key", None):
+        providers.append("azure")
+    if getattr(config, "gemini_api_key", None):
+        providers.append("gemini")
+        providers.append("google")
+    if getattr(config, "mistral_api_key", None):
+        providers.append("mistral")
+    if getattr(config, "fireworks_api_key", None):
+        providers.append("fireworks")
+    if getattr(config, "cohere_api_key", None):
+        providers.append("cohere")
+    if getattr(config, "vllm_base_url", None) or getattr(config, "vllm_api_key", None):
+        providers.append("vllm")
+    if getattr(config, "lmstudio_base_url", None):
+        providers.append("lmstudio")
+    if getattr(config, "provider", None) not in providers:
         providers.append(config.provider)
     return providers
 
@@ -256,4 +397,41 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
         return AnthropicChat(api_key=config.anthropic_api_key)
     if provider == "ollama":
         return OllamaChat(base_url=config.ollama_base_url or "http://localhost:11434")
+    if provider == "github":
+        return GitHubModelsChat(api_key=config.github_token)
+    if provider == "nvidia":
+        return NVIDIAChat(api_key=config.nvidia_api_key)
+    if provider in ("xai", "grok"):
+        return GrokChat(api_key=config.xai_api_key)
+    if provider == "groq":
+        return GroqChat(api_key=config.groq_api_key)
+    if provider == "deepseek":
+        return DeepSeekChat(api_key=config.deepseek_api_key)
+    if provider == "together":
+        return TogetherChat(api_key=config.together_api_key)
+    if provider == "perplexity":
+        return PerplexityChat(api_key=config.perplexity_api_key)
+    if provider == "azure":
+        return AzureChat(
+            azure_endpoint=config.azure_openai_endpoint,
+            api_key=config.azure_openai_api_key,
+            deployment=config.azure_openai_deployment,
+        )
+    if provider in ("gemini", "google"):
+        return GeminiChat(api_key=config.gemini_api_key)
+    if provider == "mistral":
+        return MistralChat(api_key=config.mistral_api_key)
+    if provider in ("bedrock", "aws"):
+        return BedrockChat()
+    if provider == "fireworks":
+        return FireworksChat(api_key=config.fireworks_api_key)
+    if provider == "cohere":
+        return CohereChat(api_key=config.cohere_api_key)
+    if provider == "vllm":
+        return VLLMChat(
+            base_url=config.vllm_base_url or "http://localhost:8000/v1",
+            api_key=config.vllm_api_key,
+        )
+    if provider == "lmstudio":
+        return LMStudioChat(base_url=config.lmstudio_base_url or "http://localhost:1234/v1")
     raise ValueError(f"Unsupported provider: {config.provider}")

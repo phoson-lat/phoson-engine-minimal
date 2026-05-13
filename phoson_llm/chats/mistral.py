@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    Message,
+    LLMDoneEvent,
     LLMEvent,
+    LLMStartEvent,
+    Message,
+    ModelConfig,
     TokenEvent,
     TokenUsage,
-    UsageEvent,
-    ModelConfig,
-    LLMDoneEvent,
-    LLMStartEvent,
-    ToolCallEvent,
     ToolDefinition,
+    UsageEvent,
 )
 
 if TYPE_CHECKING:
@@ -80,7 +79,9 @@ class MistralChat(BaseLLMChat):
                 
                 if chunk.data.usage:
                     u = chunk.data.usage
-                    usage = TokenUsage(input=u.prompt_tokens, output=u.completion_tokens)
+                    usage = TokenUsage(
+                        input=u.prompt_tokens, output=u.completion_tokens
+                    )
                     cost_usd, cost_known = calculate_cost(
                         model=config.model,
                         input_tokens=usage.input,

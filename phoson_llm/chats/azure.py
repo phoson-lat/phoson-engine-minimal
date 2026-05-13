@@ -33,7 +33,9 @@ class AzureChat(OpenAICompatibleChat):
         deployment: str | None = None,
         api_version: str = AZURE_API_VERSION,
     ) -> None:
-        endpoint = (azure_endpoint or os.environ.get(AZURE_ENDPOINT_ENV) or "").rstrip("/")
+        endpoint = (
+            azure_endpoint or os.environ.get(AZURE_ENDPOINT_ENV) or ""
+        ).rstrip("/")
         dep = deployment or os.environ.get(AZURE_DEPLOYMENT_ENV) or ""
         key = api_key or os.environ.get(AZURE_API_KEY_ENV) or ""
 
