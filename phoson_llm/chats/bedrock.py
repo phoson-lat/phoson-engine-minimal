@@ -1,25 +1,25 @@
 """AWS Bedrock adapter using the boto3 Converse API."""
 
+import os
+import asyncio
+from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncIterator
+
 from __future__ import annotations
 
-import asyncio
-import os
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
-
-from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    LLMDoneEvent,
-    LLMEvent,
-    LLMStartEvent,
     Message,
-    ModelConfig,
+    LLMEvent,
     TokenEvent,
     TokenUsage,
-    ToolDefinition,
     UsageEvent,
+    ModelConfig,
+    LLMDoneEvent,
+    LLMStartEvent,
+    ToolDefinition,
 )
+from phoson_llm.chats.base import BaseLLMChat
 
 if TYPE_CHECKING:
     pass
