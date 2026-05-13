@@ -26,6 +26,10 @@ from phoson_llm.chats import (
     GitHubModelsChat,
     NVIDIAChat,
     GrokChat,
+    GroqChat,
+    DeepSeekChat,
+    TogetherChat,
+    PerplexityChat,
 )
 from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost
@@ -71,6 +75,10 @@ __all__ = [
     "GitHubModelsChat",
     "NVIDIAChat",
     "GrokChat",
+    "GroqChat",
+    "DeepSeekChat",
+    "TogetherChat",
+    "PerplexityChat",
     "build_chat",
     # schemas - inputs
     "Message",

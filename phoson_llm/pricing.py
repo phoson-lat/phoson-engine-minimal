@@ -57,6 +57,16 @@ PRICES: dict[str, PriceEntry] = {
     "xai/grok-3-mini": PriceEntry(input=0.30, output=0.60),
     # ── NVIDIA ─────────────────────────────────────────────────────────────────
     "nvidia/llama-3.1-nemotron": PriceEntry(input=0.10, output=0.40),
+    # ── DeepSeek ──────────────────────────────────────────────────────────────
+    "deepseek/deepseek-chat": PriceEntry(input=0.27, output=1.10),
+    "deepseek/deepseek-reasoner": PriceEntry(input=0.55, output=2.19),
+    # ── Groq ──────────────────────────────────────────────────────────────────
+    "groq/llama-3.3-70b": PriceEntry(input=0.59, output=0.79),
+    # ── Together AI ───────────────────────────────────────────────────────────
+    "together/llama-3.3-70b": PriceEntry(input=0.72, output=0.72),
+    # ── Perplexity ────────────────────────────────────────────────────────────
+    "perplexity/sonar-pro": PriceEntry(input=1.00, output=5.00),
+    "perplexity/sonar": PriceEntry(input=0.20, output=1.00),
 }
 
 # Aliases — the SDK may send strings with version suffixes

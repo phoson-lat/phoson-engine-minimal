@@ -7,6 +7,10 @@ from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 from phoson_llm.chats.github_models import GitHubModelsChat
 from phoson_llm.chats.nvidia import NVIDIAChat
 from phoson_llm.chats.grok import GrokChat
+from phoson_llm.chats.groq import GroqChat
+from phoson_llm.chats.deepseek import DeepSeekChat
+from phoson_llm.chats.together import TogetherChat
+from phoson_llm.chats.perplexity import PerplexityChat
 
 __all__ = [
     "BaseLLMChat",
@@ -18,4 +22,8 @@ __all__ = [
     "GitHubModelsChat",
     "NVIDIAChat",
     "GrokChat",
+    "GroqChat",
+    "DeepSeekChat",
+    "TogetherChat",
+    "PerplexityChat",
 ]

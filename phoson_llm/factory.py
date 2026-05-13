@@ -12,6 +12,10 @@ from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats.github_models import GitHubModelsChat
 from phoson_llm.chats.nvidia import NVIDIAChat
 from phoson_llm.chats.grok import GrokChat
+from phoson_llm.chats.groq import GroqChat
+from phoson_llm.chats.deepseek import DeepSeekChat
+from phoson_llm.chats.together import TogetherChat
+from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.exceptions import PhosonLLMError
 
 
@@ -44,6 +48,10 @@ def build_chat(
         "nvidia": NVIDIAChat,
         "xai": GrokChat,
         "grok": GrokChat,
+        "groq": GroqChat,
+        "deepseek": DeepSeekChat,
+        "together": TogetherChat,
+        "perplexity": PerplexityChat,
     }
 
     cls = _PROVIDERS.get(provider.lower())
