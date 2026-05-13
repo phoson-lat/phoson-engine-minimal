@@ -1,24 +1,24 @@
 """Mistral AI adapter using the native SDK."""
 
+import os
+from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator
+
 from __future__ import annotations
 
-import os
-from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
-
-from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
-    LLMDoneEvent,
-    LLMEvent,
-    LLMStartEvent,
     Message,
-    ModelConfig,
+    LLMEvent,
     TokenEvent,
     TokenUsage,
-    ToolDefinition,
     UsageEvent,
+    ModelConfig,
+    LLMDoneEvent,
+    LLMStartEvent,
+    ToolDefinition,
 )
+from phoson_llm.chats.base import BaseLLMChat
 
 if TYPE_CHECKING:
     from mistralai import Mistral
