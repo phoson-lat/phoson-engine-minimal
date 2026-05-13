@@ -11,6 +11,8 @@ from phoson_llm.chats.groq import GroqChat
 from phoson_llm.chats.deepseek import DeepSeekChat
 from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.perplexity import PerplexityChat
+from phoson_llm.chats.lmstudio import LMStudioChat
+from phoson_llm.chats.vllm import VLLMChat
 
 __all__ = [
     "BaseLLMChat",
@@ -26,4 +28,6 @@ __all__ = [
     "DeepSeekChat",
     "TogetherChat",
     "PerplexityChat",
+    "LMStudioChat",
+    "VLLMChat",
 ]

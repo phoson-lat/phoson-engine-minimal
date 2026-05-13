@@ -16,6 +16,8 @@ from phoson_llm.chats.groq import GroqChat
 from phoson_llm.chats.deepseek import DeepSeekChat
 from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.perplexity import PerplexityChat
+from phoson_llm.chats.lmstudio import LMStudioChat
+from phoson_llm.chats.vllm import VLLMChat
 from phoson_llm.exceptions import PhosonLLMError
 
 
@@ -52,6 +54,8 @@ def build_chat(
         "deepseek": DeepSeekChat,
         "together": TogetherChat,
         "perplexity": PerplexityChat,
+        "lmstudio": LMStudioChat,
+        "vllm": VLLMChat,
     }
 
     cls = _PROVIDERS.get(provider.lower())
