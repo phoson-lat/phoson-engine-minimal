@@ -36,6 +36,8 @@ from phoson_llm.chats import (
     GeminiChat,
     MistralChat,
     BedrockChat,
+    FireworksChat,
+    CohereChat,
 )
 from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost
@@ -91,6 +93,8 @@ __all__ = [
     "GeminiChat",
     "MistralChat",
     "BedrockChat",
+    "FireworksChat",
+    "CohereChat",
     "build_chat",
     # schemas - inputs
     "Message",

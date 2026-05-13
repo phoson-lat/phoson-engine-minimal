@@ -17,6 +17,8 @@ from phoson_llm.chats.azure import AzureChat
 from phoson_llm.chats.gemini import GeminiChat
 from phoson_llm.chats.mistral import MistralChat
 from phoson_llm.chats.bedrock import BedrockChat
+from phoson_llm.chats.fireworks import FireworksChat
+from phoson_llm.chats.cohere import CohereChat
 
 __all__ = [
     "BaseLLMChat",
@@ -38,4 +40,6 @@ __all__ = [
     "GeminiChat",
     "MistralChat",
     "BedrockChat",
+    "FireworksChat",
+    "CohereChat",
 ]

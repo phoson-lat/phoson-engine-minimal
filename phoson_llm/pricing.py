@@ -74,6 +74,11 @@ PRICES: dict[str, PriceEntry] = {
     # ── AWS Bedrock ───────────────────────────────────────────────────────────
     "bedrock/claude-sonnet-4-6": PriceEntry(input=3.00, output=15.00),
     "bedrock/claude-haiku-4-5": PriceEntry(input=1.00, output=5.00),
+    # ── Fireworks ─────────────────────────────────────────────────────────────
+    "fireworks/llama-3.3-70b": PriceEntry(input=0.50, output=0.50),
+    # ── Cohere ────────────────────────────────────────────────────────────────
+    "cohere/command-r-plus": PriceEntry(input=2.50, output=10.00),
+    "cohere/command-r": PriceEntry(input=0.50, output=1.50),
 }
 
 # Aliases — the SDK may send strings with version suffixes
