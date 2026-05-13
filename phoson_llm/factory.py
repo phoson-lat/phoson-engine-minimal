@@ -18,6 +18,7 @@ from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.vllm import VLLMChat
+from phoson_llm.chats.azure import AzureChat
 from phoson_llm.exceptions import PhosonLLMError
 
 
@@ -56,6 +57,7 @@ def build_chat(
         "perplexity": PerplexityChat,
         "lmstudio": LMStudioChat,
         "vllm": VLLMChat,
+        "azure": AzureChat,
     }
 
     cls = _PROVIDERS.get(provider.lower())
