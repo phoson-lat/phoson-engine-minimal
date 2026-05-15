@@ -52,6 +52,9 @@ PRICES: dict[str, PriceEntry] = {
         input=0.10, output=0.40, cache_read=0.01
     ),
     "google/gemini-2.0-flash": PriceEntry(input=0.10, output=0.40, cache_read=0.01),
+    "google/gemini-3-flash": PriceEntry(
+        input=0.50, output=3.00, cache_write=0.0833333333, cache_read=0.05
+    ),
     # ── xAI (Grok) ────────────────────────────────────────────────────────────
     "xai/grok-3": PriceEntry(input=3.00, output=15.00),
     "xai/grok-3-mini": PriceEntry(input=0.30, output=0.60),
@@ -91,6 +94,7 @@ _ALIASES: dict[str, str] = {
     "openai/gpt-4o-mini-2024-07-18": "openai/gpt-4o-mini",
     "google/gemini-2.5-pro-preview": "google/gemini-2.5-pro",
     "google/gemini-2.5-flash-preview": "google/gemini-2.5-flash",
+    "google/gemini-3-flash-preview": "google/gemini-3-flash",
 }
 
 

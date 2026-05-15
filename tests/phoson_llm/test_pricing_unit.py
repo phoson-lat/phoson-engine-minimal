@@ -50,3 +50,16 @@ def test_calculate_cost_known_unprefixed_model_with_provider() -> None:
 
     assert cost_known is True
     assert cost_usd == pytest.approx(0.0035, abs=1e-9)
+
+
+def test_calculate_cost_resolves_gemini_3_flash_preview_alias() -> None:
+    cost_usd, cost_known = calculate_cost(
+        model="gemini-3-flash-preview",
+        provider="google",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_read_tokens=200,
+    )
+
+    assert cost_known is True
+    assert cost_usd == pytest.approx(0.00201, abs=1e-9)
