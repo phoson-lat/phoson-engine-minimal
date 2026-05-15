@@ -52,6 +52,33 @@ PRICES: dict[str, PriceEntry] = {
         input=0.10, output=0.40, cache_read=0.01
     ),
     "google/gemini-2.0-flash": PriceEntry(input=0.10, output=0.40, cache_read=0.01),
+    # ── xAI (Grok) ────────────────────────────────────────────────────────────
+    "xai/grok-3": PriceEntry(input=3.00, output=15.00),
+    "xai/grok-3-mini": PriceEntry(input=0.30, output=0.60),
+    # ── NVIDIA ─────────────────────────────────────────────────────────────────
+    "nvidia/llama-3.1-nemotron": PriceEntry(input=0.10, output=0.40),
+    # ── DeepSeek ──────────────────────────────────────────────────────────────
+    "deepseek/deepseek-chat": PriceEntry(input=0.27, output=1.10),
+    "deepseek/deepseek-reasoner": PriceEntry(input=0.55, output=2.19),
+    # ── Groq ──────────────────────────────────────────────────────────────────
+    "groq/llama-3.3-70b": PriceEntry(input=0.59, output=0.79),
+    # ── Together AI ───────────────────────────────────────────────────────────
+    "together/llama-3.3-70b": PriceEntry(input=0.72, output=0.72),
+    # ── Perplexity ────────────────────────────────────────────────────────────
+    "perplexity/sonar-pro": PriceEntry(input=1.00, output=5.00),
+    "perplexity/sonar": PriceEntry(input=0.20, output=1.00),
+    # ── Mistral ───────────────────────────────────────────────────────────────
+    "mistral/mistral-large-latest": PriceEntry(input=2.00, output=6.00),
+    "mistral/mistral-small-latest": PriceEntry(input=0.50, output=1.50),
+    "mistral/codestral-latest": PriceEntry(input=1.00, output=3.00),
+    # ── AWS Bedrock ───────────────────────────────────────────────────────────
+    "bedrock/claude-sonnet-4-6": PriceEntry(input=3.00, output=15.00),
+    "bedrock/claude-haiku-4-5": PriceEntry(input=1.00, output=5.00),
+    # ── Fireworks ─────────────────────────────────────────────────────────────
+    "fireworks/llama-3.3-70b": PriceEntry(input=0.50, output=0.50),
+    # ── Cohere ────────────────────────────────────────────────────────────────
+    "cohere/command-r-plus": PriceEntry(input=2.50, output=10.00),
+    "cohere/command-r": PriceEntry(input=0.50, output=1.50),
 }
 
 # Aliases — the SDK may send strings with version suffixes

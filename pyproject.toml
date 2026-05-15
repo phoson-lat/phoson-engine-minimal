@@ -86,3 +86,8 @@ dev = [
     "pyright>=1.1.400",
     "ruff>=0.15.12",
 ]
+
+[project.optional-dependencies]
+gemini = ["google-genai>=1.0.0"]
+mistral = ["mistralai>=1.0.0"]
+aws = ["boto3>=1.35.0"]

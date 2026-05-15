@@ -51,3 +51,26 @@ def test_load_config_env_subagent_model(monkeypatch, tmp_path) -> None:
     config = load_config()
 
     assert config.subagent_model == "anthropic/claude-3.5-haiku"
+
+
+def test_save_config_safely_handles_missing_attributes(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    # Create a "minimal" config object that might be missing attributes
+    # if it were an old version of the class or a mock.
+    class LegacyConfig:
+        provider = "openai"
+        model = "gpt-4"
+        openai_api_key = "sk-..."
+
+    # save_config uses getattr(config, "field", None) so it should handle this
+    path = save_config(LegacyConfig())  # type: ignore
+
+    content = path.read_text()
+    assert 'provider = "openai"' in content
+    assert 'model = "gpt-4"' in content
+    assert 'openai_api_key = "sk-..."' in content
+    assert "gemini_api_key" not in content  # Should be skipped as it returns None
