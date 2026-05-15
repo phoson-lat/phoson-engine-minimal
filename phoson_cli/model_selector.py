@@ -487,7 +487,8 @@ async def _list_gemini_models(config: PhosonConfig) -> list[ModelOption]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": api_key},
             )
             response.raise_for_status()
             data = response.json()
