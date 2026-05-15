@@ -18,6 +18,21 @@ _PROVIDER_LABELS = {
     "openai": "OpenAI",
     "anthropic": "Anthropic",
     "ollama": "Ollama",
+    "github": "GitHub Models",
+    "nvidia": "NVIDIA",
+    "xai": "Grok (X.AI)",
+    "groq": "Groq",
+    "deepseek": "DeepSeek",
+    "together": "Together AI",
+    "perplexity": "Perplexity",
+    "lmstudio": "LM Studio",
+    "vllm": "vLLM",
+    "azure": "Azure OpenAI",
+    "gemini": "Google Gemini",
+    "mistral": "Mistral AI",
+    "bedrock": "AWS Bedrock",
+    "fireworks": "Fireworks AI",
+    "cohere": "Cohere",
 }
 
 _PROMPT_STYLE = Style.from_dict(
@@ -126,7 +141,27 @@ class SetupWizard:
         Displays a numbered list and lets the user toggle entries by typing
         their numbers. Updates ``self.enabled_providers`` in place.
         """
-        providers = ["openrouter", "openai", "anthropic", "ollama"]
+        providers = [
+            "openrouter",
+            "openai",
+            "anthropic",
+            "ollama",
+            "github",
+            "nvidia",
+            "xai",
+            "groq",
+            "deepseek",
+            "together",
+            "perplexity",
+            "lmstudio",
+            "vllm",
+            "azure",
+            "gemini",
+            "mistral",
+            "bedrock",
+            "fireworks",
+            "cohere",
+        ]
         selected = set(self.enabled_providers)
 
         while True:
@@ -195,6 +230,93 @@ class SetupWizard:
             config.ollama_base_url = await self._prompt_text(
                 "Ollama base URL",
                 config.ollama_base_url or "http://localhost:11434",
+            )
+        if "github" in self.enabled_providers:
+            config.github_token = await self._secret_prompt(
+                "GitHub token",
+                config.github_token,
+            )
+        if "nvidia" in self.enabled_providers:
+            config.nvidia_api_key = await self._secret_prompt(
+                "NVIDIA API key",
+                config.nvidia_api_key,
+            )
+        if "xai" in self.enabled_providers:
+            config.xai_api_key = await self._secret_prompt(
+                "xAI / Grok API key",
+                config.xai_api_key,
+            )
+        if "groq" in self.enabled_providers:
+            config.groq_api_key = await self._secret_prompt(
+                "Groq API key",
+                config.groq_api_key,
+            )
+        if "deepseek" in self.enabled_providers:
+            config.deepseek_api_key = await self._secret_prompt(
+                "DeepSeek API key",
+                config.deepseek_api_key,
+            )
+        if "together" in self.enabled_providers:
+            config.together_api_key = await self._secret_prompt(
+                "Together AI API key",
+                config.together_api_key,
+            )
+        if "perplexity" in self.enabled_providers:
+            config.perplexity_api_key = await self._secret_prompt(
+                "Perplexity API key",
+                config.perplexity_api_key,
+            )
+        if "lmstudio" in self.enabled_providers:
+            config.lmstudio_base_url = await self._prompt_text(
+                "LM Studio base URL",
+                config.lmstudio_base_url or "http://localhost:1234/v1",
+            )
+        if "vllm" in self.enabled_providers:
+            config.vllm_base_url = await self._prompt_text(
+                "vLLM base URL",
+                config.vllm_base_url or "http://localhost:8000/v1",
+            )
+            config.vllm_api_key = await self._secret_prompt(
+                "vLLM API key (optional, press Enter to skip)",
+                config.vllm_api_key,
+            )
+        if "azure" in self.enabled_providers:
+            config.azure_openai_endpoint = await self._prompt_text(
+                "Azure OpenAI endpoint",
+                config.azure_openai_endpoint or "https://<resource>.openai.azure.com",
+            )
+            config.azure_openai_api_key = await self._secret_prompt(
+                "Azure OpenAI API key",
+                config.azure_openai_api_key,
+            )
+            config.azure_openai_deployment = await self._prompt_text(
+                "Azure OpenAI deployment name",
+                config.azure_openai_deployment,
+            )
+        if "gemini" in self.enabled_providers:
+            config.gemini_api_key = await self._secret_prompt(
+                "Google Gemini API key",
+                config.gemini_api_key,
+            )
+        if "mistral" in self.enabled_providers:
+            config.mistral_api_key = await self._secret_prompt(
+                "Mistral API key",
+                config.mistral_api_key,
+            )
+        if "bedrock" in self.enabled_providers:
+            self.console.print(
+                "[grey58]  AWS Bedrock uses your environment credentials "
+                "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).[/grey58]"
+            )
+        if "fireworks" in self.enabled_providers:
+            config.fireworks_api_key = await self._secret_prompt(
+                "Fireworks AI API key",
+                config.fireworks_api_key,
+            )
+        if "cohere" in self.enabled_providers:
+            config.cohere_api_key = await self._secret_prompt(
+                "Cohere API key",
+                config.cohere_api_key,
             )
         return config
 
@@ -279,6 +401,25 @@ class SetupWizard:
         table.add_row("OpenAI", self._mask_secret(config.openai_api_key))
         table.add_row("Anthropic", self._mask_secret(config.anthropic_api_key))
         table.add_row("Ollama", config.ollama_base_url or "—")
+        table.add_row("GitHub", self._mask_secret(config.github_token))
+        table.add_row("NVIDIA", self._mask_secret(config.nvidia_api_key))
+        table.add_row("xAI / Grok", self._mask_secret(config.xai_api_key))
+        table.add_row("Groq", self._mask_secret(config.groq_api_key))
+        table.add_row("DeepSeek", self._mask_secret(config.deepseek_api_key))
+        table.add_row("Together AI", self._mask_secret(config.together_api_key))
+        table.add_row("Perplexity", self._mask_secret(config.perplexity_api_key))
+        table.add_row("LM Studio", config.lmstudio_base_url or "—")
+        table.add_row("vLLM", config.vllm_base_url or "—")
+        table.add_row("Azure endpoint", config.azure_openai_endpoint or "—")
+        table.add_row("Azure key", self._mask_secret(config.azure_openai_api_key))
+        table.add_row("Gemini", self._mask_secret(config.gemini_api_key))
+        table.add_row("Mistral", self._mask_secret(config.mistral_api_key))
+        table.add_row(
+            "AWS Bedrock",
+            "env credentials" if "bedrock" in self.enabled_providers else "—",
+        )
+        table.add_row("Fireworks", self._mask_secret(config.fireworks_api_key))
+        table.add_row("Cohere", self._mask_secret(config.cohere_api_key))
         table.add_row("Sessions dir", str(config.sessions_dir))
         table.add_row("Max iterations", str(config.max_iterations))
         table.add_row("Safe mode", "on" if config.safe_mode else "off")
@@ -446,6 +587,36 @@ class SetupWizard:
             enabled.append("anthropic")
         if config.ollama_base_url or config.provider == "ollama":
             enabled.append("ollama")
+        if config.github_token or config.provider == "github":
+            enabled.append("github")
+        if config.nvidia_api_key or config.provider == "nvidia":
+            enabled.append("nvidia")
+        if config.xai_api_key or config.provider in ("xai", "grok"):
+            enabled.append("xai")
+        if config.groq_api_key or config.provider == "groq":
+            enabled.append("groq")
+        if config.deepseek_api_key or config.provider == "deepseek":
+            enabled.append("deepseek")
+        if config.together_api_key or config.provider == "together":
+            enabled.append("together")
+        if config.perplexity_api_key or config.provider == "perplexity":
+            enabled.append("perplexity")
+        if config.lmstudio_base_url or config.provider == "lmstudio":
+            enabled.append("lmstudio")
+        if config.vllm_base_url or config.vllm_api_key or config.provider == "vllm":
+            enabled.append("vllm")
+        if config.azure_openai_api_key or config.provider == "azure":
+            enabled.append("azure")
+        if config.gemini_api_key or config.provider in ("gemini", "google"):
+            enabled.append("gemini")
+        if config.mistral_api_key or config.provider == "mistral":
+            enabled.append("mistral")
+        if config.provider in ("bedrock", "aws"):
+            enabled.append("bedrock")
+        if config.fireworks_api_key or config.provider == "fireworks":
+            enabled.append("fireworks")
+        if config.cohere_api_key or config.provider == "cohere":
+            enabled.append("cohere")
         return enabled or [config.provider]
 
 

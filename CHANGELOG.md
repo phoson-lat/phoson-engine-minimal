@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.2.2] (2025-07-17)
+
+### ✨ Features
+
+#### phoson_cli — Full AI Provider Support
+
+- (`provider_picker.py`) Expand provider picker from 4 to all 19 providers with
+  labels for: GitHub Models, NVIDIA, Grok (X.AI), Groq, DeepSeek, Together AI,
+  Perplexity, LM Studio, vLLM, Azure OpenAI, Google Gemini, Mistral AI,
+  AWS Bedrock, Fireworks AI, Cohere
+- (`model_selector.py`) Add model listing functions for all 15 new providers with
+  automatic API discovery and graceful fallback on errors
+- (`installer.py`) Expand setup wizard (`/setup`) to support all 19 providers:
+  - Provider selection now shows all 19 providers to toggle
+  - Credential prompts for each provider's API key / base URL
+  - Summary table displays all configured providers and credentials
+  - `_infer_enabled_providers` detects credentials for all 19 providers
+
+### 📦 Version
+
+- Bump version to 0.2.2
+
 ## [0.1.0] (2025-05-02)
 
 ### ⚡ Highlights
