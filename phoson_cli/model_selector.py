@@ -306,9 +306,7 @@ async def _list_mistral_models(config: PhosonConfig) -> list[ModelOption]:
         )
         return [ModelOption(id=config.model, label=config.model, provider="mistral")]
     options = [
-        ModelOption(
-            id=item.get("id", ""), label=item.get("id", ""), provider="mistral"
-        )
+        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="mistral")
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -318,9 +316,7 @@ async def _list_mistral_models(config: PhosonConfig) -> list[ModelOption]:
 async def _list_perplexity_models(config: PhosonConfig) -> list[ModelOption]:
     api_key = getattr(config, "perplexity_api_key", None)
     if not api_key:
-        return [
-            ModelOption(id=config.model, label=config.model, provider="perplexity")
-        ]
+        return [ModelOption(id=config.model, label=config.model, provider="perplexity")]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
@@ -333,9 +329,7 @@ async def _list_perplexity_models(config: PhosonConfig) -> list[ModelOption]:
         warnings.warn(
             f"Failed to fetch Perplexity models: {exc}", UserWarning, stacklevel=2
         )
-        return [
-            ModelOption(id=config.model, label=config.model, provider="perplexity")
-        ]
+        return [ModelOption(id=config.model, label=config.model, provider="perplexity")]
     items = data.get("data", []) if isinstance(data, dict) else data
     options = [
         ModelOption(
@@ -352,9 +346,7 @@ async def _list_perplexity_models(config: PhosonConfig) -> list[ModelOption]:
 async def _list_fireworks_models(config: PhosonConfig) -> list[ModelOption]:
     api_key = getattr(config, "fireworks_api_key", None)
     if not api_key:
-        return [
-            ModelOption(id=config.model, label=config.model, provider="fireworks")
-        ]
+        return [ModelOption(id=config.model, label=config.model, provider="fireworks")]
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
@@ -367,9 +359,7 @@ async def _list_fireworks_models(config: PhosonConfig) -> list[ModelOption]:
         warnings.warn(
             f"Failed to fetch Fireworks models: {exc}", UserWarning, stacklevel=2
         )
-        return [
-            ModelOption(id=config.model, label=config.model, provider="fireworks")
-        ]
+        return [ModelOption(id=config.model, label=config.model, provider="fireworks")]
     options = [
         ModelOption(
             id=item.get("name", item.get("id", "")),
@@ -425,14 +415,10 @@ async def _list_xai_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch xAI models: {exc}", UserWarning, stacklevel=2
-        )
+        warnings.warn(f"Failed to fetch xAI models: {exc}", UserWarning, stacklevel=2)
         return [ModelOption(id=config.model, label=config.model, provider="xai")]
     options = [
-        ModelOption(
-            id=item.get("id", ""), label=item.get("id", ""), provider="xai"
-        )
+        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="xai")
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -457,9 +443,7 @@ async def _list_nvidia_models(config: PhosonConfig) -> list[ModelOption]:
         )
         return [ModelOption(id=config.model, label=config.model, provider="nvidia")]
     options = [
-        ModelOption(
-            id=item.get("id", ""), label=item.get("id", ""), provider="nvidia"
-        )
+        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="nvidia")
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -515,7 +499,8 @@ async def _list_gemini_models(config: PhosonConfig) -> list[ModelOption]:
     options = [
         ModelOption(
             id=item.get("name", "").replace("models/", ""),
-            label=item.get("displayName") or item.get("name", "").replace("models/", ""),
+            label=item.get("displayName")
+            or item.get("name", "").replace("models/", ""),
             provider="gemini",
             description=item.get("description", ""),
         )
@@ -571,14 +556,10 @@ async def _list_vllm_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch vLLM models: {exc}", UserWarning, stacklevel=2
-        )
+        warnings.warn(f"Failed to fetch vLLM models: {exc}", UserWarning, stacklevel=2)
         return [ModelOption(id=config.model, label=config.model, provider="vllm")]
     options = [
-        ModelOption(
-            id=item.get("id", ""), label=item.get("id", ""), provider="vllm"
-        )
+        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="vllm")
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -599,9 +580,7 @@ async def _list_lmstudio_models(config: PhosonConfig) -> list[ModelOption]:
         warnings.warn(
             f"Failed to fetch LM Studio models: {exc}", UserWarning, stacklevel=2
         )
-        return [
-            ModelOption(id=config.model, label=config.model, provider="lmstudio")
-        ]
+        return [ModelOption(id=config.model, label=config.model, provider="lmstudio")]
     options = [
         ModelOption(
             id=item.get("id", ""), label=item.get("id", ""), provider="lmstudio"
