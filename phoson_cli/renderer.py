@@ -21,7 +21,7 @@ from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
-from rich.console import Console
+from rich.console import Group, Console
 from rich.markdown import Markdown
 
 from phoson_agent import (
@@ -207,6 +207,11 @@ class Renderer:
         self._reasoning_active = False
         self._stream_had_tokens = False
 
+        # ── Live panel for streaming ─────────────────────────────────
+        self._live: Live | None = None
+        self._live_content: str = ""
+        self._live_reasoning: str = ""
+
         # ── Run-time context (reset on AgentStartEvent) ───────────────
         self._current_step: int = 0
         self._max_steps: int = 0
@@ -246,10 +251,81 @@ class Renderer:
         """Ensure we're on a fresh line after any raw-streamed tokens."""
         self.stop_waiting()
         self.stop_subagent_waiting()
+        self._stop_live_streaming()
         if self._streaming:
             self.console.print()
             self._streaming = False
         self._reasoning_active = False
+
+    # ── Live streaming panel ────────────────────────────────────────────────
+
+    def _start_live_streaming(self) -> None:
+        """Start a Rich Live panel for streaming Markdown."""
+        if self._live is not None:
+            return
+        self._live = Live(
+            self._render_live_panel(),
+            console=self.console,
+            refresh_per_second=8,
+            # Keep the final streamed Markdown visible after Live.stop().
+            # Rich removes the live renderable on exit when transient=True.
+            transient=False,
+        )
+        self._live.start()
+
+    def _update_live_streaming(self) -> None:
+        """Update the Live panel with current buffer content."""
+        if self._live is None:
+            return
+        self._live.update(self._render_live_panel(), refresh=True)
+
+    def _stop_live_streaming(self) -> None:
+        """Stop the Live panel and render final Markdown."""
+        if self._live is None:
+            return
+        self._live.stop()
+        self._live = None
+
+    def _render_live_panel(self) -> Panel:
+        """Render the current stream with separate thinking and answer blocks."""
+        renderables = []
+
+        if self._live_reasoning:
+            thinking_text = self._live_reasoning.strip() or "thinking..."
+            renderables.append(
+                Panel(
+                    Text(thinking_text, style=_REASONING),
+                    title="thinking",
+                    title_align="left",
+                    border_style=_MUTED2,
+                    box=box.ROUNDED,
+                    padding=(0, 1),
+                )
+            )
+
+        if self._live_content:
+            try:
+                answer_render = Markdown(
+                    self._live_content,
+                    code_theme="monokai",
+                    style="none",
+                )
+            except Exception:
+                answer_render = Text(self._live_content, style=_TEXT)
+            renderables.append(answer_render)
+
+        if not renderables:
+            renderables.append(Text("thinking...", style=_MUTED))
+
+        return Panel(
+            Group(*renderables),
+            title="assistant",
+            title_align="left",
+            border_style=_ACCENT2,
+            box=box.ROUNDED,
+            style=_PANEL_BG,
+            padding=(0, 1),
+        )
 
     def finish_turn(self) -> None:
         """Re-render buffered tokens as Markdown, then clear the buffer.
@@ -257,7 +333,7 @@ class Renderer:
         If reasoning chunks were collected, prints a summary line instead
         of replaying the raw text.
         """
-        self.flush_line()
+        self._stop_live_streaming()
 
         # Reasoning summary
         if self._reasoning_buf:
@@ -268,7 +344,7 @@ class Renderer:
             )
             self._reasoning_buf.clear()
 
-        # Assistant response
+        # Assistant response - only if not streamed (fallback)
         content = "".join(self._token_buf).strip()
         self._token_buf.clear()
         if content and not self._stream_had_tokens:
@@ -288,22 +364,42 @@ class Renderer:
                 self._current_step = 0
                 self._max_steps = event.max_iterations
                 self._run_cost_usd = 0.0
+                self._token_buf.clear()
+                self._reasoning_buf.clear()
+                self._live_content = ""
+                self._live_reasoning = ""
+                self._stream_had_tokens = False
                 self._on_start(event)
                 self.start_waiting(f"thinking  ·  step 0 / {event.max_iterations}")
 
             case AgentTokenEvent():
                 self.stop_waiting()
                 self._token_buf.append(event.content)
-                self.console.print(event.content, end="", soft_wrap=True)
+                self._live_content += event.content
                 self._streaming = True
                 self._stream_had_tokens = True
+
+                # Start or update Live panel
+                if self._live is None:
+                    self._start_live_streaming()
+                else:
+                    self._update_live_streaming()
 
             case AgentReasoningEvent():
                 self.stop_waiting()
                 self._reasoning_buf.append(event.content)
+                self._live_reasoning += event.content
                 self._streaming = True
+                self._reasoning_active = True
+
+                # Update Live panel with reasoning
+                if self._live is None:
+                    self._start_live_streaming()
+                else:
+                    self._update_live_streaming()
 
             case AgentToolStartEvent():
+                self._stop_live_streaming()
                 self.flush_line()
                 self._on_tool_start(event)
 
