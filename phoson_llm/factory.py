@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from __future__ import annotations
-
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.grok import GrokChat
 from phoson_llm.chats.groq import GroqChat

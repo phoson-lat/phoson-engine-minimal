@@ -11,6 +11,7 @@ def test_is_openai_compatible_subclass():
     )
     assert isinstance(chat, OpenAICompatibleChat)
 
+
 def test_builds_correct_base_url():
     chat = AzureChat(
         azure_endpoint="https://my-resource.openai.azure.com",
@@ -18,9 +19,12 @@ def test_builds_correct_base_url():
         deployment="gpt-4o",
         api_version="2024-08-01-preview",
     )
-    expected = ("https://my-resource.openai.azure.com/openai/deployments/"
-                "gpt-4o/chat/completions?api-version=2024-08-01-preview")
+    expected = (
+        "https://my-resource.openai.azure.com/openai/deployments/"
+        "gpt-4o/chat/completions?api-version=2024-08-01-preview"
+    )
     assert chat._base_url == expected
+
 
 def test_uses_api_key():
     chat = AzureChat(
@@ -30,6 +34,7 @@ def test_uses_api_key():
         api_version="2024-08-01-preview",
     )
     assert chat._client.api_key == "az-key-123"
+
 
 def test_falls_back_to_env_vars(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")

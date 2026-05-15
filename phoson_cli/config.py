@@ -433,5 +433,7 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
             api_key=config.vllm_api_key,
         )
     if provider == "lmstudio":
-        return LMStudioChat(base_url=config.lmstudio_base_url or "http://localhost:1234/v1")
+        return LMStudioChat(
+            base_url=config.lmstudio_base_url or "http://localhost:1234/v1"
+        )
     raise ValueError(f"Unsupported provider: {config.provider}")

@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
-from __future__ import annotations
 
 from phoson_llm.schemas import Message, LLMEvent, ModelConfig, ToolDefinition
 from phoson_llm.chats.base import BaseLLMChat
@@ -37,7 +36,7 @@ class OpenAICompatibleChat(BaseLLMChat):
         api_key_env: str = "API_KEY",
         max_tokens_key: str = "max_tokens",
         default_headers: dict[str, str] | None = None,
-        cost_calculator: CostCalculator | None = None,
+        cost_calculator: "CostCalculator | None" = None,
         extra_kwargs: dict[str, Any] | None = None,
         provider_name: str | None = None,
     ) -> None:

@@ -4,8 +4,6 @@ import os
 from typing import TYPE_CHECKING
 from collections.abc import AsyncIterator
 
-from __future__ import annotations
-
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -35,9 +33,10 @@ class MistralChat(BaseLLMChat):
         self._api_key = api_key or os.environ.get("MISTRAL_API_KEY") or ""
         self._client = None
 
-    def _get_client(self) -> Mistral:
+    def _get_client(self) -> "Mistral":
         if self._client is None:
             from mistralai import Mistral
+
             self._client = Mistral(api_key=self._api_key)
         return self._client
 
@@ -76,7 +75,7 @@ class MistralChat(BaseLLMChat):
                     content = chunk.data.choices[0].delta.content
                     text_acc += content
                     yield TokenEvent(content=content)
-                
+
                 if chunk.data.usage:
                     u = chunk.data.usage
                     usage = TokenUsage(
@@ -97,6 +96,7 @@ class MistralChat(BaseLLMChat):
 
         except Exception as e:
             from phoson_llm.schemas import ErrorEvent
+
             yield ErrorEvent(message=str(e), code="provider_error", retryable=False)
             return
 

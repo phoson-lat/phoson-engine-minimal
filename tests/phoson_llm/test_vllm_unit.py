@@ -8,6 +8,7 @@ def test_vllm_defaults():
     assert chat._base_url == VLLM_DEFAULT_BASE_URL
     assert "VLLM" in repr(chat)
 
+
 def test_vllm_custom_base_url():
     chat = VLLMChat(base_url="http://my-vllm:8000/v1")
     assert chat._base_url == "http://my-vllm:8000/v1"

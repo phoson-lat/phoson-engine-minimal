@@ -15,6 +15,7 @@ def test_is_base_llm_chat_subclass():
     chat = BedrockChat(region_name="us-east-1")
     assert isinstance(chat, BaseLLMChat)
 
+
 def test_repr_includes_bedrock():
     chat = BedrockChat(region_name="us-east-1")
     assert "Bedrock" in repr(chat)

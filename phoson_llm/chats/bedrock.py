@@ -5,8 +5,6 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
-from __future__ import annotations
-
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -63,13 +61,13 @@ class BedrockChat(BaseLLMChat):
         for msg in messages:
             if msg.role == "system":
                 continue
-            content = (
-                msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            bedrock_messages.append(
+                {
+                    "role": "user" if msg.role == "user" else "assistant",
+                    "content": [{"text": content}],
+                }
             )
-            bedrock_messages.append({
-                "role": "user" if msg.role == "user" else "assistant",
-                "content": [{"text": content}]
-            })
 
         system = []
         if config.system:
@@ -94,8 +92,8 @@ class BedrockChat(BaseLLMChat):
                     inferenceConfig={
                         "temperature": config.temperature or 0.7,
                         "maxTokens": config.max_tokens or 2048,
-                    }
-                )
+                    },
+                ),
             )
 
             text = response["output"]["message"]["content"][0]["text"]
@@ -115,10 +113,11 @@ class BedrockChat(BaseLLMChat):
                 cost_usd=cost_usd,
                 cost_known=cost_known,
             )
-            
+
             yield LLMDoneEvent(content=text, has_tool_calls=False)
 
         except Exception as e:
             from phoson_llm.schemas import ErrorEvent
+
             yield ErrorEvent(message=str(e), code="provider_error", retryable=False)
             return

@@ -4,8 +4,6 @@ import os
 from typing import TYPE_CHECKING
 from collections.abc import AsyncIterator
 
-from __future__ import annotations
-
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -28,7 +26,7 @@ if TYPE_CHECKING:
     from google.genai import types
 
 
-def _convert_messages(messages: list[Message]) -> list[types.Content]:
+def _convert_messages(messages: list[Message]) -> "list[types.Content]":
     """Converts Phoson messages to Gemini Content objects."""
     from google.genai import types
 
@@ -63,14 +61,14 @@ def _convert_messages(messages: list[Message]) -> list[types.Content]:
                             )
                         )
                 # Add other block types as needed
-        
+
         role = "user" if msg.role == "user" else "model"
         gemini_messages.append(types.Content(role=role, parts=parts))
-    
+
     return gemini_messages
 
 
-def _convert_tools(tools: list[ToolDefinition]) -> list[types.Tool]:
+def _convert_tools(tools: list[ToolDefinition]) -> "list[types.Tool]":
     """Converts Phoson tools to Gemini Tool objects."""
     from google.genai import types
 
@@ -97,9 +95,10 @@ class GeminiChat(BaseLLMChat):
         self._api_key = api_key or os.environ.get("GEMINI_API_KEY") or ""
         self._client = None
 
-    def _get_client(self) -> genai.Client:
+    def _get_client(self) -> "genai.Client":
         if self._client is None:
             from google import genai
+
             self._client = genai.Client(api_key=self._api_key)
         return self._client
 
@@ -115,7 +114,7 @@ class GeminiChat(BaseLLMChat):
         from google.genai import types
 
         client = self._get_client()
-        
+
         system_instruction = config.system
         if not system_instruction:
             for msg in messages:
@@ -155,13 +154,13 @@ class GeminiChat(BaseLLMChat):
                             if part.text:
                                 text_acc += part.text
                                 yield TokenEvent(content=part.text)
-                            
+
                             if part.function_call:
                                 has_tool_calls = True
                                 # Note: Gemini SDK handles tool calls slightly
                                 # differently in stream. This is a simplified version.
                                 yield ToolCallEvent(
-                                    index=0, # Simplified
+                                    index=0,  # Simplified
                                     tool_call_id=part.function_call.id or "call",
                                     tool_name=part.function_call.name,
                                     args=part.function_call.args,
@@ -169,6 +168,7 @@ class GeminiChat(BaseLLMChat):
 
         except Exception as e:
             from phoson_llm.schemas import ErrorEvent
+
             yield ErrorEvent(message=str(e), code="provider_error", retryable=False)
             return
 
@@ -177,7 +177,7 @@ class GeminiChat(BaseLLMChat):
             output_tokens = usage.candidates_token_count or 0
             # Gemini prompt caching info
             cache_read = getattr(usage, "cached_content_token_count", 0) or 0
-            
+
             cost_usd, cost_known = calculate_cost(
                 model=config.model,
                 input_tokens=input_tokens,

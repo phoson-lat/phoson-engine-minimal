@@ -74,4 +74,3 @@ def test_save_config_safely_handles_missing_attributes(monkeypatch, tmp_path) ->
     assert 'model = "gpt-4"' in content
     assert 'openai_api_key = "sk-..."' in content
     assert "gemini_api_key" not in content  # Should be skipped as it returns None
-
