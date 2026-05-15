@@ -159,9 +159,7 @@ class TestToolDecorator:
 
         import asyncio
 
-        result = asyncio.get_event_loop().run_until_complete(
-            fetch.handler({"url": "http://example.com"})
-        )
+        result = asyncio.run(fetch.handler({"url": "http://example.com"}))
         assert result == "fetched:http://example.com"
 
     def test_decorator_with_parentheses(self):
