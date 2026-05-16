@@ -11,6 +11,34 @@ from phoson_cli.config import load_config
 from phoson_cli.installer import run_install_wizard
 
 
+def _has_configured_provider(config) -> bool:
+    """Return whether the loaded config can build a provider without setup."""
+    if config.provider.lower() in {"ollama", "bedrock", "aws", "vllm", "lmstudio"}:
+        return True
+    return any(
+        (
+            config.openrouter_api_key,
+            config.openai_api_key,
+            config.anthropic_api_key,
+            config.github_token,
+            config.nvidia_api_key,
+            config.xai_api_key,
+            config.groq_api_key,
+            config.deepseek_api_key,
+            config.together_api_key,
+            config.perplexity_api_key,
+            config.azure_openai_api_key,
+            config.gemini_api_key,
+            config.mistral_api_key,
+            config.fireworks_api_key,
+            config.cohere_api_key,
+            config.vllm_base_url,
+            config.vllm_api_key,
+            config.lmstudio_base_url,
+        )
+    )
+
+
 def self_update() -> None:
     """Upgrade phoson-cli to the latest version via uv."""
     print("Updating phoson-cli...")
@@ -69,15 +97,9 @@ def main() -> None:
 
     config = load_config()
 
-    # Check if API keys are configured - if not, run setup wizard
-    has_api_key = (
-        config.openrouter_api_key
-        or config.openai_api_key
-        or config.anthropic_api_key
-        or config.ollama_base_url
-    )
+    config_path = Path.home() / ".phoson" / "config.toml"
 
-    if not has_api_key:
+    if not config_path.exists() and not _has_configured_provider(config):
         print("No API keys configured. Running setup wizard...")
         asyncio.run(run_install_wizard(config))
         # Reload config after setup
