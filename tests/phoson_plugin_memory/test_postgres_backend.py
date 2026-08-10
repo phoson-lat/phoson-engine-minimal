@@ -154,3 +154,50 @@ async def test_purge_expired_removes_only_expired_rows(backend):
 
     assert removed == 2
     assert await backend.get("alive") == "v"
+
+
+@pytest.mark.asyncio
+async def test_memory_plugin_auto_purges_expired_rows_against_real_postgres():
+    """End-to-end: MemoryPlugin's lazy background purge loop, for real.
+
+    Not just the fake-backend unit test in test_memory_plugin.py — this
+    proves the loop actually calls purge_expired() over the wire against a
+    real Postgres and removes real expired rows, without anyone calling
+    purge_expired() by hand.
+    """
+    from phoson_plugin_memory.plugin import MemoryPlugin
+
+    plugin = MemoryPlugin()
+    plugin.configure(
+        {
+            "backend": "postgres",
+            "dsn": DSN,
+            "namespace": "phoson-memory-autopurge-test",
+            "purge_interval_seconds": 0.3,
+        }
+    )
+    plugin.initialize()
+    store = plugin.backend
+    try:
+        await store._ensure_pool()
+    except (OSError, asyncpg.PostgresError) as exc:
+        pytest.skip(f"Postgres not reachable at {DSN}: {exc}")
+
+    try:
+        write_tool = next(t for t in plugin.get_tools() if t.name == "memory_write")
+        await write_tool.handler({"key": "short-lived", "value": "v", "ttl_seconds": 1})
+
+        assert plugin._purge_task is not None  # started lazily by the write above
+
+        await asyncio.sleep(2)  # past TTL and past at least one purge interval
+
+        pool = await store._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT 1 FROM {TABLE} WHERE namespace = $1 AND key = $2",
+                store.namespace,
+                "short-lived",
+            )
+        assert row is None  # the row is gone, not just unreadable via get()
+    finally:
+        await plugin.aclose()

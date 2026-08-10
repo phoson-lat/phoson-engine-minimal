@@ -78,14 +78,32 @@ def test_configure_can_override_embed_fn_and_url():
     assert plugin.backend.url == "http://qdrant.example:6333"
 
 
-def test_get_tools_returns_remember_and_recall():
+def test_get_tools_returns_remember_recall_and_forget():
     plugin = SemanticMemoryPlugin(embed_fn=_noop_embed)
     plugin.backend = FakeSemanticBackend()
 
     tools = plugin.get_tools()
     names = {t.name for t in tools}
 
-    assert names == {"memory_remember", "memory_recall"}
+    assert names == {"memory_remember", "memory_recall", "memory_forget"}
+
+
+def test_tool_prefix_avoids_collisions_between_instances():
+    first = SemanticMemoryPlugin(embed_fn=_noop_embed)
+    first.backend = FakeSemanticBackend()
+
+    second = SemanticMemoryPlugin(embed_fn=_noop_embed, tool_prefix="alt_")
+    second.backend = FakeSemanticBackend()
+
+    first_names = {t.name for t in first.get_tools()}
+    second_names = {t.name for t in second.get_tools()}
+
+    assert first_names.isdisjoint(second_names)
+    assert second_names == {
+        "alt_memory_remember",
+        "alt_memory_recall",
+        "alt_memory_forget",
+    }
 
 
 @pytest.mark.asyncio
@@ -129,6 +147,29 @@ async def test_recall_missing_query_returns_error(plugin):
     assert "error" in result
 
 
+@pytest.mark.asyncio
+async def test_forget_removes_entry(plugin):
+    remember_tool = next(t for t in plugin.get_tools() if t.name == "memory_remember")
+    forget_tool = next(t for t in plugin.get_tools() if t.name == "memory_forget")
+    recall_tool = next(t for t in plugin.get_tools() if t.name == "memory_recall")
+
+    await remember_tool.handler({"key": "fact-1", "text": "the sky is blue"})
+    result = await forget_tool.handler({"key": "fact-1"})
+    assert result == {"forgotten": True, "key": "fact-1"}
+
+    recalled = await recall_tool.handler({"query": "sky"})
+    assert recalled == {"matches": []}
+
+
+@pytest.mark.asyncio
+async def test_forget_missing_key_arg_returns_error(plugin):
+    forget_tool = next(t for t in plugin.get_tools() if t.name == "memory_forget")
+
+    result = await forget_tool.handler({})
+
+    assert "error" in result
+
+
 def test_get_tools_before_initialize_raises():
     plugin = SemanticMemoryPlugin(embed_fn=_noop_embed)
     with pytest.raises(AssertionError):
@@ -137,4 +178,10 @@ def test_get_tools_before_initialize_raises():
 
 def test_cleanup_clears_backend(plugin):
     plugin.cleanup()
+    assert plugin.backend is None
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_backend(plugin):
+    await plugin.aclose()
     assert plugin.backend is None

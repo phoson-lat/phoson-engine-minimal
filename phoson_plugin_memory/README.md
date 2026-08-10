@@ -54,7 +54,47 @@ engine = AgentEngine(
 )
 ```
 
-El modelo puede entonces llamar `memory_write(key, value, ttl_seconds=...)` y `memory_read(key)` como cualquier otra tool — el comportamiento es idéntico sin importar el backend elegido.
+El modelo puede entonces llamar `memory_write(key, value, ttl_seconds=...)`, `memory_read(key)`, `memory_delete(key)` y `memory_list(prefix=...)` como cualquier otra tool — el comportamiento es idéntico sin importar el backend elegido.
+
+### Combinar Redis + Postgres en el mismo agente
+
+Cada instancia de `MemoryPlugin` registra tools con el mismo nombre por default (`memory_read`, `memory_write`, ...). Si agregas dos instancias (p.ej. corto plazo + largo plazo a la vez), la segunda pisa silenciosamente a la primera en `AgentEngine` — usa `tool_prefix` para evitarlo:
+
+```python
+engine = AgentEngine(
+    chat=OpenAIChat(),
+    plugins=[
+        {"name": "phoson-plugin-memory", "config": {"backend": "redis"}},
+        {
+            "name": "phoson-plugin-memory",
+            "config": {
+                "backend": "postgres",
+                "dsn": "postgresql://phoson:phoson@localhost/phoson",
+                "tool_prefix": "longterm_",
+            },
+        },
+    ],
+)
+```
+
+El modelo ve `memory_read`/`memory_write`/... (Redis) y `longterm_memory_read`/`longterm_memory_write`/... (Postgres) como tools separadas.
+
+### Auto-purge para el tier Postgres
+
+Redis expira keys solo; Postgres no. Configura `purge_interval_seconds` para que un background task llame `purge_expired()` automáticamente:
+
+```python
+{
+    "name": "phoson-plugin-memory",
+    "config": {
+        "backend": "postgres",
+        "dsn": "...",
+        "purge_interval_seconds": 300,  # cada 5 minutos
+    },
+}
+```
+
+El task arranca solo (lazy, en la primera llamada a `memory_read`/`memory_write` — necesita el loop del agente ya corriendo) y se cancela en `cleanup()`/`aclose()`.
 
 ### Tier Qdrant (semántico) — plugin separado
 
@@ -78,7 +118,7 @@ engine = AgentEngine(
 )
 ```
 
-El modelo llama `memory_remember(key, text, metadata=...)` para guardar y `memory_recall(query, top_k=5)` para buscar por significado — devuelve una lista de `{key, text, score, metadata}` ordenada por similitud.
+El modelo llama `memory_remember(key, text, metadata=...)` para guardar, `memory_recall(query, top_k=5)` para buscar por significado (devuelve una lista de `{key, text, score, metadata}` ordenada por similitud) y `memory_forget(key)` para borrar. `tool_prefix` funciona igual que en `MemoryPlugin` si necesitas más de una instancia (p.ej. dos colecciones).
 
 ## Uso directo del backend
 

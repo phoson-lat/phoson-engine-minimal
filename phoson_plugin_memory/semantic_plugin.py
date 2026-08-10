@@ -34,6 +34,10 @@ class SemanticMemoryPlugin(Plugin):
         url: Qdrant connection URL (default ``http://localhost:6333``).
         collection_name: Qdrant collection name (default ``"phoson_memory"``).
         namespace: Logical scope for keys (default ``"phoson"``).
+        tool_prefix: Prepended to every tool name (default ``""``). Set
+            this if you add more than one ``SemanticMemoryPlugin`` to the
+            same agent (e.g. two different collections), to avoid both
+            registering identically-named tools.
     """
 
     def __init__(
@@ -43,11 +47,13 @@ class SemanticMemoryPlugin(Plugin):
         url: str = "http://localhost:6333",
         collection_name: str = "phoson_memory",
         namespace: str = "phoson",
+        tool_prefix: str = "",
     ) -> None:
         self._embed_fn = embed_fn
         self._url = url
         self._collection_name = collection_name
         self._namespace = namespace
+        self._tool_prefix = tool_prefix
         self.backend: SemanticMemoryBackend | None = None
 
     @property
@@ -71,6 +77,7 @@ class SemanticMemoryPlugin(Plugin):
         self._url = config.get("url", self._url)
         self._collection_name = config.get("collection_name", self._collection_name)
         self._namespace = config.get("namespace", self._namespace)
+        self._tool_prefix = config.get("tool_prefix", self._tool_prefix)
 
     def initialize(self) -> None:
         if not callable(self._embed_fn):
@@ -84,6 +91,9 @@ class SemanticMemoryPlugin(Plugin):
             collection_name=self._collection_name,
             namespace=self._namespace,
         )
+
+    def _tool_name(self, base: str) -> str:
+        return f"{self._tool_prefix}{base}"
 
     def get_tools(self) -> list[AgentTool]:
         assert self.backend is not None, "initialize() must run before get_tools()"
@@ -119,9 +129,18 @@ class SemanticMemoryPlugin(Plugin):
                 ]
             }
 
+        async def memory_forget(
+            args: dict[str, Any], _context: Any | None = None
+        ) -> dict[str, Any]:
+            key = args.get("key")
+            if not key:
+                return {"error": "Missing required field: key"}
+            await backend.delete(key)
+            return {"forgotten": True, "key": key}
+
         return [
             AgentTool(
-                name="memory_remember",
+                name=self._tool_name("memory_remember"),
                 description=(
                     "Store a piece of text in semantic memory under a key, so it "
                     "can later be found by meaning via memory_recall (not just by "
@@ -145,7 +164,7 @@ class SemanticMemoryPlugin(Plugin):
                 handler=memory_remember,
             ),
             AgentTool(
-                name="memory_recall",
+                name=self._tool_name("memory_recall"),
                 description=(
                     "Find entries in semantic memory whose meaning is most similar "
                     "to a query, ranked by similarity score."
@@ -166,11 +185,32 @@ class SemanticMemoryPlugin(Plugin):
                 },
                 handler=memory_recall,
             ),
+            AgentTool(
+                name=self._tool_name("memory_forget"),
+                description="Remove a piece of text from semantic memory by key.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Memory key to remove",
+                        },
+                    },
+                    "required": ["key"],
+                },
+                handler=memory_forget,
+            ),
         ]
 
     def cleanup(self) -> None:
         # backend.close() is async (qdrant AsyncQdrantClient); callers needing
-        # a clean shutdown should `await plugin.backend.close()` directly.
+        # a clean shutdown should `await plugin.aclose()` directly instead.
+        self.backend = None
+
+    async def aclose(self) -> None:
+        """Async, awaitable teardown: closes the underlying Qdrant client."""
+        if self.backend is not None:
+            await self.backend.close()
         self.backend = None
 
 
