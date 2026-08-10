@@ -13,16 +13,12 @@ python examples/simple_plugin_demo.py
 ```
 
 ### `plugin_example_memory.py`
-Plugin completo de ejemplo que proporciona:
-- **Tools**: `store_memory`, `retrieve_memory`, `list_memories`
-- **Middleware**: Inyecta contexto de memoria en los mensajes
+Ejemplo end-to-end del plugin real `phoson-plugin-memory` (tier Redis, ver `phoson_plugin_memory/`): dos instancias de `AgentEngine` completamente separadas, donde la segunda lee una memoria escrita por la primera — algo que un dict en memoria de proceso nunca podría sobrevivir.
 
-**Usar:**
-```python
-engine = AgentEngine(
-    chat=OpenAIChat(),
-    plugins=["path:./examples/plugin_example_memory.py"]
-)
+**Requiere Redis:**
+```bash
+docker compose -f docker-compose.test.yml up -d redis-test
+python examples/plugin_example_memory.py
 ```
 
 ### `plugin_usage_example.py`

@@ -522,6 +522,48 @@ El loader por path modifica globalmente `sys.path` con `insert` y luego `remove`
 
 ---
 
+### 13b. Convencion `plugin = XxxPlugin()` sombrea el submodulo `plugin.py` como atributo del paquete
+
+**Detectado:** durante el trabajo de `phoson_plugin_memory` (semana del 10-16 de agosto 2026), al escribir un test que hacia `import phoson_plugin_memory.plugin as plugin_module`.
+
+**Archivos involucrados:**
+
+- `phoson_plugin_mcp/__init__.py`
+- `phoson_plugin_checkpoint/__init__.py`
+- `phoson_plugin_memory/__init__.py`
+- Cualquier plugin nuevo que siga la misma convencion
+
+**Problema:**
+
+Los tres paquetes de plugin tienen un archivo `plugin.py` y, en su `__init__.py`, una linea `plugin = XxxPlugin()` (la convencion de carga por paquete que exige `phoson_agent/plugin_loader.py::_load_from_package`). Esa asignacion crea un atributo `plugin` en el objeto paquete que **sobreescribe la referencia al submodulo** `plugin.py` que el propio import machinery acababa de fijar.
+
+Consecuencia verificada:
+
+```python
+import phoson_plugin_memory.plugin as pm
+type(pm)  # <class '...MemoryPlugin'>, NO el modulo — a pesar de `import x.y as z`
+```
+
+`sys.modules["phoson_plugin_memory.plugin"]` sigue teniendo el modulo real, pero cualquier resolucion que pase por el atributo del paquete (`import paquete.plugin as x`, `from paquete import plugin`, y hasta el string-target de `pytest.monkeypatch.setattr("paquete.plugin.Algo", ...)`) devuelve la instancia, no el modulo. El unico camino seguro es `from paquete.plugin import Algo` o `importlib.import_module("paquete.plugin")`.
+
+**Tarea:**
+
+- Decidir si vale la pena romper la convencion (renombrar el archivo `plugin.py` a algo como `_plugin.py`, o el atributo `plugin` a `default_plugin`) o si basta con documentarlo como limitacion conocida.
+- Si se documenta: dejar una nota explicita en `docs/plugins.md` sobre las formas de import seguras vs. las que rompen.
+- Si se corrige: coordinar el cambio en los tres paquetes a la vez (`phoson_plugin_mcp`, `phoson_plugin_checkpoint`, `phoson_plugin_memory`) para no dejar la convencion a medias.
+
+**Impacto:**
+
+- Bajo para el uso normal (`plugins=["phoson-plugin-memory"]` o `from phoson_plugin_memory import plugin` funcionan bien, es el patron que el loader espera).
+- Puede confundir a quien intente importar el submodulo directamente (tests, tooling, IDEs con autocompletado agresivo) y reciba una instancia donde esperaba un modulo, con un `AttributeError` dificil de interpretar a primera vista.
+
+**Riesgo si no se atiende:**
+
+- Nuevos plugins seguiran replicando la misma trampa sin saberlo.
+- Tests o scripts externos que usen `import paquete.plugin` fallaran de forma no obvia.
+
+---
+
 ## Prioridad baja
 
 ### 14. Mejorar consistencia de idioma y estilo en comentarios/docstrings

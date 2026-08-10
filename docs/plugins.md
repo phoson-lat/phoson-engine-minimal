@@ -2,6 +2,18 @@
 
 El sistema de plugins de Phoson Agent permite extender las capacidades del agente de forma modular y reutilizable.
 
+## Decisión de interfaz canónica
+
+Existe un único contrato de plugin soportado: la clase `Plugin` (ABC síncrona) definida en `phoson_agent/plugin.py`, con el ciclo de vida `configure()` → `initialize()` → uso → `cleanup()`.
+
+Anteriormente el roadmap externo describía un segundo contrato, `PhosonPlugin` (async, `on_load`/`on_unload`), pero nunca llegó a implementarse: no existe en el código, no hay loaders para él, y ningún plugin real (`phoson_plugin_mcp`, los ejemplos en `examples/`) lo usa. Se descarta formalmente en favor de `Plugin` porque:
+
+- Es la interfaz que ya implementan `PluginRegistry`/`load_plugin` (`phoson_agent/plugin_loader.py`) y todos los plugins existentes.
+- Los tools y middlewares que un plugin expone (`get_tools`, `get_middlewares`) no requieren que la carga/descarga del propio plugin sea async — la parte async vive dentro de los tools (`ToolHandler` ya soporta handlers async), no en el lifecycle del plugin.
+- Introducir un segundo contrato solo duplicaría loaders y documentación sin habilitar nada que `initialize()`/`cleanup()` no permitan ya (un plugin puede crear un pool async dentro de `initialize()` de forma síncrona, p.ej. con `asyncio.get_event_loop().run_until_complete(...)` o guardando la corrutina de conexión para el primer uso — ver `phoson_plugin_checkpoint` y `phoson_plugin_memory` como ejemplos).
+
+Todos los plugins nuevos (`phoson_plugin_checkpoint`, `phoson_plugin_memory`) implementan `Plugin`, no `PhosonPlugin`.
+
 ## Conceptos Básicos
 
 Un **plugin** puede proporcionar:
@@ -203,6 +215,12 @@ engine = AgentEngine(
 5. **Cleanup**: Siempre implementa `cleanup()` si usas recursos
 6. **Testing**: Escribe tests para tus plugins
 7. **Type Hints**: Usa type hints para mejor DX
+
+## Plugins incluidos
+
+- `phoson_plugin_mcp`: integra servidores Model Context Protocol.
+- `phoson_plugin_checkpoint`: `SessionStorage` respaldado en Postgres, esquema propio (`phoson_checkpoint_*`). Ver `phoson_plugin_checkpoint/README.md`.
+- `phoson_plugin_memory`: memoria de corto plazo (Redis, TTL) y largo plazo (Postgres) expuesta como tools `memory_read`/`memory_write` (mismo `MemoryBackend` para ambos), más una tier semántica (Qdrant) separada expuesta como `memory_remember`/`memory_recall` — interfaz distinta porque es búsqueda por similitud, no lookup exacto. Ver `phoson_plugin_memory/README.md`.
 
 ## Ejemplos de Plugins
 
