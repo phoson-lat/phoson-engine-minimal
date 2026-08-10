@@ -1,120 +1,157 @@
+#!/usr/bin/env python3
 """
-Example plugin: Memory Plugin
-Provides persistent memory across agent runs.
+Example: phoson-plugin-memory (Redis-backed short-term memory), end to end.
+
+Unlike the old in-process demo (a plain dict that dies with the process),
+this exercises the real plugin package (`phoson_plugin_memory`) against a
+real Redis instance, and proves persistence survives across two completely
+separate AgentEngine instances — which an in-process store never could.
+
+Requires Redis:
+    docker compose -f docker-compose.test.yml up -d redis-test
+    python examples/plugin_example_memory.py
 """
 
-from typing import Any
+import asyncio
+from collections.abc import AsyncIterator
 
-from phoson_agent import Plugin, AgentTool, AgentMiddleware, tool
-from phoson_llm.schemas import Message, ModelConfig
+from phoson_agent import AgentEngine
+from phoson_llm.schemas import (
+    Message,
+    LLMEvent,
+    TokenUsage,
+    UsageEvent,
+    ModelConfig,
+    LLMDoneEvent,
+    LLMStartEvent,
+    ToolCallEvent,
+    ToolDefinition,
+)
+from phoson_llm.chats.base import BaseLLMChat
+
+REDIS_URL = "redis://localhost:56379/0"
 
 
-class MemoryPlugin(Plugin):
-    """
-    Plugin that provides memory capabilities to the agent.
-    Stores and retrieves information across conversations.
-    """
+class WriteMemoryChat(BaseLLMChat):
+    """Fake chat: writes a fact to memory, then answers."""
 
     def __init__(self) -> None:
-        self._memory_store: dict[str, Any] = {}
-        self._max_memories: int = 100
+        self._iteration = 0
 
-    @property
-    def name(self) -> str:
-        return "phoson-plugin-memory"
+    async def stream(
+        self,
+        messages: list[Message],
+        config: ModelConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        self._iteration += 1
+        yield LLMStartEvent(model=config.model, message_count=len(messages))
 
-    @property
-    def version(self) -> str:
-        return "0.1.0"
+        if self._iteration == 1:
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_write_1",
+                tool_name="memory_write",
+                args={"key": "user_name", "value": "Abel"},
+            )
+            yield UsageEvent(
+                model=config.model,
+                usage=TokenUsage(input=80, output=20),
+                cost_usd=0.0002,
+                cost_known=True,
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+            return
 
-    @property
-    def description(self) -> str:
-        return "Provides persistent memory storage for the agent"
-
-    def configure(self, config: dict[str, Any]) -> None:
-        """Configure the memory plugin."""
-        self._max_memories = config.get("max_memories", 100)
-
-    def get_tools(self) -> list[AgentTool]:
-        """Provide memory tools to the agent."""
-
-        @tool
-        def store_memory(key: str, value: str) -> str:
-            """
-            Store information in memory for later retrieval.
-
-            Args:
-                key: Unique identifier for the memory
-                value: Information to store
-            """
-            if len(self._memory_store) >= self._max_memories:
-                # Remove oldest entry
-                oldest_key = next(iter(self._memory_store))
-                del self._memory_store[oldest_key]
-
-            self._memory_store[key] = value
-            return f"Stored memory '{key}'"
-
-        @tool
-        def retrieve_memory(key: str) -> str:
-            """
-            Retrieve information from memory.
-
-            Args:
-                key: Unique identifier for the memory
-            """
-            value = self._memory_store.get(key)
-            if value is None:
-                return f"No memory found for key '{key}'"
-            return str(value)
-
-        @tool
-        def list_memories() -> dict[str, list[str]]:
-            """List all stored memory keys."""
-            return {"keys": list(self._memory_store.keys())}
-
-        return [store_memory, retrieve_memory, list_memories]
-
-    def get_middlewares(self) -> list[AgentMiddleware]:
-        """Provide memory middleware."""
-
-        class MemoryMiddleware(AgentMiddleware):
-            """Middleware to inject memory context into messages."""
-
-            def __init__(self, memory_store: dict[str, Any]):
-                self.memory_store = memory_store
-
-            async def on_before_llm(
-                self,
-                messages: list[Message],
-                config: ModelConfig,
-            ) -> list[Message]:
-                """Inject memory summary if available."""
-                if not self.memory_store:
-                    return messages
-
-                # Add a system message with memory context
-                memory_summary = "\n".join(
-                    f"- {k}: {v}" for k, v in list(self.memory_store.items())[:5]
-                )
-
-                memory_msg = Message(
-                    role="system",
-                    content=f"Available memories:\n{memory_summary}",
-                )
-
-                # Insert after the first message (usually system prompt)
-                if len(messages) > 0:
-                    return [messages[0], memory_msg] + messages[1:]
-                return [memory_msg] + messages
-
-        return [MemoryMiddleware(self._memory_store)]
-
-    def cleanup(self) -> None:
-        """Cleanup memory resources."""
-        # Could save to disk here
-        self._memory_store.clear()
+        yield UsageEvent(
+            model=config.model,
+            usage=TokenUsage(input=100, output=15),
+            cost_usd=0.0002,
+            cost_known=True,
+        )
+        yield LLMDoneEvent(
+            content="Noted, I'll remember your name.", has_tool_calls=False
+        )
 
 
-# Export plugin instance
-plugin = MemoryPlugin()
+class ReadMemoryChat(BaseLLMChat):
+    """Fake chat: reads the fact back from memory, in a brand new process/engine."""
+
+    def __init__(self) -> None:
+        self._iteration = 0
+
+    async def stream(
+        self,
+        messages: list[Message],
+        config: ModelConfig,
+        tools: list[ToolDefinition] | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        self._iteration += 1
+        yield LLMStartEvent(model=config.model, message_count=len(messages))
+
+        if self._iteration == 1:
+            yield ToolCallEvent(
+                index=0,
+                tool_call_id="call_read_1",
+                tool_name="memory_read",
+                args={"key": "user_name"},
+            )
+            yield UsageEvent(
+                model=config.model,
+                usage=TokenUsage(input=80, output=20),
+                cost_usd=0.0002,
+                cost_known=True,
+            )
+            yield LLMDoneEvent(content="", has_tool_calls=True)
+            return
+
+        yield UsageEvent(
+            model=config.model,
+            usage=TokenUsage(input=100, output=15),
+            cost_usd=0.0002,
+            cost_known=True,
+        )
+        yield LLMDoneEvent(content="Your name is Abel.", has_tool_calls=False)
+
+
+async def main() -> None:
+    memory_plugin_spec = {
+        "name": "phoson-plugin-memory",
+        "config": {"redis_url": REDIS_URL, "namespace": "phoson-example"},
+    }
+
+    print("=" * 70)
+    print("Engine #1 (process A): writes a fact to Redis-backed memory")
+    print("=" * 70)
+    engine_a = AgentEngine(chat=WriteMemoryChat(), plugins=[memory_plugin_spec])
+    try:
+        result_a = await engine_a.run(
+            [Message(role="user", content="My name is Abel, please remember it.")],
+            ModelConfig(model="fake-demo-model", max_tokens=128),
+        )
+    except Exception as exc:  # pragma: no cover - demo-only guardrail
+        print(f"\n Could not reach Redis at {REDIS_URL}: {exc}")
+        print(
+            "Start it with: docker compose -f docker-compose.test.yml up -d redis-test"
+        )
+        return
+    print(f"final_content: {result_a.final_content}")
+
+    print("\n" + "=" * 70)
+    print("Engine #2 (process B, brand new instance): reads the fact back")
+    print("=" * 70)
+    engine_b = AgentEngine(chat=ReadMemoryChat(), plugins=[memory_plugin_spec])
+    result_b = await engine_b.run(
+        [Message(role="user", content="What's my name?")],
+        ModelConfig(model="fake-demo-model", max_tokens=128),
+    )
+    print(f"final_content: {result_b.final_content}")
+
+    print(
+        "\nMemory survived across two independent AgentEngine instances "
+        "because it lives in Redis, not in a Python dict."
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

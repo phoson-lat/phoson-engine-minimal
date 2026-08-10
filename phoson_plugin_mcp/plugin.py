@@ -4,8 +4,10 @@ MCP Plugin implementation.
 
 import re
 import json
+import asyncio
 from typing import Any
 from pathlib import Path
+from contextlib import AsyncExitStack
 
 from phoson_agent import Plugin, AgentTool
 
@@ -77,6 +79,12 @@ class MCPPlugin(Plugin):
         self.tools_cache: list[AgentTool] = []
         self.tool_name_prefix: str = "mcp"
         self._initialized = False
+        # Session pooling: one live connection per server, reused across
+        # tool calls instead of reconnecting (and re-spawning stdio
+        # subprocesses) on every single call.
+        self._exit_stack = AsyncExitStack()
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._server_tool_lists: dict[str, list[Any]] = {}
 
     @property
     def name(self) -> str:
@@ -308,34 +316,37 @@ class MCPPlugin(Plugin):
         tool_name: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Execute a tool call on an MCP server."""
-        server_config = self.servers[server_name]
+        """Execute a tool call on an MCP server, reusing a pooled session.
 
-        # Determine transport type (default: stdio)
+        The first call to a given server pays connection setup cost (spawn
+        subprocess / open SSE / open HTTP stream). Every subsequent call to
+        the same server reuses that same session — no reconnect, no
+        re-``initialize()``. If the cached session turns out to be dead
+        (broken pipe, closed transport, etc.), it's dropped so the *next*
+        call transparently reconnects instead of staying wedged.
+        """
+        server_config = self.servers[server_name]
         transport = server_config.get("transport", "stdio").lower()
 
-        # Connect based on transport type
+        if transport not in ("stdio", "sse", "http", "streamable_http"):
+            return {
+                "error": f"Unsupported transport: {transport}",
+                "supported": ["stdio", "sse", "http"],
+                "server": server_name,
+                "tool": tool_name,
+            }
+
         try:
-            if transport == "stdio":
-                return await self._execute_stdio(
-                    server_name, server_config, tool_name, arguments
-                )
-            elif transport == "sse":
-                return await self._execute_sse(
-                    server_name, server_config, tool_name, arguments
-                )
-            elif transport in ("http", "streamable_http"):
-                return await self._execute_http(
-                    server_name, server_config, tool_name, arguments
-                )
-            else:
-                return {
-                    "error": f"Unsupported transport: {transport}",
-                    "supported": ["stdio", "sse", "http"],
-                    "server": server_name,
-                    "tool": tool_name,
-                }
+            session = await self._get_session(server_name)
+            return await self._call_tool_on_cached_session(
+                session, server_name, tool_name, arguments
+            )
         except Exception as exc:
+            # Drop the (possibly broken) cached session/tool list so the
+            # next call gets a fresh connection instead of repeating the
+            # same failure forever.
+            self.sessions.pop(server_name, None)
+            self._server_tool_lists.pop(server_name, None)
             return {
                 "error": str(exc),
                 "error_type": type(exc).__name__,
@@ -345,6 +356,109 @@ class MCPPlugin(Plugin):
                 "server_target": self._server_target(server_config),
                 "arguments": arguments,
             }
+
+    async def _get_session(self, server_name: str) -> "ClientSession":
+        """Return the pooled session for ``server_name``, connecting once.
+
+        Connections are entered into ``self._exit_stack`` so they stay open
+        until ``cleanup()``/``aclose()`` tears them down, instead of closing
+        at the end of an ``async with`` block like the previous per-call
+        implementation did.
+        """
+        existing = self.sessions.get(server_name)
+        if existing is not None:
+            return existing
+
+        lock = self._session_locks.setdefault(server_name, asyncio.Lock())
+        async with lock:
+            existing = self.sessions.get(server_name)
+            if existing is not None:
+                return existing
+
+            server_config = self.servers[server_name]
+            transport = server_config.get("transport", "stdio").lower()
+
+            if transport == "stdio":
+                command = server_config.get("command", "node")
+                args = server_config.get("args", [])
+                env = server_config.get("env", {})
+                server_params = StdioServerParameters(
+                    command=command, args=args, env=env if env else None
+                )
+                read, write = await self._exit_stack.enter_async_context(
+                    stdio_client(server_params)
+                )
+            elif transport == "sse":
+                url = server_config.get("url")
+                if not url:
+                    raise ValueError("SSE transport requires 'url' in config")
+                headers = server_config.get("headers", {})
+                read, write = await self._exit_stack.enter_async_context(
+                    sse_client(url, headers=headers)
+                )
+            elif transport in ("http", "streamable_http"):
+                url = server_config.get("url")
+                if not url:
+                    raise ValueError("HTTP transport requires 'url' in config")
+                headers = server_config.get("headers", {})
+                http_client = None
+                if headers:
+                    import httpx
+
+                    http_client = await self._exit_stack.enter_async_context(
+                        httpx.AsyncClient(headers=headers)
+                    )
+                http_transport = await self._exit_stack.enter_async_context(
+                    streamable_http_client(url, http_client=http_client)
+                )
+                read, write, _get_session_id = http_transport
+            else:
+                raise ValueError(f"Unsupported transport: {transport}")
+
+            session = await self._exit_stack.enter_async_context(
+                ClientSession(read, write)
+            )
+            await session.initialize()
+            self.sessions[server_name] = session
+            return session
+
+    async def _call_tool_on_cached_session(
+        self,
+        session: "ClientSession",
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Call a tool on an already-initialized, pooled session.
+
+        The remote tool list is fetched once per server (on first use) and
+        cached, instead of re-listing tools on every single call.
+        """
+        tools_result = self._server_tool_lists.get(server_name)
+        if tools_result is None:
+            tools_result = (await session.list_tools()).tools
+            self._server_tool_lists[server_name] = tools_result
+
+        tool_found = next((t for t in tools_result if t.name == tool_name), None)
+        if not tool_found:
+            return {
+                "error": f"Tool '{tool_name}' not found",
+                "error_type": "ToolNotFound",
+                "available_tools": [t.name for t in tools_result],
+                "server": server_name,
+                "tool": tool_name,
+                "arguments": arguments,
+            }
+
+        result = await session.call_tool(tool_name, arguments)
+        return {
+            "success": True,
+            "result": self._serialize_mcp_value(
+                result.content if hasattr(result, "content") else result
+            ),
+            "tool": tool_name,
+            "server": server_name,
+        }
 
     async def _list_server_tools(
         self,
@@ -426,124 +540,6 @@ class MCPPlugin(Plugin):
             if http_client is not None:
                 await http_client.aclose()
 
-    async def _execute_stdio(
-        self,
-        server_name: str,
-        server_config: dict[str, Any],
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Execute tool via STDIO transport."""
-        command = server_config.get("command", "node")
-        args = server_config.get("args", [])
-        env = server_config.get("env", {})
-
-        server_params = StdioServerParameters(
-            command=command, args=args, env=env if env else None
-        )
-
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                return await self._call_tool_on_session(
-                    session, server_name, tool_name, arguments
-                )
-
-    async def _execute_sse(
-        self,
-        server_name: str,
-        server_config: dict[str, Any],
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Execute tool via SSE transport."""
-        url = server_config.get("url")
-        if not url:
-            return {"error": "SSE transport requires 'url' in config"}
-
-        headers = server_config.get("headers", {})
-
-        async with sse_client(url, headers=headers) as (read, write):
-            async with ClientSession(read, write) as session:
-                return await self._call_tool_on_session(
-                    session, server_name, tool_name, arguments
-                )
-
-    async def _execute_http(
-        self,
-        server_name: str,
-        server_config: dict[str, Any],
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Execute tool via HTTP transport."""
-        url = server_config.get("url")
-        if not url:
-            return {"error": "HTTP transport requires 'url' in config"}
-
-        headers = server_config.get("headers", {})
-
-        import httpx
-
-        http_client = httpx.AsyncClient(headers=headers) if headers else None
-        try:
-            async with streamable_http_client(
-                url,
-                http_client=http_client,
-            ) as transport:
-                read, write, _get_session_id = transport
-                async with ClientSession(read, write) as session:
-                    return await self._call_tool_on_session(
-                        session, server_name, tool_name, arguments
-                    )
-        finally:
-            if http_client is not None:
-                await http_client.aclose()
-
-    async def _call_tool_on_session(
-        self,
-        session: ClientSession,
-        server_name: str,
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Call a tool on an established session."""
-        # Initialize the session
-        await session.initialize()
-
-        # List available tools
-        tools_result = await session.list_tools()
-
-        # Find the requested tool
-        tool_found = None
-        for tool_info in tools_result.tools:
-            if tool_info.name == tool_name:
-                tool_found = tool_info
-                break
-
-        if not tool_found:
-            available = [t.name for t in tools_result.tools]
-            return {
-                "error": f"Tool '{tool_name}' not found",
-                "error_type": "ToolNotFound",
-                "available_tools": available,
-                "server": server_name,
-                "tool": tool_name,
-                "arguments": arguments,
-            }
-
-        # Call the tool
-        result = await session.call_tool(tool_name, arguments)
-
-        # Return the result
-        return {
-            "success": True,
-            "result": self._serialize_mcp_value(
-                result.content if hasattr(result, "content") else result
-            ),
-            "tool": tool_name,
-            "server": server_name,
-        }
-
     def _serialize_mcp_value(self, value: Any) -> Any:
         """Convert MCP SDK objects into JSON-serializable Python values."""
         if value is None or isinstance(value, (str, int, float, bool)):
@@ -589,16 +585,43 @@ class MCPPlugin(Plugin):
         return self.tools_cache
 
     def cleanup(self) -> None:
-        """Cleanup MCP server connections."""
-        # Close any open sessions
-        for session in self.sessions.values():
+        """Cleanup MCP server connections.
+
+        Pooled sessions hold real async resources (subprocesses, SSE/HTTP
+        streams) that must be torn down with an awaited ``AsyncExitStack``.
+        This sync hook only manages that when it's safe to spin up a
+        throwaway event loop (no loop already running). When called from
+        inside an async context (e.g. the CLI), prefer awaiting
+        :meth:`aclose` directly before/instead of this method — otherwise
+        connections are dropped from bookkeeping without being closed.
+        """
+        try:
+            asyncio.get_running_loop()
+            running_loop = True
+        except RuntimeError:
+            running_loop = False
+
+        if not running_loop:
             try:
-                # Sessions are async context managers, cleanup happens automatically
-                pass
+                asyncio.run(self._exit_stack.aclose())
             except Exception:
                 pass
+            self._exit_stack = AsyncExitStack()
 
         self.sessions.clear()
+        self._server_tool_lists.clear()
+        self.tools_cache.clear()
+        self._initialized = False
+
+    async def aclose(self) -> None:
+        """Async, awaitable teardown of every pooled MCP connection.
+
+        Prefer this over :meth:`cleanup` when already inside an event loop.
+        """
+        await self._exit_stack.aclose()
+        self._exit_stack = AsyncExitStack()
+        self.sessions.clear()
+        self._server_tool_lists.clear()
         self.tools_cache.clear()
         self._initialized = False
 

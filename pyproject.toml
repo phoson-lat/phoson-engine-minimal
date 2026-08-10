@@ -91,3 +91,6 @@ dev = [
 gemini = ["google-genai>=1.0.0"]
 mistral = ["mistralai>=1.0.0"]
 aws = ["boto3>=1.35.0"]
+checkpoint = ["asyncpg>=0.29.0"]
+memory = ["redis>=5.0.0"]
+mcp = ["mcp>=1.0.0,<2.0.0"]

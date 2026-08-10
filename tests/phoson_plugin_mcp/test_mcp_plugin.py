@@ -20,15 +20,18 @@ if str(project_root) not in sys.path:
 
 try:
     from phoson_plugin_mcp import MCPPlugin
+    from phoson_plugin_mcp.plugin import MCP_AVAILABLE
 
-    MCP_AVAILABLE = True
+    # MCPPlugin itself always imports fine (phoson_plugin_mcp degrades
+    # gracefully without the `mcp` SDK); what these tests actually need is
+    # the real `mcp` package, tracked by plugin.py's own MCP_AVAILABLE.
 except ImportError as e:
     MCP_AVAILABLE = False
     MCPPlugin = None
     print(f"Warning: Could not import MCPPlugin: {e}")
 
 
-@pytest.mark.skipif(MCPPlugin is None, reason="MCPPlugin not available")
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="mcp package not installed")
 class TestMCPPlugin:
     """Tests for MCPPlugin."""
 
@@ -147,8 +150,8 @@ class TestMCPPlugin:
 
         plugin.cleanup()
 
-        # servers dict is preserved but sessions cleared
-        assert len(plugin.servers) == 0
+        # servers dict (static config) is preserved; runtime state is cleared
+        assert len(plugin.servers) == 1
         assert len(plugin.tools_cache) == 0
         assert not plugin._initialized
 
@@ -177,7 +180,7 @@ class TestMCPPlugin:
         assert engine.tools[0].name == "mcp_test_call"
 
 
-@pytest.mark.skipif(MCPPlugin is None, reason="MCPPlugin not available")
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="mcp package not installed")
 class TestMCPPluginWithPath:
     """Test loading MCP plugin from path."""
 

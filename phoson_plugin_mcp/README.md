@@ -340,6 +340,20 @@ Esto evita colisiones entre servidores y hace que el modelo vea herramientas má
 
 El agente puede llamar estas tools automáticamente según sea necesario.
 
+## Pooling de sesión
+
+Cada servidor MCP mantiene **una sola sesión/conexión activa**, reutilizada entre llamadas a tools (en vez de reconectar — y para STDIO, relanzar el subproceso — en cada llamada). La lista de tools remotas también se cachea por servidor tras la primera llamada.
+
+Si una sesión cacheada falla (pipe roto, proceso muerto), se descarta automáticamente y la siguiente llamada reconecta sola.
+
+```bash
+python scripts/benchmark_mcp_pooling.py --calls 10
+```
+
+En este repo, contra un servidor STDIO local de prueba, pooling da ~11x menos latencia en llamadas sucesivas a la misma tool (reconectar implica relanzar el subproceso completo en cada llamada).
+
+Para un shutdown limpio de las conexiones pooled, preferí `await plugin.aclose()` a `plugin.cleanup()` cuando ya estás dentro de un event loop (`cleanup()` es sync y solo puede cerrar conexiones de forma segura si no hay un loop corriendo).
+
 ## Troubleshooting
 
 ### Error: "MCP package not installed"
