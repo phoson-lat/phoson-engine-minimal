@@ -15,6 +15,8 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
 
 ## Esta semana
 
+**Estado: cerrada al 100%.** Los 5 ítems de abajo (incluyendo los dos adelantados desde "Bloqueado") están hechos y verificados contra servicios reales (Postgres/Redis/Qdrant/MCP), no mocks — ver detalle en cada uno. Solo quedan pendientes los dos ítems de "Bloqueado" más abajo, ambos pausados por decisión explícita (no por trabajo faltante).
+
 - [x] **Decidir la interfaz canónica de plugin.**
   Hoy coexisten dos contratos: `Plugin` real en `phoson_agent/plugin.py` (sync: `configure/initialize/cleanup`) y `PhosonPlugin` async (`on_load/on_unload`) descrito en el roadmap externo pero nunca implementado. Elegir uno, documentarlo en `docs/plugins.md`, y dejar registrada la decisión (y el porqué) en este archivo.
   **Criterio de listo:** `docs/plugins.md` refleja una sola interfaz sin ambigüedad.
@@ -60,4 +62,4 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
 ## Ver también
 
 - [`Phoson-Core/ROADMAP.md`](../Phoson-Core/ROADMAP.md) — plan de migración del lado consumidor.
-- `TODO.md` — deuda técnica de calidad (no bloquea lo de arriba, pero conviene no perderla de vista: contrato de `ToolHandler`, mutación global de `sys.path` en el plugin loader).
+- `TODO.md` — deuda técnica de calidad (no bloquea lo de arriba, pero conviene no perderla de vista: contrato de `ToolHandler`, mutación global de `sys.path` en el plugin loader, y la convención `plugin = XxxPlugin()` que sombrea el submódulo `plugin.py` como atributo del paquete — item 13b, encontrado esta semana en `phoson_plugin_memory` pero presente también en `phoson_plugin_mcp`/`phoson_plugin_checkpoint`).
