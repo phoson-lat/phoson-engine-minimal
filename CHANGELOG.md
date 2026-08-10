@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.3.0 (2026-08-09)
+
+### Feat
+
+- **memory**: close remaining phoson_plugin_memory gaps (prefix, CRUD tools, auto-purge)
+- **memory**: add Qdrant semantic tier to phoson_plugin_memory
+- **memory**: add Postgres long-term tier to phoson_plugin_memory
+- **plugins**: add checkpoint/memory plugins, fix MCP session pooling
+
+### Fix
+
+- **cli**: preserve existing config on startup
+
+## v0.2.4 (2026-05-15)
+
+### Fix
+
+- **gemini**: avoid leaking api key in model listing
+
+## v0.2.3 (2026-05-15)
+
+### Feat
+
+- **cli**: stream markdown with rich live
+
 ## [v0.2.2] (2025-07-17)
 
 ### ✨ Features
