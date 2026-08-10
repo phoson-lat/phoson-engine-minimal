@@ -64,6 +64,44 @@ def test_configure_sets_redis_url_and_namespace():
     assert plugin.backend.default_ttl_seconds == 60
 
 
+def test_defaults_to_redis_backend():
+    plugin = MemoryPlugin()
+    plugin.configure({})
+    plugin.initialize()
+
+    assert type(plugin.backend).__name__ == "RedisBackend"
+
+
+def test_configure_with_postgres_backend():
+    plugin = MemoryPlugin()
+    plugin.configure(
+        {
+            "backend": "postgres",
+            "dsn": "postgresql://user:pass@example/db",
+            "namespace": "custom-ns",
+            "default_ttl_seconds": 30,
+        }
+    )
+    plugin.initialize()
+
+    assert type(plugin.backend).__name__ == "PostgresBackend"
+    assert plugin.backend.dsn == "postgresql://user:pass@example/db"
+    assert plugin.backend.namespace == "custom-ns"
+    assert plugin.backend.default_ttl_seconds == 30
+
+
+def test_configure_postgres_without_dsn_raises():
+    plugin = MemoryPlugin()
+    with pytest.raises(ValueError, match="dsn"):
+        plugin.configure({"backend": "postgres"})
+
+
+def test_configure_unsupported_backend_raises():
+    plugin = MemoryPlugin()
+    with pytest.raises(ValueError, match="Unsupported backend"):
+        plugin.configure({"backend": "qdrant"})
+
+
 def test_get_tools_returns_read_and_write():
     plugin = MemoryPlugin()
     plugin.backend = FakeBackend()

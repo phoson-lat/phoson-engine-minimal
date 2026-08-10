@@ -11,25 +11,38 @@ from phoson_agent import Plugin, AgentTool
 
 from .backend import MemoryBackend
 from .redis_backend import RedisBackend
+from .postgres_backend import PostgresBackend
+
+_SUPPORTED_BACKENDS = ("redis", "postgres")
 
 
 class MemoryPlugin(Plugin):
-    """Plugin providing short-term memory tools backed by Redis.
+    """Plugin providing memory tools backed by a configurable MemoryBackend.
 
     Configuration:
-        redis_url: Redis connection URL (default ``redis://localhost:6379/0``).
+        backend: ``"redis"`` (default, short-term tier) or ``"postgres"``
+            (long-term tier). Both implement the same ``MemoryBackend``
+            interface, so ``memory_read``/``memory_write`` behave
+            identically regardless of which one is selected.
         namespace: Key namespace, useful to scope memory per session/agent
             (default ``"phoson"``).
         default_ttl_seconds: TTL applied to writes that don't specify one
             (default None — no expiry).
+        redis_url: Redis connection URL, only used when ``backend="redis"``
+            (default ``redis://localhost:6379/0``).
+        dsn: PostgreSQL connection string, required when
+            ``backend="postgres"``.
 
-    Postgres (long-term) and Qdrant (semantic) tiers are not implemented
-    here yet; this plugin only wires the short-term Redis tier described in
-    the memory backend interface (``MemoryBackend``).
+    A semantic (Qdrant) tier is not implemented — it doesn't fit this
+    exact-key-lookup interface (similarity search needs a different
+    ``search(query, top_k)`` shape) and is left for when there's a concrete
+    need for it.
     """
 
     def __init__(self) -> None:
+        self._backend_kind = "redis"
         self._redis_url = "redis://localhost:6379/0"
+        self._dsn: str | None = None
         self._namespace = "phoson"
         self._default_ttl_seconds: int | None = None
         self.backend: MemoryBackend | None = None
@@ -44,19 +57,40 @@ class MemoryPlugin(Plugin):
 
     @property
     def description(self) -> str:
-        return "Short-term (Redis) memory tools for Phoson Agent"
+        return "Memory tools (Redis short-term / Postgres long-term) for Phoson Agent"
 
     def configure(self, config: dict[str, Any]) -> None:
+        backend_kind = config.get("backend", self._backend_kind)
+        if backend_kind not in _SUPPORTED_BACKENDS:
+            raise ValueError(
+                f"Unsupported backend '{backend_kind}'. "
+                f"Supported: {', '.join(_SUPPORTED_BACKENDS)}"
+            )
+        self._backend_kind = backend_kind
         self._redis_url = config.get("redis_url", self._redis_url)
+        self._dsn = config.get("dsn", self._dsn)
         self._namespace = config.get("namespace", self._namespace)
         self._default_ttl_seconds = config.get("default_ttl_seconds")
 
+        if self._backend_kind == "postgres" and not self._dsn:
+            raise ValueError(
+                "phoson-plugin-memory with backend='postgres' requires a 'dsn'"
+            )
+
     def initialize(self) -> None:
-        self.backend = RedisBackend(
-            url=self._redis_url,
-            namespace=self._namespace,
-            default_ttl_seconds=self._default_ttl_seconds,
-        )
+        if self._backend_kind == "postgres":
+            assert self._dsn is not None  # enforced in configure()
+            self.backend = PostgresBackend(
+                dsn=self._dsn,
+                namespace=self._namespace,
+                default_ttl_seconds=self._default_ttl_seconds,
+            )
+        else:
+            self.backend = RedisBackend(
+                url=self._redis_url,
+                namespace=self._namespace,
+                default_ttl_seconds=self._default_ttl_seconds,
+            )
 
     def get_tools(self) -> list[AgentTool]:
         assert self.backend is not None, "initialize() must run before get_tools()"

@@ -1041,6 +1041,7 @@ mcp = [
     { name = "mcp" },
 ]
 memory = [
+    { name = "asyncpg" },
     { name = "redis" },
 ]
 mistral = [
@@ -1063,6 +1064,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.97.0" },
     { name = "asyncpg", marker = "extra == 'checkpoint'", specifier = ">=0.29.0" },
+    { name = "asyncpg", marker = "extra == 'memory'", specifier = ">=0.29.0" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.35.0" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.28.0" },

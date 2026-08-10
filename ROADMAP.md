@@ -31,6 +31,10 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
   **Criterio de listo:** un agente de ejemplo en `examples/` usando memoria Redis end-to-end (reemplaza al ejemplo educativo actual en memoria de proceso).
   **Hecho:** `phoson_plugin_memory/backend.py::MemoryBackend` + `redis_backend.py::RedisBackend`. `examples/plugin_example_memory.py` reescrito: dos `AgentEngine` separados donde el segundo lee lo que escribió el primero via Redis. Tests unitarios (backend fake) + integración (Redis real, mismo patrón skip-si-no-hay-servicio que checkpoint).
 
+- [x] **Tier Postgres de `phoson_plugin_memory`** (adelantado desde "Bloqueado" — el scaffold Redis ya quedó estable).
+  Mismo `MemoryBackend`, ahora seleccionable vía `config: {"backend": "postgres", "dsn": "..."}` en `MemoryPlugin` (default sigue siendo `"redis"`). Esquema propio (`phoson_memory_entries`, namespaced por `namespace`), sin tocar tablas de `phoson_plugin_checkpoint` aunque compartan el mismo Postgres de test.
+  **Hecho:** `phoson_plugin_memory/postgres_backend.py::PostgresBackend`. Postgres no expira keys solo — TTL se enforce filtrando `expires_at` en cada lectura, con `purge_expired()` para limpiar filas vencidas (documentado como tarea periódica, no automática). 13 tests de integración nuevos en `tests/phoson_plugin_memory/test_postgres_backend.py` (incluye TTL real con `asyncio.sleep`, aislamiento por namespace, y `purge_expired`) + tests de selección de backend en `MemoryPlugin`.
+
 - [x] **Arreglar pooling de sesión en `phoson_plugin_mcp`.**
   Hoy cada tool call reconecta y reinicializa la sesión MCP (`_execute_stdio/_execute_sse/_execute_http` en `plugin.py`), incluso lanzando un subprocess nuevo para stdio. Cachear la sesión/conexión, no solo las definiciones de tools.
   **Criterio de listo:** benchmark simple mostrando reducción de latencia en llamadas sucesivas a la misma tool MCP.
@@ -38,7 +42,7 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
 
 ## Bloqueado / después de esta semana
 
-- Tier Postgres + Qdrant de `phoson_plugin_memory` (depende de que el scaffold Redis quede estable).
+- Tier Qdrant (semántico) de `phoson_plugin_memory` — no es una extensión trivial del tier Postgres: `MemoryBackend` es lookup por key exacta, búsqueda semántica necesita una interfaz distinta (`search(query, top_k)` por similitud) y una decisión de embedder. Requiere su propio diseño, no solo "agregar un backend más".
 - `phoson_http` (modo daemon) — no es necesario para la migración de Core (que va a embeber el engine como librería, no como servicio separado). Queda pausado hasta que haya un caso de uso real que lo justifique.
 - Actualizar `CHANGELOG.md` (hoy solo documenta hasta v0.2.2 y el repo ya va en v0.2.4) — hacerlo junto con el release que incluya los plugins nuevos, no antes.
 
