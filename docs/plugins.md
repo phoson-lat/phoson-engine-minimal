@@ -220,7 +220,7 @@ engine = AgentEngine(
 
 - `phoson_plugin_mcp`: integra servidores Model Context Protocol.
 - `phoson_plugin_checkpoint`: `SessionStorage` respaldado en Postgres, esquema propio (`phoson_checkpoint_*`). Ver `phoson_plugin_checkpoint/README.md`.
-- `phoson_plugin_memory`: memoria de corto plazo (Redis, TTL) y largo plazo (Postgres) expuesta como tools `memory_read`/`memory_write`, mismo `MemoryBackend` para ambos tiers. Ver `phoson_plugin_memory/README.md`.
+- `phoson_plugin_memory`: memoria de corto plazo (Redis, TTL) y largo plazo (Postgres) expuesta como tools `memory_read`/`memory_write` (mismo `MemoryBackend` para ambos), más una tier semántica (Qdrant) separada expuesta como `memory_remember`/`memory_recall` — interfaz distinta porque es búsqueda por similitud, no lookup exacto. Ver `phoson_plugin_memory/README.md`.
 
 ## Ejemplos de Plugins
 

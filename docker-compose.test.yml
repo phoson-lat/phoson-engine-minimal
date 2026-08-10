@@ -24,3 +24,13 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  qdrant-test:
+    image: qdrant/qdrant:latest
+    ports:
+      - "56333:6333"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cat < /dev/null > /dev/tcp/127.0.0.1/6333"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
