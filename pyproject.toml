@@ -16,12 +16,19 @@ dependencies = [
     "tiktoken>=0.9.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["phoson_*"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools.package-data]
-phoson_cli = ["*.txt"]
+[tool.hatch.build.targets.wheel]
+packages = [
+    "phoson_agent",
+    "phoson_cli",
+    "phoson_llm",
+    "phoson_plugin_checkpoint",
+    "phoson_plugin_mcp",
+    "phoson_plugin_memory",
+]
 
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"
