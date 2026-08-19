@@ -448,6 +448,8 @@ Contributions are welcome! Here's how you can help:
 4. Push to the branch: `git push origin feature/amazing-feature`
 5. Open a **Pull Request**
 
+> 🌐 **Language policy:** everything in this repository must be in **English** — documentation, docstrings, code comments, commit messages, issue titles and bodies, and PR descriptions. This keeps the project accessible to contributors worldwide. If you're more comfortable writing in another language, draft your changes in a branch and maintainers will help polish the English before merge.
+
 Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for details on our code of conduct and development process.
 
 ### Ideas for contributions

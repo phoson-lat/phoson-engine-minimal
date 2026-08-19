@@ -1,14 +1,14 @@
 # Phoson Checkpoint Plugin
 
-Session persistence (`SessionStorage`) respaldada en PostgreSQL, con su propio esquema (`phoson_checkpoint_sessions`, `phoson_checkpoint_nodes`). No depende de tablas de ninguna aplicación host — es seguro apuntarlo a la misma base de datos que usa Phoson-Core u otra app.
+PostgreSQL-backed session persistence (`SessionStorage`) with its own schema (`phoson_checkpoint_sessions`, `phoson_checkpoint_nodes`). It does not depend on any host-application tables — it is safe to point it at the same database used by Phoson-Core or any other app.
 
-## Instalación
+## Installation
 
 ```bash
-pip install "phoson-engine-minimal[checkpoint]"  # instala asyncpg
+pip install "phoson-engine-minimal[checkpoint]"  # installs asyncpg
 ```
 
-## Uso directo (sin pasar por el sistema de plugins)
+## Direct usage (without the plugin system)
 
 ```python
 from phoson_plugin_checkpoint import PostgresStorage
@@ -20,7 +20,7 @@ sessions = await storage.list_sessions()
 await storage.close()
 ```
 
-## Uso como Plugin
+## Usage as a plugin
 
 ```python
 from phoson_agent import AgentEngine
@@ -40,20 +40,20 @@ checkpoint = next(p for p in engine._loaded_plugins if p.name == "phoson-plugin-
 storage = checkpoint.storage  # PostgresStorage, ready to use
 ```
 
-## Esquema
+## Schema
 
-- `phoson_checkpoint_sessions`: una fila por sesión (metadata: costo, tokens, step_count, last_model).
-- `phoson_checkpoint_nodes`: una fila por nodo del árbol de conversación, `ON DELETE CASCADE` desde sessions.
+- `phoson_checkpoint_sessions`: one row per session (metadata: cost, tokens, step_count, last_model).
+- `phoson_checkpoint_nodes`: one row per conversation-tree node, `ON DELETE CASCADE` from sessions.
 
-Las tablas se crean automáticamente (`CREATE TABLE IF NOT EXISTS`) en la primera operación.
+Tables are created automatically (`CREATE TABLE IF NOT EXISTS`) on first use.
 
-## Tests de integración
+## Integration tests
 
-Requieren un Postgres real:
+Require a real Postgres:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d postgres-test
 pytest tests/phoson_plugin_checkpoint -q
 ```
 
-Si Postgres no está corriendo, los tests se saltan (no fallan) automáticamente.
+If Postgres is not running, the tests skip (do not fail) automatically.

@@ -1,4 +1,4 @@
-"""Tests para la funcionalidad multimodal (imágenes, audio, video, PDF)."""
+"""Tests for multimodal functionality (images, audio, video, PDF)."""
 
 import pytest
 
@@ -27,7 +27,7 @@ def image_message() -> Message:
         role="user",
         content=[
             ImageBlock(source="https://example.com/photo.jpg"),
-            TextBlock(text="¿Qué ves en esta imagen?"),
+            TextBlock(text="What do you see in this image?"),
         ],
     )
 
@@ -110,7 +110,7 @@ class TestMultimodalBlocks:
 
 
 class TestOpenAIMessageConversion:
-    """Tests para la conversión de mensajes Phoson → OpenAI."""
+    """Tests for Phoson -> OpenAI message conversion."""
 
     def test_simple_text_message(self, text_message):
         result = openai_module._convert_messages([text_message])
@@ -125,7 +125,7 @@ class TestOpenAIMessageConversion:
         parts = result[0]["content"]
         assert isinstance(parts, list)
         assert parts[0]["type"] == "text"
-        assert parts[0]["text"] == "¿Qué ves en esta imagen?"
+        assert parts[0]["text"] == "What do you see in this image?"
         assert parts[1]["type"] == "image_url"
         assert parts[1]["image_url"]["url"] == "https://example.com/photo.jpg"
 
@@ -186,7 +186,7 @@ class TestOpenAIMessageConversion:
 
 
 class TestAnthropicMessageConversion:
-    """Tests para la conversión de mensajes Phoson → Anthropic."""
+    """Tests for Phoson -> Anthropic message conversion."""
 
     def test_simple_text_message(self, text_message):
         result = anthropic_module._convert_messages([text_message])

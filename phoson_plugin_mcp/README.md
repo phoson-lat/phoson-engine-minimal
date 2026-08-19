@@ -1,28 +1,28 @@
 # Phoson MCP Plugin
 
-Plugin para integrar servidores Model Context Protocol (MCP) con Phoson Agent.
+Plugin to integrate Model Context Protocol (MCP) servers with Phoson Agent.
 
-## Instalación
+## Installation
 
 ```bash
-# Instalar el paquete MCP
+# Install the MCP package
 pip install mcp
 
-# El plugin viene incluido con phoson-engine
+# The plugin ships with phoson-engine
 ```
 
-## Configuración
+## Configuration
 
-### Ubicación del Archivo
+### Config File Location
 
-El plugin usa la ruta indicada en su configuración.
+The plugin uses the path given in its configuration.
 
-- En el CLI, Phoson le pasa `~/.phoson/mcps.json` por defecto.
-- Si usas el plugin directamente sin configurar `config_file`, usa `phoson-mcp.json` en el directorio actual.
+- In the CLI, Phoson passes `~/.phoson/mcps.json` by default.
+- If you use the plugin directly without setting `config_file`, it uses `phoson-mcp.json` in the current directory.
 
-### Crear Configuración
+### Creating the Config
 
-Crea el archivo `~/.phoson/mcps.json` (recomendado para CLI):
+Create the `~/.phoson/mcps.json` file (recommended for the CLI):
 
 ```json
 {
@@ -43,25 +43,25 @@ Crea el archivo `~/.phoson/mcps.json` (recomendado para CLI):
 }
 ```
 
-## Uso
+## Usage
 
-### Uso Básico
+### Basic Usage
 
 ```python
 from phoson_agent import AgentEngine
 from phoson_llm import OpenAIChat
 
-# Sin config_file, el plugin cargará phoson-mcp.json del directorio actual
+# Without config_file, the plugin loads phoson-mcp.json from the current directory
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=["phoson-plugin-mcp"],
 )
 ```
 
-### Configuración Personalizada
+### Custom Configuration
 
 ```python
-# Especificar un archivo de configuración diferente
+# Specify a different config file
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
@@ -75,10 +75,10 @@ engine = AgentEngine(
 )
 ```
 
-### Configuración Inline
+### Inline Configuration
 
 ```python
-# Configurar servidores directamente en código
+# Configure servers directly in code
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
@@ -97,30 +97,30 @@ engine = AgentEngine(
 )
 ```
 
-### Usando desde Path Local
+### Using a Local Path
 
 ```python
-# Cargar el plugin desde el directorio local
+# Load the plugin from a local directory
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=["path:./phoson_plugin_mcp/_plugin.py"],
 )
 ```
 
-## Formato del Archivo de Configuración
+## Config File Format
 
-El archivo de configuración MCP soporta tres tipos de transporte: **STDIO**, **SSE** y **HTTP**.
+The MCP config file supports three transport types: **STDIO**, **SSE** and **HTTP**.
 
 ### STDIO Transport (Default)
 
-Para servidores que se ejecutan como procesos locales:
+For servers that run as local processes:
 
 ```json
 {
   "mcpServers": {
     "server-name": {
       "transport": "stdio",
-      "command": "comando-ejecutable",
+      "command": "executable-command",
       "args": ["arg1", "arg2"],
       "env": {
         "VARIABLE": "valor"
@@ -130,15 +130,15 @@ Para servidores que se ejecutan como procesos locales:
 }
 ```
 
-**Campos:**
-- `transport`: "stdio" (opcional, es el default)
-- `command`: Comando para ejecutar el servidor
-- `args`: Lista de argumentos
-- `env`: Variables de entorno (opcional)
+**Fields:**
+- `transport`: "stdio" (optional, it is the default)
+- `command`: Command to run the server
+- `args`: List of arguments
+- `env`: Environment variables (optional)
 
 ### SSE Transport
 
-Para servidores que exponen Server-Sent Events:
+For servers that expose Server-Sent Events:
 
 ```json
 {
@@ -154,14 +154,14 @@ Para servidores que exponen Server-Sent Events:
 }
 ```
 
-**Campos:**
+**Fields:**
 - `transport`: "sse"
-- `url`: URL del endpoint SSE (requerido)
-- `headers`: Headers HTTP (opcional)
+- `url`: SSE endpoint URL (required)
+- `headers`: HTTP headers (optional)
 
 ### HTTP Transport
 
-Para servidores HTTP estándar:
+For standard HTTP servers:
 
 ```json
 {
@@ -178,16 +178,16 @@ Para servidores HTTP estándar:
 }
 ```
 
-**Campos:**
-- `transport`: "http" o "streamable_http"
-- `url`: URL del servidor MCP (requerido)
-- `headers`: Headers HTTP (opcional)
+**Fields:**
+- `transport`: "http" or "streamable_http"
+- `url`: MCP server URL (required)
+- `headers`: HTTP headers (optional)
 
-## Servidores MCP Disponibles
+## Available MCP Servers
 
-### Oficiales de Anthropic
+### Official from Anthropic
 
-1. **Filesystem** - Acceso al sistema de archivos
+1. **Filesystem** - Filesystem access
    ```json
    {
      "command": "npx",
@@ -195,7 +195,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-2. **GitHub** - Interacción con GitHub
+2. **GitHub** - GitHub interaction
    ```json
    {
      "command": "npx",
@@ -206,7 +206,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-3. **Brave Search** - Búsqueda web
+3. **Brave Search** - Web search
    ```json
    {
      "command": "npx",
@@ -217,7 +217,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-4. **Memory** - Almacenamiento de conocimiento
+4. **Memory** - Knowledge storage
    ```json
    {
      "command": "npx",
@@ -225,7 +225,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-5. **PostgreSQL** - Base de datos
+5. **PostgreSQL** - Database
    ```json
    {
      "command": "npx",
@@ -233,7 +233,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-6. **Puppeteer** - Automatización de navegador
+6. **Puppeteer** - Browser automation
    ```json
    {
      "command": "npx",
@@ -241,7 +241,7 @@ Para servidores HTTP estándar:
    }
    ```
 
-7. **Slack** - Integración con Slack
+7. **Slack** - Slack integration
    ```json
    {
      "command": "npx",
@@ -253,19 +253,19 @@ Para servidores HTTP estándar:
    }
    ```
 
-## Ejemplo Completo
+## Complete Example
 
 ```python
 from phoson_agent import AgentEngine
 from phoson_llm import OpenAIChat, ModelConfig, Message
 
-# Crear engine con plugin MCP
+# Create the engine with the MCP plugin
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=["phoson-plugin-mcp"],
 )
 
-# Usar el agente
+# Use the agent
 result = await engine.run(
     messages=[
         Message(
@@ -279,19 +279,19 @@ result = await engine.run(
 print(result.final_content)
 ```
 
-## Cómo Funcionan las Tools MCP
+## How MCP Tools Work
 
-Ahora el plugin **descubre las tools reales** de cada servidor MCP y las expone como `AgentTool`s nativas.
+The plugin now **discovers the real tools** from each MCP server and exposes them as native `AgentTool`s.
 
-### Antes
+### Before
 
-Se exponía una tool wrapper genérica por servidor:
+A generic wrapper tool per server was exposed:
 
 - `mcp_github_call(tool_name="get_user_public_profile", arguments={...})`
 
-### Ahora
+### Now
 
-Se exponen las tools reales con prefijo configurable para evitar colisiones:
+The real tools are exposed with a configurable prefix to avoid collisions:
 
 - `mcp_github_get_user_public_profile(username="phoson-lat")`
 - `mcp_filesystem_read_file(path="/tmp/test.txt")`
@@ -299,17 +299,17 @@ Se exponen las tools reales con prefijo configurable para evitar colisiones:
 
 ### Naming Convention
 
-Las tools se registran como:
+Tools are registered as:
 
 ```text
 {tool_name_prefix}_{server_name}_{remote_tool_name}
 ```
 
-Por default el prefijo es `mcp`. Esto evita colisiones con tools locales u otros plugins.
+The prefix defaults to `mcp`. This avoids collisions with local tools or other plugins.
 
-### Configurar Prefijo
+### Configuring the Prefix
 
-Puedes cambiar el prefijo así:
+You can change the prefix like this:
 
 ```python
 engine = AgentEngine(
@@ -325,61 +325,61 @@ engine = AgentEngine(
 )
 ```
 
-Ejemplo de nombres resultantes:
+Example resulting names:
 - `remote_github_get_user_public_profile`
 - `remote_filesystem_read_file`
 
-Esto evita colisiones entre servidores y hace que el modelo vea herramientas más naturales.
+This avoids collisions between servers and lets the model see more natural tools.
 
-### Beneficios
+### Benefits
 
-- El modelo razona mejor sobre tools específicas
-- Los schemas de parámetros son los reales del servidor MCP
-- No necesitas wrapper `tool_name + arguments`
-- Mejor DX y mejor tool selection del LLM
+- The model reasons better about specific tools
+- Parameter schemas are the real ones from the MCP server
+- No `tool_name + arguments` wrapper needed
+- Better DX and better LLM tool selection
 
-El agente puede llamar estas tools automáticamente según sea necesario.
+The agent can call these tools automatically as needed.
 
-## Pooling de sesión
+## Session pooling
 
-Cada servidor MCP mantiene **una sola sesión/conexión activa**, reutilizada entre llamadas a tools (en vez de reconectar — y para STDIO, relanzar el subproceso — en cada llamada). La lista de tools remotas también se cachea por servidor tras la primera llamada.
+Each MCP server keeps **a single active session/connection**, reused across tool calls (instead of reconnecting — and, for STDIO, relaunching the subprocess — on every call). The remote tool list is also cached per server after the first call.
 
-Si una sesión cacheada falla (pipe roto, proceso muerto), se descarta automáticamente y la siguiente llamada reconecta sola.
+If a cached session fails (broken pipe, dead process), it is discarded automatically and the next call reconnects on its own.
 
 ```bash
 python scripts/benchmark_mcp_pooling.py --calls 10
 ```
 
-En este repo, contra un servidor STDIO local de prueba, pooling da ~11x menos latencia en llamadas sucesivas a la misma tool (reconectar implica relanzar el subproceso completo en cada llamada).
+In this repo, against a local STDIO test server, pooling gives ~11x lower latency for successive calls to the same tool (reconnecting means relaunching the full subprocess on every call).
 
-Para un shutdown limpio de las conexiones pooled, preferí `await plugin.aclose()` a `plugin.cleanup()` cuando ya estás dentro de un event loop (`cleanup()` es sync y solo puede cerrar conexiones de forma segura si no hay un loop corriendo).
+For a clean shutdown of pooled connections, prefer `await plugin.aclose()` over `plugin.cleanup()` when you are already inside an event loop (`cleanup()` is sync and can only close connections safely if no loop is running).
 
 ## Troubleshooting
 
 ### Error: "MCP package not installed"
 
-Instala el paquete MCP:
+Install the MCP package:
 ```bash
 pip install mcp
 ```
 
 ### Error: "Failed to load MCP config"
 
-Verifica que:
-1. El archivo `phoson-mcp.json` existe
-2. El JSON es válido
-3. Tienes permisos de lectura
+Make sure:
+1. The `phoson-mcp.json` file exists
+2. The JSON is valid
+3. You have read permissions
 
 ### Error: "Tool not found"
 
-El servidor MCP puede no tener la tool solicitada. Verifica:
-1. El servidor está configurado correctamente
-2. El comando del servidor es correcto
-3. Las dependencias del servidor están instaladas
+The MCP server may not have the requested tool. Check:
+1. The server is configured correctly
+2. The server command is correct
+3. The server dependencies are installed
 
-### Servidores Node.js
+### Node.js Servers
 
-Los servidores MCP oficiales requieren Node.js. Instala con:
+The official MCP servers require Node.js. Install it with:
 ```bash
 # Ubuntu/Debian
 sudo apt install nodejs npm
@@ -388,16 +388,16 @@ sudo apt install nodejs npm
 brew install node
 
 # Windows
-# Descargar desde nodejs.org
+# Download from nodejs.org
 ```
 
-## Recursos
+## Resources
 
 - [MCP Documentation](https://modelcontextprotocol.io/)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
 - [Official MCP Servers](https://github.com/modelcontextprotocol/servers)
-- [Phoson Plugin System](../PLUGIN_SYSTEM.md)
+- [Phoson Plugin System](../docs/plugins.md)
 
-## Licencia
+## License
 
 MIT

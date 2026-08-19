@@ -1,21 +1,21 @@
 # Phoson Memory Plugin
 
-Memoria para Phoson Agent, expuesta como tools nativas (`AgentTool`, no `StructuredTool`). Es la extracción de la forma de `core/memory/unified.py::UnifiedMemory` de Phoson-Core, desacoplada de Core, con **dos plugins** según el tipo de acceso que necesitas:
+Memory for Phoson Agent, exposed as native tools (`AgentTool`, not `StructuredTool`). It is the extracted form of Phoson-Core's `core/memory/unified.py::UnifiedMemory`, decoupled from Core, with **two plugins** depending on the access pattern you need:
 
-- **`MemoryPlugin`** (`memory_read`/`memory_write`, lookup exacto por key) — dos tiers intercambiables detrás de la misma interfaz `MemoryBackend`:
-  - **Redis** (corto plazo, con TTL) — default.
-  - **Postgres** (largo plazo) — mismo TTL, pero enforced a nivel de lectura (ver abajo).
-- **`SemanticMemoryPlugin`** (`memory_remember`/`memory_recall`, búsqueda por similitud) — tier Qdrant. Interfaz distinta a propósito: `MemoryBackend` es "dame el valor de esta key exacta"; búsqueda semántica es "dame las N entradas más parecidas a este texto", no encajan en el mismo contrato de tool.
+- **`MemoryPlugin`** (`memory_read`/`memory_write`, exact key lookup) — two interchangeable tiers behind the same `MemoryBackend` interface:
+  - **Redis** (short-term, with TTL) — default.
+  - **Postgres** (long-term) — same TTL, but enforced at read time (see below).
+- **`SemanticMemoryPlugin`** (`memory_remember`/`memory_recall`, similarity search) — Qdrant tier. Deliberately a different interface: `MemoryBackend` is "give me the value for this exact key"; semantic search is "give me the N entries most similar to this text" — they do not fit the same tool contract.
 
-## Instalación
+## Installation
 
 ```bash
-pip install "phoson-engine-minimal[memory]"  # instala redis + asyncpg + qdrant-client
+pip install "phoson-engine-minimal[memory]"  # installs redis + asyncpg + qdrant-client
 ```
 
-## Uso como Plugin
+## Usage as a plugin
 
-### Tier Redis (default)
+### Redis tier (default)
 
 ```python
 from phoson_agent import AgentEngine
@@ -28,15 +28,15 @@ engine = AgentEngine(
             "name": "phoson-plugin-memory",
             "config": {
                 "redis_url": "redis://localhost:6379/0",
-                "namespace": "my-agent",       # opcional, scope de las keys
-                "default_ttl_seconds": 3600,   # opcional
+                "namespace": "my-agent",       # optional, key scope
+                "default_ttl_seconds": 3600,   # optional
             },
         }
     ],
 )
 ```
 
-### Tier Postgres
+### Postgres tier
 
 ```python
 engine = AgentEngine(
@@ -54,11 +54,11 @@ engine = AgentEngine(
 )
 ```
 
-El modelo puede entonces llamar `memory_write(key, value, ttl_seconds=...)`, `memory_read(key)`, `memory_delete(key)` y `memory_list(prefix=...)` como cualquier otra tool — el comportamiento es idéntico sin importar el backend elegido.
+The model can then call `memory_write(key, value, ttl_seconds=...)`, `memory_read(key)`, `memory_delete(key)` and `memory_list(prefix=...)` like any other tool — the behavior is identical regardless of the chosen backend.
 
-### Combinar Redis + Postgres en el mismo agente
+### Combining Redis + Postgres in the same agent
 
-Cada instancia de `MemoryPlugin` registra tools con el mismo nombre por default (`memory_read`, `memory_write`, ...). Si agregas dos instancias (p.ej. corto plazo + largo plazo a la vez), la segunda pisa silenciosamente a la primera en `AgentEngine` — usa `tool_prefix` para evitarlo:
+Each `MemoryPlugin` instance registers tools with the same names by default (`memory_read`, `memory_write`, ...). If you add two instances (e.g. short-term + long-term at the same time), the second silently overrides the first in `AgentEngine` — use `tool_prefix` to avoid that:
 
 ```python
 engine = AgentEngine(
@@ -77,11 +77,11 @@ engine = AgentEngine(
 )
 ```
 
-El modelo ve `memory_read`/`memory_write`/... (Redis) y `longterm_memory_read`/`longterm_memory_write`/... (Postgres) como tools separadas.
+The model sees `memory_read`/`memory_write`/... (Redis) and `longterm_memory_read`/`longterm_memory_write`/... (Postgres) as separate tools.
 
-### Auto-purge para el tier Postgres
+### Auto-purge for the Postgres tier
 
-Redis expira keys solo; Postgres no. Configura `purge_interval_seconds` para que un background task llame `purge_expired()` automáticamente:
+Only Redis expires keys on its own; Postgres does not. Set `purge_interval_seconds` so a background task calls `purge_expired()` automatically:
 
 ```python
 {
@@ -89,22 +89,22 @@ Redis expira keys solo; Postgres no. Configura `purge_interval_seconds` para que
     "config": {
         "backend": "postgres",
         "dsn": "...",
-        "purge_interval_seconds": 300,  # cada 5 minutos
+        "purge_interval_seconds": 300,  # every 5 minutes
     },
 }
 ```
 
-El task arranca solo (lazy, en la primera llamada a `memory_read`/`memory_write` — necesita el loop del agente ya corriendo) y se cancela en `cleanup()`/`aclose()`.
+The task starts on its own (lazy, on the first `memory_read`/`memory_write` call — it needs the agent loop already running) and is cancelled in `cleanup()`/`aclose()`.
 
-### Tier Qdrant (semántico) — plugin separado
+### Qdrant tier (semantic) — separate plugin
 
-`embed_fn` (texto -> vector) no tiene default y no es JSON-serializable, así que se pasa como objeto Python — al constructor o vía `config["embed_fn"]` si usas un spec con dict:
+`embed_fn` (text -> vector) has no default and is not JSON-serializable, so it is passed as a Python object — to the constructor, or via `config["embed_fn"]` if you use a dict spec:
 
 ```python
 from phoson_plugin_memory import SemanticMemoryPlugin
 
 def my_embed_fn(text: str) -> list[float]:
-    ...  # tu proveedor/modelo de embeddings — no viene incluido
+    ...  # your embedding provider/model — not included
 
 engine = AgentEngine(
     chat=OpenAIChat(),
@@ -118,9 +118,9 @@ engine = AgentEngine(
 )
 ```
 
-El modelo llama `memory_remember(key, text, metadata=...)` para guardar, `memory_recall(query, top_k=5)` para buscar por significado (devuelve una lista de `{key, text, score, metadata}` ordenada por similitud) y `memory_forget(key)` para borrar. `tool_prefix` funciona igual que en `MemoryPlugin` si necesitas más de una instancia (p.ej. dos colecciones).
+The model calls `memory_remember(key, text, metadata=...)` to store, `memory_recall(query, top_k=5)` to search by meaning (returns a list of `{key, text, score, metadata}` sorted by similarity) and `memory_forget(key)` to delete. `tool_prefix` works the same as in `MemoryPlugin` if you need more than one instance (e.g. two collections).
 
-## Uso directo del backend
+## Direct backend usage
 
 ```python
 from phoson_plugin_memory import RedisBackend, PostgresBackend
@@ -143,25 +143,25 @@ matches = await qdrant_backend.search("does the user like light or dark UI?", to
 await qdrant_backend.close()
 ```
 
-## TTL en Postgres
+## TTL in Postgres
 
-A diferencia de Redis, Postgres no expira keys automáticamente. `PostgresBackend` filtra por `expires_at` en cada lectura (`get`/`list_keys`), así que un valor expirado nunca se devuelve — pero la fila queda en la tabla hasta que alguien la borre. Llama `await backend.purge_expired()` periódicamente (cron, tarea de background) si escribes muchas entradas con TTL corto, para no acumular basura sin límite.
+Unlike Redis, Postgres does not expire keys automatically. `PostgresBackend` filters by `expires_at` on every read (`get`/`list_keys`), so an expired value is never returned — but the row stays in the table until someone deletes it. Call `await backend.purge_expired()` periodically (cron, background task) if you write many short-TTL entries, to avoid unbounded garbage accumulation.
 
-## Qdrant: IDs de punto y namespaces
+## Qdrant: point IDs and namespaces
 
-Qdrant solo acepta enteros o UUID como ID de punto (un string arbitrario se rechaza con 400) — `QdrantBackend` deriva un UUID5 determinista de `namespace:key` y guarda la key original en el payload. La colección se crea sola en el primer `upsert()`, con el tamaño de vector inferido del primer embedding. Varios namespaces pueden compartir una misma colección: el filtro de namespace se aplica tanto en `search()` como en `delete()`.
+Qdrant only accepts integers or UUIDs as point IDs (an arbitrary string is rejected with 400) — `QdrantBackend` derives a deterministic UUID5 from `namespace:key` and stores the original key in the payload. The collection is created on the first `upsert()`, with the vector size inferred from the first embedding. Multiple namespaces can share the same collection: the namespace filter is applied in both `search()` and `delete()`.
 
-## Extender con otro backend
+## Extending with another backend
 
-Implementa `MemoryBackend` (`get`/`set`/`delete`/`list_keys`/`close`) y pásalo directamente a `MemoryPlugin`, o `SemanticMemoryBackend` (`upsert`/`search`/`delete`/`close`) para `SemanticMemoryPlugin` — no necesitas heredar de `RedisBackend`/`PostgresBackend`/`QdrantBackend`.
+Implement `MemoryBackend` (`get`/`set`/`delete`/`list_keys`/`close`) and pass it directly to `MemoryPlugin`, or `SemanticMemoryBackend` (`upsert`/`search`/`delete`/`close`) for `SemanticMemoryPlugin` — you do not need to subclass `RedisBackend`/`PostgresBackend`/`QdrantBackend`.
 
-## Tests de integración
+## Integration tests
 
-Requieren Redis, Postgres y/o Qdrant reales:
+Require real Redis, Postgres and/or Qdrant:
 
 ```bash
 docker compose -f docker-compose.test.yml up -d redis-test postgres-test qdrant-test
 pytest tests/phoson_plugin_memory -q
 ```
 
-Si el servicio correspondiente no está corriendo, esos tests de integración se saltan (no fallan); los tests unitarios de `MemoryPlugin`/`SemanticMemoryPlugin` corren siempre porque usan un backend fake.
+If the corresponding service is not running, those integration tests skip (do not fail); the unit tests for `MemoryPlugin`/`SemanticMemoryPlugin` always run because they use a fake backend.

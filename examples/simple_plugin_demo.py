@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Demo simple del sistema de plugins.
-Muestra cómo crear y usar un plugin inline.
+Simple demo of the plugin system.
+Shows how to create and use an inline plugin.
 """
 
 import asyncio
@@ -9,9 +9,9 @@ import asyncio
 from phoson_agent import Plugin, AgentTool, AgentEngine, tool
 
 
-# Definir un plugin simple inline
+# Define a simple inline plugin
 class CalculatorPlugin(Plugin):
-    """Plugin que proporciona operaciones matemáticas."""
+    """Plugin that provides math operations."""
 
     @property
     def name(self) -> str:
@@ -26,7 +26,7 @@ class CalculatorPlugin(Plugin):
         return "Provides basic math operations"
 
     def get_tools(self) -> list[AgentTool]:
-        """Proporciona herramientas matemáticas."""
+        """Provides math tools."""
 
         @tool
         def add(a: float, b: float) -> float:
@@ -47,31 +47,31 @@ class CalculatorPlugin(Plugin):
 
 
 async def main():
-    """Demo principal."""
+    """Main demo."""
     print("=" * 60)
     print("🔌 Phoson Agent - Plugin System Demo")
     print("=" * 60)
 
-    # Crear engine con el plugin
-    print("\n📦 Cargando plugin de calculadora...")
+    # Create the engine with the plugin
+    print("\n📦 Loading calculator plugin...")
     engine = AgentEngine(
-        chat=None,  # No necesitamos LLM para este demo
+        chat=None,  # No LLM needed for this demo
         plugins=[
-            CalculatorPlugin(),  # Plugin inline
+            CalculatorPlugin(),  # Inline plugin
         ],
     )
 
-    # Verificar que las tools se cargaron
-    print(f"✅ Plugin cargado: {engine._loaded_plugins[0].name}")
-    print(f"🔧 Tools disponibles: {[t.name for t in engine.tools]}")
+    # Verify the tools were loaded
+    print(f"✅ Plugin loaded: {engine._loaded_plugins[0].name}")
+    print(f"🔧 Available tools: {[t.name for t in engine.tools]}")
 
-    # Mostrar info de las tools
-    print("\n📋 Información de las tools:")
+    # Show tool info
+    print("\n📋 Tool info:")
     for tool_obj in engine.tools:
         print(f"  • {tool_obj.name}: {tool_obj.description}")
 
-    # Probar las tools directamente
-    print("\n🧪 Probando las tools:")
+    # Try the tools directly
+    print("\n🧪 Testing the tools:")
 
     add_tool = engine._tools_by_name["add"]
     result = add_tool.handler({"a": 5, "b": 3}, engine.context)
@@ -86,10 +86,10 @@ async def main():
     print(f"  power(2, 10) = {result}")
 
     # Cleanup
-    print("\n🧹 Limpiando recursos...")
+    print("\n🧹 Cleaning up resources...")
     engine.cleanup()
 
-    print("\n✨ Demo completado!")
+    print("\n✨ Demo complete!")
 
 
 if __name__ == "__main__":
