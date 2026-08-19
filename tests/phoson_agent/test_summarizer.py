@@ -288,6 +288,121 @@ async def test_wrap_llm_call_forwards_summary_usage_event() -> None:
     assert pending[0].messages_removed > 0
 
 
+@pytest.mark.asyncio
+async def test_wrap_llm_call_generates_real_summary_via_llm() -> None:
+    """The compacted message must carry the LLM-generated summary, the system
+    prompt must be preserved intact, and the most recent messages must be
+    passed through unchanged to the second call."""
+    mw = _make_middleware(window=20)
+    mw.threshold = 0.10
+    mw.min_keep_messages = 2
+
+    captured: dict[str, list[Message]] = {}
+
+    async def call_next(
+        messages: list[Message], config: ModelConfig
+    ) -> AsyncIterator[LLMEvent]:
+        if "You are summarizing a conversation" in str(messages[0].content):
+            # Internal summary call — mock LLM produces the summary text.
+            captured["summary_call"] = list(messages)
+            yield TokenEvent(content="USER WANTS X. DECIDED Y.")
+            yield LLMDoneEvent(content="USER WANTS X. DECIDED Y.", has_tool_calls=False)
+        else:
+            # Main call with the compacted messages.
+            captured["main_call"] = list(messages)
+            yield LLMDoneEvent(content="ok", has_tool_calls=False)
+
+    msgs = [
+        Message(role="system", content="be helpful"),
+        Message(role="user", content="old question one"),
+        Message(role="assistant", content="old answer one"),
+        Message(role="user", content="old question two"),
+        Message(role="assistant", content="old answer two"),
+        Message(role="user", content="recent question"),
+        Message(role="assistant", content="recent answer"),
+    ]
+    cfg = ModelConfig(model="gpt-4o-mini")
+    _ = [ev async for ev in mw.wrap_llm_call(call_next, msgs, cfg)]
+
+    assert "summary_call" in captured and "main_call" in captured
+    main_msgs = captured["main_call"]
+
+    # 1) Exactly one summary message, containing the generated text.
+    summary_msgs = [m for m in main_msgs if "Conversation summary" in str(m.content)]
+    assert len(summary_msgs) == 1
+    assert "USER WANTS X. DECIDED Y." in str(summary_msgs[0].content)
+
+    # 2) System prompt preserved intact and first.
+    assert main_msgs[0].role == "system"
+    assert main_msgs[0].content == "be helpful"
+
+    # 3) The most recent min_keep_messages are kept verbatim at the tail.
+    assert str(main_msgs[-2].content) == "recent question"
+    assert str(main_msgs[-1].content) == "recent answer"
+
+    # 4) Summarized (old) messages are gone.
+    assert all("old question" not in str(m.content) for m in main_msgs)
+
+
+@pytest.mark.asyncio
+async def test_wrap_llm_call_summary_does_not_leak_prompt() -> None:
+    """The compacted message must contain only the generated summary — never
+    the full summary prompt (instructions + formatted history)."""
+    mw = _make_middleware(window=20)
+    mw.threshold = 0.10
+    mw.min_keep_messages = 1
+
+    calls: list[list[Message]] = []
+
+    async def call_next(
+        messages: list[Message], config: ModelConfig
+    ) -> AsyncIterator[LLMEvent]:
+        calls.append(list(messages))
+        if "You are summarizing a conversation" in str(messages[0].content):
+            yield TokenEvent(content="tiny summary")
+            yield LLMDoneEvent(content="tiny summary", has_tool_calls=False)
+        else:
+            yield LLMDoneEvent(content="ok", has_tool_calls=False)
+
+    msgs = [
+        Message(role="user", content="old one " * 5),
+        Message(role="assistant", content="old two " * 5),
+        Message(role="user", content="keep me"),
+    ]
+    cfg = ModelConfig(model="gpt-4o-mini")
+    _ = [ev async for ev in mw.wrap_llm_call(call_next, msgs, cfg)]
+
+    assert len(calls) == 2
+    main_msgs = calls[1]
+    for m in main_msgs:
+        assert "You are summarizing a conversation" not in str(m.content)
+        assert "Instructions:" not in str(m.content)
+    summary_msgs = [m for m in main_msgs if "Conversation summary" in str(m.content)]
+    assert len(summary_msgs) == 1
+    assert str(summary_msgs[0].content) == (
+        "[Conversation summary up to this point: tiny summary]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_on_before_llm_does_not_mutate_messages() -> None:
+    """No double compaction: `on_before_llm` must return the messages
+    untouched — real compaction only happens in `wrap_llm_call`."""
+    mw = _make_middleware(window=20)
+    mw.threshold = 0.10
+
+    msgs = [
+        Message(role="user", content="old one"),
+        Message(role="assistant", content="old two"),
+        Message(role="user", content="new"),
+    ]
+    cfg = ModelConfig(model="gpt-4o-mini")
+    out = await mw.on_before_llm(msgs, cfg)
+    assert out is msgs
+    assert len(out) == 3
+    assert out[0].content == "old one"
+
+
 def test_summarization_middleware_resolver_initialized() -> None:
     """Regression: ``_resolver`` must be initialized after ``__post_init__``.
 

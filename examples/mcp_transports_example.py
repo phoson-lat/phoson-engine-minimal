@@ -130,7 +130,7 @@ async def example_stdio():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(config_file)},
                 }
             ],
@@ -166,7 +166,7 @@ async def example_sse():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(config_file)},
                 }
             ],
@@ -203,7 +203,7 @@ async def example_http():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(config_file)},
                 }
             ],
@@ -240,7 +240,7 @@ async def example_mixed():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(config_file)},
                 }
             ],

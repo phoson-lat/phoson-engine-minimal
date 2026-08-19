@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import AsyncIterator
 
 import httpx
@@ -9,6 +10,7 @@ from phoson_llm.schemas import (
     LLMEvent,
     TextBlock,
     ErrorEvent,
+    JsonObject,
     TokenEvent,
     TokenUsage,
     UsageEvent,
@@ -21,6 +23,8 @@ from phoson_llm.schemas import (
 )
 from phoson_llm.chats.base import BaseLLMChat
 
+logger = logging.getLogger(__name__)
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 DEFAULT_BASE_URL = "http://localhost:11434"
@@ -30,7 +34,7 @@ DEFAULT_TIMEOUT = 300.0
 # ─── Message conversion Phoson → Ollama ─────────────────────────────────
 
 
-def _convert_messages(messages: list[Message]) -> list[dict]:
+def _convert_messages(messages: list[Message]) -> list[JsonObject]:
     """Converts Phoson's internal format to the format expected by Ollama.
 
     The Ollama ``/api/chat`` endpoint expects the ``system`` prompt as a
@@ -43,7 +47,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     Returns:
         List of formatted messages for Ollama.
     """
-    result: list[dict] = []
+    result: list[JsonObject] = []
 
     for msg in messages:
         if isinstance(msg.content, str):
@@ -60,7 +64,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     return result
 
 
-def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
+def _convert_tools(tools: list[ToolDefinition]) -> list[JsonObject]:
     """Converts ToolDefinition to Ollama tools format."""
     return [
         {
@@ -75,7 +79,7 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
     ]
 
 
-def _prepend_system(messages: list[dict], system: str) -> list[dict]:
+def _prepend_system(messages: list[JsonObject], system: str) -> list[JsonObject]:
     """Prepend a system message to the converted message list.
 
     If a system message is already present at the start, it is replaced.
@@ -177,7 +181,10 @@ class OllamaChat(BaseLLMChat):
                                 if len(body) > 4096:
                                     break
                         except httpx.ReadError:
-                            pass
+                            logger.debug(
+                                "Ollama error-body drain interrupted; "
+                                "proceeding with partial body",
+                            )
                         detail = body.decode("utf-8", errors="replace").strip()
                         msg = f"Ollama API error {response.status_code}"
                         if detail:
@@ -195,7 +202,10 @@ class OllamaChat(BaseLLMChat):
 
                         try:
                             data = json.loads(line)
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as exc:
+                            logger.debug(
+                                "Skipping non-JSON Ollama stream line: %s", exc
+                            )
                             continue
 
                         # Ollama streams one JSON object per line. While the
@@ -280,7 +290,7 @@ class OllamaChat(BaseLLMChat):
         if has_tool_calls and tool_args_acc:
             for idx, raw in tool_args_acc.items():
                 try:
-                    args = json.loads(raw) if raw else {}
+                    args: JsonObject = json.loads(raw) if raw else {}
                 except json.JSONDecodeError:
                     import warnings
 

@@ -1,27 +1,27 @@
 # Plugin System
 
-El sistema de plugins de Phoson Agent permite extender las capacidades del agente de forma modular y reutilizable.
+The Phoson Agent plugin system lets you extend the agent's capabilities in a modular, reusable way.
 
-## Decisión de interfaz canónica
+## Canonical interface decision
 
-Existe un único contrato de plugin soportado: la clase `Plugin` (ABC síncrona) definida en `phoson_agent/plugin.py`, con el ciclo de vida `configure()` → `initialize()` → uso → `cleanup()`.
+There is a single supported plugin contract: the `Plugin` class (synchronous ABC) defined in `phoson_agent/plugin.py`, with the lifecycle `configure()` → `initialize()` → use → `cleanup()`.
 
-Anteriormente el roadmap externo describía un segundo contrato, `PhosonPlugin` (async, `on_load`/`on_unload`), pero nunca llegó a implementarse: no existe en el código, no hay loaders para él, y ningún plugin real (`phoson_plugin_mcp`, los ejemplos en `examples/`) lo usa. Se descarta formalmente en favor de `Plugin` porque:
+An earlier external roadmap described a second contract, `PhosonPlugin` (async, `on_load`/`on_unload`), but it was never implemented: it does not exist in the code, there are no loaders for it, and no real plugin (`phoson_plugin_mcp`, the examples in `examples/`) uses it. It is formally discarded in favor of `Plugin` because:
 
-- Es la interfaz que ya implementan `PluginRegistry`/`load_plugin` (`phoson_agent/plugin_loader.py`) y todos los plugins existentes.
-- Los tools y middlewares que un plugin expone (`get_tools`, `get_middlewares`) no requieren que la carga/descarga del propio plugin sea async — la parte async vive dentro de los tools (`ToolHandler` ya soporta handlers async), no en el lifecycle del plugin.
-- Introducir un segundo contrato solo duplicaría loaders y documentación sin habilitar nada que `initialize()`/`cleanup()` no permitan ya (un plugin puede crear un pool async dentro de `initialize()` de forma síncrona, p.ej. con `asyncio.get_event_loop().run_until_complete(...)` o guardando la corrutina de conexión para el primer uso — ver `phoson_plugin_checkpoint` y `phoson_plugin_memory` como ejemplos).
+- It is the interface already implemented by `PluginRegistry`/`load_plugin` (`phoson_agent/plugin_loader.py`) and by every existing plugin.
+- The tools and middlewares a plugin exposes (`get_tools`, `get_middlewares`) do not require the plugin's own load/unload to be async — the async part lives inside the tools (`ToolHandler` already supports async handlers), not in the plugin lifecycle.
+- Introducing a second contract would only duplicate loaders and documentation without enabling anything `initialize()`/`cleanup()` do not already allow (a plugin can create an async pool inside a synchronous `initialize()`, e.g. with `asyncio.get_event_loop().run_until_complete(...)` or by deferring the connection coroutine to first use — see `phoson_plugin_checkpoint` and `phoson_plugin_memory` as examples).
 
-Todos los plugins nuevos (`phoson_plugin_checkpoint`, `phoson_plugin_memory`) implementan `Plugin`, no `PhosonPlugin`.
+All new plugins (`phoson_plugin_checkpoint`, `phoson_plugin_memory`) implement `Plugin`, not `PhosonPlugin`.
 
-## Conceptos Básicos
+## Basic Concepts
 
-Un **plugin** puede proporcionar:
-- **Tools**: Funciones que el agente puede llamar
-- **Middlewares**: Hooks en el ciclo de vida del agente
-- **Configuración**: Opciones personalizables
+A **plugin** can provide:
+- **Tools**: functions the agent can call
+- **Middlewares**: hooks in the agent lifecycle
+- **Configuration**: customizable options
 
-## Uso Rápido
+## Quick Usage
 
 ```python
 from phoson_agent import AgentEngine
@@ -30,8 +30,8 @@ from phoson_llm import OpenAIChat
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
-        "phoson-plugin-mcp",      # Plugin instalado vía pip
-        "phoson-plugin-memory",   # Otro plugin
+        "phoson-plugin-mcp",      # Plugin installed via pip
+        "phoson-plugin-memory",   # Another plugin
         {
             "name": "phoson-plugin-checkpoint",
             "config": {
@@ -42,9 +42,9 @@ engine = AgentEngine(
 )
 ```
 
-## Crear un Plugin
+## Creating a Plugin
 
-### Plugin Básico
+### Basic Plugin
 
 ```python
 from phoson_agent import Plugin, AgentTool, tool
@@ -57,16 +57,16 @@ class MyPlugin(Plugin):
     def get_tools(self) -> list[AgentTool]:
         @tool
         def my_function(x: int) -> int:
-            """Mi función personalizada."""
+            """My custom function."""
             return x * 2
         
         return [my_function]
 
-# Exportar instancia
+# Export the instance
 plugin = MyPlugin()
 ```
 
-### Plugin con Middleware
+### Plugin with Middleware
 
 ```python
 from phoson_agent import Plugin, AgentMiddleware
@@ -84,14 +84,14 @@ class MyPlugin(Plugin):
                 messages: list[Message],
                 config: ModelConfig,
             ) -> list[Message]:
-                # Modificar mensajes antes del LLM
+                # Modify messages before the LLM
                 print("Before LLM call")
                 return messages
         
         return [MyMiddleware()]
 ```
 
-### Plugin con Configuración
+### Plugin with Configuration
 
 ```python
 class MyPlugin(Plugin):
@@ -106,52 +106,58 @@ class MyPlugin(Plugin):
         self.setting_value = config.get("setting", "default")
     
     def initialize(self) -> None:
-        # Setup (conexiones, recursos, etc)
+        # Setup (connections, resources, etc.)
         print(f"Initialized with setting: {self.setting_value}")
     
     def cleanup(self) -> None:
-        # Limpieza (cerrar conexiones, guardar estado, etc)
+        # Teardown (close connections, save state, etc.)
         print("Cleaning up...")
 ```
 
-## Formatos de Carga
+## Load Formats
 
-### 1. Plugin Instalado (Package)
+### 1. Installed Plugin (Package)
 
 ```python
 plugins=["phoson-plugin-memory"]
 ```
 
-El plugin debe estar instalado vía pip y tener un atributo `plugin` en su `__init__.py`:
+The plugin must be installed via pip and expose a `plugin` attribute in its `__init__.py`:
 
 ```python
 # phoson_plugin_memory/__init__.py
-from .plugin import MemoryPlugin
+from ._plugin import MemoryPlugin
 plugin = MemoryPlugin()
 ```
 
-### 2. Plugin desde Path Local
+> **Naming convention:** the module file must be `_plugin.py` (with the
+> leading underscore), **not** `plugin.py`. A bare `plugin.py` would make
+> the `plugin = MemoryPlugin()` assignment shadow the *submodule*
+> attribute on the package, so `import phoson_plugin_memory.plugin as m`
+> would bind the plugin instance instead of the module.
+
+### 2. Plugin from a Local Path
 
 ```python
 plugins=["path:./my_plugin.py"]
 ```
 
-El archivo debe tener un atributo `plugin` o función `create_plugin()`.
+The file must expose a `plugin` attribute or a `create_plugin()` function.
 
-### 3. Plugin desde Entry Point
+### 3. Plugin from an Entry Point
 
 ```python
 plugins=["entrypoint:my-plugin"]
 ```
 
-Configurado en `pyproject.toml`:
+Configured in `pyproject.toml`:
 
 ```toml
 [project.entry-points."phoson.plugins"]
 my-plugin = "my_package.plugin:create_plugin"
 ```
 
-### 4. Plugin con Configuración
+### 4. Plugin with Configuration
 
 ```python
 plugins=[
@@ -165,66 +171,66 @@ plugins=[
 ]
 ```
 
-### 5. Instancia Directa
+### 5. Direct Instance
 
 ```python
 plugins=[MyPlugin()]
 ```
 
-## Lifecycle de un Plugin
+## Plugin Lifecycle
 
-1. **Carga**: El plugin es importado/instanciado
-2. **Configuración**: Se llama `configure(config)` con la config del usuario
-3. **Inicialización**: Se llama `initialize()` para setup
-4. **Uso**: El agente usa los tools y middlewares del plugin
-5. **Cleanup**: Se llama `cleanup()` al finalizar
+1. **Load**: the plugin is imported/instantiated
+2. **Configuration**: `configure(config)` is called with the user config
+3. **Initialization**: `initialize()` is called for setup
+4. **Use**: the agent uses the plugin's tools and middlewares
+5. **Cleanup**: `cleanup()` is called on exit
 
 ## Context Manager
 
 ```python
 with AgentEngine(chat=OpenAIChat(), plugins=[...]) as engine:
     result = await engine.run(messages, config)
-# cleanup() se llama automáticamente
+# cleanup() is called automatically
 ```
 
-## Loader Personalizado
+## Custom Loader
 
 ```python
 from phoson_agent import register_loader, Plugin
 
 def load_from_github(repo_url: str) -> Plugin:
-    # Tu lógica para descargar y cargar desde GitHub
+    # Your logic to download and load from GitHub
     ...
     return plugin_instance
 
 register_loader("github", load_from_github)
 
-# Ahora puedes usar:
+# Now you can use:
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=["github:user/repo/plugin.py"],
 )
 ```
 
-## Mejores Prácticas
+## Best Practices
 
-1. **Naming**: Usa el prefijo `phoson-plugin-` para plugins públicos
-2. **Versioning**: Sigue semantic versioning
-3. **Documentation**: Documenta todos los tools y sus parámetros
-4. **Error Handling**: Maneja errores gracefully en tools
-5. **Cleanup**: Siempre implementa `cleanup()` si usas recursos
-6. **Testing**: Escribe tests para tus plugins
-7. **Type Hints**: Usa type hints para mejor DX
+1. **Naming**: use the `phoson-plugin-` prefix for public plugins
+2. **Versioning**: follow semantic versioning
+3. **Documentation**: document all tools and their parameters
+4. **Error Handling**: handle errors gracefully in tools
+5. **Cleanup**: always implement `cleanup()` if you use resources
+6. **Testing**: write tests for your plugins
+7. **Type Hints**: use type hints for a better DX
 
-## Plugins incluidos
+## Bundled plugins
 
-- `phoson_plugin_mcp`: integra servidores Model Context Protocol.
-- `phoson_plugin_checkpoint`: `SessionStorage` respaldado en Postgres, esquema propio (`phoson_checkpoint_*`). Ver `phoson_plugin_checkpoint/README.md`.
-- `phoson_plugin_memory`: memoria de corto plazo (Redis, TTL) y largo plazo (Postgres) expuesta como tools `memory_read`/`memory_write` (mismo `MemoryBackend` para ambos), más una tier semántica (Qdrant) separada expuesta como `memory_remember`/`memory_recall` — interfaz distinta porque es búsqueda por similitud, no lookup exacto. Ver `phoson_plugin_memory/README.md`.
+- `phoson_plugin_mcp`: integrates Model Context Protocol servers.
+- `phoson_plugin_checkpoint`: Postgres-backed `SessionStorage` with its own schema (`phoson_checkpoint_*`). See `phoson_plugin_checkpoint/README.md`.
+- `phoson_plugin_memory`: short-term (Redis, TTL) and long-term (Postgres) memory exposed as `memory_read`/`memory_write` tools (same `MemoryBackend` for both), plus a separate semantic tier (Qdrant) exposed as `memory_remember`/`memory_recall` — a different interface because it is similarity search, not exact lookup. See `phoson_plugin_memory/README.md`.
 
-## Ejemplos de Plugins
+## Plugin Examples
 
-### Plugin de Memoria
+### Memory Plugin
 
 ```python
 class MemoryPlugin(Plugin):
@@ -250,7 +256,7 @@ class MemoryPlugin(Plugin):
         return [store_memory, retrieve_memory]
 ```
 
-### Plugin de Checkpoint
+### Checkpoint Plugin
 
 ```python
 class CheckpointPlugin(Plugin):
@@ -262,13 +268,13 @@ class CheckpointPlugin(Plugin):
         class CheckpointMiddleware(AgentMiddleware):
             async def on_agent_event(self, event: AgentEvent) -> None:
                 if isinstance(event, AgentStepDoneEvent):
-                    # Guardar checkpoint
+                    # Save the checkpoint
                     save_checkpoint(event)
         
         return [CheckpointMiddleware()]
 ```
 
-### Plugin MCP (Model Context Protocol)
+### MCP Plugin (Model Context Protocol)
 
 ```python
 class MCPPlugin(Plugin):
@@ -284,7 +290,7 @@ class MCPPlugin(Plugin):
         self.mcp_client.connect()
     
     def get_tools(self) -> list[AgentTool]:
-        # Convertir herramientas MCP a AgentTools
+        # Convert MCP tools to AgentTools
         return convert_mcp_tools(self.mcp_client.list_tools())
     
     def cleanup(self) -> None:
@@ -323,7 +329,7 @@ class PluginRegistry:
     def load(self, spec: PluginSpec) -> Plugin: ...
 ```
 
-### Funciones Utilitarias
+### Utility Functions
 
 ```python
 def load_plugin(spec: str | dict | Plugin) -> Plugin: ...

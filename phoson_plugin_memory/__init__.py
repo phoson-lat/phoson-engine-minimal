@@ -9,7 +9,7 @@ The semantic tier requires an injected embed_fn; no embedding provider is
 bundled here.
 """
 
-from .plugin import MemoryPlugin
+from ._plugin import MemoryPlugin
 from .backend import MemoryBackend
 from .redis_backend import RedisBackend
 from .qdrant_backend import QdrantBackend
@@ -19,7 +19,9 @@ from .semantic_backend import SemanticMatch, SemanticMemoryBackend
 
 __version__ = "0.1.0"
 
-# Export plugin instance (package-loader convention, see docs/plugins.md)
+# Export plugin instance (package-loader convention, see docs/plugins.md).
+# The module file is `_plugin.py` (not `plugin.py`) so this attribute
+# doesn't shadow the submodule attribute — see phoson_plugin_mcp.
 plugin = MemoryPlugin()
 
 __all__ = [

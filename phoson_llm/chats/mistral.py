@@ -19,7 +19,7 @@ from phoson_llm.schemas import (
 from phoson_llm.chats.base import BaseLLMChat
 
 if TYPE_CHECKING:
-    from mistralai import Mistral
+    from mistralai.client import Mistral
 
 
 class MistralChat(BaseLLMChat):
@@ -35,7 +35,7 @@ class MistralChat(BaseLLMChat):
 
     def _get_client(self) -> "Mistral":
         if self._client is None:
-            from mistralai import Mistral
+            from mistralai.client import Mistral
 
             self._client = Mistral(api_key=self._api_key)
         return self._client
@@ -71,15 +71,16 @@ class MistralChat(BaseLLMChat):
             )
 
             async for chunk in stream_response:
-                if chunk.data.choices[0].delta.content:
-                    content = chunk.data.choices[0].delta.content
-                    text_acc += content
-                    yield TokenEvent(content=content)
+                delta_content = chunk.data.choices[0].delta.content
+                if isinstance(delta_content, str) and delta_content:
+                    text_acc += delta_content
+                    yield TokenEvent(content=delta_content)
 
                 if chunk.data.usage:
                     u = chunk.data.usage
                     usage = TokenUsage(
-                        input=u.prompt_tokens, output=u.completion_tokens
+                        input=u.prompt_tokens or 0,
+                        output=u.completion_tokens or 0,
                     )
                     cost_usd, cost_known = calculate_cost(
                         model=config.model,

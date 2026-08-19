@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ejemplo de uso exactamente como lo solicitaste.
+Usage example exactly as requested.
 """
 
 import asyncio
@@ -11,7 +11,7 @@ from phoson_agent import AgentEngine
 
 async def main():
     """
-    Ejemplo del uso exacto que solicitaste:
+    The exact usage as requested:
 
     engine = AgentEngine(
         chat=OpenAIChat(),
@@ -24,13 +24,13 @@ async def main():
     """
 
     print("=" * 70)
-    print("🔌 Phoson Agent - Uso del Sistema de Plugins")
+    print("🔌 Phoson Agent - Plugin System Usage")
     print("=" * 70)
 
-    # Nota: Como los plugins reales aún no existen, usaremos el ejemplo local
-    # En producción, esto funcionaría con plugins instalados vía pip
+    # Note: since the real plugins are not published yet, we use the local example
+    # In production, this would work with plugins installed via pip
 
-    print("\n📦 Ejemplo 1: Plugins como strings (cuando estén publicados)")
+    print("\n📦 Example 1: Plugins as strings (once published)")
     print("-" * 70)
     print("""
 engine = AgentEngine(
@@ -43,7 +43,7 @@ engine = AgentEngine(
 )
 """)
 
-    print("\n📦 Ejemplo 2: Con configuración personalizada")
+    print("\n📦 Example 2: With custom configuration")
     print("-" * 70)
     print("""
 engine = AgentEngine(
@@ -69,7 +69,7 @@ engine = AgentEngine(
 )
 """)
 
-    print("\n📦 Ejemplo 3: Mezclando diferentes formatos")
+    print("\n📦 Example 3: Mixing different formats")
     print("-" * 70)
     print("""
 from my_custom_plugin import MyPlugin
@@ -77,9 +77,9 @@ from my_custom_plugin import MyPlugin
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
-        "phoson-plugin-mcp",                    # Package instalado
-        "path:./local_plugin.py",              # Plugin local
-        MyPlugin(),                             # Instancia directa
+        "phoson-plugin-mcp",                    # Installed package
+        "path:./local_plugin.py",              # Local plugin
+        MyPlugin(),                             # Direct instance
         {
             "name": "phoson-plugin-memory",
             "config": {"max_memories": 50}
@@ -88,10 +88,10 @@ engine = AgentEngine(
 )
 """)
 
-    print("\n🚀 Demo funcional con plugin local")
+    print("\n🚀 Working demo with a local plugin")
     print("-" * 70)
 
-    # Demo real con el plugin de ejemplo
+    # Real demo with the example plugin
     engine = AgentEngine(
         chat=OpenAIChat(),
         plugins=[
@@ -100,11 +100,11 @@ engine = AgentEngine(
     )
 
     print(f"✅ Engine creado con {len(engine._loaded_plugins)} plugin(s)")
-    print(f"🔧 Tools disponibles: {[t.name for t in engine.tools]}")
-    print(f"🔀 Middlewares activos: {len(engine.middlewares)}")
+    print(f"🔧 Available tools: {[t.name for t in engine.tools]}")
+    print(f"🔀 Active middlewares: {len(engine.middlewares)}")
 
-    # Probar las tools del plugin
-    print("\n🧪 Probando tools del plugin de memoria:")
+    # Try the plugin tools
+    print("\n🧪 Testing the memory plugin tools:")
 
     store_tool = engine._tools_by_name["store_memory"]
     result = store_tool.handler({"key": "user_name", "value": "Alice"}, engine.context)
@@ -119,16 +119,16 @@ engine = AgentEngine(
     print(f"  → list_memories(): {result}")
 
     # Cleanup
-    print("\n🧹 Limpiando recursos...")
+    print("\n🧹 Cleaning up resources...")
     engine.cleanup()
 
-    print("\n✨ Demo completado!")
+    print("\n✨ Demo complete!")
     print("\n" + "=" * 70)
-    print("💡 Próximos pasos:")
-    print("   1. Implementar plugins reales (phoson-plugin-mcp, etc)")
-    print("   2. Publicarlos en PyPI")
+    print("💡 Next steps:")
+    print("   1. Implement the real plugins (phoson-plugin-mcp, etc.)")
+    print("   2. Publish them to PyPI")
     print("   3. Instalar con: pip install phoson-plugin-<name>")
-    print("   4. Usar como en el Ejemplo 1")
+    print("   4. Use them as in Example 1")
     print("=" * 70)
 
 

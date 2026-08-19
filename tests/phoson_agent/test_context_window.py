@@ -88,3 +88,31 @@ def test_clear_cache():
     r.clear_cache()
     assert r._ollama_cache == {}
     assert r._openrouter_cache == {}
+
+
+# ── Resolver: logging policy (issue #23) ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ollama_fallback_logs_warning_for_traceability(caplog):
+    """A failed Ollama context lookup must leave a WARNING log record
+    (in addition to the user-facing UserWarning) so silent fallbacks
+    remain diagnosable."""
+    import logging
+    import warnings
+
+    resolver = ContextWindowResolver(ollama_base_url="http://127.0.0.1:9")
+    # The resolver also emits a user-facing UserWarning; swallow it here
+    # because this test only cares about the log record.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with caplog.at_level(
+            logging.WARNING, logger="phoson_agent.plugins.context_window"
+        ):
+            result = await resolver.resolve("ollama", "nonexistent-model")
+
+    assert result == DEFAULT_CONTEXT_WINDOW
+    assert any(
+        "Ollama context window lookup failed" in record.message
+        for record in caplog.records
+    )

@@ -1,43 +1,43 @@
-# Ejemplos de Plugins para Phoson Agent
+# Plugin Examples for Phoson Agent
 
-Esta carpeta contiene ejemplos de cómo crear y usar plugins.
+This folder contains examples of how to create and use plugins.
 
-## 📁 Archivos
+## 📁 Files
 
 ### `simple_plugin_demo.py`
-Demo básico que muestra cómo crear un plugin inline (CalculatorPlugin) y usarlo con el AgentEngine.
+Basic demo showing how to create an inline plugin (CalculatorPlugin) and use it with the AgentEngine.
 
-**Ejecutar:**
+**Run:**
 ```bash
 python examples/simple_plugin_demo.py
 ```
 
 ### `plugin_example_memory.py`
-Ejemplo end-to-end del plugin real `phoson-plugin-memory` (tier Redis, ver `phoson_plugin_memory/`): dos instancias de `AgentEngine` completamente separadas, donde la segunda lee una memoria escrita por la primera — algo que un dict en memoria de proceso nunca podría sobrevivir.
+End-to-end example of the real `phoson-plugin-memory` plugin (Redis tier, see `phoson_plugin_memory/`): two fully separate `AgentEngine` instances, where the second reads a memory written by the first — something an in-process dict could never survive.
 
-**Requiere Redis:**
+**Requires Redis:**
 ```bash
 docker compose -f docker-compose.test.yml up -d redis-test
 python examples/plugin_example_memory.py
 ```
 
 ### `plugin_usage_example.py`
-Colección de ejemplos mostrando diferentes formas de usar plugins:
-1. Plugin desde archivo local
-2. Plugin con configuración
-3. Plugin inline
-4. Mezclar plugins con tools regulares
-5. Context manager para cleanup automático
-6. Múltiples plugins
+Collection of examples showing different ways to use plugins:
+1. Plugin from a local file
+2. Plugin with configuration
+3. Inline plugin
+4. Mixing plugins with regular tools
+5. Context manager for automatic cleanup
+6. Multiple plugins
 
-**Ejecutar:**
+**Run:**
 ```bash
 python examples/plugin_usage_example.py
 ```
 
-## 🎯 Casos de Uso
+## 🎯 Use Cases
 
-### Plugin Simple (Solo Tools)
+### Simple Plugin (Tools Only)
 
 ```python
 from phoson_agent import Plugin, tool
@@ -58,7 +58,7 @@ class SimplePlugin(Plugin):
 plugin = SimplePlugin()
 ```
 
-### Plugin con Estado
+### Stateful Plugin
 
 ```python
 class StatefulPlugin(Plugin):
@@ -79,7 +79,7 @@ class StatefulPlugin(Plugin):
         return [increment]
 ```
 
-### Plugin con Configuración
+### Configurable Plugin
 
 ```python
 class ConfigurablePlugin(Plugin):
@@ -96,12 +96,12 @@ class ConfigurablePlugin(Plugin):
         self.endpoint = config.get("endpoint", "https://api.example.com")
     
     def initialize(self):
-        # Validar configuración
+        # Validate configuration
         if not self.api_key:
             raise ValueError("api_key is required")
 ```
 
-### Plugin con Middleware
+### Plugin with Middleware
 
 ```python
 class LoggingPlugin(Plugin):
@@ -117,7 +117,7 @@ class LoggingPlugin(Plugin):
         return [LoggingMiddleware()]
 ```
 
-### Plugin con Recursos
+### Plugin with Resources
 
 ```python
 class DatabasePlugin(Plugin):
@@ -129,11 +129,11 @@ class DatabasePlugin(Plugin):
         return "database"
     
     def initialize(self):
-        # Abrir conexión
+        # Open connection
         self.connection = connect_to_database()
     
     def cleanup(self):
-        # Cerrar conexión
+        # Close connection
         if self.connection:
             self.connection.close()
     
@@ -146,7 +146,7 @@ class DatabasePlugin(Plugin):
         return [query]
 ```
 
-## 🔌 Plantilla de Plugin
+## 🔌 Plugin Template
 
 ```python
 """
@@ -248,8 +248,8 @@ def test_my_plugin():
     engine.cleanup()
 ```
 
-## 📚 Recursos
+## 📚 Resources
 
-- [Documentación completa](../docs/plugins.md)
-- [Sistema de plugins](../PLUGIN_SYSTEM.md)
+- [Full documentation](../docs/plugins.md)
+- [Plugin system](../docs/plugins.md)
 - [Tests](../tests/phoson_agent/test_plugin_system.py)

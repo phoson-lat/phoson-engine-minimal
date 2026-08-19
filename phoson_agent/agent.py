@@ -19,6 +19,7 @@ and the middleware chain construction; everything else is delegated.
 """
 
 import asyncio
+import logging
 from typing import Any
 from dataclasses import field, dataclass
 from collections.abc import AsyncIterator
@@ -60,6 +61,8 @@ from phoson_agent.exceptions import (
 from phoson_agent.middleware import AgentMiddleware
 from phoson_agent._tool_runner import ToolRunner
 from phoson_agent.plugin_loader import load_plugin
+
+logger = logging.getLogger(__name__)
 
 # Re-export tool events on the engine module for backwards compatibility
 # with the agent's public surface.
@@ -221,6 +224,12 @@ class AgentEngine:
         Cannot be called from within a running event loop. Use ``run()`` in
         async contexts (Jupyter, FastAPI, etc.).
 
+        Note:
+            Runs the full agent stream via ``asyncio.run``, so events are
+            consumed in memory before the result is returned — there is no
+            incremental delivery. See :meth:`BaseLLMChat.stream_sync` for the
+            same limitation at the LLM layer.
+
         Raises:
             RuntimeError: If called from within a running event loop, or if
                 the agent fails to produce a final result.
@@ -264,8 +273,8 @@ class AgentEngine:
         """
         try:
             self.cleanup()
-        except PhosonPluginCleanupError:
-            pass
+        except PhosonPluginCleanupError as exc:
+            logger.warning("Plugin cleanup failed (suppressed): %s", exc)
 
     # ── Middleware orchestration ────────────────────────────────────────
 

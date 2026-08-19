@@ -381,6 +381,10 @@ class CommandHandler:
             r.print_info("Cancelled.")
             return True
 
+        if result.session_id is None:
+            r.print_error("No session selected.")
+            return True
+
         if result.delete:
             if result.session_id == self.repl.tree.session_id:
                 r.print_error(

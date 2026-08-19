@@ -66,3 +66,21 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -q || [ $? -eq 5 ]
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Install dependencies (with provider extras)
+        run: uv sync --dev --all-extras --locked
+
+      - name: Pyright
+        run: uv run pyright

@@ -165,7 +165,7 @@ async def test_memory_plugin_auto_purges_expired_rows_against_real_postgres():
     real Postgres and removes real expired rows, without anyone calling
     purge_expired() by hand.
     """
-    from phoson_plugin_memory.plugin import MemoryPlugin
+    from phoson_plugin_memory import MemoryPlugin
 
     plugin = MemoryPlugin()
     plugin.configure(

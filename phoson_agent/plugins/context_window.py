@@ -4,9 +4,12 @@ Provides a single entry point to look up the context_window (in tokens)
 for any model, using a mix of static registry and dynamic API queries.
 """
 
+import logging
 import warnings
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────
 # Static registry — verified values (tokens)
@@ -137,6 +140,13 @@ class ContextWindowResolver:
                 UserWarning,
                 stacklevel=2,
             )
+            logger.warning(
+                "Ollama context window lookup failed for %r; "
+                "falling back to default (%d tokens): %s",
+                model,
+                DEFAULT_CONTEXT_WINDOW,
+                exc,
+            )
 
         self._ollama_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
@@ -213,6 +223,13 @@ class ContextWindowResolver:
                 f"Failed to fetch OpenRouter context window for {model!r}: {exc}",
                 UserWarning,
                 stacklevel=2,
+            )
+            logger.warning(
+                "OpenRouter context window lookup failed for %r; "
+                "falling back to default (%d tokens): %s",
+                model,
+                DEFAULT_CONTEXT_WINDOW,
+                exc,
             )
 
         self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW

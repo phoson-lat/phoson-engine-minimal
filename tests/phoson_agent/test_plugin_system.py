@@ -2,6 +2,8 @@
 Unit tests for the plugin system.
 """
 
+import sys
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -13,9 +15,11 @@ from phoson_agent import (
     AgentEngine,
     PluginRegistry,
     AgentMiddleware,
+    PhosonPluginLoadError,
     PhosonPluginConfigError,
     PhosonPluginCleanupError,
     tool,
+    load_plugin,
 )
 
 
@@ -305,6 +309,101 @@ class TestPluginLifecycle:
 
         with AgentEngine(chat=Mock(), plugins=[BrokenPlugin()]):
             pass  # Should not raise on exit
+
+
+class TestPathPluginLoader:
+    """Tests for the ``path:`` loader — sys.path hygiene (issue #26).
+
+    The loader must not leave any trace in ``sys.path`` after loading,
+    even when the parent directory was already present or the load fails.
+    """
+
+    PLUGIN_SOURCE = """\
+from phoson_agent import Plugin
+
+
+class PathPlugin(Plugin):
+    def __init__(self) -> None:
+        self.initialized = False
+
+    @property
+    def name(self) -> str:
+        return "path-plugin"
+
+    def initialize(self) -> None:
+        self.initialized = True
+
+
+plugin = PathPlugin()
+"""
+
+    def _write_plugin(self, directory: Path, body: str | None = None) -> Path:
+        file_path = directory / "my_path_plugin.py"
+        file_path.write_text(body if body is not None else self.PLUGIN_SOURCE)
+        return file_path
+
+    def test_load_from_path(self, tmp_path: Path):
+        file_path = self._write_plugin(tmp_path)
+        plugin = load_plugin(f"path:{file_path}")
+        assert plugin.name == "path-plugin"
+        assert plugin.initialized is True
+
+    def test_sys_path_not_mutated_after_load(self, tmp_path: Path):
+        file_path = self._write_plugin(tmp_path)
+        before = list(sys.path)
+        load_plugin(f"path:{file_path}")
+        assert sys.path == before
+
+    def test_sys_path_exact_restore_when_parent_already_present(self, tmp_path: Path):
+        # Parent directory already on sys.path: the guard must restore the
+        # exact list (no duplicate entries, original order preserved).
+        sys.path.insert(0, str(tmp_path))
+        try:
+            file_path = self._write_plugin(tmp_path)
+            before = list(sys.path)
+            load_plugin(f"path:{file_path}")
+            assert sys.path == before
+        finally:
+            sys.path.remove(str(tmp_path))
+
+    def test_sys_path_restored_when_load_fails(self, tmp_path: Path):
+        file_path = self._write_plugin(tmp_path, body="VALUE = 42\n")
+        before = list(sys.path)
+        with pytest.raises(PhosonPluginLoadError):
+            load_plugin(f"path:{file_path}")
+        assert sys.path == before
+
+    def test_load_same_path_twice(self, tmp_path: Path):
+        file_path = self._write_plugin(tmp_path)
+        first = load_plugin(f"path:{file_path}")
+        second = load_plugin(f"path:{file_path}")
+        assert first.name == "path-plugin"
+        assert second.name == "path-plugin"
+
+    def test_sibling_imports_resolve_during_load(self, tmp_path: Path):
+        # The guard exists so sibling modules next to the plugin file can be
+        # imported while it executes. Verify that still works.
+        (tmp_path / "sibling_helper.py").write_text("MARKER = 'from-sibling'\n")
+        plugin_file = self._write_plugin(
+            tmp_path,
+            body=(
+                "from phoson_agent import Plugin\n"
+                "from sibling_helper import MARKER\n"
+                "\n"
+                "\n"
+                "class PathPlugin(Plugin):\n"
+                "    @property\n"
+                "    def name(self) -> str:\n"
+                "        return f'path-plugin-{MARKER}'\n"
+                "\n"
+                "plugin = PathPlugin()\n"
+            ),
+        )
+        before = list(sys.path)
+        plugin = load_plugin(f"path:{plugin_file}")
+        assert plugin.name == "path-plugin-from-sibling"
+        # And no sys.path residue afterwards.
+        assert sys.path == before
 
 
 if __name__ == "__main__":

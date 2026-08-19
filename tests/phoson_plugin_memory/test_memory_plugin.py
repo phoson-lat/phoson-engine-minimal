@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from phoson_plugin_memory.plugin import MemoryPlugin
+from phoson_plugin_memory import MemoryPlugin
 from phoson_plugin_memory.backend import MemoryBackend
 
 
@@ -285,14 +285,10 @@ async def test_purge_task_starts_lazily_for_postgres_backend(monkeypatch):
         {"backend": "postgres", "dsn": "postgresql://x", "purge_interval_seconds": 60}
     )
     fake_postgres_backend = FakeBackend()
-    # importlib.import_module reads straight from sys.modules, sidestepping
-    # the fact that `phoson_plugin_memory.plugin` as a package ATTRIBUTE is
-    # shadowed by __init__.py's own `plugin = MemoryPlugin()` instance (the
-    # blessed package-loader convention) — both `import
-    # phoson_plugin_memory.plugin as x` and monkeypatch's string-target form
-    # resolve via that attribute and would silently grab the instance
-    # instead of the submodule.
-    plugin_module = importlib.import_module("phoson_plugin_memory.plugin")
+    # The plugin module lives in `_plugin.py` (leading underscore) precisely
+    # so the package-level `plugin = MemoryPlugin()` instance does NOT shadow
+    # the submodule attribute — see issue #27. Regular module imports work.
+    plugin_module = importlib.import_module("phoson_plugin_memory._plugin")
     monkeypatch.setattr(plugin_module, "PostgresBackend", type(fake_postgres_backend))
     plugin.backend = fake_postgres_backend
 

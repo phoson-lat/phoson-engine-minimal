@@ -3,15 +3,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from dataclasses import field, dataclass
 from collections.abc import Callable, Awaitable
 
-from phoson_llm.schemas import Message, TokenUsage
+from phoson_llm.schemas import Message, JsonObject, JsonSchema, TokenUsage
 
 if TYPE_CHECKING:
     from phoson_agent.context import AgentContext
 
 ToolReturn = str | dict[str, Any]
-ToolHandler = Callable[
-    [dict[str, Any], "AgentContext"], ToolReturn | Awaitable[ToolReturn]
-]
+ToolHandler = Callable[[JsonObject, "AgentContext"], ToolReturn | Awaitable[ToolReturn]]
 
 
 @dataclass
@@ -20,7 +18,7 @@ class AgentTool:
 
     name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: JsonSchema
     handler: ToolHandler
 
 
@@ -141,7 +139,14 @@ class AgentErrorEvent(AgentEvent):
 
 @dataclass(kw_only=True)
 class AgentSubagentResult(AgentEvent):
-    """Event emitted when a subagent completes with its metrics."""
+    """Event *intended* to be emitted when a subagent completes with its metrics.
+
+    Note:
+        **Experimental** — not yet emitted by :class:`AgentEngine`. Subagent
+        results currently travel as ordinary tool results (see the CLI
+        subagent tools); this event is reserved for first-class subagent
+        orchestration. Consumers should not depend on receiving it.
+    """
 
     index: int = 0
     task: str = ""

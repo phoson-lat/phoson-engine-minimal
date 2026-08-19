@@ -13,9 +13,9 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
 
 ---
 
-## Esta semana
+## Semana del 10 al 16 de agosto — cerrada
 
-**Estado: cerrada al 100%.** Los 5 ítems de abajo (incluyendo los dos adelantados desde "Bloqueado") están hechos y verificados contra servicios reales (Postgres/Redis/Qdrant/MCP), no mocks — ver detalle en cada uno. Solo quedan pendientes los dos ítems de "Bloqueado" más abajo, ambos pausados por decisión explícita (no por trabajo faltante).
+Los 4 ítems planeados quedaron hechos, más 2 adelantados desde "Bloqueado" (tiers Postgres y Qdrant de `phoson_plugin_memory`). Detalle completo abajo, sin tocar — es el registro de lo que se hizo y por qué.
 
 - [x] **Decidir la interfaz canónica de plugin.**
   Hoy coexisten dos contratos: `Plugin` real en `phoson_agent/plugin.py` (sync: `configure/initialize/cleanup`) y `PhosonPlugin` async (`on_load/on_unload`) descrito en el roadmap externo pero nunca implementado. Elegir uno, documentarlo en `docs/plugins.md`, y dejar registrada la decisión (y el porqué) en este archivo.
@@ -42,24 +42,22 @@ Construirlas aquí no es solo requisito de migración — son exactamente las "A
   **Decisión de embedder:** `embed_fn` inyectable (`str -> list[float]`, sync o async), sin proveedor por default — evita meter una dependencia pesada (sentence-transformers) o atar el plugin a una API key de un proveedor específico. Mantiene el engine "minimal".
   **Hecho:** `phoson_plugin_memory/semantic_backend.py::SemanticMemoryBackend` (interfaz nueva: `upsert`/`search`/`delete`/`close`, no extiende `MemoryBackend`) + `qdrant_backend.py::QdrantBackend`. Plugin separado, `semantic_plugin.py::SemanticMemoryPlugin`, expone `memory_remember`/`memory_recall` (no `memory_read`/`memory_write` — el contrato de tool es distinto). Validado contra un Qdrant real antes de escribir el código final: los IDs de punto deben ser UUID/entero, no string arbitrario (se deriva un UUID5 de `namespace:key`); coleccion se crea sola en el primer `upsert`, tamaño de vector inferido del embedding. 20 tests contra Qdrant real en `tests/phoson_plugin_memory/test_qdrant_backend.py` (ranking por similitud con un embedding de prueba determinista, sin modelo pesado) + `test_semantic_plugin.py`.
 
-- [x] **Cerrar gaps de `phoson_plugin_memory` detectados al revisar los 3 tiers juntos.**
-  Al confirmar que los 3 tiers estaban completos, salieron tres huecos concretos (no cosméticos):
-  1. **Colisión de nombres de tool entre instancias de `MemoryPlugin`** — combinar Redis + Postgres en el mismo agente hacía que la segunda instancia pisara silenciosamente las tools de la primera (`AgentEngine._tools_by_name` es un dict, sobreescribe sin avisar). Se agregó `tool_prefix` a `MemoryPlugin` y `SemanticMemoryPlugin`.
-  2. **No había tools de borrado/listado.** `delete()`/`list_keys()` existían en los backends pero no eran invocables por el modelo. Se agregaron `memory_delete`/`memory_list` (`MemoryPlugin`) y `memory_forget` (`SemanticMemoryPlugin`).
-  3. **`purge_expired()` de Postgres era 100% manual.** Se agregó `purge_interval_seconds` en `MemoryPlugin`: arranca un background task lazy (en la primera llamada a una tool, porque `initialize()` no garantiza un loop corriendo) que se cancela en `cleanup()`/`aclose()`. Probado contra Postgres real, no solo con un backend fake.
-  **Explícitamente fuera de este cierre** (decisiones ya tomadas, no re-abrirlas sin conversarlo): un embedder por default para `SemanticMemoryPlugin` (se decidió `embed_fn` inyectable, ver arriba) y una capa de orquestación tipo `UnifiedMemory` que decida sola dónde leer/escribir entre tiers (no hay spec de esa política — combinar tiers hoy es explícito, agregando cada plugin por separado).
-
 - [x] **Arreglar pooling de sesión en `phoson_plugin_mcp`.**
-  Hoy cada tool call reconecta y reinicializa la sesión MCP (`_execute_stdio/_execute_sse/_execute_http` en `plugin.py`), incluso lanzando un subprocess nuevo para stdio. Cachear la sesión/conexión, no solo las definiciones de tools.
+  Hoy cada tool call reconecta y reinicializa la sesión MCP (`_execute_stdio/_execute_sse/_execute_http` en `_plugin.py`), incluso lanzando un subprocess nuevo para stdio. Cachear la sesión/conexión, no solo las definiciones de tools.
   **Criterio de listo:** benchmark simple mostrando reducción de latencia en llamadas sucesivas a la misma tool MCP.
   **Hecho:** `_get_session`/`_call_tool_on_cached_session` reemplazan `_execute_stdio/_execute_sse/_execute_http` — una sesión por servidor, cacheada en un `AsyncExitStack`, con auto-reconexión si la sesión cacheada falla. `scripts/benchmark_mcp_pooling.py` mide contra un servidor STDIO local real (`tests/phoson_plugin_mcp/fixtures/echo_server.py`, sin dependencia de red): **~11x** menos latencia en 10 llamadas sucesivas (991ms/call sin pooling → 91ms/call con pooling). 5 tests nuevos en `tests/phoson_plugin_mcp/test_session_pooling.py` contra el mismo servidor real. De paso se corrigió un bug de colisión de nombres (`tests/phoson_plugin_mcp/__init__.py` sombreaba el paquete real `phoson_plugin_mcp`, dejando sus 13 tests siempre en skip).
 
-## Bloqueado / después de esta semana
+## Ahora
+
+Phoson-Core ya está consumiendo estos plugins desde `PhosonAgentRuntime` (Fase 1 de su migración, ver su roadmap). Esta semana no hay trabajo nuevo planeado de este lado — el foco está en Core conectando MCP/memoria/sandbox. Si al hacerlo aparece un gap real en los plugins (no cosmético), se agrega aquí antes de tocarlo directamente desde Core.
+
+Pendiente de definir: si el tema de sandboxes (ver discusión en curso en `Phoson-Core/ROADMAP.md`) termina necesitando algo del lado del engine (p. ej. un `phoson_plugin_sandbox` en vez de tools ad-hoc en Core), se decide y se agrega aquí — todavía no está resuelto.
+
+## Bloqueado / sin fecha
 
 - `phoson_http` (modo daemon) — no es necesario para la migración de Core (que va a embeber el engine como librería, no como servicio separado). Queda pausado hasta que haya un caso de uso real que lo justifique.
-- Actualizar `CHANGELOG.md` (hoy solo documenta hasta v0.2.2 y el repo ya va en v0.2.4) — hacerlo junto con el release que incluya los plugins nuevos, no antes.
 
 ## Ver también
 
 - [`Phoson-Core/ROADMAP.md`](../Phoson-Core/ROADMAP.md) — plan de migración del lado consumidor.
-- `TODO.md` — deuda técnica de calidad (no bloquea lo de arriba, pero conviene no perderla de vista: contrato de `ToolHandler`, mutación global de `sys.path` en el plugin loader, y la convención `plugin = XxxPlugin()` que sombrea el submódulo `plugin.py` como atributo del paquete — item 13b, encontrado esta semana en `phoson_plugin_memory` pero presente también en `phoson_plugin_mcp`/`phoson_plugin_checkpoint`).
+- `TODO.md` — deuda técnica de calidad (no bloquea lo de arriba, pero conviene no perderla de vista: contrato de `ToolHandler`, mutación global de `sys.path` en el plugin loader).

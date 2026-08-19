@@ -2,6 +2,18 @@ from typing import Any, Literal
 from dataclasses import dataclass
 from collections.abc import Sequence
 
+# ─── JSON type aliases ───────────────────────────────────────────────────────
+# Shared aliases for JSON payloads (tool arguments, JSON Schema documents).
+# They document intent without locking us into a validation library.
+
+type JsonValue = (
+    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+)
+type JsonObject = dict[str, JsonValue]
+# A JSON Schema object describing a tool's parameters (each provider
+# validates it server-side; we only promise it's a JSON object).
+type JsonSchema = dict[str, Any]
+
 # ─── Content Blocks ──────────────────────────────────────────────────────────
 
 
@@ -18,7 +30,7 @@ class ToolUseBlock:
 
     tool_call_id: str
     tool_name: str
-    args: dict[str, Any]
+    args: JsonObject
 
 
 @dataclass
@@ -141,7 +153,7 @@ class ToolDefinition:
 
     name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: JsonSchema
 
 
 # ─── Config ──────────────────────────────────────────────────────────────────

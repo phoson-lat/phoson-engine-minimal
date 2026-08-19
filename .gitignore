@@ -9,6 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# Local agent/tooling state (not part of the project)
+.agents/
+.claude/
+.opencode/
+skills-lock.json
+
 # Summary and completion files
 SUMMARY.md
 PLUGIN_COMPLETION_SUMMARY.txt

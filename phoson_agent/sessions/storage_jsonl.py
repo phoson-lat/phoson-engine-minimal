@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import logging
 import datetime
 from pathlib import Path
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from phoson_agent.sessions.serialization import (
     apply_tree_meta,
     tree_meta_to_dict,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -115,8 +118,8 @@ class JsonlStorage(SessionStorage):
                 # Do not leave a stale tmp file behind on any failure path.
                 try:
                     tmp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("Could not remove temp file %s: %s", tmp_path, exc)
 
     def _load_sync(self, session_id: str) -> ConversationTree:
         file_path = self._session_file(session_id)
@@ -171,7 +174,8 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
                     continue
                 try:
                     record = json.loads(stripped)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    logger.debug("Skipping malformed line in %s: %s", file_path, exc)
                     continue
                 if record.get("type") == "session_meta":
                     continue
