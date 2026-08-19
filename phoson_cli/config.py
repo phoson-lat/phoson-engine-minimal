@@ -38,6 +38,14 @@ class PhosonConfigError(Exception):
     """Raised when the Phoson configuration file is malformed or invalid."""
 
 
+#: Providers that work without any API key (local runtimes / cloud IAM).
+#: Single source of truth for the "configured?" checks in the CLI entry
+#: point and in :func:`has_configured_provider`.
+NO_CREDENTIAL_PROVIDERS: frozenset[str] = frozenset(
+    {"ollama", "bedrock", "aws", "vllm", "lmstudio"}
+)
+
+
 @dataclass
 class PhosonConfig:
     """Application configuration."""
@@ -326,15 +334,23 @@ def save_config(config: PhosonConfig) -> Path:
             lines.append(line)
 
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # The file holds API keys — restrict it to the owner. The parent
+    # directory also stores session data, so keep it private as well.
+    try:
+        os.chmod(config_path, 0o600)
+        os.chmod(config_dir, 0o700)
+    except OSError:  # pragma: no cover - non-POSIX filesystems
+        pass
+
     return config_path
 
 
-def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
-    """Return the list of usable providers derived from ``config``.
+def _credential_providers(config: PhosonConfig) -> list[str]:
+    """Return the providers that have a usable credential in ``config``.
 
-    A provider is considered enabled when its credential (API key or base URL)
-    is present. The active ``config.provider`` is always included so the REPL
-    never ends up with an empty list.
+    Alias names are included alongside their primary (e.g. ``xai`` also
+    enables ``grok``, ``gemini`` also enables ``google``).
     """
     providers: list[str] = []
     if getattr(config, "openrouter_api_key", None):
@@ -375,9 +391,31 @@ def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
         providers.append("vllm")
     if getattr(config, "lmstudio_base_url", None):
         providers.append("lmstudio")
+    return providers
+
+
+def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
+    """Return the list of usable providers derived from ``config``.
+
+    A provider is considered enabled when its credential (API key or base URL)
+    is present. The active ``config.provider`` is always included so the REPL
+    never ends up with an empty list.
+    """
+    providers = _credential_providers(config)
     if getattr(config, "provider", None) not in providers:
         providers.append(config.provider)
     return providers
+
+
+def has_configured_provider(config: PhosonConfig) -> bool:
+    """Return whether ``config`` has at least one usable provider.
+
+    True when the active provider needs no credential (see
+    :data:`NO_CREDENTIAL_PROVIDERS`) or when any credential is present.
+    """
+    if config.provider.lower() in NO_CREDENTIAL_PROVIDERS:
+        return True
+    return bool(_credential_providers(config))
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
