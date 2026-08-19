@@ -89,7 +89,7 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | **Tool execution** | `@tool` decorator with JSON Schema definitions |
 | **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
 | **Branching sessions** | `ConversationTree` for non-linear conversation history |
-| **Interactive REPL** | CLI with streaming, branching, and model switching |
+| **Interactive REPL** | CLI with streaming, session persistence, and model switching |
 | **Cost tracking** | Built-in pricing module for USD usage calculation |
 | **Thinking support** | Native reasoning/thinking token handling (Anthropic & OpenAI o1) |
 
@@ -204,9 +204,9 @@ Stateless-by-run orchestration over message history with tool execution:
 Command-line interface for interactive agent sessions:
 
 - `PhosonRepl` — Interactive read-eval-print loop
-- **Commands:** `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/branch`, `/label`, `/help`
+- **Commands:** `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/label`, `/help`
 - Real-time streaming responses
-- Session branching and labeling
+- Session persistence and labeling
 - Multiple model switching
 
 ---
@@ -403,7 +403,6 @@ uv run phoson-cli
 - `/model <name>` — Switch model
 - `/tree` — Show conversation tree
 - `/sessions` — List saved sessions
-- `/branch` — Branch from current node
 - `/label <text>` — Label current node
 - `/help` — Show all commands
 

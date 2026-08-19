@@ -59,7 +59,6 @@ Start the REPL and type natural language or commands.
 | `/tree`           | Show conversation tree                  |
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
-| `/branch`         | Branch from current node                |
 | `/label`          | Label current node                      |
 | `/attach`         | Attach image/audio/video/pdf           |
 | `/attachments`    | List or clear attachments              |
