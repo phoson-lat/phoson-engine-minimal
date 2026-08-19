@@ -404,7 +404,11 @@ uv run phoson-cli
 - `/tree` — Show conversation tree
 - `/sessions` — List saved sessions
 - `/label <text>` — Label current node
+- `/update` — Check for and install CLI updates
 - `/help` — Show all commands
+
+**Self-update:** `phoson-cli --self-update` performs the same check/upgrade
+flow from outside the REPL (e.g. from a script).
 
 ---
 
