@@ -54,7 +54,7 @@ async def example_basic():
         # The plugin will automatically load phoson-mcp.json
         engine = AgentEngine(
             chat=None,  # No LLM needed for this demo
-            plugins=["path:./phoson_plugin_mcp/plugin.py"],
+            plugins=["path:./phoson_plugin_mcp/_plugin.py"],
         )
 
         print(f"\n✅ Plugin loaded: {engine._loaded_plugins[0].name}")
@@ -96,7 +96,7 @@ async def example_custom_config():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(custom_config)},
                 }
             ],
@@ -128,7 +128,7 @@ async def example_inline_config():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {
                         "servers": {
                             "echo": {"command": "echo", "args": ["Hello from MCP!"]}
@@ -160,7 +160,7 @@ async def example_no_config():
             chat=None,
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": "./nonexistent.json"},
                 }
             ],
@@ -203,7 +203,7 @@ async def main():
     print("   3. Use with a real LLM:")
     print("      engine = AgentEngine(")
     print("          chat=OpenAIChat(),")
-    print('          plugins=["path:./phoson_plugin_mcp/plugin.py"],')
+    print('          plugins=["path:./phoson_plugin_mcp/_plugin.py"],')
     print("      )")
 
 
