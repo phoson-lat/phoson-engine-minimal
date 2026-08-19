@@ -71,6 +71,75 @@ _SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
+def build_system_prompt(tools: list) -> str:
+    """Build the system prompt for the loaded tools.
+
+    Mentions the MCP tools currently loaded so the model knows they
+    exist beyond the built-in set. Shared by the REPL and the one-shot
+    mode.
+    """
+    has_mcp = any(t.name.startswith("mcp_") for t in tools)
+    mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
+    if not has_mcp:
+        mcp_note = ""
+    return _SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd(), mcp_note=mcp_note)
+
+
+def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the MCP plugin specs for a configuration.
+
+    Returns an empty list when MCP is disabled. Tries the in-tree
+    ``phoson_plugin_mcp`` first; falls back to the path-based loader
+    used during local development if the package is not installed.
+    """
+    if not config.enable_mcp:
+        return []
+
+    mcp_config = {
+        "config_file": str(config.mcp_config_file),
+        "tool_name_prefix": "mcp",
+    }
+
+    try:
+        from phoson_plugin_mcp import MCPPlugin
+
+        plugin = MCPPlugin()
+        plugin.configure(mcp_config)
+        return [plugin]
+    except ImportError:
+        return [
+            {
+                "name": "path:./phoson_plugin_mcp/_plugin.py",
+                "config": mcp_config,
+            }
+        ]
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+async def close_plugins(plugins: list) -> None:
+    """Close plugin instances, preferring async ``aclose()`` when present.
+
+    Failures are logged, never raised — closing old resources must not
+    take down whatever is rebuilding them.
+    """
+    for plugin in plugins:
+        try:
+            if hasattr(plugin, "aclose"):
+                await plugin.aclose()
+            else:
+                plugin.cleanup()
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Could not close plugin %r",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
+
+
 class _SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
 
@@ -175,38 +244,8 @@ class PhosonRepl:
     # ── Engine (re)construction ───────────────────────────────────────────────
 
     def _build_mcp_plugins(self) -> list[str | dict[str, Any] | Plugin]:
-        """Resolve the MCP plugin specs for the current configuration.
-
-        Returns an empty list when MCP is disabled. Tries the in-tree
-        ``phoson_plugin_mcp`` first; falls back to the path-based loader
-        used during local development if the package is not installed.
-        """
-        if not self.config.enable_mcp:
-            return []
-
-        mcp_config = {
-            "config_file": str(self.config.mcp_config_file),
-            "tool_name_prefix": "mcp",
-        }
-
-        try:
-            from phoson_plugin_mcp import MCPPlugin
-
-            plugin = MCPPlugin()
-            plugin.configure(mcp_config)
-            return [plugin]
-        except ImportError:
-            return [
-                {
-                    "name": "path:./phoson_plugin_mcp/_plugin.py",
-                    "config": mcp_config,
-                }
-            ]
-        except Exception as exc:
-            warnings.warn(
-                f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
-            )
-            return []
+        """MCP plugin specs for the current configuration (see module level)."""
+        return build_mcp_plugins(self.config)
 
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
@@ -240,7 +279,7 @@ class PhosonRepl:
         # not leak them. Failures are logged, never fatal to the rebuild.
         if old_plugins:
             try:
-                asyncio.get_running_loop().create_task(self._close_plugins(old_plugins))
+                asyncio.get_running_loop().create_task(close_plugins(old_plugins))
             except RuntimeError:
                 for plugin in old_plugins:
                     try:
@@ -272,23 +311,13 @@ class PhosonRepl:
         self.engine.context.extra["available_tools"] = self.tools_dict
         self.engine.context.extra["default_model"] = self.subagent_model
         self.engine.context.extra["max_iterations"] = self.config.max_iterations
+        self.engine.context.extra["subagent_max_parallel"] = (
+            self.config.subagent_max_parallel
+        )
+        self.engine.context.extra["subagent_timeout_seconds"] = (
+            self.config.subagent_timeout_seconds
+        )
         self.engine.context.extra["chat"] = self.chat
-
-    @staticmethod
-    async def _close_plugins(plugins: list) -> None:
-        """Close plugin instances, preferring async ``aclose()`` when present."""
-        for plugin in plugins:
-            try:
-                if hasattr(plugin, "aclose"):
-                    await plugin.aclose()
-                else:
-                    plugin.cleanup()
-            except Exception:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Could not close plugin %r during engine rebuild",
-                    getattr(plugin, "name", "?"),
-                    exc_info=True,
-                )
 
     async def run(self) -> None:
         """Run the REPL main loop.
@@ -478,11 +507,7 @@ class PhosonRepl:
         Mentions the MCP tools currently loaded so the model knows they
         exist beyond the built-in set.
         """
-        has_mcp = any(t.name.startswith("mcp_") for t in self.engine.tools)
-        mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
-        if not has_mcp:
-            mcp_note = ""
-        return _SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd(), mcp_note=mcp_note)
+        return build_system_prompt(self.engine.tools)
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
@@ -558,6 +583,47 @@ class PhosonRepl:
         if self.current_node_id is None:
             return
         self.tree.label(self.current_node_id, text)
+
+    def undo_last_turn(self) -> tuple[bool, str]:
+        """Move the cursor back to just before the last user turn.
+
+        The "undone" messages are not deleted — they remain in the tree
+        (visible via /tree) as an abandoned branch; the next user message
+        appends a new branch from the restored cursor position. Session
+        cost/token metrics are cumulative and are intentionally NOT
+        rolled back.
+
+        Returns:
+            Tuple of (success, message or new node id).
+        """
+        if self.current_node_id is None:
+            return False, "No active node — nothing to undo."
+
+        # Walk the node path root → cursor (the message-level get_path is
+        # not enough: we need node ids to move the cursor).
+        node_path: list = []
+        cursor: str | None = self.current_node_id
+        while cursor is not None:
+            node = self.tree.nodes[cursor]
+            node_path.append(node)
+            cursor = node.parent_id
+        node_path.reverse()
+
+        last_user_idx = next(
+            (
+                i
+                for i in range(len(node_path) - 1, -1, -1)
+                if node_path[i].message.role == "user"
+            ),
+            None,
+        )
+        if last_user_idx is None:
+            return False, "No user turn found in the current path."
+        if last_user_idx == 0:
+            return False, "Nothing to undo — the session starts with this turn."
+
+        self.current_node_id = node_path[last_user_idx - 1].id
+        return True, self.current_node_id
 
     def find_latest_node_id(self) -> str | None:
         """Find the most recent leaf node — the continuation point.

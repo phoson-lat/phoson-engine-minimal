@@ -74,6 +74,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
     CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
     CommandSpec(
+        ("/undo",),
+        "Undo the last turn (branch from before your last message)",
+        "_cmd_undo",
+    ),
+    CommandSpec(
         ("/attach", "/attachments"),
         "Attach a file to the next message, or list pending attachments",
         "_cmd_attach",
@@ -321,6 +326,14 @@ class CommandHandler:
             return True
         self.repl.label_current_node(cmd.args)
         self._r.print_info(f"Labelled  \u201c{cmd.args}\u201d")
+        return True
+
+    async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002
+        ok, info = self.repl.undo_last_turn()
+        if ok:
+            self._r.print_info(f"\u21a9 Undid last turn (cursor \u2192 {info[:8]})")
+        else:
+            self._r.print_info(info)
         return True
 
     async def _cmd_attach(self, cmd: Command) -> bool:
