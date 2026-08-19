@@ -56,6 +56,7 @@ Start the REPL and type natural language or commands.
 | `/cost`           | Show session cost breakdown             |
 | `/tokens`         | Show token usage stats                  |
 | `/steps`          | Show execution steps                    |
+| `/update`         | Check for and install CLI updates (alias `/upgrade`) |
 | `/tree`           | Show conversation tree                  |
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
