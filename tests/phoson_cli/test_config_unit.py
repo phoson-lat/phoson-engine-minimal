@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from phoson_cli.config import load_config
 
 
@@ -74,3 +78,24 @@ def test_save_config_safely_handles_missing_attributes(monkeypatch, tmp_path) ->
     assert 'model = "gpt-4"' in content
     assert 'openai_api_key = "sk-..."' in content
     assert "gemini_api_key" not in content  # Should be skipped as it returns None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="chmod semantics are POSIX-only")
+def test_save_config_restricts_permissions(monkeypatch, tmp_path) -> None:
+    """The config file holds API keys: it must not be world-readable."""
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    class MinimalConfig:
+        provider = "openai"
+        model = "gpt-4"
+        openai_api_key = "sk-secret"
+
+    path = save_config(MinimalConfig())  # type: ignore
+
+    mode = os.stat(path).st_mode & 0o777
+    assert mode == 0o600, f"config file mode is {oct(mode)}, expected 0o600"
+    dir_mode = os.stat(path.parent).st_mode & 0o777
+    assert dir_mode == 0o700, f"config dir mode is {oct(dir_mode)}, expected 0o700"

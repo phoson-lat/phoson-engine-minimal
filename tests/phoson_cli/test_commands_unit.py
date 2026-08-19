@@ -72,7 +72,6 @@ def test_parse_command_all_known_commands() -> None:
         "/tree",
         "/sessions",
         "/delete",
-        "/branch",
         "/label",
         "/attach",
         "/attachments",
@@ -148,3 +147,33 @@ def test_command_specs_have_no_duplicate_names() -> None:
         for name in spec.names:
             assert name not in seen, f"duplicate command name: {name}"
             seen.add(name)
+
+
+# ─── Removed commands ────────────────────────────────────────────────────────
+
+
+def test_branch_command_removed() -> None:
+    """/branch was a silent no-op (tree.branch returned the same node); it
+    is removed pending a real branching/undo UX (tracked in TODO.md)."""
+    assert "/branch" not in COMMANDS
+
+
+async def test_branch_command_reports_unknown() -> None:
+    """Typing /branch now surfaces the standard unknown-command error."""
+
+    class FakeRenderer:
+        def __init__(self) -> None:
+            self.errors: list[str] = []
+
+        def print_error(self, message: str) -> None:
+            self.errors.append(message)
+
+    class FakeRepl:
+        def __init__(self) -> None:
+            self.renderer = FakeRenderer()
+
+    handler = CommandHandler(FakeRepl())  # type: ignore[arg-type]
+    kept = await handler.handle(Command(name="/branch", args=""))
+
+    assert kept is True
+    assert handler.repl.renderer.errors == ["Unknown command: /branch"]
