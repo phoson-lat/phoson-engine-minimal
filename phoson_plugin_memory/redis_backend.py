@@ -40,6 +40,7 @@ class RedisBackend(MemoryBackend):
                 "redis package not installed. Install with: pip install redis "
                 "or pip install 'phoson-engine-minimal[memory]'"
             )
+        assert redis_asyncio is not None
         if self._client is None:
             self._client = redis_asyncio.from_url(self.url, decode_responses=True)
         return self._client

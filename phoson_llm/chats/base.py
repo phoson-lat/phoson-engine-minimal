@@ -124,6 +124,12 @@ class BaseLLMChat(ABC):
         Cannot be called from inside a running event loop. Use stream() instead
         when in async contexts (Jupyter, FastAPI, etc.).
 
+        Note:
+            The async stream is driven to completion with ``asyncio.run``
+            before the first yield, so the whole response is collected in
+            memory first. This is *not* incremental streaming: memory usage
+            grows with the length of the response.
+
         Args:
             messages: List of messages.
             config: Model configuration.

@@ -5,7 +5,7 @@ different (store-and-rank-by-similarity vs. exact-key get/set), not just a
 different storage backend behind the same tools.
 """
 
-from typing import Any
+from typing import Any, cast
 
 from phoson_agent import Plugin, AgentTool
 
@@ -80,13 +80,16 @@ class SemanticMemoryPlugin(Plugin):
         self._tool_prefix = config.get("tool_prefix", self._tool_prefix)
 
     def initialize(self) -> None:
-        if not callable(self._embed_fn):
+        embed_fn = self._embed_fn
+        if not callable(embed_fn):
             raise ValueError(
                 "phoson-plugin-memory-semantic requires 'embed_fn' (a callable "
                 "str -> vector), passed to the constructor or via config['embed_fn']"
             )
         self.backend = QdrantBackend(
-            embed_fn=self._embed_fn,
+            # configure() can pass any callable via config["embed_fn"]; the
+            # runtime check above is the contract, the cast satisfies pyright.
+            embed_fn=cast(EmbedFn, embed_fn),
             url=self._url,
             collection_name=self._collection_name,
             namespace=self._namespace,

@@ -1,6 +1,7 @@
 import datetime
-from typing import Any
 from dataclasses import field, dataclass
+
+from phoson_llm.schemas.inputs import JsonObject
 
 # ─── Base ────────────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ class ToolCallEvent(LLMEvent):
     index: int = 0
     tool_call_id: str = ""
     tool_name: str = ""
-    args: dict[str, Any] = field(default_factory=dict)
+    args: JsonObject = field(default_factory=dict)
 
 
 # ─── Usage ───────────────────────────────────────────────────────────────────
@@ -122,9 +123,15 @@ class UsageEvent(LLMEvent):
 
 @dataclass(kw_only=True)
 class LLMModalitiesEvent(LLMEvent):
-    """Event emitted to indicate which input modalities the model supports.
+    """Event that *would* indicate which input modalities a model supports.
 
-    Supported modalities vary by provider/model (e.g., ["text", "vision", "audio"]).
+    Supported modalities vary by provider/model (e.g., ["text", "vision",
+    "audio"]).
+
+    Note:
+        **Experimental / reserved** — no adapter currently emits this event.
+        It is kept in the schema for the planned modality discovery feature;
+        consumers should not depend on receiving it.
     """
 
     supported: list[str] = field(default_factory=list)

@@ -1,9 +1,12 @@
 from .inputs import (
     Message,
+    JsonValue,
     TextBlock,
     AudioBlock,
     # multimodal
     ImageBlock,
+    JsonObject,
+    JsonSchema,
     VideoBlock,
     ModelConfig,
     ContentBlock,
@@ -37,6 +40,10 @@ __all__ = [
     "Message",
     "ToolDefinition",
     "ModelConfig",
+    # JSON aliases
+    "JsonValue",
+    "JsonObject",
+    "JsonSchema",
     # multimodal inputs
     "ImageBlock",
     "AudioBlock",

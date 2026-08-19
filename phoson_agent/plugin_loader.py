@@ -7,9 +7,27 @@ import importlib
 import importlib.util
 from typing import Any
 from pathlib import Path
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 from phoson_agent.plugin import Plugin, PluginSpec, PluginLoader
 from phoson_agent.exceptions import PhosonPluginLoadError, PhosonPluginConfigError
+
+
+@contextmanager
+def _sys_path_guard(directory: str) -> Iterator[None]:
+    """Temporarily prepend ``directory`` to ``sys.path``.
+
+    Restores the *exact* previous state on exit (snapshot-restore instead of
+    ``remove``), so it is safe even if the directory was already present in
+    ``sys.path`` or the list is mutated while the guard is active.
+    """
+    original = list(sys.path)
+    sys.path.insert(0, directory)
+    try:
+        yield
+    finally:
+        sys.path[:] = original
 
 
 def _resolve_plugin(attr: Any, source: str) -> Plugin:
@@ -171,11 +189,9 @@ class PluginRegistry:
         if not path.is_file():
             raise PhosonPluginLoadError(f"Plugin path must be a file: {path}")
 
-        # Add parent directory to sys.path temporarily
-        parent_dir = str(path.parent)
-        sys.path.insert(0, parent_dir)
-
-        try:
+        # Prepend the parent directory so sibling imports inside the plugin
+        # file resolve; the guard restores sys.path exactly on exit.
+        with _sys_path_guard(str(path.parent)):
             spec = importlib.util.spec_from_file_location(path.stem, path)
             if not spec or not spec.loader:
                 raise PhosonPluginLoadError(f"Failed to load plugin from {path}")
@@ -193,8 +209,6 @@ class PluginRegistry:
             raise PhosonPluginLoadError(
                 f"Plugin file '{path}' must have 'plugin' or 'create_plugin()'"
             )
-        finally:
-            sys.path.remove(parent_dir)
 
     def _load_from_entrypoint(self, name: str) -> Plugin:
         """

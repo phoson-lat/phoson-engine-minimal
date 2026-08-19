@@ -13,7 +13,6 @@ from phoson_llm.schemas import (
     AudioBlock,
     ImageBlock,
     VideoBlock,
-    ContentBlock,
     DocumentBlock,
 )
 
@@ -86,7 +85,9 @@ class AttachmentManager:
 
         self._pending.append(Attachment(path=p, block=block))
 
-    def flush(self) -> Sequence[ContentBlock]:
+    def flush(
+        self,
+    ) -> Sequence[ImageBlock | AudioBlock | VideoBlock | DocumentBlock]:
         """Return pending blocks and clear the manager."""
         blocks = [a.block for a in self._pending]
         self._pending.clear()

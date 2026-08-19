@@ -103,7 +103,7 @@ engine = AgentEngine(
 # Cargar el plugin desde el directorio local
 engine = AgentEngine(
     chat=OpenAIChat(),
-    plugins=["path:./phoson_plugin_mcp/plugin.py"],
+    plugins=["path:./phoson_plugin_mcp/_plugin.py"],
 )
 ```
 

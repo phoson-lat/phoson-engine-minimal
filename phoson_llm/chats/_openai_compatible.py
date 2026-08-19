@@ -12,6 +12,7 @@ import json
 import base64
 import warnings
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, NotRequired
+from dataclasses import field, dataclass
 from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
@@ -20,6 +21,7 @@ from phoson_llm.utils import map_error_code
 from phoson_llm.schemas import (
     LLMEvent,
     ErrorEvent,
+    JsonObject,
     TokenEvent,
     TokenUsage,
     UsageEvent,
@@ -87,7 +89,7 @@ class _MessageDict(TypedDict):
 # ─── Message / tool conversion ──────────────────────────────────────────────
 
 
-def _convert_content_block(block: "ContentBlock") -> dict:
+def _convert_content_block(block: "ContentBlock") -> JsonObject:
     """Converts a Phoson ContentBlock to OpenAI-compatible API format."""
     from phoson_llm.utils import load_file_as_base64
     from phoson_llm.schemas import (
@@ -221,7 +223,7 @@ def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
     return result
 
 
-def _convert_tools(tools: list["ToolDefinition"]) -> list[dict]:
+def _convert_tools(tools: list["ToolDefinition"]) -> list[JsonObject]:
     """Converts ToolDefinition to OpenAI-compatible tools format."""
     return [
         {
@@ -250,7 +252,7 @@ def _extract_reasoning_delta(delta: object) -> str | None:
     return None
 
 
-def _parse_tool_args(raw: str) -> dict[str, Any]:
+def _parse_tool_args(raw: str) -> JsonObject:
     """Safe parsing of tool arguments emitted by OpenAI-compatible APIs."""
     if not raw:
         return {}
@@ -282,6 +284,70 @@ def _parse_tool_args(raw: str) -> dict[str, Any]:
 
 
 # ─── Request construction ───────────────────────────────────────────────────
+
+
+@dataclass
+class ToolCallAccumulator:
+    """Accumulates streamed tool-call deltas and finalizes complete calls.
+
+    Single source of truth for delta bookkeeping (id / name / args
+    fragments) shared by every OpenAI-compatible adapter, so the
+    accumulation logic has exactly one implementation and one test surface.
+    """
+
+    tool_args_acc: dict[int, str] = field(default_factory=dict)
+    tool_names: dict[int, str] = field(default_factory=dict)
+    tool_ids: dict[int, str] = field(default_factory=dict)
+
+    def feed_delta(self, tc: Any) -> list[ToolCallDeltaEvent]:
+        """Ingest one ``delta.tool_calls`` entry (SDK object).
+
+        Returns the :class:`ToolCallDeltaEvent` instances to emit for this
+        fragment (empty when the fragment carries no args chunk).
+        """
+        events: list[ToolCallDeltaEvent] = []
+        idx = tc.index
+        self.tool_args_acc.setdefault(idx, "")
+        if tc.id:
+            self.tool_ids[idx] = tc.id
+        if tc.function and tc.function.name:
+            self.tool_names[idx] = tc.function.name
+
+        if tc.function and tc.function.arguments:
+            chunk_str = tc.function.arguments
+            self.tool_args_acc[idx] += chunk_str
+            events.append(
+                ToolCallDeltaEvent(
+                    index=idx,
+                    tool_name=self.tool_names.get(idx, ""),
+                    args_chunk=chunk_str,
+                )
+            )
+        return events
+
+    def finalize(self) -> list[ToolCallEvent]:
+        """Build :class:`ToolCallEvent` for every accumulated call and reset.
+
+        Calls missing an id or a name are skipped (malformed stream). The
+        buffers are cleared so a subsequent ``tool_calls`` finish in the
+        same response starts fresh.
+        """
+        events: list[ToolCallEvent] = []
+        for idx, raw in self.tool_args_acc.items():
+            if idx not in self.tool_ids or idx not in self.tool_names:
+                continue
+            events.append(
+                ToolCallEvent(
+                    index=idx,
+                    tool_call_id=self.tool_ids[idx],
+                    tool_name=self.tool_names[idx],
+                    args=_parse_tool_args(raw),
+                )
+            )
+        self.tool_args_acc.clear()
+        self.tool_ids.clear()
+        self.tool_names.clear()
+        return events
 
 
 def _build_request_kwargs(
@@ -382,9 +448,7 @@ async def stream_chat_completions(
 
     text_acc = ""
     reasoning_acc = ""
-    tool_args_acc: dict[int, str] = {}
-    tool_names: dict[int, str] = {}
-    tool_ids: dict[int, str] = {}
+    tool_acc = ToolCallAccumulator()
     has_tool_calls = False
     final_usage: object = None
     tools_emitted = False
@@ -414,41 +478,14 @@ async def stream_chat_completions(
             if delta.tool_calls:
                 has_tool_calls = True
                 for tc in delta.tool_calls:
-                    idx = tc.index
-
-                    tool_args_acc.setdefault(idx, "")
-                    if tc.id:
-                        tool_ids[idx] = tc.id
-                    if tc.function and tc.function.name:
-                        tool_names[idx] = tc.function.name
-
-                    if tc.function and tc.function.arguments:
-                        chunk_str = tc.function.arguments
-                        tool_args_acc[idx] += chunk_str
-                        yield ToolCallDeltaEvent(
-                            index=idx,
-                            tool_name=tool_names.get(idx, ""),
-                            args_chunk=chunk_str,
-                        )
+                    for event in tool_acc.feed_delta(tc):
+                        yield event
 
             finish = chunk.choices[0].finish_reason
             if finish == "tool_calls" and not tools_emitted:
                 tools_emitted = True
-                for idx, raw in tool_args_acc.items():
-                    if idx not in tool_ids or idx not in tool_names:
-                        continue
-                    yield ToolCallEvent(
-                        index=idx,
-                        tool_call_id=tool_ids[idx],
-                        tool_name=tool_names[idx],
-                        args=_parse_tool_args(raw),
-                    )
-
-                # Clear buffers so any subsequent tool_calls in the same
-                # response (unusual but possible) start fresh.
-                tool_args_acc.clear()
-                tool_ids.clear()
-                tool_names.clear()
+                for event in tool_acc.finalize():
+                    yield event
                 tools_emitted = False
 
     except APIStatusError as e:

@@ -49,14 +49,14 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
                         # if supported.
                         parts.append(
                             types.Part.from_uri(
-                                uri=block.source[7:],
+                                file_uri=block.source[7:],
                                 mime_type=block.media_type or "image/jpeg",
                             )
                         )
                     else:
                         parts.append(
                             types.Part.from_uri(
-                                uri=block.source,
+                                file_uri=block.source,
                                 mime_type=block.media_type or "image/jpeg",
                             )
                         )
@@ -78,7 +78,9 @@ def _convert_tools(tools: list[ToolDefinition]) -> "list[types.Tool]":
             types.FunctionDeclaration(
                 name=t.name,
                 description=t.description,
-                parameters=t.parameters,
+                # google-genai accepts a plain JSON-schema dict and validates
+                # it into a Schema model at runtime.
+                parameters=t.parameters,  # pyright: ignore[reportArgumentType]
             )
         )
     return [types.Tool(function_declarations=declarations)]
@@ -124,14 +126,17 @@ class GeminiChat(BaseLLMChat):
                     )
                     break
 
+        gemini_messages = _convert_messages(messages)
+
+        gemini_tools = _convert_tools(tools) if tools else None
         generate_config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=config.temperature,
             max_output_tokens=config.max_tokens,
-            tools=_convert_tools(tools) if tools else None,
+            # The SDK's tools param expects a list of a wider union type;
+            # list invariance makes a plain list[Tool] a nominal mismatch.
+            tools=gemini_tools,  # pyright: ignore[reportArgumentType]
         )
-
-        gemini_messages = _convert_messages(messages)
 
         yield LLMStartEvent(model=config.model, message_count=len(messages))
 
@@ -162,8 +167,8 @@ class GeminiChat(BaseLLMChat):
                                 yield ToolCallEvent(
                                     index=0,  # Simplified
                                     tool_call_id=part.function_call.id or "call",
-                                    tool_name=part.function_call.name,
-                                    args=part.function_call.args,
+                                    tool_name=part.function_call.name or "",
+                                    args=part.function_call.args or {},
                                 )
 
         except Exception as e:

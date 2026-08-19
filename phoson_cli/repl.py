@@ -10,6 +10,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.formatted_text import FormattedText
 
 from phoson_agent import (
     Plugin,
@@ -172,7 +173,7 @@ class PhosonRepl:
 
     # ── Engine (re)construction ───────────────────────────────────────────────
 
-    def _build_mcp_plugins(self) -> list[Plugin | dict[str, Any]]:
+    def _build_mcp_plugins(self) -> list[str | dict[str, Any] | Plugin]:
         """Resolve the MCP plugin specs for the current configuration.
 
         Returns an empty list when MCP is disabled. Tries the in-tree
@@ -196,7 +197,7 @@ class PhosonRepl:
         except ImportError:
             return [
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": mcp_config,
                 }
             ]
@@ -269,7 +270,7 @@ class PhosonRepl:
         while True:
             try:
                 prompt_fragments = self._prompt_fragments()
-                user_input = await session.prompt_async(prompt_fragments)
+                user_input = await session.prompt_async(FormattedText(prompt_fragments))
             except KeyboardInterrupt:
                 if self.current_task and not self.current_task.done():
                     self.current_task.cancel()
@@ -304,9 +305,10 @@ class PhosonRepl:
         """Flush pending attachments and construct the user Message."""
         pending_blocks: list[ContentBlock] = []
         if self.attachments:
-            pending_blocks = list(self.attachments.flush())
-            for block in pending_blocks:
+            media_blocks = list(self.attachments.flush())
+            for block in media_blocks:
                 self.renderer.print_info(f"  📎 {block.source.split('file://', 1)[-1]}")
+            pending_blocks = list(media_blocks)
 
         if user_input:
             pending_blocks.insert(0, _text_block(user_input))

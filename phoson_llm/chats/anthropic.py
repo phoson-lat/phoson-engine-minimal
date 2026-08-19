@@ -19,6 +19,7 @@ from phoson_llm.schemas import (
     AudioBlock,
     ErrorEvent,
     ImageBlock,
+    JsonObject,
     TokenEvent,
     TokenUsage,
     UsageEvent,
@@ -42,7 +43,7 @@ from phoson_llm.chats.base import BaseLLMChat
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _convert_content_block(block: ContentBlock) -> dict:
+def _convert_content_block(block: ContentBlock) -> JsonObject:
     """
     Converts a multimodal ContentBlock to the format expected by Anthropic.
 
@@ -119,7 +120,7 @@ def _convert_content_block(block: ContentBlock) -> dict:
     return {"type": "text", "text": f"[Unsupported block: {type(block).__name__}]"}
 
 
-def _convert_messages(messages: list[Message]) -> list[dict]:
+def _convert_messages(messages: list[Message]) -> list[JsonObject]:
     """
     Converts Phoson's internal format to the format expected by Anthropic.
 
@@ -183,7 +184,7 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     return result
 
 
-def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
+def _convert_tools(tools: list[ToolDefinition]) -> list[JsonObject]:
     """Converts ToolDefinition to Anthropic's tools format."""
     return [
         {
@@ -224,7 +225,7 @@ class AnthropicChat(BaseLLMChat):
 
     async def aclose(self) -> None:
         """Release the underlying HTTP connection pool."""
-        await self._client.aclose()
+        await self._client.close()
 
     async def stream(
         self,
@@ -339,7 +340,7 @@ class AnthropicChat(BaseLLMChat):
                         if idx in tool_args_acc and tool_names.get(idx):
                             raw = tool_args_acc[idx]
                             try:
-                                args = json.loads(raw) if raw else {}
+                                args: JsonObject = json.loads(raw) if raw else {}
                             except json.JSONDecodeError:
                                 import warnings
 

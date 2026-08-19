@@ -44,11 +44,14 @@ from phoson_llm.pricing import PriceEntry, calculate_cost
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
+    JsonValue,
     TextBlock,
     AudioBlock,
     ErrorEvent,
     # multimodal
     ImageBlock,
+    JsonObject,
+    JsonSchema,
     TokenEvent,
     TokenUsage,
     UsageEvent,
@@ -105,6 +108,10 @@ __all__ = [
     "ContentBlock",
     "ToolDefinition",
     "ModelConfig",
+    # schemas - JSON aliases
+    "JsonValue",
+    "JsonObject",
+    "JsonSchema",
     # schemas - multimodal inputs
     "ImageBlock",
     "AudioBlock",

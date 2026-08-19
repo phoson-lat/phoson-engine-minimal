@@ -8,7 +8,15 @@ import inspect
 import warnings
 import functools
 from types import UnionType
-from typing import Any, Literal, Annotated, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Literal,
+    Annotated,
+    get_args,
+    overload,
+    get_origin,
+    get_type_hints,
+)
 from collections.abc import Callable
 
 from phoson_agent.models import AgentTool
@@ -123,6 +131,13 @@ def _build_parameters(fn: Callable[..., Any], exclude: set[str]) -> dict[str, An
     return schema
 
 
+@overload
+def tool(_fn: Callable[..., Any]) -> AgentTool: ...
+@overload
+def tool(
+    *,
+    inject: list[str] | None = None,
+) -> Callable[[Callable[..., Any]], AgentTool]: ...
 def tool(
     _fn: Callable[..., Any] | None = None,
     *,
