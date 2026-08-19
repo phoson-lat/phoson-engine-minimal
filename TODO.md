@@ -24,15 +24,16 @@
 
 ## Pending (outside this branch)
 
-- Merge the PR and cut a release tag.
-- Translate the remaining Spanish *internal* working docs: `ROADMAP.md`
-  (maintainer's working plan) and `2026-05-13-ai-providers-expansion.md`
-  (dated internal record). All user-facing docs (README, `docs/api/*`,
-  `docs/plugins.md`, `docs/mcp-cli.md`, plugin READMEs, examples) are now
-  English per the language policy declared in the README.
+- Merge the PR and cut the next release tag (v0.4.0).
 - Optional: doctest infrastructure for doc snippets.
 - Optional: wire up `AgentSubagentResult` / `LLMModalitiesEvent` when
   their features land (subagent orchestration, modality discovery).
+
+## Decisions
+
+- `ROADMAP.md` stays in Spanish: it is the maintainer's working plan and is
+  out of scope for the English-only policy (which covers user-facing
+  content: docs, docstrings, comments, commits, issues, PRs, examples).
 
 ## Verification (branch)
 
