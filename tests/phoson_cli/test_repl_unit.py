@@ -363,3 +363,75 @@ def test_system_prompt_mentions_mcp_tools_when_loaded(repl: PhosonRepl) -> None:
     prompt = repl._build_system_prompt()
 
     assert "MCP tools (names prefixed 'mcp_') are also available" in prompt
+
+
+# ── PhosonRepl.undo_last_turn ─────────────────────────────────────────────────
+
+
+def _build_two_turn_tree(repl: PhosonRepl) -> tuple:
+    """Build: u1 → a1 → u2 → a2, with the cursor at a2. Returns (u1, a1, u2, a2)."""
+    from phoson_llm.schemas import Message
+
+    repl._append_user_turn(Message(role="user", content="q1"))
+    a1 = repl.tree.append(repl.current_node_id, Message(role="assistant", content="a1"))
+    repl.current_node_id = a1.id
+    u2, _ = repl._append_user_turn(Message(role="user", content="q2"))
+    a2 = repl.tree.append(repl.current_node_id, Message(role="assistant", content="a2"))
+    repl.current_node_id = a2.id
+    u1 = next(n for n in repl.tree.nodes.values() if n.message.content == "q1")
+    return u1, a1, u2, a2
+
+
+def test_undo_last_turn_moves_cursor_before_last_user(repl: PhosonRepl) -> None:
+    from phoson_llm.schemas import Message
+
+    _u1, a1, _u2, a2 = _build_two_turn_tree(repl)
+
+    ok, info = repl.undo_last_turn()
+
+    assert ok is True
+    assert repl.current_node_id == a1.id  # cursor → node before the last user turn
+    assert info == a1.id
+    # The undone branch still exists in the tree.
+    assert a2.id in repl.tree.nodes
+
+    # The next user message branches from a1 (sibling of the undone u2).
+    u3_id, path = repl._append_user_turn(Message(role="user", content="q2-retry"))
+    assert repl.tree.nodes[u3_id].parent_id == a1.id
+    assert path[-1].content == "q2-retry"
+
+
+def test_undo_single_turn_reports_nothing_to_undo(repl: PhosonRepl) -> None:
+    from phoson_llm.schemas import Message
+
+    repl._append_user_turn(Message(role="user", content="only turn"))
+
+    ok, info = repl.undo_last_turn()
+
+    assert ok is False
+    assert "session starts with this turn" in info
+    # Cursor untouched.
+    assert repl.current_node_id is not None
+
+
+def test_undo_without_active_node(repl: PhosonRepl) -> None:
+    repl.current_node_id = None
+
+    ok, info = repl.undo_last_turn()
+
+    assert ok is False
+    assert "No active node" in info
+
+
+def test_undo_keeps_metrics_untouched(repl: PhosonRepl) -> None:
+    """Session cost/token metrics are cumulative — undo must not rewind them."""
+    _u1, _a1, _u2, _a2 = _build_two_turn_tree(repl)
+
+    repl.session_metrics.total_cost_usd = 1.25
+    repl.session_metrics.step_count = 7
+
+    ok, _ = repl.undo_last_turn()
+
+    assert ok is True
+    assert repl.session_metrics.total_cost_usd == 1.25
+    assert repl.session_metrics.step_count == 7
