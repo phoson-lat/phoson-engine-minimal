@@ -20,11 +20,11 @@ if str(project_root) not in sys.path:
 
 try:
     from phoson_plugin_mcp import MCPPlugin
-    from phoson_plugin_mcp.plugin import MCP_AVAILABLE
+    from phoson_plugin_mcp._plugin import MCP_AVAILABLE
 
     # MCPPlugin itself always imports fine (phoson_plugin_mcp degrades
     # gracefully without the `mcp` SDK); what these tests actually need is
-    # the real `mcp` package, tracked by plugin.py's own MCP_AVAILABLE.
+    # the real `mcp` package, tracked by _plugin.py's own MCP_AVAILABLE.
 except ImportError as e:
     MCP_AVAILABLE = False
     MCPPlugin = None
@@ -195,7 +195,7 @@ class TestMCPPluginWithPath:
             chat=Mock(),
             plugins=[
                 {
-                    "name": "path:./phoson_plugin_mcp/plugin.py",
+                    "name": "path:./phoson_plugin_mcp/_plugin.py",
                     "config": {"config_file": str(config_file)},
                 }
             ],

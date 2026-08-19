@@ -223,3 +223,50 @@ class TestContextValues:
 
         whoami.handler({}, Ctx())
         assert received["user_id"] == "alice"
+
+
+# ── Manual handler contract ──────────────────────────────────────────────────
+
+
+class TestManualHandlerContract:
+    """Regression tests for the manual `AgentTool` handler contract.
+
+    The engine always invokes ``tool.handler(call.args, context)`` with two
+    positional arguments (see docs/api/phoson_agent.md, "Manual tools").
+    """
+
+    def test_decorator_handler_accepts_args_and_context(self):
+        @tool
+        def echo(message: str) -> str:
+            """Echo a message."""
+            return message
+
+        # Exactly how the engine invokes handlers: (args, context).
+        assert echo.handler({"message": "hi"}, None) == "hi"
+
+    def test_manual_tool_with_args_context_handler_works(self):
+        from phoson_agent.context import AgentContext
+
+        manual = AgentTool(
+            name="manual",
+            description="A manually constructed tool.",
+            parameters={
+                "type": "object",
+                "properties": {"x": {"type": "string"}},
+                "required": ["x"],
+            },
+            handler=lambda args, context: args["x"],
+        )
+        assert manual.handler({"x": "ok"}, AgentContext()) == "ok"
+
+    def test_manual_tool_with_single_arg_handler_is_not_supported(self):
+        # A handler that only accepts `args` is not part of the supported
+        # contract: the engine always passes (args, context) positionally.
+        broken = AgentTool(
+            name="broken",
+            description="Single-arg handler (not a supported contract).",
+            parameters={"type": "object"},
+            handler=lambda args: args,
+        )
+        with pytest.raises(TypeError):
+            broken.handler({"x": 1}, None)

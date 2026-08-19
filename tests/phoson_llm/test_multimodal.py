@@ -246,7 +246,7 @@ class TestAnthropicMessageConversion:
         system_msg = Message(role="system", content="You are a helpful assistant.")
         user_msg = Message(role="user", content="Hi")
         result = anthropic_module._convert_messages([system_msg, user_msg])
-        # System no debe aparecer como mensaje
+        # The system message must not appear as a conversation message
         roles = [m.get("role") for m in result]
         assert "system" not in roles
         assert "user" in roles
