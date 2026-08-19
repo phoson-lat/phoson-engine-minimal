@@ -37,6 +37,7 @@ phoson-cli = "phoson_cli.__main__:main"
 # Target version for Python
 target-version = "py312"
 line-length = 88
+extend-exclude = [".agents", ".claude", ".opencode"]
 
 [tool.ruff.lint]
 # Enable specific rules
@@ -75,7 +76,14 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 
 [tool.pyright]
-include = ["phoson_llm", "phoson_agent"]
+include = [
+    "phoson_llm",
+    "phoson_agent",
+    "phoson_cli",
+    "phoson_plugin_checkpoint",
+    "phoson_plugin_mcp",
+    "phoson_plugin_memory",
+]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true
 reportMissingTypeStubs = false
