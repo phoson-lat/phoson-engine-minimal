@@ -148,7 +148,7 @@ class PluginRegistry:
 
         Example:
             # phoson_plugin_mcp/__init__.py
-            from .plugin import MCPPlugin
+            from ._plugin import MCPPlugin
             plugin = MCPPlugin()
 
         Raises:
