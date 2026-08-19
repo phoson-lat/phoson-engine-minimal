@@ -126,9 +126,15 @@ El plugin debe estar instalado vía pip y tener un atributo `plugin` en su `__in
 
 ```python
 # phoson_plugin_memory/__init__.py
-from .plugin import MemoryPlugin
+from ._plugin import MemoryPlugin
 plugin = MemoryPlugin()
 ```
+
+> **Naming convention:** the module file must be `_plugin.py` (with the
+> leading underscore), **not** `plugin.py`. A bare `plugin.py` would make
+> the `plugin = MemoryPlugin()` assignment shadow the *submodule*
+> attribute on the package, so `import phoson_plugin_memory.plugin as m`
+> would bind the plugin instance instead of the module.
 
 ### 2. Plugin desde Path Local
 

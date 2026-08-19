@@ -84,7 +84,7 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | Feature | Description |
 |---------|-------------|
 | **Framework-free** | Pure Python + provider SDKs; no LangChain/LangGraph |
-| **Multi-provider** | OpenAI, Anthropic, OpenRouter, Ollama support |
+| **Multi-provider** | 20+ providers behind a single `BaseLLMChat` contract |
 | **Typed events** | Normalized `LLMEvent` stream for all providers |
 | **Tool execution** | `@tool` decorator with JSON Schema definitions |
 | **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
@@ -143,9 +143,11 @@ phoson-engine-minimal/
 ├── phoson_llm/           # LLM normalization layer (adapters + schemas + pricing)
 ├── phoson_agent/         # ReAct agent loop, tools, middleware, sessions
 ├── phoson_cli/           # Interactive CLI (REPL) for agent sessions
-├── tests/                # Unit/integration tests for llm and agent layers
+├── phoson_plugin_*/      # Official plugins (checkpoint, mcp, memory)
+├── tests/                # Unit/integration tests for all layers
+├── docs/api/             # Per-package API documentation
 ├── .github/workflows/    # CI and security automation
-├── PROJECT.md            # Deep architecture notes and roadmap
+├── ROADMAP.md            # Project roadmap
 └── pyproject.toml        # Project metadata, dependencies, tooling config
 ```
 
@@ -171,10 +173,13 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 | `ErrorEvent` | Error with code, message, retryable flag |
 
 **Supported providers:**
-- **Anthropic** — `AnthropicChat` (thinking, tool use, prompt caching)
-- **OpenAI** — `OpenAIChat` (tool use, reasoning_effort for o1/o3)
-- **OpenRouter** — `OpenAIChat(base_url=..., api_key=...)`
-- **Ollama** — `OpenAIChat(base_url="http://localhost:11434/v1", api_key="ollama")`
+
+| Category | Providers |
+|----------|-----------|
+| Native adapters | **OpenAI** (tool use, reasoning effort), **Anthropic** (thinking, tool use, prompt caching), **Google Gemini**, **Mistral**, **Azure OpenAI**, **AWS Bedrock** |
+| OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
+
+All of them are available via the `build_chat()` factory, e.g. `build_chat("openrouter")`, and expose the same `stream()` event contract.
 
 Pricing module (`phoson_llm.pricing`) provides `calculate_cost()` for provider-level USD usage.
 
@@ -281,8 +286,10 @@ uv run pre-commit install --hook-type pre-push
 ## ✅ Run checks locally
 
 ```bash
+uv sync --dev --all-extras   # --all-extras is needed for pyright (provider SDK stubs)
 uv run ruff format --check .
 uv run ruff check .
+uv run pyright
 uv run python -m compileall phoson_llm phoson_agent phoson_cli
 uv run pytest -q
 ```
@@ -291,13 +298,35 @@ uv run pytest -q
 
 ## 🔐 Environment variables
 
+Set the variables for the providers you use (the adapter reads the default when no `api_key` is passed):
+
 ```env
-ANTHROPIC_API_KEY=
+# Cloud providers
 OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 OPENROUTER_API_KEY=
+GEMINI_API_KEY=
+MISTRAL_API_KEY=
+GROQ_API_KEY=
+XAI_API_KEY=
+DEEPSEEK_API_KEY=
+TOGETHER_API_KEY=
+PERPLEXITY_API_KEY=
+NVIDIA_API_KEY=
+FIREWORKS_API_KEY=
+COHERE_API_KEY=
+GITHUB_TOKEN=
+
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=
+AZURE_OPENAI_API_KEY=
+AZURE_OPENAI_DEPLOYMENT=
+
+# AWS Bedrock (plus standard AWS credentials: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+AWS_DEFAULT_REGION=us-east-1
 ```
 
-> **Note:** Use `OPENROUTER_API_KEY` when initializing `OpenAIChat` with an OpenRouter `base_url`.
+Local servers (Ollama, LM Studio, vLLM) need no API key — just the right `base_url`.
 
 ---
 
@@ -328,13 +357,40 @@ print(result.total_cost_usd, result.total_credits)
 ### Define a tool
 
 ```python
+import ast
+import operator
+
 from phoson_agent import tool
+
 
 @tool
 def calculate(expression: str) -> str:
-    """Evaluate a mathematical expression."""
-    return str(eval(expression))
+    """Safely evaluate a basic arithmetic expression like "2 + 2 * 10"."""
+
+    def _eval(node: ast.AST):
+        match node:
+            case ast.Expression(body=value):
+                return _eval(value)
+            case ast.Constant():
+                return node.value
+            case ast.BinOp(left=left, op=op, right=right):
+                ops = {
+                    ast.Add: operator.add,
+                    ast.Sub: operator.sub,
+                    ast.Mult: operator.mul,
+                    ast.Div: operator.truediv,
+                }
+                if type(op) not in ops:
+                    raise ValueError(f"Unsupported operator: {type(op).__name__}")
+                return ops[type(op)](_eval(left), _eval(right))
+            case ast.UnaryOp(op=op, operand=value) if isinstance(op, ast.USub):
+                return -_eval(value)
+        raise ValueError(f"Unsupported expression: {expression!r}")
+
+    return str(_eval(ast.parse(expression, mode="eval")))
 ```
+
+> ⚠️ **Never use `eval()`/`exec()` on model-generated input** — treat LLM output as untrusted and validate or sandbox every tool argument.
 
 ### Interactive CLI
 
@@ -378,7 +434,7 @@ chore: update pre-commit hook versions
 
 ## 🗓️ Roadmap
 
-For detailed architecture notes and future plans, see [PROJECT.md](./PROJECT.md).
+For the project roadmap see [ROADMAP.md](./ROADMAP.md), and per-package API documentation under [docs/api/](./docs/api/index.md).
 
 ---
 
@@ -396,7 +452,7 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for details on our code of cond
 
 ### Ideas for contributions
 
-- 🆕 Add new LLM providers (Google Gemini, Azure OpenAI, etc.)
+- 🆕 Add new LLM providers (20+ already supported — see the table above)
 - 🔧 Improve tool execution (batching, retries, caching)
 - 📊 Add observability integrations (OpenTelemetry, Langfuse)
 - 🖥️ Build a web-based REPL or playground
@@ -438,7 +494,7 @@ SOFTWARE.
 
 - **Issues:** [GitHub Issues](https://github.com/phoson-lat/phoson-engine-minimal/issues) for bug reports
 - **Discussions:** [GitHub Discussions](https://github.com/phoson-lat/phoson-engine-minimal/discussions) for questions
-- **Documentation:** See [PROJECT.md](./PROJECT.md) for deep architecture notes
+- **Documentation:** See [docs/api/](./docs/api/index.md) for per-package API notes
 - **Website:** [https://phoson.lat](https://phoson.lat)
 - **SDK Docs:** [https://phoson.lat/docs](https://phoson.lat/docs)
 

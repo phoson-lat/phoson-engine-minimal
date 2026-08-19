@@ -111,6 +111,27 @@ class AgentTool:
     handler: ToolHandler                   # Callable
 ```
 
+### Manual tools
+
+When constructing an `AgentTool` directly (without `@tool`), the handler must accept **two positional arguments**: the tool's JSON args (`dict`) and the shared `AgentContext`. This is exactly how `AgentEngine` invokes every handler:
+
+```python
+from phoson_agent import AgentTool
+from phoson_agent.context import AgentContext
+
+def handle_echo(args: dict[str, Any], context: AgentContext) -> str:
+    return args["message"]
+
+echo = AgentTool(
+    name="echo",
+    description="Echo a message.",
+    parameters={"type": "object", "properties": {"message": {"type": "string"}}},
+    handler=handle_echo,
+)
+```
+
+> ⚠️ A single-argument handler (only `args`) is **not** a supported contract: the engine always calls `handler(args, context)`, so a single-argument handler raises `TypeError` at execution time.
+
 ## Middleware
 
 ### AgentMiddleware
@@ -262,7 +283,7 @@ All events inherit from `AgentEvent` which has `timestamp`.
 | `AgentStepDoneEvent`   | `step: RunStep`                                 |
 | `AgentDoneEvent`       | `result: AgentRunResult`                         |
 | `AgentErrorEvent`      | `message`, `code`, `retryable`                 |
-| `AgentSubagentResult`  | `index`, `task`, `result`, `cost_usd`, `credits`, `duration_ms`, `input_tokens`, `output_tokens`, `error` |
+| `AgentSubagentResult`  | `index`, `task`, `result`, `cost_usd`, `credits`, `duration_ms`, `input_tokens`, `output_tokens`, `error` *(experimental — not yet emitted; subagent results currently travel as tool results)* |
 
 ## RunStep Model
 
