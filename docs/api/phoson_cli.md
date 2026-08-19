@@ -20,6 +20,18 @@ phoson-cli
 python -m phoson_cli
 ```
 
+### One-shot mode (scripts and CI)
+
+Run a single task without the interactive REPL. No session is persisted;
+the final answer goes to stdout and the exit code is 0 on success, 1 on
+agent error.
+
+```bash
+phoson-cli "fix the failing tests"      # positional task
+phoson-cli -p "summarize this repo"     # --print flag
+echo "explain the CI failure" | phoson-cli   # piped stdin
+```
+
 ## Configuration
 
 ### PhosonConfig
@@ -33,6 +45,8 @@ config = PhosonConfig(
     sessions_dir="./sessions",
     max_iterations=12,
     safe_mode=False,
+    subagent_max_parallel=4,     # max concurrent sub-agent LLM sessions
+    subagent_timeout_seconds=300.0,  # per sub-agent task timeout
 )
 
 # Provider API keys are typically loaded from environment variables,
@@ -61,6 +75,7 @@ Start the REPL and type natural language or commands.
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
 | `/label`          | Label current node                      |
+| `/undo`           | Undo the last turn (branch before your last message) |
 | `/attach`         | Attach image/audio/video/pdf           |
 | `/attachments`    | List or clear attachments              |
 | `/help`           | Show command reference                  |
@@ -107,11 +122,20 @@ result = tool.run(args={"query": "python async", "source": "duckduckgo"})
 
 ### SubAgentTool
 
-```python
-from phoson_cli.tools.subagent import SubAgentTool
+Two tools: `agent` (single task, clean context) and `agents` (multiple
+tasks in parallel). Parallelism is bounded by `subagent_max_parallel`
+(a semaphore — the parent agent decides how many tasks to spawn, not how
+many LLM sessions may run at once), and each task is guarded by
+`subagent_timeout_seconds`.
 
-tool = SubAgentTool(chat=chat, tools=tools, subagent_model="gpt-4o")
-result = tool.run(args={"task": "Search for info", "prompt": "..."})
+```python
+from phoson_cli.tools.subagent import agent, agents
+
+result = await agent.handler(
+    {"task": "Search for info"},
+    {"chat": chat, "available_tools": tools, "default_model": "gpt-4o",
+     "max_iterations": 12, "safe_mode": False, "subagent_timeout_seconds": 300.0},
+)
 ```
 
 ## Session Management
