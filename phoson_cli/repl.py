@@ -66,7 +66,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
     "Available tools: read_file, write_file, patch_file, list_dir, bash, "
-    "web_search, subagents. Be concise, accurate, and use tools when needed."
+    "web_search, agent, agents.{mcp_note}"
+    " Be concise, accurate, and use tools when needed."
 )
 
 
@@ -214,8 +215,17 @@ class PhosonRepl:
         provider/model/MCP state. The summarizer's provider/model fields
         are also refreshed so token estimation and context-window
         resolution stay accurate.
+
+        The previous runtime (chat client + engine plugins) is closed:
+        plugins that expose ``aclose`` (e.g. the MCP plugin with its pooled
+        sessions) are closed asynchronously on the running loop; without a
+        loop the synchronous ``cleanup()`` fallback is used.
         """
         old_chat = getattr(self, "chat", None)
+        old_engine = getattr(self, "engine", None)
+        old_plugins = (
+            list(getattr(old_engine, "_loaded_plugins", [])) if old_engine else []
+        )
         self.chat = build_chat(self.config)
         # Release the old client's connection pool (e.g. Anthropic SDK holds
         # a persistent httpx.AsyncClient). Schedule on the running loop;
@@ -225,6 +235,22 @@ class PhosonRepl:
                 asyncio.get_running_loop().create_task(old_chat.aclose())
             except RuntimeError:
                 pass
+        # Release the old engine's plugin resources (e.g. MCP pooled
+        # sessions / STDIO subprocesses) so switching model/provider does
+        # not leak them. Failures are logged, never fatal to the rebuild.
+        if old_plugins:
+            try:
+                asyncio.get_running_loop().create_task(self._close_plugins(old_plugins))
+            except RuntimeError:
+                for plugin in old_plugins:
+                    try:
+                        plugin.cleanup()
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.warning(
+                            "Could not clean up plugin %r during engine rebuild",
+                            getattr(plugin, "name", "?"),
+                            exc_info=True,
+                        )
         self.tools = build_tools()
         self.tools_dict = build_tools_dict()
 
@@ -247,6 +273,22 @@ class PhosonRepl:
         self.engine.context.extra["default_model"] = self.subagent_model
         self.engine.context.extra["max_iterations"] = self.config.max_iterations
         self.engine.context.extra["chat"] = self.chat
+
+    @staticmethod
+    async def _close_plugins(plugins: list) -> None:
+        """Close plugin instances, preferring async ``aclose()`` when present."""
+        for plugin in plugins:
+            try:
+                if hasattr(plugin, "aclose"):
+                    await plugin.aclose()
+                else:
+                    plugin.cleanup()
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Could not close plugin %r during engine rebuild",
+                    getattr(plugin, "name", "?"),
+                    exc_info=True,
+                )
 
     async def run(self) -> None:
         """Run the REPL main loop.
@@ -399,7 +441,7 @@ class PhosonRepl:
 
         config = ModelConfig(
             model=self.current_model,
-            system=_SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd()),
+            system=self._build_system_prompt(),
         )
 
         # Resolve context window and estimate current tokens
@@ -429,6 +471,18 @@ class PhosonRepl:
         )
 
     # ── Session / model management ─────────────────────────────────────────────
+
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt for the next run.
+
+        Mentions the MCP tools currently loaded so the model knows they
+        exist beyond the built-in set.
+        """
+        has_mcp = any(t.name.startswith("mcp_") for t in self.engine.tools)
+        mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
+        if not has_mcp:
+            mcp_note = ""
+        return _SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd(), mcp_note=mcp_note)
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
@@ -473,11 +527,14 @@ class PhosonRepl:
             self.renderer.print_error(f"Failed to load session: {e}")
             return False
 
-    def branch_session(self) -> None:
-        """Branch the conversation from the current node."""
-        if self.current_node_id is None:
-            return
-        self.current_node_id = self.tree.branch(self.current_node_id)
+    def branch_session(self) -> None:  # pragma: no cover - kept for API compat
+        """Deprecated no-op kept for backward compatibility.
+
+        The conversation tree's append cursor already follows the current
+        node, so there is nothing to branch from; real branching/undo UX is
+        tracked as follow-up work (see TODO.md).
+        """
+        pass
 
     def set_provider(self, provider: str) -> None:
         """Switch to a different provider and rebuild runtime state."""
@@ -503,10 +560,19 @@ class PhosonRepl:
         self.tree.label(self.current_node_id, text)
 
     def find_latest_node_id(self) -> str | None:
-        """Find the most recently created node."""
+        """Find the most recent leaf node — the continuation point.
+
+        Only leaves are considered (the next turn appends to a leaf), and
+        ties on ``created_at`` are broken deterministically by node id so a
+        loaded tree (nodes re-inserted in saved order) yields a stable pick.
+        """
         if not self.tree.nodes:
             return None
-        latest = max(self.tree.nodes.values(), key=lambda n: n.created_at)
+        leaves = self.tree.get_leaves()
+        if not leaves:
+            return None
+        leaf_nodes = [self.tree.nodes[node_id] for node_id in leaves]
+        latest = max(leaf_nodes, key=lambda n: (n.created_at, n.id))
         return latest.id
 
     # ── Tree rendering ────────────────────────────────────────────────────────

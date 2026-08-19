@@ -71,7 +71,6 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
     CommandSpec(("/sessions",), "List, load or delete saved sessions", "_cmd_sessions"),
     CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
-    CommandSpec(("/branch",), "Branch the current node into a new path", "_cmd_branch"),
     CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
     CommandSpec(
         ("/attach", "/attachments"),
@@ -308,12 +307,6 @@ class CommandHandler:
 
     async def _cmd_tree(self, cmd: Command) -> bool:  # noqa: ARG002
         self._r.print_info(self.repl.render_tree_ascii())
-        return True
-
-    async def _cmd_branch(self, cmd: Command) -> bool:  # noqa: ARG002
-        self.repl.branch_session()
-        node = (self.repl.current_node_id or "")[:8]
-        self._r.print_info(f"Branched from  {node}")
         return True
 
     async def _cmd_label(self, cmd: Command) -> bool:

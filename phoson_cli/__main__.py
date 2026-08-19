@@ -7,36 +7,8 @@ import subprocess
 from pathlib import Path
 
 from phoson_cli.repl import PhosonRepl
-from phoson_cli.config import load_config
+from phoson_cli.config import build_chat, load_config, has_configured_provider
 from phoson_cli.installer import run_install_wizard
-
-
-def _has_configured_provider(config) -> bool:
-    """Return whether the loaded config can build a provider without setup."""
-    if config.provider.lower() in {"ollama", "bedrock", "aws", "vllm", "lmstudio"}:
-        return True
-    return any(
-        (
-            config.openrouter_api_key,
-            config.openai_api_key,
-            config.anthropic_api_key,
-            config.github_token,
-            config.nvidia_api_key,
-            config.xai_api_key,
-            config.groq_api_key,
-            config.deepseek_api_key,
-            config.together_api_key,
-            config.perplexity_api_key,
-            config.azure_openai_api_key,
-            config.gemini_api_key,
-            config.mistral_api_key,
-            config.fireworks_api_key,
-            config.cohere_api_key,
-            config.vllm_base_url,
-            config.vllm_api_key,
-            config.lmstudio_base_url,
-        )
-    )
 
 
 def self_update() -> None:
@@ -99,11 +71,24 @@ def main() -> None:
 
     config_path = Path.home() / ".phoson" / "config.toml"
 
-    if not config_path.exists() and not _has_configured_provider(config):
+    if not config_path.exists() and not has_configured_provider(config):
         print("No API keys configured. Running setup wizard...")
         asyncio.run(run_install_wizard(config))
         # Reload config after setup
         config = load_config()
+
+    # Fail fast with a friendly message instead of a traceback when the
+    # active provider has no usable credential (e.g. stale config.toml).
+    try:
+        build_chat(config)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print(
+            "Set the provider's API key in ~/.phoson/config.toml "
+            "or run: phoson-cli --setup",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     repl = PhosonRepl(config)
     asyncio.run(repl.run())

@@ -1,5 +1,6 @@
 """Unit tests for phoson_cli.repl (PhosonRepl and SessionMetrics)."""
 
+import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,7 +13,7 @@ from phoson_agent.models import (
     AgentDoneEvent,
     AgentRunResult,
 )
-from phoson_agent.sessions.models import SessionMeta
+from phoson_agent.sessions.models import SessionMeta, ConversationTree
 
 UTC = datetime.UTC
 
@@ -221,3 +222,144 @@ async def test_load_session_schema_mapping(repl: PhosonRepl, tmp_path) -> None:
     assert repl.session_metrics.total_output_tokens == 500
     assert repl.session_metrics.step_count == 3
     assert repl.session_metrics.last_model == "gpt-4"
+
+
+# ── PhosonRepl._rebuild_engine: old runtime cleanup ─────────────────────────
+
+
+def _fake_engine_with_plugins(*plugins) -> MagicMock:
+    engine = MagicMock()
+    engine._loaded_plugins = list(plugins)
+    return engine
+
+
+class _AsyncClosePlugin:
+    """Plugin with async aclose() (like the MCP plugin)."""
+
+    name = "mcp"
+
+    def __init__(self) -> None:
+        self.aclose_calls = 0
+        self.fail = False
+
+    async def aclose(self) -> None:
+        self.aclose_calls += 1
+        if self.fail:
+            raise RuntimeError("boom")
+
+
+class _SyncOnlyPlugin:
+    """Plugin with only sync cleanup()."""
+
+    name = "memory"
+
+    def __init__(self) -> None:
+        self.cleaned = 0
+
+    def cleanup(self) -> None:
+        self.cleaned += 1
+
+
+@pytest.mark.asyncio
+async def test_rebuild_engine_closes_old_plugins_and_chat(repl: PhosonRepl) -> None:
+    """Switching model/provider must close the previous engine's plugins
+    (e.g. MCP pooled sessions) and the old chat client."""
+    async_plugin = _AsyncClosePlugin()
+    sync_plugin = _SyncOnlyPlugin()
+
+    old_chat = MagicMock()
+    old_chat.aclose = AsyncMock()
+
+    repl.chat = old_chat
+    repl.engine = _fake_engine_with_plugins(async_plugin, sync_plugin)
+
+    new_engine = MagicMock()
+    new_engine._loaded_plugins = []
+    with patch("phoson_cli.repl.AgentEngine", return_value=new_engine):
+        repl._rebuild_engine()
+
+    # The close is scheduled as a task — give the loop a tick to run it.
+    await asyncio.sleep(0.05)
+
+    assert async_plugin.aclose_calls == 1
+    assert sync_plugin.cleaned == 1
+    old_chat.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rebuild_engine_survives_plugin_close_failure(repl: PhosonRepl) -> None:
+    """A failing plugin close must not break the rebuild — the new engine
+    is in place and the failure is logged, not raised."""
+    bad_plugin = _AsyncClosePlugin()
+    bad_plugin.fail = True
+
+    old_chat = MagicMock()
+    old_chat.aclose = AsyncMock()
+
+    repl.chat = old_chat
+    repl.engine = _fake_engine_with_plugins(bad_plugin)
+
+    new_engine = MagicMock()
+    new_engine._loaded_plugins = []
+    with patch("phoson_cli.repl.AgentEngine", return_value=new_engine):
+        repl._rebuild_engine()  # must not raise
+
+    await asyncio.sleep(0.05)
+
+    assert repl.engine is new_engine
+    assert bad_plugin.aclose_calls == 1
+
+
+# ── PhosonRepl.find_latest_node_id ───────────────────────────────────────────
+
+
+def test_find_latest_node_id_empty_tree(repl: PhosonRepl) -> None:
+    fresh = ConversationTree.new(session_id="x")
+    repl.tree = fresh
+    repl.current_node_id = None
+    assert repl.find_latest_node_id() is None
+
+
+def test_find_latest_node_id_returns_newest_leaf(repl: PhosonRepl) -> None:
+    """The continuation point is the newest *leaf*; internal nodes and
+    stale leaves on other branches are ignored."""
+    from phoson_llm.schemas import Message
+
+    tree = ConversationTree.new(session_id="s1")
+    root = tree.append(None, Message(role="user", content="root"))
+    a = tree.append(root.id, Message(role="assistant", content="branch A"))
+    b = tree.append(root.id, Message(role="assistant", content="branch B"))
+
+    # Make branch A the stale one (older than B) and B's continuation the
+    # newest leaf.
+    older = root.created_at - datetime.timedelta(seconds=10)
+    a.created_at = older
+    continuation = tree.append(b.id, Message(role="user", content="continue on B"))
+
+    repl.tree = tree
+    repl.current_node_id = None
+
+    assert repl.find_latest_node_id() == continuation.id
+
+
+# ── PhosonRepl._build_system_prompt ──────────────────────────────────────────
+
+
+def test_system_prompt_lists_real_tool_names(repl: PhosonRepl) -> None:
+    prompt = repl._build_system_prompt()
+
+    assert "agent, agents" in prompt
+    assert "subagents" not in prompt
+    assert "MCP tools" not in prompt
+
+
+def test_system_prompt_mentions_mcp_tools_when_loaded(repl: PhosonRepl) -> None:
+    fake_mcp_tool = MagicMock()
+    fake_mcp_tool.name = "mcp_github_get_user"
+    plain_tool = MagicMock()
+    plain_tool.name = "bash"
+    repl.engine.tools = [plain_tool, fake_mcp_tool]
+
+    prompt = repl._build_system_prompt()
+
+    assert "MCP tools (names prefixed 'mcp_') are also available" in prompt
