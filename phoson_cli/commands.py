@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
 from .config import save_config, enabled_providers_from_config
+from .updater import perform_self_update
 from .installer import run_install_wizard
 from .model_picker import pick_model
 from ._mcp_commands import _MCPSubcommands
@@ -84,6 +85,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/steps",), "Show the number of agent steps so far", "_cmd_steps"),
     CommandSpec(("/setup",), "Run the initial setup wizard again", "_cmd_setup"),
     CommandSpec(("/mcp",), "Manage Model Context Protocol servers", "_cmd_mcp"),
+    CommandSpec(
+        ("/update", "/upgrade"),
+        "Check for and install CLI updates",
+        "_cmd_update",
+    ),
 )
 
 
@@ -441,3 +447,10 @@ class CommandHandler:
 
     async def _cmd_mcp(self, cmd: Command) -> bool:
         return await _MCPSubcommands(self).dispatch(cmd)
+
+    async def _cmd_update(self, cmd: Command) -> bool:  # noqa: ARG002
+        """Check PyPI and install the latest CLI release (asks first)."""
+        summary = await perform_self_update(assume_yes=False)
+        for line in summary.splitlines():
+            self._r.print_info(line)
+        return True

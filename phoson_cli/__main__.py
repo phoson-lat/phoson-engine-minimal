@@ -8,22 +8,15 @@ from pathlib import Path
 
 from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import build_chat, load_config, has_configured_provider
+from phoson_cli.updater import perform_self_update
 from phoson_cli.installer import run_install_wizard
 
 
 def self_update() -> None:
-    """Upgrade phoson-cli to the latest version via uv."""
-    print("Updating phoson-cli...")
-    result = subprocess.run(
-        ["uv", "tool", "upgrade", "phoson-engine-minimal"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        print("Update complete!")
-    else:
-        print(f"Update failed: {result.stderr}", file=sys.stderr)
+    """Upgrade phoson-cli to the latest version (with confirmation)."""
+    summary = asyncio.run(perform_self_update(assume_yes=False))
+    print(summary)
+    if "Update failed" in summary:
         sys.exit(1)
 
 
