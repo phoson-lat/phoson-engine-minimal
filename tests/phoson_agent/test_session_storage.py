@@ -269,3 +269,34 @@ async def test_list_sessions_skips_malformed_lines(temp_dir):
 async def test_delete_nonexistent_session_does_not_raise(temp_dir):
     storage = JsonlStorage(base_path=temp_dir)
     await storage.delete("does-not-exist")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_restores_persisted_meta_totals(temp_dir):
+    """Regression: list_sessions must read cost/tokens/steps/model from the
+    persisted session_meta record, not return zeros."""
+    storage = JsonlStorage(base_path=temp_dir)
+    tree = ConversationTree.new(session_id="meta-roundtrip")
+    tree.append(parent_id=None, message=Message(role="user", content="Hi"))
+    await storage.save(tree)
+    await storage.save_meta(
+        "meta-roundtrip",
+        {
+            "total_cost_usd": 1.25,
+            "total_input_tokens": 100,
+            "total_output_tokens": 50,
+            "step_count": 7,
+            "last_model": "claude-3-haiku",
+        },
+    )
+
+    metas = await storage.list_meta()
+
+    assert len(metas) == 1
+    meta = metas[0]
+    assert meta.id == "meta-roundtrip"
+    assert meta.total_cost == 1.25
+    assert meta.total_tokens == 150
+    assert meta.step_count == 7
+    assert meta.last_model == "claude-3-haiku"
+    assert meta.message_count == 1

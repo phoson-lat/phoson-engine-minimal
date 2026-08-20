@@ -162,10 +162,14 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
 
     Each line is parsed exactly once, in order. The first non-meta record
     determines ``created_at``; ``message_count`` is the number of non-meta
-    records. Empty or malformed files are skipped silently.
+    records. Cost/token/step/model totals come from the ``session_meta``
+    record persisted by ``save_meta`` (last one wins; files are rewritten
+    atomically, so there is normally exactly one). Empty or malformed
+    files are skipped silently.
     """
     created_at: datetime.datetime | None = None
     message_count = 0
+    meta_values: dict | None = None
     try:
         with file_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -178,6 +182,7 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
                     logger.debug("Skipping malformed line in %s: %s", file_path, exc)
                     continue
                 if record.get("type") == "session_meta":
+                    meta_values = record
                     continue
                 message_count += 1
                 if created_at is None:
@@ -200,4 +205,8 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         created_at=created_at,
         updated_at=updated_at,
         message_count=message_count,
+        total_cost=(float(meta_values.get("total_cost", 0.0)) if meta_values else 0.0),
+        total_tokens=int(meta_values.get("total_tokens", 0)) if meta_values else 0,
+        step_count=int(meta_values.get("step_count", 0)) if meta_values else 0,
+        last_model=meta_values.get("last_model") if meta_values else None,
     )
