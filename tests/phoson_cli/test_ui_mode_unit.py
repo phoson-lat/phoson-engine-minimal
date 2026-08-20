@@ -60,17 +60,27 @@ def test_textual_without_dependency_exits_with_friendly_error(
     assert "uv sync --extra tui" in out
 
 
-def test_textual_with_dependency_falls_back_to_classic(
-    monkeypatch, tmp_path, capsys
-) -> None:
+def test_textual_with_dependency_launches_tui(monkeypatch, tmp_path) -> None:
+    """Phase 3: with the tui extra, --textual hands over to the TUI.
+
+    ``_start_textual_ui`` is stubbed (launching the real app would block);
+    the contract under test is that main() starts it with the config and
+    never runs the classic REPL.
+    """
     monkeypatch.setattr(_main_module(), "_textual_available", lambda: True)
     repl_ran: dict = {}
+    started: dict = {}
     _classic_env(monkeypatch, tmp_path, ["phoson-cli", "--textual"], repl_ran)
 
+    def _fake_start(config):
+        started["config"] = config
+        return True
+
+    monkeypatch.setattr(_main_module(), "_start_textual_ui", _fake_start)
     _main_module().main()
 
-    assert repl_ran.get("ran") is True
-    assert "under construction" in capsys.readouterr().out
+    assert "config" in started  # TUI took over with the loaded config
+    assert repl_ran.get("ran") is not True  # classic REPL never started
 
 
 def test_classic_flag_runs_classic_without_textual(monkeypatch, tmp_path, capsys):
