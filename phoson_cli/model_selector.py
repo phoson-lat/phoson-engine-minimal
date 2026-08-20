@@ -1,23 +1,75 @@
 import warnings
 from decimal import Decimal, InvalidOperation
-from dataclasses import dataclass
 
 import httpx
 
 from .config import PhosonConfig
-
-
-@dataclass(frozen=True)
-class ModelOption:
-    id: str
-    label: str
-    provider: str
-    description: str = ""
-    context_length: int | None = None
-    pricing: str = ""
+from .models import (
+    ModelOption,
+    update_cache,
+    cache_is_fresh,
+    cached_options,
+    option_to_dict,
+    load_models_file,
+    save_models_file,
+    apply_model_overrides,
+)
 
 
 async def list_available_models(config: PhosonConfig) -> list[ModelOption]:
+    """List models, cache-first.
+
+    Resolution: fresh ``~/.phoson/models.json`` cache (instant, works
+    offline) → live fetch (updates the cache on success) → stale cache
+    (when the network is down) → the single current-model fallback.
+    User model overrides from the file are always applied on top.
+    """
+    data = load_models_file()
+    provider = config.provider.lower()
+
+    if cache_is_fresh(data):
+        cached = apply_model_overrides(data, cached_options(data, provider), provider)
+        if cached:
+            return _prioritize_current(cached, config.model)
+
+    options = await _fetch_provider_models(config)
+
+    if _is_fallback_list(options, config.model):
+        cached = apply_model_overrides(data, cached_options(data, provider), provider)
+        if cached:
+            warnings.warn(
+                "Model list unavailable — showing the cached listing from models.json.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return _prioritize_current(cached, config.model)
+        return _prioritize_current(
+            apply_model_overrides(data, options, provider), config.model
+        )
+
+    _refresh_cache_for(data, provider, options)
+    return _prioritize_current(
+        apply_model_overrides(data, options, provider), config.model
+    )
+
+
+def _is_fallback_list(options: list[ModelOption], current_model: str) -> bool:
+    """True when a lister produced its single-item "current model" fallback."""
+    return len(options) == 1 and options[0].id == current_model
+
+
+def _refresh_cache_for(data: dict, provider: str, options: list[ModelOption]) -> None:
+    """Persist a freshly fetched listing; a write failure must not break the picker."""
+    try:
+        save_models_file(
+            update_cache(data, {provider: [option_to_dict(o) for o in options]})
+        )
+    except OSError:
+        pass
+
+
+async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
+    """Live (network/local-API) model listing for the configured provider."""
     provider = config.provider.lower()
     if provider == "openrouter":
         return await _list_openrouter_models(config)
