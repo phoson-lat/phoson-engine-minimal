@@ -14,7 +14,7 @@ import pytest
 
 textual = pytest.importorskip("textual")
 
-from textual.widgets import Input  # noqa: E402
+from textual.widgets import Input, Static  # noqa: E402
 
 from phoson_agent import (  # noqa: E402
     RunStep,
@@ -87,6 +87,16 @@ async def _wait_idle(app: PhosonTextualApp, pilot, max_pauses: int = 60) -> None
     pytest.fail("run did not finish in time")
 
 
+async def _wait_turn_content(app: PhosonTextualApp, pilot, expected: str) -> None:
+    """Wait until the turn's buffered tokens have all landed (async tasks)."""
+    for _ in range(60):
+        await pilot.pause()
+        turn = app._last_turn
+        if turn is not None and turn.content == expected:
+            return
+    pytest.fail("turn content did not settle in time")
+
+
 def _rows(app: PhosonTextualApp) -> list:
     return list(app.query_one("#conversation").children)
 
@@ -128,15 +138,20 @@ async def test_streaming_run_renders_turn_and_persists(tmp_path: Path) -> None:
         with _patch_models():
             await _submit(app, pilot, "hola")
             await _wait_idle(app, pilot)
+            await _wait_turn_content(app, pilot, "Hola mundo")
 
         rows = _rows(app)
-        assert isinstance(rows[0], UserTurn)
-        turn = rows[1]
+        # the conversation starts with the welcome line
+        assert isinstance(rows[0], Static)
+        user_idx = next(i for i, w in enumerate(rows) if isinstance(w, UserTurn))
+        turn_idx = next(i for i, w in enumerate(rows) if isinstance(w, StreamingTurn))
+        assert user_idx == turn_idx - 1
+        turn = rows[turn_idx]
         assert isinstance(turn, StreamingTurn)
         assert turn.content == "Hola mundo"
-        # reasoning block + tool card inside the turn
-        assert turn.reasoning_view is not None
-        assert any(type(c).__name__ == "ToolCard" for c in turn.children)
+        # chronological order: reasoning, content, tool card, status line
+        names = [type(c).__name__ for c in turn.children]
+        assert names == ["ReasoningView", "Markdown", "ToolCard", "Static"]
         # status bar back to idle with a session
         assert "idle" in _status_text(app)
         assert "session" in _status_text(app)
@@ -330,3 +345,99 @@ async def test_textual_available_flag_still_gates_import(tmp_path: Path) -> None
     from phoson_cli.__main__ import _textual_available
 
     assert _textual_available() is True
+
+
+# ── polish: segments, composer state, persistence, welcome/footer ───────────
+
+
+async def test_tool_cards_render_above_following_content(tmp_path: Path) -> None:
+    async def fake_stream(self, messages, config):
+        yield AgentTokenEvent(content="before ")
+        yield AgentToolStartEvent(tool_name="bash", args={"command": "ls"})
+        yield AgentToolDoneEvent(tool_name="bash", result="ok", duration_ms=3)
+        yield AgentTokenEvent(content="after")
+        yield AgentDoneEvent(result=_done_result(messages, "before after"))
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app._controller.engine.stream = fake_stream.__get__(app._controller.engine)
+        with _patch_models():
+            await _submit(app, pilot, "hi")
+            await _wait_idle(app, pilot)
+            await _wait_turn_content(app, pilot, "before after")
+
+        turn = app._last_turn
+        assert turn is not None
+        names = [type(c).__name__ for c in turn.children]
+        # segment 1, then the card, then segment 2, then the status line
+        assert names == ["Markdown", "ToolCard", "Markdown", "Static"]
+        mds = [c for c in turn.children if type(c).__name__ == "Markdown"]
+        # the two segments carry the text before and after the tool call
+        from textual.widgets import Markdown
+
+        assert isinstance(mds[0], Markdown)
+        assert isinstance(mds[1], Markdown)
+        app.shutdown()
+
+
+async def test_composer_disabled_while_running(tmp_path: Path) -> None:
+    async def slow_stream(self, messages, config):
+        for _ in range(50):
+            yield AgentTokenEvent(content="x")
+            await asyncio.sleep(0.02)
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        composer = app.query_one("#composer")
+        assert composer.disabled is False
+        app._controller.engine.stream = slow_stream.__get__(app._controller.engine)
+        with _patch_models():
+            await _submit(app, pilot, "hi")
+            await pilot.pause(0.2)
+            assert app._is_running()
+            assert composer.disabled is True
+            for _ in range(60):
+                await pilot.pause()
+                if not app._is_running():
+                    break
+        assert composer.disabled is False
+        assert app.screen.focused is composer
+        app.shutdown()
+
+
+async def test_model_command_persists_config(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    app = PhosonTextualApp(
+        PhosonConfig(provider="ollama", model="old-model", sessions_dir=tmp_path)
+    )
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        with _patch_models():
+            await _submit(app, pilot, "/model new-model")
+            for _ in range(20):
+                await pilot.pause()
+        config_file = home / ".phoson" / "config.toml"
+        assert config_file.exists()
+        assert 'model = "new-model"' in config_file.read_text()
+        assert "saved" in _notify_text(app)
+        app.shutdown()
+
+
+async def test_welcome_line_and_footer_on_mount(tmp_path: Path) -> None:
+    from textual.widgets import Footer
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        # the footer shows the available bindings
+        assert app.query_one(Footer) is not None
+        # the conversation starts with a welcome line (model + session)
+        first = _rows(app)[0]
+        text = str(first.render())
+        assert "test-model" in text
+        assert "session" in text
+        app.shutdown()

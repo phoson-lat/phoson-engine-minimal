@@ -117,34 +117,54 @@ class StreamingTurn(Vertical):
     def __init__(self) -> None:
         super().__init__()
         self._content = ""
+        self._seg_offset = 0  # start index of the current content segment
         self._reasoning = ""
         self._reasoning_view: ReasoningView | None = None
-        self._content_view: Markdown | None = None
+        self._active_md: Markdown | None = None
         self._status_view: Static | None = None
         self._finished = False
 
     def compose(self) -> Iterable[Widget]:
-        # Base views always exist (mounted together with the turn).
-        self._content_view = Markdown("")
+        # Only the status line exists from the start; content markdown
+        # segments and tool cards are added as the run progresses, in
+        # chronological order (segment → card → segment → …).
         self._status_view = Static("", classes="turn-status")
-        yield self._content_view
         yield self._status_view
 
     # ── event-driven updates (called by the sink) ─────────────────
+
+    def _insert_anchor(self) -> "Static | Markdown":
+        """Mount anchor for new children: above the active segment, or
+        above the status line when no segment is open."""
+        assert self._status_view is not None
+        return self._active_md if self._active_md is not None else self._status_view
 
     async def append_reasoning(self, text: str) -> None:
         self._reasoning += text
         if self._reasoning_view is None:
             self._reasoning_view = ReasoningView(self._reasoning)
             # Reasoning block goes above the content.
-            await self.mount(self._reasoning_view, before=self._content_view)
+            await self.mount(self._reasoning_view, before=self._insert_anchor())
         else:
             self._reasoning_view.append_text(text)
 
-    def append_token(self, text: str) -> None:
+    async def append_token(self, text: str) -> None:
         self._content += text
-        if self._content_view is not None:
-            self._content_view.update(self._content)
+        if self._active_md is None:
+            self._active_md = Markdown(self._content[self._seg_offset :])
+            await self.mount(self._active_md, before=self._status_view)
+        else:
+            self._active_md.update(self._content[self._seg_offset :])
+
+    def close_segment(self) -> None:
+        """Freeze the current content segment (called before a tool card).
+
+        The next token opens a new markdown segment *below* the card, so
+        tool cards render above the content that follows them — the same
+        order the classic spinner-based renderer produces.
+        """
+        self._seg_offset = len(self._content)
+        self._active_md = None
 
     @property
     def status_view(self) -> "Static | None":

@@ -6,6 +6,7 @@ directly. No Rich console, no ``Live``, no threads — Textual owns all
 rendering.
 """
 
+import asyncio
 from typing import TYPE_CHECKING
 from collections.abc import Sequence
 
@@ -32,6 +33,10 @@ class TextualSink:
     def __init__(self, app: "PhosonTextualApp") -> None:
         self._app = app
         self._last_card: ToolCard | None = None
+        # Turn mutations (token/reasoning/tool updates) are serialized
+        # through a FIFO queue so async mounts never interleave.
+        self._turn_queue: asyncio.Queue = asyncio.Queue()
+        self._turn_worker: asyncio.Task | None = None
 
     # ── AgentEventSink ────────────────────────────────────────────
 
@@ -51,9 +56,9 @@ class TextualSink:
     def on_event(self, event: "object") -> None:
         match event:
             case AgentTokenEvent():
-                self._current_turn().append_token(event.content)
+                self._enqueue_turn(self._current_turn().append_token(event.content))
             case AgentReasoningEvent():
-                self._app.schedule(self._current_turn().append_reasoning(event.content))
+                self._enqueue_turn(self._current_turn().append_reasoning(event.content))
             case AgentToolStartEvent():
                 self._on_tool_start(event)
             case AgentToolDoneEvent():
@@ -100,6 +105,23 @@ class TextualSink:
 
     # ── internals ─────────────────────────────────────────────────
 
+    def _enqueue_turn(self, coro) -> None:
+        self._turn_queue.put_nowait(coro)
+        if self._turn_worker is None or self._turn_worker.done():
+            self._turn_worker = asyncio.ensure_future(self._drain_turn_queue())
+            self._turn_worker.add_done_callback(self._app._log_task_error)
+
+    async def _drain_turn_queue(self) -> None:
+        while True:
+            coro = await self._turn_queue.get()
+            try:
+                await coro
+            except Exception as exc:  # noqa: BLE001 — keep the run alive
+                self._app.log.warning("turn update error: %s", exc)
+            if self._turn_queue.empty():
+                self._turn_worker = None
+                return
+
     def _current_turn(self) -> StreamingTurn:
         turn = self._app.current_turn()
         assert turn is not None, "on_event received outside a run"
@@ -111,7 +133,14 @@ class TextualSink:
         card = ToolCard(label, detail)
         self._last_card = card
         turn = self._current_turn()
-        self._app.schedule(turn.mount(card, before=turn.status_view))
+
+        async def _place_card() -> None:
+            # Freeze the current content segment so the card sits above
+            # the text that streams after the tool.
+            turn.close_segment()
+            await turn.mount(card, before=turn.status_view)
+
+        self._enqueue_turn(_place_card())
 
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
         if self._last_card is not None:
