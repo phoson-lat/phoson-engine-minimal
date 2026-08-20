@@ -83,9 +83,21 @@ async def test_bash_truncates_long_output() -> None:
     assert len(out.encode()) <= MAX_BYTES + len("\n\n[...truncated]") + 16
 
 
+class _FakeConfirmation:
+    """Recording ConfirmationService double."""
+
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.asked: list[str] = []
+
+    async def confirm_bash(self, command: str) -> bool:
+        self.asked.append(command)
+        return self.answer
+
+
 @pytest.mark.asyncio
 async def test_bash_safe_mode_declined(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the user declines, no subprocess is spawned."""
+    """When the confirmation service declines, no subprocess is spawned."""
     spawned = {"count": 0}
 
     real_create = asyncio.create_subprocess_shell
@@ -94,13 +106,11 @@ async def test_bash_safe_mode_declined(monkeypatch: pytest.MonkeyPatch) -> None:
         spawned["count"] += 1
         return await real_create(*args, **kwargs)  # type: ignore[arg-type]
 
-    async def fake_confirm(_command: str) -> bool:
-        return False
-
     monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create)
-    monkeypatch.setattr(bash_module, "_confirm_async", fake_confirm)
 
-    out = await _run_bash("echo nope", safe_mode=True)
+    out = await _run_bash(
+        "echo nope", safe_mode=True, confirmation=_FakeConfirmation(False)
+    )
 
     assert "Cancelled" in out
     assert spawned["count"] == 0
@@ -108,10 +118,70 @@ async def test_bash_safe_mode_declined(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_bash_safe_mode_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_confirm(_command: str) -> bool:
-        return True
-
-    monkeypatch.setattr(bash_module, "_confirm_async", fake_confirm)
-
-    out = await _run_bash("echo yes", safe_mode=True)
+    conf = _FakeConfirmation(True)
+    out = await _run_bash("echo yes", safe_mode=True, confirmation=conf)
     assert "yes" in out
+    assert conf.asked == ["echo yes"]
+
+
+@pytest.mark.asyncio
+async def test_bash_safe_mode_without_service_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One-shot/scripts inject no confirmation service: refuse, never run,
+    never hang."""
+    spawned = {"count": 0}
+
+    real_create = asyncio.create_subprocess_shell
+
+    async def fake_create(*args: object, **kwargs: object):
+        spawned["count"] += 1
+        return await real_create(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", fake_create)
+
+    # No confirmation service provided (one-shot / scripts).
+    out = await _run_bash("echo pwned", safe_mode=True)
+
+    assert "Blocked" in out
+    assert "safe_mode" in out
+    assert spawned["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_bash_without_safe_mode_never_confirms() -> None:
+    conf = _FakeConfirmation(False)  # would decline if asked
+    out = await _run_bash("echo free", safe_mode=False, confirmation=conf)
+    assert "free" in out
+    assert conf.asked == []  # never consulted
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_injects_confirmation_from_context() -> None:
+    """The @tool handler picks bash_confirmation/safe_mode from the context
+    (dict form, as _context_values accepts)."""
+    conf = _FakeConfirmation(True)
+    out = await bash_module.bash.handler(
+        {"command": "echo injected"},
+        context={"safe_mode": True, "bash_confirmation": conf},
+    )
+    assert "injected" in out
+    assert conf.asked == ["echo injected"]
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_without_context_key_fails_closed() -> None:
+    """Context without bash_confirmation + safe_mode → refused (one-shot)."""
+    out = await bash_module.bash.handler(
+        {"command": "echo pwned"},
+        context={"safe_mode": True},
+    )
+    assert "Blocked" in out
+
+
+@pytest.mark.asyncio
+async def test_bash_tool_schema_hides_injected_params() -> None:
+    props = bash_module.bash.parameters.get("properties", {})
+    assert "command" in props
+    assert "safe_mode" not in props
+    assert "bash_confirmation" not in props
