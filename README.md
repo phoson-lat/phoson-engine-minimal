@@ -436,6 +436,12 @@ non-sensitive provider settings (`default_model`, `base_url` for
 self-hosted/proxied endpoints) and an automatic 24 h model-list cache
 that makes `/model` instant and works offline. API keys never live there;
 see [docs/api/phoson_cli.md](docs/api/phoson_cli.md).
+
+**UI modes:** the interactive REPL (Rich + prompt_toolkit) is the default.
+`phoson-cli --classic` selects it explicitly; `phoson-cli --textual` selects
+the Textual TUI, which is under migration (see `MIGRATE_CLI_TO_TEXTUAL.md`)
+and requires the optional extra: `uv sync --extra tui`. One-shot mode
+(`phoson-cli "task"`) is always stdout-only and ignores UI flags.
 ---
 
 ## 🔒 CI and security workflows
