@@ -56,4 +56,21 @@ class AgentEventSink(Protocol):
         """Show a status message. ``kind`` is info, warn or error."""
 
 
-__all__ = ["AgentEventSink"]
+@runtime_checkable
+class ConfirmationService(Protocol):
+    """Human-in-the-loop confirmations (Textual migration, phase 2).
+
+    Tools that need an interactive yes/no (bash in ``safe_mode``) receive
+    a service through engine context injection instead of opening a
+    prompt themselves: the classic REPL injects a prompt_toolkit-based
+    implementation; the Textual TUI will inject a modal; front ends that
+    cannot confirm (one-shot / scripts) inject nothing and the tool must
+    fail closed.
+    """
+
+    async def confirm_bash(self, command: str) -> bool:
+        """Ask whether ``command`` may run. False on cancel/EOF."""
+        ...
+
+
+__all__ = ["AgentEventSink", "ConfirmationService"]
