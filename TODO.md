@@ -1,10 +1,10 @@
 # Technical TODO — phoson-engine-minimal
 
-> **2026-08-19:** Backlog #18–#29 closed and shipped in **v0.4.0**
-> (PRs #30 + #31). CLI P0 bug fixes merged in PR #32. The `/update`
-> self-update command merged in PR #33. CLI P1 core (one-shot mode,
-> `/undo`, sub-agent concurrency + timeout) is on branch
-> `feat/cli-p1-core`. This file is the index of what is left.
+> **2026-08-20:** CLI P1 core (one-shot mode, `/undo`, sub-agent
+> concurrency + timeout) merged in PR #34 and shipped in **v0.5.0**.
+> Look & feel work is starting: the theme foundation is on branch
+> `feat/cli-theme-foundation` (PR pending). This file is the index of
+> what is left.
 
 ## Resolved (shipped in v0.4.0)
 
@@ -17,7 +17,7 @@ English-only language policy (#28), experimental event marking (#29).
 Plus: provider SDK bug fixes (Anthropic/Mistral/Gemini), pyright in CI,
 user-facing docs translated to English.
 
-## CLI P0 — merged (PR #32, pending release tag)
+## CLI P0 — merged (PR #32, shipped in v0.5.0)
 
 | Area | Fix |
 |------|-----|
@@ -29,7 +29,7 @@ user-facing docs translated to English.
 | Provider list drift | `_has_configured_provider` (main) and `enabled_providers_from_config` (config) now share one credential registry (`_credential_providers` + `NO_CREDENTIAL_PROVIDERS` + new `has_configured_provider`). |
 | Stale system prompt | Tool list now says `agent, agents` (real names) and mentions MCP tools when loaded (`_build_system_prompt`). |
 
-## CLI self-update — branch `feat/cli-update-command`
+## CLI self-update — merged (PR #33, shipped in v0.5.0)
 
 - New `phoson_cli/updater.py`: shared update logic — current version via
   `importlib.metadata` ("dev" from source), latest from PyPI JSON (best
@@ -40,9 +40,7 @@ user-facing docs translated to English.
 - `--self-update` flag now uses the same flow (version check first instead
   of a blind `uv tool upgrade`), and exits non-zero on failure.
 
-## Pending
-
-### CLI P1 core — branch `feat/cli-p1-core`
+## CLI P1 core — merged (PR #34, shipped in v0.5.0)
 
 - **One-shot mode**: `phoson-cli "task"` / `-p "task"` / piped stdin —
   single agent run, final content to stdout, exit code 0/1, no REPL and no
@@ -53,7 +51,7 @@ user-facing docs translated to English.
   the undone messages stay in the tree as an abandoned branch and the next
   message branches from the restored position. Cost/token metrics are
   cumulative and intentionally not rolled back.
-- **Sub-agent concurrency**: `agents` now runs behind an
+- **Sub-agent concurrency**: `agents` runs behind an
   `asyncio.Semaphore(subagent_max_parallel)` (config key,
   `PHOSON_SUBAGENT_MAX_PARALLEL`, default 4) — the parent agent decides how
   many tasks to spawn, not how many LLM sessions may run at once.
@@ -61,6 +59,29 @@ user-facing docs translated to English.
   `agents`) is guarded by `asyncio.wait_for` with
   `subagent_timeout_seconds` (`PHOSON_SUBAGENT_TIMEOUT`, default 300s);
   a timeout surfaces as a per-task error block, not a hung parent.
+
+## Pending
+
+### CLI look & feel — in progress
+
+Research (2026-08-20) validated staying on Rich + prompt_toolkit with
+scrollback (the pattern used by Claude Code / Codex / Gemini CLI);
+Textual (full-screen TUI) explicitly rejected. Plan:
+
+- **PR-1 — theme foundation** (branch `feat/cli-theme-foundation`):
+  `phoson_cli/theme.py` token system consumed by every rendering site
+  (renderer, banner, prompt, pickers, wizard, subagent panel). Four tiers:
+  `dark` (default, historical look), `light`, `ansi` (16-color SSH-safe),
+  `no-color` (auto via `NO_COLOR`/`CLICOLOR=0`). Selected by
+  `PHOSON_THEME` env var or `theme = "..."` in config.toml.
+- **PR-2 — tool visibility**: Live execution panel per tool run with
+  action labels (`writing file`, `running command`…) + detail line (path,
+  size, command), elapsed time, rotating waiting phrases in the spinner,
+  and specialized result renderers (colored diff for `edit_file`,
+  `+N lines · X KB` for `write_file`).
+- **PR-3 — look upgrades**: persistent bottom status bar (model ·
+  session · $ · tokens · cwd), colored `/tree`, grouped `/help`, error
+  hints, banner animation.
 
 ### CLI P1 (planned)
 
@@ -70,7 +91,7 @@ user-facing docs translated to English.
 - `/resume <id>` — direct session load by id (picker only today).
 
 Done so far: `/update` + `--self-update` (PR #33); one-shot mode, `/undo`,
-sub-agent concurrency limit + per-task timeout (branch `feat/cli-p1-core`).
+sub-agent concurrency limit + per-task timeout (PR #34).
 
 ### CLI P2 (planned)
 

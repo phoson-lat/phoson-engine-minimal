@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from phoson_cli.theme import NO_COLOR
 from phoson_cli.commands import Command, CommandHandler
 
 
@@ -29,6 +30,7 @@ class DummyRepl:
             anthropic_api_key=None,
             ollama_base_url=None,
         )
+        self.theme = NO_COLOR
         self.renderer = DummyRenderer()
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
         self.provider_calls: list[str] = []
@@ -65,13 +67,13 @@ async def test_provider_command_opens_picker_switches_provider_and_model(
     handler = CommandHandler(repl)
     saved_configs: list[object] = []
 
-    async def fake_pick_provider(providers, current_provider):
+    async def fake_pick_provider(providers, current_provider, theme=None):
         return SimpleNamespace(provider="openai", cancelled=False)
 
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="gpt-4.1-mini", provider="openai")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="gpt-4.1-mini", cancelled=False)
 
     monkeypatch.setattr("phoson_cli.commands.pick_provider", fake_pick_provider)
@@ -105,7 +107,7 @@ async def test_provider_command_switches_provider_directly(monkeypatch) -> None:
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="gpt-4.1-mini", provider="openai")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="gpt-4.1-mini", cancelled=False)
 
     monkeypatch.setattr(

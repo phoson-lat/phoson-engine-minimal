@@ -77,6 +77,7 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    theme: str = "dark"
     subagent_max_parallel: int = 4
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
@@ -290,6 +291,7 @@ def load_config() -> PhosonConfig:
             "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
         ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        theme=_resolve_str("PHOSON_THEME", "theme", fd, d.theme),
         subagent_max_parallel=_resolve_int(
             "PHOSON_SUBAGENT_MAX_PARALLEL",
             "subagent_max_parallel",
@@ -365,6 +367,7 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(getattr(config, "sessions_dir", ""))),
         _line("max_iterations", getattr(config, "max_iterations", None)),
         _line("safe_mode", getattr(config, "safe_mode", None)),
+        _line("theme", getattr(config, "theme", None)),
         _line("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         _line(
             "subagent_timeout_seconds",

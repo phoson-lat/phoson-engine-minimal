@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from phoson_cli.theme import NO_COLOR
 from phoson_cli.commands import Command, CommandHandler
 
 
@@ -35,6 +36,7 @@ class DummyRepl:
             enable_mcp=False,
             mcp_config_file="~/.phoson/mcps.json",
         )
+        self.theme = NO_COLOR
         self.renderer = DummyRenderer()
         self.set_model_calls: list[str] = []
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
@@ -77,7 +79,7 @@ async def test_model_command_opens_picker_and_switches_model(monkeypatch) -> Non
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="google/gemini-2.5-flash", cancelled=False)
 
     monkeypatch.setattr(
@@ -117,7 +119,7 @@ async def test_subagent_model_command_opens_picker_and_switches_model(
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="anthropic/claude-3.5-haiku", cancelled=False)
 
     monkeypatch.setattr(

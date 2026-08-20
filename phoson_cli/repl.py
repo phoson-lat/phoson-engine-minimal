@@ -22,6 +22,7 @@ from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
+from .theme import Theme, load_theme, build_prompt_style
 from .tools import build_tools, build_tools_dict
 from ._views import print_banner, render_tree_ascii
 from .config import PhosonConfig, build_chat
@@ -31,30 +32,6 @@ from .renderer import Renderer
 from .attachments import AttachmentManager
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
-
-# ── Prompt style ──────────────────────────────────────────────────────────────
-# purple accent on prefix/arrow, muted elsewhere; completion menu purple
-_PROMPT_STYLE = Style.from_dict(
-    {
-        # input
-        "": "#9a8faa",
-        "prompt.prefix": "#b57bee bold",
-        "prompt.bracket": "#5a4e6e",
-        "prompt.model": "#e0d0ff bold",
-        "prompt.sep": "#5a4e6e",
-        "prompt.node": "#6b5b8a",
-        "prompt.tokens": "#8a7a9a",
-        "prompt.arrow": "#b57bee bold",
-        # completion dropdown
-        "completion-menu": "bg:#1e1530 #9a8faa",
-        "completion-menu.completion": "bg:#1e1530 #9a8faa",
-        "completion-menu.completion.current": "bg:#3d2b6e #e0d0ff bold",
-        "completion-menu.meta": "bg:#150f24 #6b5b8a",
-        "completion-menu.meta.current": "bg:#3d2b6e #9b72cf",
-        "scrollbar.background": "bg:#150f24",
-        "scrollbar.button": "bg:#5a4e6e",
-    }
-)
 
 # Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
 # completer's meta column stays in sync with /help and the dispatch table.
@@ -184,7 +161,10 @@ class PhosonRepl:
         self.config = config
         self.storage = JsonlStorage(base_path=config.sessions_dir)
         self._session = SessionState.new()
-        self.renderer = Renderer()
+        # Theme is resolved once at startup (env NO_COLOR/PHOSON_THEME, then
+        # config.toml, then dark) and shared by every rendering site.
+        self.theme: Theme = load_theme(getattr(config, "theme", None))
+        self.renderer = Renderer(theme=self.theme)
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
         self.attachments = AttachmentManager()
@@ -331,7 +311,7 @@ class PhosonRepl:
         history_path.parent.mkdir(parents=True, exist_ok=True)
         session = PromptSession(
             history=FileHistory(str(history_path)),
-            style=_PROMPT_STYLE,
+            style=Style.from_dict(build_prompt_style(self.theme)),
             completer=_SlashCompleter(),
             complete_while_typing=True,
             reserve_space_for_menu=6,
@@ -698,6 +678,7 @@ class PhosonRepl:
             provider=self.config.provider,
             model=self.current_model,
             session_id=self.tree.session_id,
+            theme=self.theme,
         )
 
 

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from phoson_agent.sessions.models import SessionMeta
 
+from .theme import Theme
 from .pickers import BasePicker, picker_style
 
 
@@ -89,6 +90,7 @@ async def pick_session(
     sessions: list[SessionMeta],
     current_id: str,
     page_size: int = 15,
+    theme: "Theme | None" = None,
 ) -> SessionPickerResult:
     """Show an interactive session picker. Returns the selected session_id or None."""
     if not sessions:
@@ -100,7 +102,7 @@ async def pick_session(
         render=lambda: _render_sessions(
             sessions, current_id, state["selected"], state["page"], page_size
         ),
-        style=picker_style(),
+        style=picker_style(theme=theme),
     )
 
     picker.bind_paged_nav(

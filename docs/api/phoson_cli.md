@@ -53,6 +53,22 @@ config = PhosonConfig(
 # for example: OPENAI_API_KEY or OPENROUTER_API_KEY.
 ```
 
+### Theme (appearance)
+
+Four tiers, selected by `PHOSON_THEME` (env var) or `theme = "..."` in
+`~/.phoson/config.toml` (env var wins):
+
+| Theme | Use case |
+|---|---|
+| `dark` (default) | The historical purple palette on dark terminals |
+| `light` | Light terminals (Rich never auto-inverts) |
+| `ansi` | 16-color-safe palette for SSH / limited-color terminals |
+| `no-color` | Plain text; selected automatically by `NO_COLOR` / `CLICOLOR=0` |
+
+`NO_COLOR` (set, non-empty) and `CLICOLOR=0` always win over every other
+selection — scripts and CI get plain output. Unknown theme names warn and
+fall back to `dark`.
+
 ## REPL Usage
 
 Start the REPL and type natural language or commands.

@@ -422,6 +422,10 @@ The final answer is printed to stdout; the exit code is 0 on success and
 **Self-update:** `phoson-cli --self-update` performs the same check/upgrade
 flow from outside the REPL (e.g. from a script).
 
+**Appearance:** `PHOSON_THEME=light|ansi|no-color` (or `theme = "..."` in
+`~/.phoson/config.toml`) switches the color tier; `NO_COLOR` / `CLICOLOR=0`
+always produce plain output (scripts, CI).
+
 ---
 
 ## 🔒 CI and security workflows

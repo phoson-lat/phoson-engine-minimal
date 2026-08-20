@@ -35,6 +35,7 @@ from phoson_agent import (
     AgentReasoningEvent,
     AgentToolStartEvent,
 )
+from phoson_cli.theme import Theme, load_theme
 from phoson_cli.tools.subagent_panel import (
     render_subagent_panel,
     parse_subagent_metrics,
@@ -42,18 +43,7 @@ from phoson_cli.tools.subagent_panel import (
     render_subagent_panel_frame,
 )
 
-# ── Palette ────────────────────────────────────────────────────────────────────
-_ACCENT = "medium_purple1"
-_ACCENT2 = "plum3"
-_MUTED = "grey50"
-_MUTED2 = "grey35"
-_TEXT = "white"
-_PANEL_BG = "on #120d1d"
-_TOOL_OK = "medium_spring_green"
-_TOOL_ERR = "indian_red1"
-_REASONING = "grey42"
-_WARN = "gold3"
-_ERR_BORDER = "indian_red1"
+# Palette lives in phoson_cli.theme (see Renderer.theme).
 
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -130,8 +120,9 @@ class WaitingSpinner:
 class SubagentSpinner:
     """Rich Live panel animation for parallel subagent execution."""
 
-    def __init__(self, console: Console) -> None:
+    def __init__(self, console: Console, theme: Theme | None = None) -> None:
         self._console = console
+        self._theme = theme or load_theme()
         self._lock = threading.Lock()
         self._live: Live | None = None
         self._thread: threading.Thread | None = None
@@ -145,7 +136,7 @@ class SubagentSpinner:
             self._tasks = tasks
         self._stop = threading.Event()
         self._live = Live(
-            render_subagent_panel(tasks),
+            render_subagent_panel(tasks, theme=self._theme),
             console=self._console,
             refresh_per_second=12,
             transient=True,
@@ -175,7 +166,10 @@ class SubagentSpinner:
         while not stop.is_set():
             with self._lock:
                 tasks = self._tasks
-            live.update(render_subagent_panel_frame(tasks, frame), refresh=True)
+            live.update(
+                render_subagent_panel_frame(tasks, frame, theme=self._theme),
+                refresh=True,
+            )
             frame += 1
             sleep(0.08)
 
@@ -191,13 +185,18 @@ class Renderer:
     hierarchy.
     """
 
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(
+        self, console: Console | None = None, theme: Theme | None = None
+    ) -> None:
         """Initialize the renderer.
 
         Args:
             console: Optional Rich Console instance. Creates default if None.
+            theme: Optional :class:`Theme`. Resolved via ``load_theme()``
+                (env/config) when None.
         """
         self.console = console or Console(highlight=False)
+        self.theme = theme or load_theme()
         self.session_id: str | None = None
 
         # ── Streaming state ───────────────────────────────────────────
@@ -219,7 +218,7 @@ class Renderer:
 
         # ── Animations ────────────────────────────────────────────────
         self._spinner = WaitingSpinner(self.console)
-        self._subagent_spinner = SubagentSpinner(self.console)
+        self._subagent_spinner = SubagentSpinner(self.console, theme=self.theme)
 
     def set_session(self, session_id: str) -> None:
         """Set the current session ID for display."""
@@ -294,10 +293,10 @@ class Renderer:
             thinking_text = self._live_reasoning.strip() or "thinking..."
             renderables.append(
                 Panel(
-                    Text(thinking_text, style=_REASONING),
+                    Text(thinking_text, style=self.theme.reasoning),
                     title="thinking",
                     title_align="left",
-                    border_style=_MUTED2,
+                    border_style=self.theme.muted_deep,
                     box=box.ROUNDED,
                     padding=(0, 1),
                 )
@@ -307,23 +306,23 @@ class Renderer:
             try:
                 answer_render = Markdown(
                     self._live_content,
-                    code_theme="monokai",
+                    code_theme=self.theme.code_theme,
                     style="none",
                 )
             except Exception:
-                answer_render = Text(self._live_content, style=_TEXT)
+                answer_render = Text(self._live_content, style=self.theme.text)
             renderables.append(answer_render)
 
         if not renderables:
-            renderables.append(Text("thinking...", style=_MUTED))
+            renderables.append(Text("thinking...", style=self.theme.muted))
 
         return Panel(
             Group(*renderables),
             title="assistant",
             title_align="left",
-            border_style=_ACCENT2,
+            border_style=self.theme.accent_soft,
             box=box.ROUNDED,
-            style=_PANEL_BG,
+            style=self.theme.panel_bg,
             padding=(0, 1),
         )
 
@@ -340,7 +339,7 @@ class Renderer:
             chars = len("".join(self._reasoning_buf))
             approx_tokens = max(1, chars // 4)
             self.console.print(
-                Text(f"  ◦  reasoning  (~{approx_tokens} tok)", style=_MUTED)
+                Text(f"  ◦  reasoning  (~{approx_tokens} tok)", style=self.theme.muted)
             )
             self._reasoning_buf.clear()
 
@@ -348,8 +347,8 @@ class Renderer:
         content = "".join(self._token_buf).strip()
         self._token_buf.clear()
         if content and not self._stream_had_tokens:
-            self.console.print(Rule(style=_MUTED2))
-            self.console.print(Markdown(content, code_theme="monokai"))
+            self.console.print(Rule(style=self.theme.muted_deep))
+            self.console.print(Markdown(content, code_theme=self.theme.code_theme))
 
     # ── Event dispatch ────────────────────────────────────────────────────────
 
@@ -433,12 +432,15 @@ class Renderer:
     def _on_start(self, event: AgentStartEvent) -> None:
         """Render session/model badge at the start of a run."""
         session = (self.session_id or "")[:8] or "—"
-        badge = Text(" assistant ", style=f"bold {_TEXT} on #3a255e")
+        badge = Text(" assistant ", style=self.theme.badge_assistant)
         meta = Text.assemble(
             badge,
-            Text("  ", style=_MUTED),
-            Text(event.model, style=f"bold {_ACCENT}"),
-            Text(f"  session {session}  ·  {event.message_count} msgs", style=_MUTED),
+            Text("  ", style=self.theme.muted),
+            Text(event.model, style=f"bold {self.theme.accent}"),
+            Text(
+                f"  session {session}  ·  {event.message_count} msgs",
+                style=self.theme.muted,
+            ),
         )
         self.console.print(meta)
 
@@ -447,9 +449,9 @@ class Renderer:
         if event.tool_name in {"agent", "agents"}:
             label = _tool_label(event)
             line = Text()
-            line.append("  │ ", style=_ACCENT2)
-            line.append("◌ ", style=_ACCENT2)
-            line.append(f"spawning {label}", style=f"bold {_ACCENT}")
+            line.append("  │ ", style=self.theme.accent_soft)
+            line.append("◌ ", style=self.theme.accent_soft)
+            line.append(f"spawning {label}", style=f"bold {self.theme.accent}")
             self.console.print(line)
             tasks = _subagent_tasks_from_args(event.tool_name, event.args)
             if tasks:
@@ -470,27 +472,27 @@ class Renderer:
             self.stop_subagent_waiting()
             metrics = parse_subagent_metrics(event.result)
             if metrics:
-                self.console.print(render_subagent_summary(metrics))
+                self.console.print(render_subagent_summary(metrics, theme=self.theme))
                 return
 
         label = _tool_label(event)
         line = Text()
         if event.error:
-            line.append("  │ ", style=_ACCENT2)
-            line.append("✗ ", style=_TOOL_ERR)
-            line.append(label, style=f"bold {_TOOL_ERR}")
-            line.append(f"  ·  {event.duration_ms}ms", style=_MUTED)
+            line.append("  │ ", style=self.theme.accent_soft)
+            line.append("✗ ", style=self.theme.err)
+            line.append(label, style=f"bold {self.theme.err}")
+            line.append(f"  ·  {event.duration_ms}ms", style=self.theme.muted)
             err_short = event.error.splitlines()[0][:72]
-            line.append(f"  ·  {err_short}", style=_TOOL_ERR)
+            line.append(f"  ·  {err_short}", style=self.theme.err)
         else:
-            line.append("  │ ", style=_ACCENT2)
+            line.append("  │ ", style=self.theme.accent_soft)
             if event.tool_name in {"agent", "agents"}:
-                line.append("◍ ", style=_TOOL_OK)
-                line.append(f"spawned {label}", style=_TOOL_OK)
+                line.append("◍ ", style=self.theme.ok)
+                line.append(f"spawned {label}", style=self.theme.ok)
             else:
-                line.append("✓ ", style=_TOOL_OK)
-                line.append(label, style=_TOOL_OK)
-            line.append(f"  ·  {event.duration_ms}ms", style=_MUTED)
+                line.append("✓ ", style=self.theme.ok)
+                line.append(label, style=self.theme.ok)
+            line.append(f"  ·  {event.duration_ms}ms", style=self.theme.muted)
         self.console.print(line)
 
     def _on_done(self, event: AgentDoneEvent) -> None:
@@ -502,24 +504,26 @@ class Renderer:
         steps = len(r.steps)
         parts.append(f"{steps} step{'s' if steps != 1 else ''}")
         if parts:
-            self.console.print(Text(f"  {chr(183)} ".join(["", *parts]), style=_MUTED))
+            self.console.print(
+                Text(f"  {chr(183)} ".join(["", *parts]), style=self.theme.muted)
+            )
 
     def _on_error(self, event: AgentErrorEvent) -> None:
         """Render error panel."""
         body = Text()
         body.append(event.message, style="bold")
         if event.code:
-            body.append(f"\ncode={event.code}", style=_MUTED)
+            body.append(f"\ncode={event.code}", style=self.theme.muted)
         if event.retryable:
-            body.append("  retryable", style=_WARN)
+            body.append("  retryable", style=self.theme.warn)
         self.console.print(
             Panel(
                 body,
                 title="error",
-                border_style=_ERR_BORDER,
+                border_style=self.theme.err,
                 padding=(0, 1),
                 box=box.SQUARE,
-                style=_PANEL_BG,
+                style=self.theme.panel_bg,
             )
         )
 
@@ -527,21 +531,21 @@ class Renderer:
 
     def print_user_turn(self, text: str) -> None:
         """Render a user message with a lightweight badge + plain text."""
-        badge = Text(" user ", style=f"bold {_TEXT} on #23192f")
+        badge = Text(" user ", style=self.theme.badge_user)
         self.console.print(badge)
-        self.console.print(Text(f"  {text}", style=_TEXT))
+        self.console.print(Text(f"  {text}", style=self.theme.text))
 
     def print_info(self, message: str) -> None:
         """Print an informational message."""
-        self.console.print(Text(f"  {message}", style=_MUTED))
+        self.console.print(Text(f"  {message}", style=self.theme.muted))
 
     def print_warn(self, message: str) -> None:
         """Print a warning message."""
-        self.console.print(Text(f"  ⚠ {message}", style=_WARN))
+        self.console.print(Text(f"  ⚠ {message}", style=self.theme.warn))
 
     def print_error(self, message: str) -> None:
         """Print an error message."""
-        self.console.print(Text(f"  ✗ {message}", style=_TOOL_ERR))
+        self.console.print(Text(f"  ✗ {message}", style=self.theme.err))
 
     def print_history(self, messages: "list[Message]", tail: int | None = None) -> None:
         """Re-render a list of Message objects as a conversation replay.
@@ -555,10 +559,12 @@ class Renderer:
 
         if tail is not None and len(messages) > tail:
             above = len(messages) - tail
-            self.console.print(Rule(f"{above} messages above", style=_MUTED2))
+            self.console.print(
+                Rule(f"{above} messages above", style=self.theme.muted_deep)
+            )
             messages = messages[-tail:]
 
-        self.console.print(Text(" session history ", style=f"bold {_TEXT} on #2e2047"))
+        self.console.print(Text(" session history ", style=self.theme.badge_history))
 
         for msg in messages:
             role = getattr(msg, "role", "?")
@@ -572,51 +578,57 @@ class Renderer:
                     isinstance(b, ToolResultBlock) for b in content
                 ):
                     continue
-                badge = Text(" user ", style=f"bold {_TEXT} on #23192f")
+                badge = Text(" user ", style=self.theme.badge_user)
                 self.console.print(badge)
                 if isinstance(content, str):
-                    self.console.print(Text(f"  {content}", style=_TEXT))
+                    self.console.print(Text(f"  {content}", style=self.theme.text))
                 else:
                     for block in content:
                         if isinstance(block, TextBlock):
-                            self.console.print(Text(f"  {block.text}", style=_TEXT))
+                            self.console.print(
+                                Text(f"  {block.text}", style=self.theme.text)
+                            )
 
             elif role == "assistant":
-                badge = Text(" assistant ", style=f"bold {_TEXT} on #3a255e")
+                badge = Text(" assistant ", style=self.theme.badge_assistant)
                 self.console.print(badge)
                 if isinstance(content, str) and content.strip():
-                    self.console.print(Rule(style=_MUTED2))
-                    self.console.print(Markdown(content.strip(), code_theme="monokai"))
+                    self.console.print(Rule(style=self.theme.muted_deep))
+                    self.console.print(
+                        Markdown(content.strip(), code_theme=self.theme.code_theme)
+                    )
                 elif not isinstance(content, str):
                     text_parts = [b.text for b in content if isinstance(b, TextBlock)]
                     tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
                     combined = "\n".join(text_parts).strip()
                     if combined:
-                        self.console.print(Rule(style=_MUTED2))
-                        self.console.print(Markdown(combined, code_theme="monokai"))
+                        self.console.print(Rule(style=self.theme.muted_deep))
+                        self.console.print(
+                            Markdown(combined, code_theme=self.theme.code_theme)
+                        )
                     for b in tool_uses:
                         t = Text()
-                        t.append("  │ ", style=_ACCENT2)
-                        t.append("⚙ ", style=_ACCENT2)
-                        t.append(b.tool_name, style=f"bold {_ACCENT}")
+                        t.append("  │ ", style=self.theme.accent_soft)
+                        t.append("⚙ ", style=self.theme.accent_soft)
+                        t.append(b.tool_name, style=f"bold {self.theme.accent}")
                         self.console.print(t)
 
-        self.console.print(Rule(style=_MUTED2))
+        self.console.print(Rule(style=self.theme.muted_deep))
 
     def print_sessions_table(self, sessions: "list[SessionMeta]") -> None:
         """Print a table of sessions."""
         table = Table(
             show_header=True,
-            header_style=f"bold {_ACCENT}",
-            border_style=_MUTED2,
+            header_style=f"bold {self.theme.accent}",
+            border_style=self.theme.muted_deep,
             box=box.SIMPLE_HEAVY,
             padding=(0, 1),
         )
-        table.add_column("#", style=_MUTED, width=3, justify="right")
+        table.add_column("#", style=self.theme.muted, width=3, justify="right")
         table.add_column("Session ID", style="white", no_wrap=True)
-        table.add_column("Messages", style=_MUTED, justify="right")
-        table.add_column("Updated", style=_MUTED)
-        table.add_column("State", style=_ACCENT2)
+        table.add_column("Messages", style=self.theme.muted, justify="right")
+        table.add_column("Updated", style=self.theme.muted)
+        table.add_column("State", style=self.theme.accent_soft)
         for i, s in enumerate(sessions, start=1):
             updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
             state = (
@@ -635,12 +647,12 @@ class Renderer:
         """
         table = Table(
             show_header=False,
-            border_style=_MUTED2,
+            border_style=self.theme.muted_deep,
             box=box.SIMPLE_HEAVY,
             padding=(0, 1),
         )
-        table.add_column("cmd", style=f"bold {_ACCENT}", no_wrap=True)
-        table.add_column("desc", style=_MUTED)
+        table.add_column("cmd", style=f"bold {self.theme.accent}", no_wrap=True)
+        table.add_column("desc", style=self.theme.muted)
         for name, description in entries:
             table.add_row(name, description)
         self.console.print(table)
