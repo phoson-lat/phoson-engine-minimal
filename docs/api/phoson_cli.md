@@ -43,21 +43,33 @@ the session runtime is decoupled from the front end:
     bar and composer `Input`; owns the run task (one `asyncio` task per
     turn); bindings `Ctrl+C` (cancel run / quit), `Ctrl+T` (toggle
     reasoning — live while streaming, persisted afterwards), `Ctrl+L`
-    (clear view), `Ctrl+Q` (quit); TUI-native slash commands
-    (`/help /new /tree /undo /label /env /cost /tokens /steps /model
-    [id] /sessions [id] /exit`) routed through the controller; quit
-    paths await `controller.shutdown()` before exiting.
+    (clear view), `Ctrl+Q` (quit), `PgUp`/`PgDn` (page-scroll the
+    conversation); auto-follow keeps the viewport pinned to the bottom
+    while the answer grows (a change-guarded 0.1 s tick covers the
+    Markdown render tail) and releases when the user scrolls up
+    (wheel or `PgUp`), re-arming at the bottom or on a new message;
+    TUI-native slash commands (`/help /new /tree /undo /label /env
+    /cost /tokens /steps /model [id] /sessions [id] /exit`) routed
+    through the controller; quit paths await `controller.shutdown()`
+    before exiting. `PHOSON_TEXTUAL_DEBUG=1` (or `=/path`) logs keys
+    and lifecycle to `~/.phoson/tui-debug.log`; the composer and
+    conversation are thin `Input`/`VerticalScroll` subclasses that feed
+    that log and the scroll-intent hooks.
   - `sink.py` — `TextualSink`: `AgentEventSink` over the conversation
     widgets (dispatches by event type, same contract as `ClassicSink`).
   - `widgets.py` — `UserTurn`, `StreamingTurn` (markdown content +
-    `ReasoningView` collapsible + `ToolCard` rows + status line),
-    `AssistantTurn`, `StatusLine`. Pure widget updates inside the app
-    loop — no `Rich.Live`, no threads, no console writes.
+    `ReasoningView` collapsible + `ToolCard` rows + status line —
+    `height: auto` so long turns grow past the viewport instead of
+    being clipped), `AssistantTurn`, `StatusLine`. Pure widget updates
+    inside the app loop — no `Rich.Live`, no threads, no console writes.
   - `dialogs.py` — `BashConfirmation` modal (the TUI body of
     `ConfirmationService`: y/n keys or buttons; Escape declines).
   - `confirmation.py` — `TextualConfirmationService` (awaitable modal).
   `phoson-cli --textual` launches the app; `--classic` (or no flag) runs
-  the classic REPL.
+  the classic REPL. `PHOSON_TEXTUAL_LEGACY_KEYS=1` maps onto Textual's
+  `TEXTUAL_DISABLE_KITTY_KEY` (set before the first `import textual` in
+  `__main__._start_textual_ui`) for terminals that misbehave with the
+  Kitty keyboard protocol.
 
 ## Running the CLI
 

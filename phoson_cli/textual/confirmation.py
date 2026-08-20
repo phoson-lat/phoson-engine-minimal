@@ -19,4 +19,4 @@ class TextualConfirmationService:
         self._app = app
 
     async def confirm_bash(self, command: str) -> bool:
-        return await self._app.ask_confirmation(f"Run bash command?  {command}")
+        return await self._app.ask_confirmation(command)

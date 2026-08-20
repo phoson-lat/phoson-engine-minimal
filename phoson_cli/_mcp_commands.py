@@ -7,7 +7,7 @@ from .config import save_config
 if TYPE_CHECKING:
     from .repl import PhosonRepl
     from .commands import Command, CommandHandler
-    from .renderer import Renderer
+    from .command_host import CommandHost
 
 
 class _MCPSubcommands:
@@ -26,8 +26,8 @@ class _MCPSubcommands:
         return self._parent.repl
 
     @property
-    def r(self) -> "Renderer":
-        return self.repl.renderer
+    def r(self) -> "CommandHost":
+        return self._parent.host
 
     async def dispatch(self, cmd: "Command") -> bool:
         args = cmd.args.strip()
