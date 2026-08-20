@@ -100,6 +100,7 @@ async def _run_one_subagent(
     selected_tools: list[AgentTool],
     model: str,
     max_iterations: int,
+    timeout_seconds: float | None = None,
 ) -> str:
     """Run a single sub-agent and return its final string content."""
     sub_engine = AgentEngine(
@@ -109,25 +110,37 @@ async def _run_one_subagent(
     )
     messages = [Message(role="user", content=task)]
     config = ModelConfig(model=model)
-    try:
+
+    async def _run() -> str:
         result = await sub_engine.run(messages, config)
         return result.final_content
+
+    try:
+        if timeout_seconds is not None and timeout_seconds > 0:
+            return await asyncio.wait_for(_run(), timeout=timeout_seconds)
+        return await _run()
+    except TimeoutError:
+        _LOGGER.debug("Sub-agent timed out after %.0fs: %s", timeout_seconds, task[:80])
+        return f"Sub-agent timed out after {timeout_seconds:.0f}s."
     except Exception as exc:
         _LOGGER.debug("Sub-agent raised: %s", exc, exc_info=True)
         return f"Sub-agent error: {exc}"
 
 
-# Sub-agent tool injection parameters
-_SUBAGENT_INJECT = [
+# Sub-agent tool injection parameters (per tool: `agents` also gets the
+# parallelism limit; the single `agent` tool only needs the timeout).
+_AGENT_INJECT = [
     "chat",
     "available_tools",
     "default_model",
     "max_iterations",
     "safe_mode",
+    "subagent_timeout_seconds",
 ]
+_AGENTS_INJECT = _AGENT_INJECT + ["subagent_max_parallel"]
 
 
-@tool(inject=_SUBAGENT_INJECT)
+@tool(inject=_AGENT_INJECT)
 async def agent(
     task: str,
     tools: list[str] | None = None,
@@ -138,6 +151,7 @@ async def agent(
     default_model: str,
     max_iterations: int,
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context
+    subagent_timeout_seconds: float = 300.0,
 ) -> str:
     """Execute a task using a sub-agent with clean context."""
     selected, err = _select_tools(available_tools, tools)
@@ -150,10 +164,11 @@ async def agent(
         selected_tools=list(selected.values()),
         model=model or default_model,
         max_iterations=max_iterations,
+        timeout_seconds=subagent_timeout_seconds,
     )
 
 
-@tool(inject=_SUBAGENT_INJECT)
+@tool(inject=_AGENTS_INJECT)
 async def agents(
     tasks: list[str],
     tools: list[str] | None = None,
@@ -164,6 +179,8 @@ async def agents(
     default_model: str,
     max_iterations: int,
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context
+    subagent_max_parallel: int = 4,
+    subagent_timeout_seconds: float = 300.0,
 ) -> str:
     """Execute multiple tasks in parallel using sub-agents."""
     if not tasks:
@@ -175,39 +192,61 @@ async def agents(
 
     effective_model = model or default_model
     selected_tools_list = list(selected.values())
+    # Bound the concurrency: the parent agent decides how many tasks to
+    # spawn, not how many LLM sessions may run at once.
+    semaphore = asyncio.Semaphore(max(1, subagent_max_parallel))
 
     async def run_one(idx: int, task: str) -> dict[str, Any]:
-        sub_engine = AgentEngine(
-            chat=_clone_chat(chat),
-            tools=selected_tools_list,
-            max_iterations=max_iterations,
-        )
-        messages = [Message(role="user", content=task)]
-        config = ModelConfig(model=effective_model)
+        async with semaphore:
+            sub_engine = AgentEngine(
+                chat=_clone_chat(chat),
+                tools=selected_tools_list,
+                max_iterations=max_iterations,
+            )
+            messages = [Message(role="user", content=task)]
+            config = ModelConfig(model=effective_model)
 
-        try:
-            result = await sub_engine.run(messages, config)
-            input_tokens, output_tokens = _aggregate_tokens(result.steps)
-            return {
-                "index": idx,
-                "task": task,
-                "task_preview": task[:40] + "..." if len(task) > 40 else task,
-                "result": result.final_content,
-                "cost_usd": result.total_cost_usd,
-                "credits": result.total_credits,
-                "duration_ms": sum(s.duration_ms for s in result.steps),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-            }
-        except Exception as exc:
-            _LOGGER.debug("Parallel sub-agent %d raised: %s", idx, exc, exc_info=True)
-            return {
-                "index": idx,
-                "task": task,
-                "task_preview": task[:40] + "..." if len(task) > 40 else task,
-                "result": f"Error: {exc}",
-                "error": str(exc),
-            }
+            async def _run():
+                return await sub_engine.run(messages, config)
+
+            try:
+                if subagent_timeout_seconds > 0:
+                    result = await asyncio.wait_for(
+                        _run(), timeout=subagent_timeout_seconds
+                    )
+                else:
+                    result = await _run()
+                input_tokens, output_tokens = _aggregate_tokens(result.steps)
+                return {
+                    "index": idx,
+                    "task": task,
+                    "task_preview": task[:40] + "..." if len(task) > 40 else task,
+                    "result": result.final_content,
+                    "cost_usd": result.total_cost_usd,
+                    "credits": result.total_credits,
+                    "duration_ms": sum(s.duration_ms for s in result.steps),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                }
+            except TimeoutError:
+                return {
+                    "index": idx,
+                    "task": task,
+                    "task_preview": task[:40] + "..." if len(task) > 40 else task,
+                    "result": "",
+                    "error": f"timeout after {subagent_timeout_seconds:g}s",
+                }
+            except Exception as exc:
+                _LOGGER.debug(
+                    "Parallel sub-agent %d raised: %s", idx, exc, exc_info=True
+                )
+                return {
+                    "index": idx,
+                    "task": task,
+                    "task_preview": task[:40] + "..." if len(task) > 40 else task,
+                    "result": f"Error: {exc}",
+                    "error": str(exc),
+                }
 
     results: list[dict[str, Any]] = list(
         await asyncio.gather(*(run_one(idx, task) for idx, task in enumerate(tasks)))

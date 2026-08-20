@@ -99,3 +99,79 @@ def test_save_config_restricts_permissions(monkeypatch, tmp_path) -> None:
     assert mode == 0o600, f"config file mode is {oct(mode)}, expected 0o600"
     dir_mode = os.stat(path.parent).st_mode & 0o777
     assert dir_mode == 0o700, f"config dir mode is {oct(dir_mode)}, expected 0o700"
+
+
+# ── Sub-agent tuning keys ────────────────────────────────────────────────────
+
+
+def test_subagent_keys_defaults(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import load_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_SUBAGENT_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("PHOSON_SUBAGENT_TIMEOUT", raising=False)
+
+    config = load_config()
+
+    assert config.subagent_max_parallel == 4
+    assert config.subagent_timeout_seconds == 300.0
+
+
+def test_subagent_keys_env_override(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import load_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PHOSON_SUBAGENT_MAX_PARALLEL", "8")
+    monkeypatch.setenv("PHOSON_SUBAGENT_TIMEOUT", "120.5")
+
+    config = load_config()
+
+    assert config.subagent_max_parallel == 8
+    assert config.subagent_timeout_seconds == pytest.approx(120.5)
+
+
+def test_subagent_keys_invalid_env_falls_back(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import load_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PHOSON_SUBAGENT_MAX_PARALLEL", "not-a-number")
+    monkeypatch.setenv("PHOSON_SUBAGENT_TIMEOUT", "also-not")
+
+    with pytest.warns(UserWarning):
+        config = load_config()
+
+    assert config.subagent_max_parallel == 4
+    assert config.subagent_timeout_seconds == 300.0
+
+
+def test_subagent_keys_round_trip_save_load(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import PhosonConfig, load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_SUBAGENT_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("PHOSON_SUBAGENT_TIMEOUT", raising=False)
+
+    original = PhosonConfig(
+        provider="ollama",
+        sessions_dir=home / "sessions",
+        subagent_max_parallel=6,
+        subagent_timeout_seconds=120.5,
+    )
+    path = save_config(original)
+
+    # Numeric values are written as TOML numbers, not quoted strings.
+    content = path.read_text()
+    assert "subagent_max_parallel = 6" in content
+    assert "subagent_timeout_seconds = 120.5" in content
+
+    loaded = load_config()
+    assert loaded.subagent_max_parallel == 6
+    assert loaded.subagent_timeout_seconds == pytest.approx(120.5)

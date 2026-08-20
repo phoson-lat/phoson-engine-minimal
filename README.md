@@ -398,12 +398,24 @@ def calculate(expression: str) -> str:
 uv run phoson-cli
 ```
 
+**One-shot mode** (no REPL, no session — for scripts and CI):
+
+```bash
+phoson-cli "fix the failing tests"     # positional task
+phoson-cli -p "summarize this repo"    # --print flag
+echo "explain the CI failure" | phoson-cli   # piped stdin
+```
+
+The final answer is printed to stdout; the exit code is 0 on success and
+1 on agent error.
+
 **Available commands:**
 - `/new` — Start a new session
 - `/model <name>` — Switch model
 - `/tree` — Show conversation tree
 - `/sessions` — List saved sessions
 - `/label <text>` — Label current node
+- `/undo` — Undo the last turn (branch from before your last message)
 - `/update` — Check for and install CLI updates
 - `/help` — Show all commands
 

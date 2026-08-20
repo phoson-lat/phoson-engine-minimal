@@ -77,6 +77,8 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    subagent_max_parallel: int = 4
+    subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
 
@@ -168,6 +170,30 @@ def _resolve_int(
     if env_var in os.environ:
         return _parse_int(os.environ[env_var], default, env_var=env_var)
     return int(fd.get(file_key, default))
+
+
+def _resolve_float(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+    default: float,
+) -> float:
+    if env_var in os.environ:
+        try:
+            return float(os.environ[env_var])
+        except ValueError:
+            warnings.warn(
+                f"Ignoring invalid float value {os.environ[env_var]!r} "
+                f"(from {env_var}); using default {default}.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return default
+    value = fd.get(file_key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def load_config() -> PhosonConfig:
@@ -264,6 +290,18 @@ def load_config() -> PhosonConfig:
             "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
         ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        subagent_max_parallel=_resolve_int(
+            "PHOSON_SUBAGENT_MAX_PARALLEL",
+            "subagent_max_parallel",
+            fd,
+            d.subagent_max_parallel,
+        ),
+        subagent_timeout_seconds=_resolve_float(
+            "PHOSON_SUBAGENT_TIMEOUT",
+            "subagent_timeout_seconds",
+            fd,
+            d.subagent_timeout_seconds,
+        ),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
         mcp_config_file=Path(
             _resolve_str(
@@ -281,12 +319,12 @@ def save_config(config: PhosonConfig) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
 
-    def _line(key: str, value: str | int | bool | None) -> str | None:
+    def _line(key: str, value: str | int | float | bool | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, bool):
             rendered = "true" if value else "false"
-        elif isinstance(value, int):
+        elif isinstance(value, (int, float)):
             rendered = str(value)
         else:
             escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
@@ -327,6 +365,11 @@ def save_config(config: PhosonConfig) -> Path:
         _line("sessions_dir", str(getattr(config, "sessions_dir", ""))),
         _line("max_iterations", getattr(config, "max_iterations", None)),
         _line("safe_mode", getattr(config, "safe_mode", None)),
+        _line("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
+        _line(
+            "subagent_timeout_seconds",
+            getattr(config, "subagent_timeout_seconds", None),
+        ),
         _line("enable_mcp", getattr(config, "enable_mcp", None)),
         _line("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
     ]:
