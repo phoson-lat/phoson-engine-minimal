@@ -34,7 +34,7 @@ from .config import PhosonConfig, build_chat
 from .models import load_models_file, provider_settings, resolve_context_window
 from ._session import SessionState, SessionMetrics
 from .attachments import AttachmentManager
-from .ui_protocols import AgentEventSink
+from .ui_protocols import AgentEventSink, ConfirmationService
 from .session_utils import (
     close_plugins,
     build_mcp_plugins,
@@ -75,11 +75,22 @@ class SessionController:
             controller mutates ``config.model`` / ``config.provider`` on
             switch, matching the classic REPL's behavior.
         sink: Presentation target (see ``ui_protocols.AgentEventSink``).
+        confirmation: Optional
+            ``ui_protocols.ConfirmationService`` for interactive
+            yes/no prompts (bash in safe_mode). Injected into the engine
+            context as ``bash_confirmation``. Front ends that cannot
+            confirm (one-shot) pass nothing and the tool fails closed.
     """
 
-    def __init__(self, config: PhosonConfig, sink: AgentEventSink) -> None:
+    def __init__(
+        self,
+        config: PhosonConfig,
+        sink: AgentEventSink,
+        confirmation: ConfirmationService | None = None,
+    ) -> None:
         self.config = config
         self.sink = sink
+        self.confirmation = confirmation
         self.storage = JsonlStorage(base_path=config.sessions_dir)
         self._session = SessionState.new()
         self.attachments = AttachmentManager()
@@ -228,6 +239,9 @@ class SessionController:
             self.config.subagent_timeout_seconds
         )
         self.engine.context.extra["chat"] = self.chat
+        # Interactive confirmations (safe_mode bash). None → the tool
+        # fails closed (one-shot / non-interactive front ends).
+        self.engine.context.extra["bash_confirmation"] = self.confirmation
 
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.

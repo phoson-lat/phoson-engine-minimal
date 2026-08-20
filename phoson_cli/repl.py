@@ -40,6 +40,7 @@ from ._session import SessionMetrics  # noqa: F401
 from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer, ClassicSink
 from .controller import SessionController
+from .confirmation import PromptToolkitConfirmationService
 from .session_utils import (  # noqa: F401
     close_plugins,
     build_mcp_plugins,
@@ -107,7 +108,11 @@ class PhosonRepl:
         # The session runtime — engine, tree, metrics, run lifecycle —
         # lives in the UI-independent controller; this REPL is its
         # prompt_toolkit front end.
-        self._controller = SessionController(config, ClassicSink(self.renderer))
+        self._controller = SessionController(
+            config,
+            ClassicSink(self.renderer),
+            confirmation=PromptToolkitConfirmationService(),
+        )
 
     # ── Config / controller state ─────────────────────────────────────────
 

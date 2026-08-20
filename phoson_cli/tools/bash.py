@@ -1,32 +1,26 @@
 """Bash command execution tool.
 
-The handler is fully async so it never blocks the event loop. The
-interactive confirmation in ``safe_mode`` uses ``prompt_toolkit``'s
-async prompt to stay cooperative with the running REPL.
+The handler is fully async so it never blocks the event loop.
+
+Safe-mode confirmation (Textual migration, phase 2): the tool no longer
+opens its own prompt. It receives an optional
+:class:`~phoson_cli.ui_protocols.ConfirmationService` through engine
+context injection (``bash_confirmation``):
+
+- classic REPL: a prompt_toolkit-based service (interactive prompt);
+- Textual TUI: a modal-based service;
+- nothing injected (one-shot / scripts): **fail closed** — the command
+  is refused with an actionable message instead of hanging or running.
 """
 
 import asyncio
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.patch_stdout import patch_stdout
-
 from phoson_agent.tool import tool
+
+from ..ui_protocols import ConfirmationService
 
 MAX_BYTES = 50 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
-
-
-async def _confirm_async(command: str) -> bool:
-    """Ask the user (asynchronously) whether to run ``command``."""
-    session: PromptSession[str] = PromptSession()
-    try:
-        with patch_stdout():
-            answer = await session.prompt_async(
-                f"Run bash command? {command!r} [y/N]: "
-            )
-    except (EOFError, KeyboardInterrupt):
-        return False
-    return answer.strip().lower() in {"y", "yes"}
 
 
 def _truncate(output: str) -> str:
@@ -42,17 +36,27 @@ async def _run_bash(
     command: str,
     safe_mode: bool = False,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    confirmation: ConfirmationService | None = None,
 ) -> str:
     """Execute a bash command and return ``stdout + stderr``.
 
     Args:
         command: The shell command to execute.
-        safe_mode: When True, prompt the user for confirmation before
-            running the command.
+        safe_mode: When True, confirm with the user before running.
         timeout: Hard timeout in seconds. Defaults to 30s.
+        confirmation: Interactive confirmation service (injected by the
+            front end). Required when safe_mode is on; without it the
+            command is refused (fail closed).
     """
-    if safe_mode and not await _confirm_async(command):
-        return "Cancelled by user (safe_mode enabled)."
+    if safe_mode:
+        if confirmation is None:
+            return (
+                "Blocked: safe_mode is enabled but no interactive "
+                "confirmation is available in this context. Run the CLI "
+                "interactively or disable safe_mode."
+            )
+        if not await confirmation.confirm_bash(command):
+            return "Cancelled by user (safe_mode enabled)."
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -80,7 +84,11 @@ async def _run_bash(
     return _truncate(stdout + stderr)
 
 
-@tool(inject=["safe_mode"])
-async def bash(command: str, safe_mode: bool = False) -> str:
+@tool(inject=["safe_mode", "bash_confirmation"])
+async def bash(
+    command: str,
+    safe_mode: bool = False,
+    bash_confirmation: ConfirmationService | None = None,
+) -> str:
     """Execute a bash command and return stdout+stderr combined."""
-    return await _run_bash(command, safe_mode=safe_mode)
+    return await _run_bash(command, safe_mode=safe_mode, confirmation=bash_confirmation)

@@ -36,6 +36,7 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 from phoson_cli.theme import Theme, load_theme
+from phoson_cli.formatting import render_reasoning_panel
 from phoson_cli.tools.subagent_panel import (
     render_subagent_panel,
     parse_subagent_metrics,
@@ -293,15 +294,12 @@ class Renderer:
         return self._live_show_reasoning
 
     def render_reasoning_panel(self, reasoning: str) -> Panel:
-        """Build the expanded reasoning panel (Ctrl+T post-turn)."""
-        return Panel(
-            Text(reasoning, style=self.theme.reasoning),
-            title="reasoning",
-            title_align="left",
-            border_style=self.theme.muted_deep,
-            box=box.ROUNDED,
-            padding=(0, 1),
-        )
+        """Build the expanded reasoning panel (Ctrl+T post-turn).
+
+        Thin delegate over the pure formatter in :mod:`.formatting` (the
+        Textual TUI reuses the same renderable).
+        """
+        return render_reasoning_panel(reasoning, self.theme)
 
     # ── Live streaming panel ────────────────────────────────────────────────
 
