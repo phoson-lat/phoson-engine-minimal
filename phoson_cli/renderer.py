@@ -756,3 +756,49 @@ def _subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:
     if isinstance(tasks, list):
         return [task for task in tasks if isinstance(task, str) and task]
     return []
+
+
+# ── AgentEventSink adapter ────────────────────────────────────────────────────
+
+
+class ClassicSink:
+    """``AgentEventSink`` implementation over the classic Rich ``Renderer``.
+
+    This is the presentation adapter used by the classic REPL (and by
+    :class:`~phoson_cli.controller.SessionController` in tests). The
+    Textual TUI (MIGRATE_CLI_TO_TEXTUAL.md, phase 3) will provide its
+    own sink; nothing in the controller depends on this class.
+    """
+
+    def __init__(self, renderer: "Renderer") -> None:
+        self._renderer = renderer
+
+    def on_user_message(self, text: str, message: "Message") -> None:
+        self._renderer.print_user_turn(text)
+
+    def on_attachments(self, sources: list[str]) -> None:
+        for source in sources:
+            self._renderer.print_info(f"  📎 {source}")
+
+    def on_event(self, event: AgentEvent) -> None:
+        self._renderer.on_event(event)
+
+    def flush_line(self) -> None:
+        self._renderer.flush_line()
+
+    def capture_partial_reasoning(self) -> None:
+        self._renderer.capture_partial_reasoning()
+
+    def take_reasoning(self) -> str:
+        return self._renderer.take_last_reasoning()
+
+    def set_session(self, session_id: str) -> None:
+        self._renderer.set_session(session_id)
+
+    def print_history(self, path: list["Message"], tail: int) -> None:
+        self._renderer.print_history(path, tail=tail)
+
+    def notify(self, kind: str, message: str) -> None:
+        method = getattr(self._renderer, f"print_{kind}", None)
+        if method is not None:
+            method(message)

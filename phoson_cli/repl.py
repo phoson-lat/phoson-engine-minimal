@@ -1,7 +1,20 @@
+"""Classic interactive REPL (prompt_toolkit + Rich).
+
+Textual migration (MIGRATE_CLI_TO_TEXTUAL.md), phase 1: all session
+runtime — engine, tree, metrics, run lifecycle, persistence — now lives
+in :class:`~phoson_cli.controller.SessionController`, which is free of
+UI dependencies. ``PhosonRepl`` is the *classic front end* over that
+controller: it owns the prompt loop, key bindings, completer, prompt
+fragments and banner, and adapts its Rich ``Renderer`` to the
+controller's :class:`~phoson_cli.ui_protocols.AgentEventSink` via
+``ClassicSink``.
+
+The future Textual TUI will be a second front end over the same
+controller — a sink, not a fork.
+"""
+
 import asyncio
 import logging
-import warnings
-from typing import Any
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -13,26 +26,25 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
 
-from phoson_agent import (
-    Plugin,
-    AgentEngine,
-    AgentDoneEvent,
-    AgentErrorEvent,
-)
-from phoson_llm.schemas import Message, ModelConfig, ContentBlock
-from phoson_agent.sessions import JsonlStorage, ConversationTree
-from phoson_agent.plugins.summarizer import SummarizationMiddleware
-from phoson_agent.plugins.context_window import ContextWindowResolver
+# Re-exported for backward compatibility (one-shot mode, existing tests).
+from phoson_agent import AgentEngine  # noqa: F401
+from phoson_agent.sessions import ConversationTree  # noqa: F401
 
 from .theme import Theme, load_theme, build_prompt_style
-from .tools import build_tools, build_tools_dict
 from ._views import print_banner, render_tree_ascii
-from .config import PhosonConfig, build_chat
-from .models import load_models_file, provider_settings, resolve_context_window
-from ._session import SessionState, SessionMetrics
+from .config import (
+    PhosonConfig,
+    build_chat,  # noqa: F401
+)
+from ._session import SessionMetrics  # noqa: F401
 from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
-from .renderer import Renderer
-from .attachments import AttachmentManager
+from .renderer import Renderer, ClassicSink
+from .controller import SessionController
+from .session_utils import (  # noqa: F401
+    close_plugins,
+    build_mcp_plugins,
+    build_system_prompt,
+)
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
 
@@ -41,83 +53,6 @@ _LOGGER = logging.getLogger("phoson_cli.repl")
 _CMD_META: dict[str, str] = {
     name: spec.help for spec in COMMAND_SPECS for name in spec.names
 }
-
-_SYSTEM_PROMPT_TEMPLATE = (
-    "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
-    "You are running in working directory: {cwd}. "
-    "Available tools: read_file, write_file, patch_file, list_dir, bash, "
-    "web_search, agent, agents.{mcp_note}"
-    " Be concise, accurate, and use tools when needed."
-)
-
-
-def build_system_prompt(tools: list) -> str:
-    """Build the system prompt for the loaded tools.
-
-    Mentions the MCP tools currently loaded so the model knows they
-    exist beyond the built-in set. Shared by the REPL and the one-shot
-    mode.
-    """
-    has_mcp = any(t.name.startswith("mcp_") for t in tools)
-    mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
-    if not has_mcp:
-        mcp_note = ""
-    return _SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd(), mcp_note=mcp_note)
-
-
-def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the MCP plugin specs for a configuration.
-
-    Returns an empty list when MCP is disabled. Tries the in-tree
-    ``phoson_plugin_mcp`` first; falls back to the path-based loader
-    used during local development if the package is not installed.
-    """
-    if not config.enable_mcp:
-        return []
-
-    mcp_config = {
-        "config_file": str(config.mcp_config_file),
-        "tool_name_prefix": "mcp",
-    }
-
-    try:
-        from phoson_plugin_mcp import MCPPlugin
-
-        plugin = MCPPlugin()
-        plugin.configure(mcp_config)
-        return [plugin]
-    except ImportError:
-        return [
-            {
-                "name": "path:./phoson_plugin_mcp/_plugin.py",
-                "config": mcp_config,
-            }
-        ]
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-async def close_plugins(plugins: list) -> None:
-    """Close plugin instances, preferring async ``aclose()`` when present.
-
-    Failures are logged, never raised — closing old resources must not
-    take down whatever is rebuilding them.
-    """
-    for plugin in plugins:
-        try:
-            if hasattr(plugin, "aclose"):
-                await plugin.aclose()
-            else:
-                plugin.cleanup()
-        except Exception:  # noqa: BLE001
-            _LOGGER.warning(
-                "Could not close plugin %r",
-                getattr(plugin, "name", "?"),
-                exc_info=True,
-            )
 
 
 class _SlashCompleter(Completer):
@@ -145,14 +80,13 @@ class _SlashCompleter(Completer):
                 )
 
 
-# Banner ASCII art and tree-rendering live in ``_views`` so they can be
-# imported, replaced or tested without instantiating the REPL.
-
-
 class PhosonRepl:
-    """Interactive REPL for the Phoson agent platform.
+    """Classic interactive REPL for the Phoson agent platform.
 
-    Handles user input, command execution, agent running, and session management.
+    Thin prompt_toolkit front end over
+    :class:`~phoson_cli.controller.SessionController`. The public API
+    (methods and state attributes) is preserved for the command handlers
+    and the existing test suite.
     """
 
     def __init__(self, config: PhosonConfig) -> None:
@@ -161,149 +95,199 @@ class PhosonRepl:
         Args:
             config: PhosonConfig containing provider, model, and session settings.
         """
-        self.config = config
-        self.storage = JsonlStorage(base_path=config.sessions_dir)
-        self._session = SessionState.new()
+        self._config = config
         # Theme is resolved once at startup (env NO_COLOR/PHOSON_THEME, then
         # config.toml, then dark) and shared by every rendering site.
         self.theme: Theme = load_theme(getattr(config, "theme", None))
         self.renderer = Renderer(theme=self.theme)
-        self.current_model = config.model
-        self.current_task: asyncio.Task | None = None
-        self.attachments = AttachmentManager()
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
         self._expanded_reasoning: set[str] = set()
 
-        # Sub-agent model: explicit override or fallback to main model.
-        self.subagent_model: str = config.subagent_model or config.model
+        # The session runtime — engine, tree, metrics, run lifecycle —
+        # lives in the UI-independent controller; this REPL is its
+        # prompt_toolkit front end.
+        self._controller = SessionController(config, ClassicSink(self.renderer))
 
-        # Context window resolver + token estimator for prompt display.
-        self._cw_resolver = ContextWindowResolver(
-            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
-            openrouter_api_key=config.openrouter_api_key,
-        )
-        self._context_window: int = 128_000  # default, resolved on first use
-        self._context_tokens: int = 0  # current estimated tokens in context
+    # ── Config / controller state ─────────────────────────────────────────
 
-        # Summarization middleware. The provider/model fields are kept in
-        # sync with the active config every time ``_rebuild_engine`` runs.
-        self.summarizer = SummarizationMiddleware(
-            threshold=0.80,
-            min_keep_messages=4,
-            provider=config.provider,
-            model=config.model,
-            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
-            openrouter_api_key=config.openrouter_api_key,
-        )
+    @property
+    def config(self) -> PhosonConfig:
+        return self._controller.config
 
-        # Build the runtime (chat client, tools, plugins, engine).
-        self._rebuild_engine()
+    @config.setter
+    def config(self, value: PhosonConfig) -> None:
+        self._controller.config = value
+        self._config = value
 
-        self.renderer.set_session(self._session.tree.session_id)
-
-    # ── Session state properties ──────────────────────────────────────────────
+    @property
+    def storage(self):
+        return self._controller.storage
 
     @property
     def tree(self) -> "ConversationTree":
         """The active conversation tree."""
-        return self._session.tree
+        return self._controller.tree
 
     @tree.setter
     def tree(self, value: "ConversationTree") -> None:
-        self._session.tree = value
+        self._controller.tree = value
 
     @property
     def current_node_id(self) -> str | None:
         """ID of the most recently active tree node."""
-        return self._session.current_node_id
+        return self._controller.current_node_id
 
     @current_node_id.setter
     def current_node_id(self, value: str | None) -> None:
-        self._session.current_node_id = value
+        self._controller.current_node_id = value
 
     @property
     def session_metrics(self) -> SessionMetrics:
         """Accumulated metrics for the current session."""
-        return self._session.metrics
+        return self._controller.session_metrics
 
-    # ── Engine (re)construction ───────────────────────────────────────────────
+    @property
+    def engine(self):
+        return self._controller.engine
 
-    def _build_mcp_plugins(self) -> list[str | dict[str, Any] | Plugin]:
-        """MCP plugin specs for the current configuration (see module level)."""
-        return build_mcp_plugins(self.config)
+    @engine.setter
+    def engine(self, value) -> None:
+        self._controller.engine = value
+
+    @property
+    def chat(self):
+        return self._controller.chat
+
+    @chat.setter
+    def chat(self, value) -> None:
+        self._controller.chat = value
+
+    @property
+    def tools(self):
+        return self._controller.tools
+
+    @property
+    def tools_dict(self):
+        return self._controller.tools_dict
+
+    @property
+    def current_model(self) -> str:
+        return self._controller.current_model
+
+    @current_model.setter
+    def current_model(self, value: str) -> None:
+        self._controller.current_model = value
+
+    @property
+    def subagent_model(self) -> str:
+        return self._controller.subagent_model
+
+    @subagent_model.setter
+    def subagent_model(self, value: str) -> None:
+        self._controller.subagent_model = value
+
+    @property
+    def attachments(self):
+        return self._controller.attachments
+
+    @property
+    def summarizer(self):
+        return self._controller.summarizer
+
+    @property
+    def current_task(self) -> asyncio.Task | None:
+        """The in-flight run task (``None`` when idle)."""
+        return self._controller.current_task
+
+    @current_task.setter
+    def current_task(self, value: asyncio.Task | None) -> None:
+        self._controller.current_task = value
+
+    # ── Private-state passthroughs (tests, prompt display) ─────────────────
+
+    @property
+    def _cw_resolver(self):
+        return self._controller._cw_resolver
+
+    @property
+    def _context_window(self) -> int:
+        return self._controller.context_window
+
+    @_context_window.setter
+    def _context_window(self, value: int) -> None:
+        self._controller._context_window = value
+
+    @property
+    def _context_tokens(self) -> int:
+        return self._controller.context_tokens
+
+    @_context_tokens.setter
+    def _context_tokens(self, value: int) -> None:
+        self._controller._context_tokens = value
+
+    # ── Delegated runtime methods ─────────────────────────────────────────
 
     def _rebuild_engine(self) -> None:
-        """(Re)build chat client, tool registry, plugins and the engine.
+        self._controller._rebuild_engine()
 
-        Called from ``__init__`` and from every command that mutates
-        provider/model/MCP state. The summarizer's provider/model fields
-        are also refreshed so token estimation and context-window
-        resolution stay accurate.
+    def _build_system_prompt(self) -> str:
+        return self._controller.build_system_prompt()
 
-        The previous runtime (chat client + engine plugins) is closed:
-        plugins that expose ``aclose`` (e.g. the MCP plugin with its pooled
-        sessions) are closed asynchronously on the running loop; without a
-        loop the synchronous ``cleanup()`` fallback is used.
-        """
-        old_chat = getattr(self, "chat", None)
-        old_engine = getattr(self, "engine", None)
-        old_plugins = (
-            list(getattr(old_engine, "_loaded_plugins", [])) if old_engine else []
-        )
-        self.chat = build_chat(self.config)
-        # Release the old client's connection pool (e.g. Anthropic SDK holds
-        # a persistent httpx.AsyncClient). Schedule on the running loop;
-        # no-op on the first call from __init__ where there is no old client.
-        if old_chat is not None and hasattr(old_chat, "aclose"):
-            try:
-                asyncio.get_running_loop().create_task(old_chat.aclose())
-            except RuntimeError:
-                pass
-        # Release the old engine's plugin resources (e.g. MCP pooled
-        # sessions / STDIO subprocesses) so switching model/provider does
-        # not leak them. Failures are logged, never fatal to the rebuild.
-        if old_plugins:
-            try:
-                asyncio.get_running_loop().create_task(close_plugins(old_plugins))
-            except RuntimeError:
-                for plugin in old_plugins:
-                    try:
-                        plugin.cleanup()
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.warning(
-                            "Could not clean up plugin %r during engine rebuild",
-                            getattr(plugin, "name", "?"),
-                            exc_info=True,
-                        )
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
+    def _build_user_message(self, user_input: str):
+        return self._controller._build_user_message(user_input)
 
-        self.summarizer.provider = self.config.provider
-        self.summarizer.model = self.config.model
+    def _append_user_turn(self, message):
+        return self._controller._append_user_turn(message)
 
-        plugins = self._build_mcp_plugins()
+    def _finalize_run(self, done_event, base_count: int) -> None:
+        self._controller._finalize_run(done_event, base_count)
 
-        self.engine = AgentEngine(
-            chat=self.chat,
-            tools=self.tools,
-            middlewares=[self.summarizer],
-            plugins=plugins,
-            max_iterations=self.config.max_iterations,
-        )
+    def _append_partial_history(self, base_count: int) -> None:
+        self._controller._append_partial_history(base_count)
 
-        # Inject runtime context for sub-agents.
-        self.engine.context.extra["safe_mode"] = self.config.safe_mode
-        self.engine.context.extra["available_tools"] = self.tools_dict
-        self.engine.context.extra["default_model"] = self.subagent_model
-        self.engine.context.extra["max_iterations"] = self.config.max_iterations
-        self.engine.context.extra["subagent_max_parallel"] = (
-            self.config.subagent_max_parallel
-        )
-        self.engine.context.extra["subagent_timeout_seconds"] = (
-            self.config.subagent_timeout_seconds
-        )
-        self.engine.context.extra["chat"] = self.chat
+    async def _run_agent(self, user_input: str):
+        """Run one agent turn (delegates to the controller)."""
+        return await self._controller.run_turn(user_input)
+
+    def new_session(self) -> None:
+        """Start a fresh session, resetting tree and metrics."""
+        self._controller.new_session()
+
+    async def load_session(self, session_id: str) -> bool:
+        """Load a session from storage and replay its tail."""
+        outcome = await self._controller.load_session(session_id)
+        return outcome.ok
+
+    def branch_session(self) -> None:  # pragma: no cover - kept for API compat
+        """Deprecated no-op kept for backward compatibility."""
+        self._controller.branch_session()
+
+    def set_provider(self, provider: str) -> None:
+        """Switch provider (models.json ``default_model`` honored)."""
+        self._controller.set_provider(provider)
+
+    def set_model(self, model: str) -> None:
+        """Switch model and rebuild the engine."""
+        self._controller.set_model(model)
+
+    def label_current_node(self, text: str) -> None:
+        """Label the current node with text."""
+        self._controller.label_current_node(text)
+
+    def undo_last_turn(self) -> tuple[bool, str]:
+        """Move the cursor back to just before the last user turn."""
+        return self._controller.undo_last_turn()
+
+    def find_latest_node_id(self) -> str | None:
+        """Most recent leaf node — the continuation point."""
+        return self._controller.find_latest_node_id()
+
+    async def shutdown(self) -> None:
+        """Release chat client and plugins (called on exit)."""
+        await self._controller.shutdown()
+
+    # ── Main loop ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
         """Run the REPL main loop.
@@ -337,11 +321,12 @@ class PhosonRepl:
                 prompt_fragments = self._prompt_fragments()
                 user_input = await session.prompt_async(FormattedText(prompt_fragments))
             except KeyboardInterrupt:
-                if self.current_task and not self.current_task.done():
-                    self.current_task.cancel()
+                if self._controller.is_running:
+                    self._controller.cancel_current()
                     self.renderer.print_warn("Interrupted — run cancelled.")
                 continue
             except EOFError:
+                await self.shutdown()
                 self.renderer.print_info("Bye.")
                 return
 
@@ -353,6 +338,7 @@ class PhosonRepl:
             if cmd:
                 should_continue = await command_handler.handle(cmd)
                 if not should_continue:
+                    await self.shutdown()
                     self.renderer.print_info("Bye.")
                     return
                 continue
@@ -360,190 +346,11 @@ class PhosonRepl:
             try:
                 await self._run_agent(text)
             except KeyboardInterrupt:
-                if self.current_task and not self.current_task.done():
-                    self.current_task.cancel()
+                if self._controller.is_running:
+                    self._controller.cancel_current()
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
-    # ── Agent execution ───────────────────────────────────────────────────────
-
-    def _build_user_message(self, user_input: str) -> Message:
-        """Flush pending attachments and construct the user Message."""
-        pending_blocks: list[ContentBlock] = []
-        if self.attachments:
-            media_blocks = list(self.attachments.flush())
-            for block in media_blocks:
-                self.renderer.print_info(f"  📎 {block.source.split('file://', 1)[-1]}")
-            pending_blocks = list(media_blocks)
-
-        if user_input:
-            pending_blocks.insert(0, _text_block(user_input))
-
-        content: str | list[ContentBlock] = (
-            pending_blocks if pending_blocks else user_input
-        )
-        return Message(role="user", content=content)
-
-    def _append_user_turn(self, message: Message) -> tuple[str, list[Message]]:
-        """Append user message to the tree.
-
-        Returns:
-            Tuple of (new_node_id, full conversation path).
-        """
-        node = self.tree.append(
-            parent_id=self.current_node_id,
-            message=message,
-        )
-        self.current_node_id = node.id
-        path = self.tree.get_path(self.current_node_id)
-        return node.id, path
-
-    async def _consume_stream(
-        self, path: list[Message], config: ModelConfig
-    ) -> AgentDoneEvent | AgentErrorEvent:
-        """Run the agent stream loop via renderer.on_event().
-
-        Returns the terminal event — ``AgentDoneEvent`` on success or
-        ``AgentErrorEvent`` when the run failed (auth errors, tool
-        failures, max iterations). The engine's contract is that exactly
-        one terminal event is emitted; a stream that ends without either
-        is a protocol bug and raises ``RuntimeError``.
-
-        Re-raises ``asyncio.CancelledError`` without catching — the caller
-        (``_run_agent``) handles it so that ``base_count`` stays in scope
-        for ``_save_partial``.
-        """
-        terminal: AgentDoneEvent | AgentErrorEvent | None = None
-
-        async def consume() -> None:
-            nonlocal terminal
-            async for event in self.engine.stream(path, config):
-                self.renderer.on_event(event)
-                if isinstance(event, (AgentDoneEvent, AgentErrorEvent)):
-                    terminal = event
-
-        self.current_task = asyncio.create_task(consume())
-        await self.current_task
-        self.current_task = None
-
-        if terminal is None:
-            raise RuntimeError(
-                "Agent stream ended without a terminal AgentDoneEvent/AgentErrorEvent"
-            )
-        return terminal
-
-    def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
-        """Append new messages to tree, update metrics, save session."""
-        new_messages = done_event.result.history[base_count:]
-        if new_messages:
-            created = self.tree.append_many(self.current_node_id, new_messages)
-            self.current_node_id = created[-1].id
-
-        self._context_tokens = self.summarizer.estimate_tokens(
-            done_event.result.history
-        )
-        for step in done_event.result.steps:
-            self.session_metrics.add_run_step(step)
-
-    def _append_partial_history(self, base_count: int) -> None:
-        """Slice engine partial history and append new nodes to the tree.
-
-        Updates ``current_node_id`` to the last appended node.
-        Called synchronously from the ``CancelledError`` handler in
-        ``_run_agent`` before the async saves.
-        """
-        partial = self.engine.get_partial_history()
-        new_messages = partial[base_count:]
-        if new_messages:
-            created = self.tree.append_many(self.current_node_id, new_messages)
-            self.current_node_id = created[-1].id
-
-    async def _run_agent(self, user_input: str) -> None:
-        """Execute the agent with user input.
-
-        Args:
-            user_input: The user's message text.
-        """
-        user_message = self._build_user_message(user_input)
-        _node_id, path = self._append_user_turn(user_message)
-        base_count = len(path)
-
-        self.renderer.print_user_turn(user_input)
-
-        config = ModelConfig(
-            model=self.current_model,
-            system=self._build_system_prompt(),
-        )
-
-        # Resolve context window: models.json (user override or cache)
-        # wins, then the engine's registry.
-        _models_data = load_models_file()
-        _model_bare = self.current_model.split("/", 1)[-1]
-        _override = resolve_context_window(
-            _models_data, self.config.provider, _model_bare
-        )
-        if _override is not None:
-            self._context_window = _override
-        else:
-            self._context_window = await self._cw_resolver.resolve(
-                self.config.provider, self.current_model
-            )
-        self._context_tokens = self.summarizer.estimate_tokens(path)
-
-        try:
-            terminal_event = await self._consume_stream(path, config)
-        except asyncio.CancelledError:
-            self.renderer.flush_line()
-            self.renderer.capture_partial_reasoning()
-            self._append_partial_history(base_count)
-            self._persist_run_reasoning()
-            await self.storage.save(self.tree)
-            await self.storage.save_meta(
-                self.tree.session_id, self.session_metrics.to_meta()
-            )
-            self.renderer.print_warn("Partial progress saved.")
-            return
-        finally:
-            self.current_task = None
-
-        if isinstance(terminal_event, AgentErrorEvent):
-            # The renderer already printed the error panel. Persist what
-            # exists (the user turn, plus any steps that succeeded before
-            # the failure) so the conversation is not lost and can be
-            # retried or /undo'd — then return to the prompt instead of
-            # crashing the REPL.
-            self._append_partial_history(base_count)
-            self._persist_run_reasoning()
-            await self.storage.save(self.tree)
-            await self.storage.save_meta(
-                self.tree.session_id, self.session_metrics.to_meta()
-            )
-            if terminal_event.code == "auth":
-                self.renderer.print_warn(
-                    "Check your credentials — run /setup or set the "
-                    "provider API key env var."
-                )
-            return
-
-        self._finalize_run(terminal_event, base_count)
-        self._persist_run_reasoning()
-        await self.storage.save(self.tree)
-        await self.storage.save_meta(
-            self.tree.session_id, self.session_metrics.to_meta()
-        )
-
-    def _persist_run_reasoning(self) -> None:
-        """Attach captured reasoning to the last assistant node on the path.
-
-        Stored in ``node.metadata["reasoning"]`` (a generic, backward
-        compatible dict) so it survives session resume and can be
-        expanded later with Ctrl+T.
-        """
-        reasoning = self.renderer.take_last_reasoning()
-        if not reasoning or self.current_node_id is None:
-            return
-        node = self.tree.nodes.get(self.current_node_id)
-        if node is not None and node.message.role == "assistant":
-            node.metadata["reasoning"] = reasoning
+    # ── Reasoning (Ctrl+T) ─────────────────────────────────────────────────
 
     def _on_reasoning_toggle(self) -> None:
         """Ctrl+T handler.
@@ -553,8 +360,7 @@ class PhosonRepl:
         the current path that has any (a node's reasoning is printed at
         most once per REPL session — the terminal is append-only).
         """
-        task = self.current_task
-        if task is not None and not task.done():
+        if self._controller.is_running:
             self.renderer.toggle_live_reasoning()
             return
 
@@ -584,162 +390,13 @@ class PhosonRepl:
 
         self.renderer.print_info("No reasoning captured in the current conversation.")
 
-    # ── Session / model management ─────────────────────────────────────────────
-
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt for the next run.
-
-        Mentions the MCP tools currently loaded so the model knows they
-        exist beyond the built-in set.
-        """
-        return build_system_prompt(self.engine.tools)
-
-    def new_session(self) -> None:
-        """Start a fresh session, resetting tree and metrics."""
-        self._session.reset()
-        self.attachments.clear()
-        self.renderer.set_session(self._session.tree.session_id)
-
-    async def load_session(self, session_id: str) -> bool:
-        """Load a session from storage and replay its tail. Returns True on success."""
-        try:
-            self._session.tree = await self.storage.load(session_id)
-            self._session.current_node_id = self.find_latest_node_id()
-            self._session.metrics = SessionMetrics()
-            self.renderer.set_session(self._session.tree.session_id)
-
-            # Load saved metrics using the authoritative SessionMeta field names.
-            metas = await self.storage.list_meta()
-            for meta in metas:
-                if str(meta.id) == session_id:
-                    self.session_metrics.total_cost_usd = meta.total_cost
-                    self.session_metrics.total_output_tokens = meta.total_tokens
-                    self.session_metrics.step_count = meta.step_count
-                    self.session_metrics.last_model = meta.last_model or ""
-                    break
-
-            # Replay the tail of the session so the user knows where they left off.
-            try:
-                path = self.tree.get_path(self.current_node_id)
-                self.renderer.print_history(path, tail=6)
-            except (ValueError, AttributeError, TypeError):
-                _LOGGER.debug(
-                    "Could not replay session history — node may be corrupted",
-                    exc_info=True,
-                )
-
-            return True
-        except FileNotFoundError:
-            self.renderer.print_error(f"Session {session_id[:8]} not found.")
-            return False
-        except Exception as e:
-            _LOGGER.exception("Failed to load session %s", session_id[:8])
-            self.renderer.print_error(f"Failed to load session: {e}")
-            return False
-
-    def branch_session(self) -> None:  # pragma: no cover - kept for API compat
-        """Deprecated no-op kept for backward compatibility.
-
-        The conversation tree's append cursor already follows the current
-        node, so there is nothing to branch from; real branching/undo UX is
-        tracked as follow-up work (see TODO.md).
-        """
-        pass
-
-    def set_provider(self, provider: str) -> None:
-        """Switch to a different provider and rebuild runtime state.
-
-        If ``models.json`` defines a ``default_model`` for the new
-        provider, that model is selected; otherwise the current model
-        name is kept.
-        """
-        self.config.provider = provider
-        settings = provider_settings(load_models_file(), provider)
-        default_model = settings.get("default_model")
-        self.set_model(default_model or self.config.model)
-
-    def set_model(self, model: str) -> None:
-        """Switch to a different model and rebuild the engine.
-
-        Args:
-            model: The new model name to use.
-        """
-        self.current_model = model
-        self.config.model = model
-        # Sub-agent model follows the main model unless explicitly overridden.
-        self.subagent_model = self.config.subagent_model or model
-        self._rebuild_engine()
-
-    def label_current_node(self, text: str) -> None:
-        """Label the current node with text."""
-        if self.current_node_id is None:
-            return
-        self.tree.label(self.current_node_id, text)
-
-    def undo_last_turn(self) -> tuple[bool, str]:
-        """Move the cursor back to just before the last user turn.
-
-        The "undone" messages are not deleted — they remain in the tree
-        (visible via /tree) as an abandoned branch; the next user message
-        appends a new branch from the restored cursor position. Session
-        cost/token metrics are cumulative and are intentionally NOT
-        rolled back.
-
-        Returns:
-            Tuple of (success, message or new node id).
-        """
-        if self.current_node_id is None:
-            return False, "No active node — nothing to undo."
-
-        # Walk the node path root → cursor (the message-level get_path is
-        # not enough: we need node ids to move the cursor).
-        node_path: list = []
-        cursor: str | None = self.current_node_id
-        while cursor is not None:
-            node = self.tree.nodes[cursor]
-            node_path.append(node)
-            cursor = node.parent_id
-        node_path.reverse()
-
-        last_user_idx = next(
-            (
-                i
-                for i in range(len(node_path) - 1, -1, -1)
-                if node_path[i].message.role == "user"
-            ),
-            None,
-        )
-        if last_user_idx is None:
-            return False, "No user turn found in the current path."
-        if last_user_idx == 0:
-            return False, "Nothing to undo — the session starts with this turn."
-
-        self.current_node_id = node_path[last_user_idx - 1].id
-        return True, self.current_node_id
-
-    def find_latest_node_id(self) -> str | None:
-        """Find the most recent leaf node — the continuation point.
-
-        Only leaves are considered (the next turn appends to a leaf), and
-        ties on ``created_at`` are broken deterministically by node id so a
-        loaded tree (nodes re-inserted in saved order) yields a stable pick.
-        """
-        if not self.tree.nodes:
-            return None
-        leaves = self.tree.get_leaves()
-        if not leaves:
-            return None
-        leaf_nodes = [self.tree.nodes[node_id] for node_id in leaves]
-        latest = max(leaf_nodes, key=lambda n: (n.created_at, n.id))
-        return latest.id
-
-    # ── Tree rendering ────────────────────────────────────────────────────────
+    # ── Tree rendering ────────────────────────────────────────────────────
 
     def render_tree_ascii(self) -> str:
         """Render the conversation tree as an ASCII diagram."""
         return render_tree_ascii(self.tree, self.current_node_id)
 
-    # ── Prompt ────────────────────────────────────────────────────────────────
+    # ── Prompt ────────────────────────────────────────────────────────────
 
     def _prompt_fragments(self) -> list[tuple[str, str]]:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
@@ -781,7 +438,7 @@ class PhosonRepl:
 
         return f"{_fmt(used)}/{_fmt(total)}"
 
-    # ── Banner ────────────────────────────────────────────────────────────────
+    # ── Banner ────────────────────────────────────────────────────────────
 
     def _print_banner(self) -> None:
         """Render the welcome banner."""
@@ -792,13 +449,3 @@ class PhosonRepl:
             session_id=self.tree.session_id,
             theme=self.theme,
         )
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _text_block(text: str) -> "ContentBlock":
-    """Create a TextBlock inline."""
-    from phoson_llm.schemas import TextBlock
-
-    return TextBlock(text=text)

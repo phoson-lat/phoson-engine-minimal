@@ -85,7 +85,7 @@ def test_render_reasoning_panel_contains_text() -> None:
 
 
 def _make_repl(tmp_path) -> PhosonRepl:
-    with patch("phoson_cli.repl.build_chat") as mock_build:
+    with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
