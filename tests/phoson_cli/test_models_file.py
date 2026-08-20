@@ -31,7 +31,7 @@ def _make_repl(tmp_path):
     from phoson_cli.repl import PhosonRepl
     from phoson_cli.config import PhosonConfig
 
-    with patch("phoson_cli.repl.build_chat") as mock_build:
+    with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
@@ -405,14 +405,14 @@ async def test_repl_uses_models_json_context_window(tmp_path) -> None:
         ),
     ]
     data = {"models": {"qwen3.8-27b": {"context_window": 262144}}}
-    import phoson_cli.repl as repl_mod
+    import phoson_cli.controller as controller_mod
 
     repl = _make_repl_with_events(tmp_path, events)
     repl.current_model = "openrouter/qwen3.8-27b"
     repl.config.provider = "openrouter"
     mock_resolve = repl._cw_resolver.resolve
 
-    with patch.object(repl_mod, "load_models_file", return_value=data):
+    with patch.object(controller_mod, "load_models_file", return_value=data):
         await repl._run_agent("q")
 
     assert repl._context_window == 262144
@@ -447,22 +447,22 @@ async def test_repl_falls_back_to_engine_resolver_without_override(tmp_path) -> 
     repl.current_model = "some-model"
     repl.config.provider = "openrouter"
 
-    import phoson_cli.repl as repl_mod
+    import phoson_cli.controller as controller_mod
 
-    with patch.object(repl_mod, "load_models_file", return_value={}):
+    with patch.object(controller_mod, "load_models_file", return_value={}):
         await repl._run_agent("q")
 
     assert repl._context_window == 128_000  # engine resolver value
 
 
 def test_set_provider_uses_default_model(tmp_path) -> None:
-    import phoson_cli.repl as repl_mod
+    import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
     data = {"providers": {"openrouter": {"default_model": "qwen3.8-27b"}}}
     with (
-        patch.object(repl_mod, "load_models_file", return_value=data),
-        patch.object(repl_mod, "build_chat", return_value=None),
+        patch.object(controller_mod, "load_models_file", return_value=data),
+        patch.object(controller_mod, "build_chat", return_value=None),
     ):
         repl.set_provider("openrouter")
     assert repl.current_model == "qwen3.8-27b"
@@ -470,14 +470,14 @@ def test_set_provider_uses_default_model(tmp_path) -> None:
 
 
 def test_set_provider_without_default_keeps_model(tmp_path) -> None:
-    import phoson_cli.repl as repl_mod
+    import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
-    with patch.object(repl_mod, "build_chat", return_value=None):
+    with patch.object(controller_mod, "build_chat", return_value=None):
         repl.set_model("keep-me")
     with (
-        patch.object(repl_mod, "load_models_file", return_value={}),
-        patch.object(repl_mod, "build_chat", return_value=None),
+        patch.object(controller_mod, "load_models_file", return_value={}),
+        patch.object(controller_mod, "build_chat", return_value=None),
     ):
         repl.set_provider("openrouter")
     assert repl.current_model == "keep-me"

@@ -24,7 +24,7 @@ UTC = datetime.UTC
 @pytest.fixture
 def repl(tmp_path):
     """A PhosonRepl instance with a mocked chat client."""
-    with patch("phoson_cli.repl.build_chat") as mock_build:
+    with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
@@ -275,7 +275,7 @@ async def test_rebuild_engine_closes_old_plugins_and_chat(repl: PhosonRepl) -> N
 
     new_engine = MagicMock()
     new_engine._loaded_plugins = []
-    with patch("phoson_cli.repl.AgentEngine", return_value=new_engine):
+    with patch("phoson_cli.controller.AgentEngine", return_value=new_engine):
         repl._rebuild_engine()
 
     # The close is scheduled as a task — give the loop a tick to run it.
@@ -301,7 +301,7 @@ async def test_rebuild_engine_survives_plugin_close_failure(repl: PhosonRepl) ->
 
     new_engine = MagicMock()
     new_engine._loaded_plugins = []
-    with patch("phoson_cli.repl.AgentEngine", return_value=new_engine):
+    with patch("phoson_cli.controller.AgentEngine", return_value=new_engine):
         repl._rebuild_engine()  # must not raise
 
     await asyncio.sleep(0.05)
