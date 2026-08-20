@@ -316,7 +316,14 @@ def load_config() -> PhosonConfig:
 
 
 def save_config(config: PhosonConfig) -> Path:
-    """Persist configuration defaults to ~/.phoson/config.toml."""
+    """Persist configuration defaults to ~/.phoson/config.toml.
+
+    The existing file is updated **in place**: only the managed keys of the
+    ``[defaults]`` section are touched (replaced at their original position,
+    appended when missing, removed when now ``None``). Every other line —
+    comments, user-added keys, extra sections — is preserved byte-for-byte,
+    so saving never clobbers content the CLI does not own.
+    """
     config_dir = Path("~/.phoson").expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
@@ -335,51 +342,103 @@ def save_config(config: PhosonConfig) -> Path:
 
     enabled_providers = enabled_providers_from_config(config)
 
-    lines = ["[defaults]"]
-    for line in [
-        _line("provider", getattr(config, "provider", None)),
-        _line("enabled_providers", ",".join(enabled_providers)),
-        _line("model", getattr(config, "model", None)),
-        _line("subagent_model", getattr(config, "subagent_model", None)),
-        _line("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
-        _line("openai_api_key", getattr(config, "openai_api_key", None)),
-        _line("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
-        _line("ollama_base_url", getattr(config, "ollama_base_url", None)),
-        _line("github_token", getattr(config, "github_token", None)),
-        _line("nvidia_api_key", getattr(config, "nvidia_api_key", None)),
-        _line("xai_api_key", getattr(config, "xai_api_key", None)),
-        _line("groq_api_key", getattr(config, "groq_api_key", None)),
-        _line("deepseek_api_key", getattr(config, "deepseek_api_key", None)),
-        _line("together_api_key", getattr(config, "together_api_key", None)),
-        _line("perplexity_api_key", getattr(config, "perplexity_api_key", None)),
-        _line("azure_openai_endpoint", getattr(config, "azure_openai_endpoint", None)),
-        _line("azure_openai_api_key", getattr(config, "azure_openai_api_key", None)),
-        _line(
-            "azure_openai_deployment", getattr(config, "azure_openai_deployment", None)
-        ),
-        _line("gemini_api_key", getattr(config, "gemini_api_key", None)),
-        _line("mistral_api_key", getattr(config, "mistral_api_key", None)),
-        _line("fireworks_api_key", getattr(config, "fireworks_api_key", None)),
-        _line("cohere_api_key", getattr(config, "cohere_api_key", None)),
-        _line("vllm_base_url", getattr(config, "vllm_base_url", None)),
-        _line("vllm_api_key", getattr(config, "vllm_api_key", None)),
-        _line("lmstudio_base_url", getattr(config, "lmstudio_base_url", None)),
-        _line("sessions_dir", str(getattr(config, "sessions_dir", ""))),
-        _line("max_iterations", getattr(config, "max_iterations", None)),
-        _line("safe_mode", getattr(config, "safe_mode", None)),
-        _line("theme", getattr(config, "theme", None)),
-        _line("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
-        _line(
-            "subagent_timeout_seconds",
-            getattr(config, "subagent_timeout_seconds", None),
-        ),
-        _line("enable_mcp", getattr(config, "enable_mcp", None)),
-        _line("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
+    managed: dict[str, str | None] = {}
+    for key, value in [
+        ("provider", getattr(config, "provider", None)),
+        ("enabled_providers", ",".join(enabled_providers)),
+        ("model", getattr(config, "model", None)),
+        ("subagent_model", getattr(config, "subagent_model", None)),
+        ("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
+        ("openai_api_key", getattr(config, "openai_api_key", None)),
+        ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
+        ("ollama_base_url", getattr(config, "ollama_base_url", None)),
+        ("github_token", getattr(config, "github_token", None)),
+        ("nvidia_api_key", getattr(config, "nvidia_api_key", None)),
+        ("xai_api_key", getattr(config, "xai_api_key", None)),
+        ("groq_api_key", getattr(config, "groq_api_key", None)),
+        ("deepseek_api_key", getattr(config, "deepseek_api_key", None)),
+        ("together_api_key", getattr(config, "together_api_key", None)),
+        ("perplexity_api_key", getattr(config, "perplexity_api_key", None)),
+        ("azure_openai_endpoint", getattr(config, "azure_openai_endpoint", None)),
+        ("azure_openai_api_key", getattr(config, "azure_openai_api_key", None)),
+        ("azure_openai_deployment", getattr(config, "azure_openai_deployment", None)),
+        ("gemini_api_key", getattr(config, "gemini_api_key", None)),
+        ("mistral_api_key", getattr(config, "mistral_api_key", None)),
+        ("fireworks_api_key", getattr(config, "fireworks_api_key", None)),
+        ("cohere_api_key", getattr(config, "cohere_api_key", None)),
+        ("vllm_base_url", getattr(config, "vllm_base_url", None)),
+        ("vllm_api_key", getattr(config, "vllm_api_key", None)),
+        ("lmstudio_base_url", getattr(config, "lmstudio_base_url", None)),
+        ("sessions_dir", str(getattr(config, "sessions_dir", ""))),
+        ("max_iterations", getattr(config, "max_iterations", None)),
+        ("safe_mode", getattr(config, "safe_mode", None)),
+        ("theme", getattr(config, "theme", None)),
+        ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
+        ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
+        ("enable_mcp", getattr(config, "enable_mcp", None)),
+        ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
     ]:
-        if line:
-            lines.append(line)
+        managed[key] = _line(key, value)
 
-    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    def _is_complete_value(line: str) -> bool:
+        # Managed values are single-line scalars; a managed key whose line
+        # has unbalanced brackets/quotes is a multi-line value we must not
+        # break (leave it as-is).
+        return (
+            line.count("[") == line.count("]")
+            and line.count("{") == line.count("}")
+            and line.count('"') % 2 == 0
+        )
+
+    lines = (
+        config_path.read_text(encoding="utf-8").splitlines()
+        if config_path.exists()
+        else []
+    )
+
+    out: list[str] = []
+    in_defaults = False
+    touched: set[str] = set()
+    defaults_end = None  # index in `out` after the last [defaults] line
+    section_open = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_defaults = stripped == "[defaults]"
+            out.append(line)
+            if in_defaults:
+                section_open = True
+                defaults_end = len(out)
+            continue
+        if in_defaults and stripped and not stripped.startswith("#"):
+            key = stripped.split("=", 1)[0].strip()
+            if key in managed and "=" in stripped:
+                if _is_complete_value(stripped):
+                    replacement = managed[key]
+                    if replacement is not None:
+                        out.append(replacement)
+                    # else: the managed key was cleared -> drop the line
+                # else: multi-line value — preserved byte-for-byte
+                touched.add(key)
+                continue
+        out.append(line)
+        if in_defaults and stripped and not stripped.startswith("#"):
+            defaults_end = len(out)
+
+    if not section_open:
+        # No [defaults] section in the file: start one at the top.
+        block = ["[defaults]"]
+        out = block + out
+        defaults_end = 1
+
+    missing = [
+        line for key, line in managed.items() if line is not None and key not in touched
+    ]
+    if missing:
+        out[defaults_end:defaults_end] = missing
+
+    config_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
     # The file holds API keys — restrict it to the owner. The parent
     # directory also stores session data, so keep it private as well.
