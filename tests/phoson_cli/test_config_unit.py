@@ -212,3 +212,150 @@ def test_subagent_keys_round_trip_save_load(monkeypatch, tmp_path) -> None:
     loaded = load_config()
     assert loaded.subagent_max_parallel == 6
     assert loaded.subagent_timeout_seconds == pytest.approx(120.5)
+
+
+# ── save_config preserves user-owned file content ───────────────────────────
+
+
+class _SaveCfg:
+    provider = "groq"
+    model = "llama-3.3-70b"
+    groq_api_key = "gsk_test"
+
+
+def test_save_config_preserves_unknown_keys_and_sections(monkeypatch, tmp_path) -> None:
+    """User-added keys, comments and extra sections survive a save."""
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    config_path = home / ".phoson" / "config.toml"
+    monkeypatch.setenv("HOME", str(home))
+
+    config_path.write_text(
+        "# user note at top\n"
+        "[defaults]\n"
+        'provider = "openrouter"  # was openrouter\n'
+        'model = "old-model"\n'
+        'fireworks_base_url = "https://custom.proxy/v1"\n'
+        'custom_note = "keep me"\n'
+        "\n"
+        "[custom_section]\n"
+        "answer = 42\n",
+        encoding="utf-8",
+    )
+
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    content = config_path.read_text()
+
+    # user content preserved
+    assert "# user note at top" in content
+    assert 'fireworks_base_url = "https://custom.proxy/v1"' in content
+    assert 'custom_note = "keep me"' in content
+    assert "[custom_section]" in content
+    assert "answer = 42" in content
+
+    # managed keys updated in place, cleared keys dropped
+    assert 'provider = "groq"' in content
+    assert 'model = "llama-3.3-70b"' in content
+    assert "old-model" not in content
+
+    # still valid TOML, loadable, with the new values
+    from phoson_cli.config import load_config
+
+    loaded = load_config()
+    assert loaded.provider == "groq"
+    assert loaded.model == "llama-3.3-70b"
+
+
+def test_save_config_preserves_comments_and_order(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    config_path = home / ".phoson" / "config.toml"
+    monkeypatch.setenv("HOME", str(home))
+
+    config_path.write_text(
+        "[defaults]\n"
+        "# my comment inside defaults\n"
+        'model = "old"\n'
+        'provider = "openrouter"\n',
+        encoding="utf-8",
+    )
+
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    lines = config_path.read_text().splitlines()
+
+    # the comment and original key order are kept
+    assert "# my comment inside defaults" in lines
+    model_i = lines.index('model = "llama-3.3-70b"')
+    provider_i = lines.index('provider = "groq"')
+    comment_i = lines.index("# my comment inside defaults")
+    assert comment_i < model_i < provider_i
+
+
+def test_save_config_removes_cleared_managed_key(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    config_path = home / ".phoson" / "config.toml"
+    monkeypatch.setenv("HOME", str(home))
+
+    config_path.write_text(
+        "[defaults]\n"
+        'provider = "openrouter"\n'
+        'subagent_model = "old/sub"\n'
+        'model = "old-model"\n',
+        encoding="utf-8",
+    )
+
+    # _SaveCfg has no subagent_model attribute -> getattr -> None -> dropped
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    content = config_path.read_text()
+    assert "subagent_model" not in content
+    assert "old/sub" not in content
+    assert 'provider = "groq"' in content
+
+
+def test_save_config_creates_defaults_section_when_missing(
+    monkeypatch, tmp_path
+) -> None:
+    from phoson_cli.config import load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    config_path = home / ".phoson" / "config.toml"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_MODEL", raising=False)
+
+    config_path.write_text("[other]\nfoo = 1\n", encoding="utf-8")
+
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    content = config_path.read_text()
+    assert "[defaults]" in content
+    assert "foo = 1" in content
+
+    loaded = load_config()
+    assert loaded.provider == "groq"
+    assert loaded.model == "llama-3.3-70b"
+
+
+def test_save_config_idempotent_second_save(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    config_path = home / ".phoson" / "config.toml"
+    monkeypatch.setenv("HOME", str(home))
+
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    first = config_path.read_text()
+    save_config(_SaveCfg())  # type: ignore[arg-type]
+    second = config_path.read_text()
+
+    # no duplicated managed keys on re-save
+    assert second == first
+    assert second.count('provider = "groq"') == 1
+    assert second.count('model = "llama-3.3-70b"') == 1
