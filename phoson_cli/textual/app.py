@@ -26,13 +26,14 @@ from collections.abc import Iterable, Awaitable
 
 from textual.app import App
 from textual.widget import Widget
-from textual.widgets import Input, Static
+from textual.widgets import Input, Footer, Static
 from textual.containers import VerticalScroll
 
 if TYPE_CHECKING:
     from ..config import PhosonConfig
 
 from .sink import TextualSink
+from ..config import save_config
 from .dialogs import BashConfirmation
 from .widgets import ReasoningView, StreamingTurn
 from ..controller import SessionController
@@ -101,11 +102,27 @@ class PhosonTextualApp(App):
             confirmation=TextualConfirmationService(self),
         )
         self.update_status_bar()
+        self._welcome()
         self.query_one(Input).focus()
+
+    def _welcome(self) -> None:
+        controller = self._controller
+        assert controller is not None
+        session = (controller.current_node_id or "")[:8] or "—"
+        self._fire(
+            self.conversation().mount(
+                Static(
+                    f"[bold]phoson[/]  [dim]·[/]  {controller.current_model}  "
+                    f"[dim]·[/]  {controller.config.provider}  [dim]·[/]  "
+                    f"session {session}  [dim]·[/]  /help for commands",
+                )
+            )
+        )
 
     def compose(self) -> Iterable[Widget]:
         yield VerticalScroll(id="conversation")
         yield Static("", id="status")
+        yield Footer()
         yield Input(
             placeholder=(
                 "Ask Phos — /help for commands · Ctrl+T reasoning · "
@@ -182,6 +199,16 @@ class PhosonTextualApp(App):
         if self._sink is not None:
             self._sink.notify(kind, message)
 
+    def _persist_config(self) -> None:
+        """Save the config like the classic REPL does (fail soft)."""
+        controller = self._controller
+        if controller is None:
+            return
+        try:
+            save_config(controller.config)
+        except OSError:
+            self._notify("warn", "could not save ~/.phoson/config.toml")
+
     def update_status_bar(self) -> None:
         bar = self.query_one("#status", Static)
         parts: list[str] = []
@@ -225,6 +252,8 @@ class PhosonTextualApp(App):
             return
         turn = StreamingTurn()
         self._current_turn = turn
+        composer = self.query_one(Input)
+        composer.disabled = True
         self.update_status_bar()
         self._run_task = asyncio.ensure_future(self._run(text))
         self._run_task.add_done_callback(self._log_task_error)
@@ -245,6 +274,9 @@ class PhosonTextualApp(App):
             self._last_turn = self._current_turn
             self._current_turn = None
             self._run_task = None
+            composer = self.query_one(Input)
+            composer.disabled = False
+            composer.focus()
             self.update_status_bar()
 
     # ── slash commands (TUI subset) ───────────────────────────────
@@ -308,7 +340,8 @@ class PhosonTextualApp(App):
         elif command == "model":
             if arg:
                 controller.set_model(arg)
-                self._notify("info", f"model → {arg}")
+                self._persist_config()
+                self._notify("info", f"model → {arg}  ·  saved")
                 self.update_status_bar()
             else:
                 self._notify(

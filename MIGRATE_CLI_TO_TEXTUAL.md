@@ -207,6 +207,14 @@ Convertir `PhosonRepl` de `phoson_cli/repl.py` en una capa delgada de entrada/sa
 > (headless con `App.run_test`).
 > Pendiente de la fase (se mueve a Fase 4/6): Composer multilínea
 > (Cmd+Enter), `SubagentStatusPanel` dedicado y `Ctrl+Enter`.
+>
+> **Pulido posterior (PR #44):** línea de bienvenida al montar, footer
+> con atajos, composer deshabilitado mientras corre el turno (con
+> re-foco al terminar), cards de herramientas por encima del texto que
+> las sigue (segmentos de markdown cronológicos — actualizaciones de
+> turno serializadas en una cola FIFO para que los mounts async no
+> se entrelacen) y `/model <id>` persiste a `config.toml` (paridad
+> con el REPL clásico).
 
 ### Archivos nuevos
 
