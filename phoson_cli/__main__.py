@@ -56,6 +56,60 @@ def _read_stdin_task() -> str:
         return ""
 
 
+#: UI mode flags. They never reach the one-shot task parser.
+UI_MODE_FLAGS = {"--textual", "--classic"}
+
+
+def _resolve_ui_mode(args: list[str]) -> tuple[str, list[str]]:
+    """Split the UI mode flag out of ``args``.
+
+    Returns ``(mode, remaining_args)`` where mode is ``"textual"`` or
+    ``"classic"`` (the default). ``--classic`` is accepted for explicitness
+    and future compatibility; the classic REPL is the default.
+    """
+    mode = "classic"
+    rest: list[str] = []
+    for arg in args:
+        if arg in UI_MODE_FLAGS:
+            if arg == "--textual":
+                mode = "textual"
+        else:
+            rest.append(arg)
+    return mode, rest
+
+
+def _textual_available() -> bool:
+    """True when the optional ``textual`` dependency is importable."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("textual") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def _start_textual_ui() -> bool:
+    """Attempt to start the Textual TUI. Returns True if it took over.
+
+    Phase 0 of the Textual migration (MIGRATE_CLI_TO_TEXTUAL.md): the TUI
+    does not exist in this version yet, so a missing dependency is a
+    friendly error and an installed one falls back to the classic REPL
+    with a notice.
+    """
+    if not _textual_available():
+        print("Error: the Textual TUI requires the optional 'tui' extra.")
+        print(
+            "Install it with:  uv sync --extra tui"
+            "   (or: pip install 'phoson-engine-minimal[tui]')"
+        )
+        sys.exit(1)
+    print(
+        "The Textual TUI is under construction (MIGRATE_CLI_TO_TEXTUAL.md) — "
+        "using the classic REPL for now."
+    )
+    return False
+
+
 def _parse_oneshot_task(args: list[str]) -> str | None:
     """Return the one-shot task, or None for interactive REPL mode.
 
@@ -162,9 +216,14 @@ def main() -> None:
         asyncio.run(run_install_wizard(config))
         return
 
+    # UI mode selection happens before one-shot parsing so the flags never
+    # leak into the task text.
+    ui_mode, args = _resolve_ui_mode(args)
+
     # One-shot mode: phoson-cli "task" | -p "task" | piped stdin.
     # Skips the interactive wizard — missing credentials surface as the
     # friendly pre-check error below, which is what scripts need.
+    # (One-shot is always stdout-only; --textual/--classic are ignored.)
     oneshot_task = _parse_oneshot_task(args)
     if oneshot_task is not None:
         config = load_config()
@@ -202,6 +261,9 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    if ui_mode == "textual" and _start_textual_ui():
+        return
 
     repl = PhosonRepl(config)
     asyncio.run(repl.run())
