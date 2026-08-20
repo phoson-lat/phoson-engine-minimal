@@ -12,6 +12,26 @@ Interactive command-line interface for the Phoson autonomous-agent platform.
 - **Subagent support** — Run parallel agent tasks
 - **Attachment support** — Images, audio, video, documents
 
+### Architecture (UI-independent session runtime)
+
+Since the start of the Textual migration (`MIGRATE_CLI_TO_TEXTUAL.md`),
+the session runtime is decoupled from the front end:
+
+- `SessionController` (`controller.py`) — owns the LLM client, agent
+  engine, tools, plugins, session state (tree, cursor, metrics), the
+  full run lifecycle (stream, cancellation, partial persistence,
+  reasoning capture, saves) and model/provider switching. It has **no
+  dependencies on Rich, prompt_toolkit or Textual**.
+- `AgentEventSink` (`ui_protocols.py`) — the narrow presentation contract
+  the controller uses to show anything (events, user turns, notices).
+- `PhosonRepl` (`repl.py`) — the classic front end: prompt_toolkit input
+  loop, key bindings, completer, prompt display, banner. It adapts the
+  Rich `Renderer` to the sink via `ClassicSink` and delegates all
+  runtime calls to the controller.
+- The upcoming Textual TUI will be a second front end over the same
+  controller (a sink, not a fork); `phoson-cli --textual` / `--classic`
+  select the mode.
+
 ## Running the CLI
 
 ```bash
