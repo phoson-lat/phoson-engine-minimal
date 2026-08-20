@@ -101,6 +101,43 @@ def test_save_config_restricts_permissions(monkeypatch, tmp_path) -> None:
     assert dir_mode == 0o700, f"config dir mode is {oct(dir_mode)}, expected 0o700"
 
 
+def test_theme_key_round_trip(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import PhosonConfig, load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_THEME", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    original = PhosonConfig(
+        provider="ollama", sessions_dir=home / "sessions", theme="light"
+    )
+    save_config(original)
+
+    content = (home / ".phoson" / "config.toml").read_text()
+    assert 'theme = "light"' in content
+
+    loaded = load_config()
+    assert loaded.theme == "light"
+
+
+def test_theme_key_env_override(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import PhosonConfig, load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    save_config(
+        PhosonConfig(provider="ollama", sessions_dir=home / "sessions", theme="light")
+    )
+
+    monkeypatch.setenv("PHOSON_THEME", "ansi")
+    loaded = load_config()
+    assert loaded.theme == "ansi"
+
+
 # ── Sub-agent tuning keys ────────────────────────────────────────────────────
 
 

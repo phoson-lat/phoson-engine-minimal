@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from phoson_cli.theme import NO_COLOR
 from phoson_cli.commands import Command, CommandHandler
 
 
@@ -26,6 +27,7 @@ class DummyRepl:
             model=self.current_model,
             subagent_model=self.subagent_model,
         )
+        self.theme = NO_COLOR
         self.renderer = DummyRenderer()
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
         self.model_calls: list[str] = []
@@ -45,7 +47,7 @@ async def test_model_command_persists_selected_model(monkeypatch) -> None:
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="google/gemini-2.5-flash", provider="openrouter")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="google/gemini-2.5-flash", cancelled=False)
 
     monkeypatch.setattr(
@@ -74,7 +76,7 @@ async def test_subagent_model_command_persists_selected_model(monkeypatch) -> No
     async def fake_list_available_models(config):
         return [SimpleNamespace(id="anthropic/claude-3.5-haiku", provider="openrouter")]
 
-    async def fake_pick_model(models, current_model):
+    async def fake_pick_model(models, current_model, theme=None):
         return SimpleNamespace(model_id="anthropic/claude-3.5-haiku", cancelled=False)
 
     monkeypatch.setattr(
