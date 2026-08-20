@@ -1,5 +1,6 @@
 """Entry point for the Phoson CLI application."""
 
+import os
 import sys
 import shutil
 import asyncio
@@ -88,6 +89,39 @@ def _textual_available() -> bool:
         return False
 
 
+def _apply_textual_key_env() -> None:
+    """Map PHOSON_TEXTUAL_LEGACY_KEYS onto Textual's kitty-key opt-out.
+
+    Some terminal emulators misbehave with the Kitty keyboard protocol;
+    the legacy xterm sequences are a solid fallback. Must run before
+    the first ``import textual`` (Textual reads the env var at import).
+    """
+    if os.environ.get("PHOSON_TEXTUAL_LEGACY_KEYS", "").strip() not in ("", "0"):
+        os.environ["TEXTUAL_DISABLE_KITTY_KEY"] = "1"
+
+
+def _workaround_kitty_associated_text() -> None:
+    """Disable Kitty's "associated text" key reporting for the TUI.
+
+    Textual 8.2.8's XTermParser does not understand the ``u;<codepoint>``
+    suffix that Kitty appends to every key when the associated-text flag
+    is enabled, so on Kitty each typed key becomes ``key + ';<digits>'``
+    garbage in the composer (``/help`` is untypeable, shortcuts look
+    dead). The disambiguate and report-all-keys flags — the ones that
+    make the Ctrl combos work — are kept. Must run after ``import
+    textual.drivers.linux_driver`` (the driver reads these globals when
+    it starts the input thread) and before ``App.run()``.
+    """
+    try:
+        from textual.drivers import linux_driver
+    except ModuleNotFoundError:  # pragma: no cover - non-Linux platform
+        return
+    try:
+        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = 0  # type: ignore[misc]
+    except (AttributeError, TypeError):  # pragma: no cover - defensive
+        pass  # driver layout changed: leave the flag as Textual sets it
+
+
 def _start_textual_ui(config: "PhosonConfig") -> bool:
     """Launch the Textual TUI. Returns True if it took over.
 
@@ -102,6 +136,8 @@ def _start_textual_ui(config: "PhosonConfig") -> bool:
             "   (or: pip install 'phoson-engine-minimal[tui]')"
         )
         sys.exit(1)
+    _apply_textual_key_env()
+    _workaround_kitty_associated_text()
     from phoson_cli.textual import PhosonTextualApp
 
     app = PhosonTextualApp(config)

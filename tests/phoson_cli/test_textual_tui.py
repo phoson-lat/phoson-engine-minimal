@@ -5,6 +5,7 @@ stream (same pattern as the controller tests). Skipped when the
 optional ``tui`` extra is not installed.
 """
 
+import os
 import asyncio
 import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from phoson_llm.schemas.inputs import Message  # noqa: E402
 from phoson_cli.textual.widgets import (  # noqa: E402
     UserTurn,
     StatusLine,
+    AssistantTurn,
     StreamingTurn,
 )
 
@@ -330,3 +332,198 @@ async def test_textual_available_flag_still_gates_import(tmp_path: Path) -> None
     from phoson_cli.__main__ import _textual_available
 
     assert _textual_available() is True
+
+
+# ── scroll + input improvements ────────────────────────────────────
+
+
+async def test_streaming_follows_viewport_bottom(tmp_path: Path) -> None:
+    """The viewport stays pinned to the bottom while the answer streams."""
+
+    async def many_lines_stream(self, messages, config):
+        for i in range(300):
+            yield AgentTokenEvent(content=f"line {i}\n\n")
+        yield AgentDoneEvent(result=_done_result(messages, "done"))
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(60, 15)) as pilot:
+        await pilot.pause()
+        app._controller.engine.stream = many_lines_stream.__get__(
+            app._controller.engine
+        )
+        with _patch_models():
+            await _submit(app, pilot, "hi")
+            conv = app.conversation()
+            # wait until the content actually overflows (Markdown renders
+            # its blocks asynchronously, so the height converges in a pass)
+            for _ in range(100):
+                await pilot.pause()
+                if conv.max_scroll_y > 50:
+                    break
+            assert conv.max_scroll_y > 50, "content should overflow the view"
+            # the viewport must be pinned to the bottom while streaming
+            assert conv.scroll_offset.y >= conv.max_scroll_y - 24
+            await _wait_idle(app, pilot)
+            for _ in range(50):
+                await pilot.pause()
+            assert conv.scroll_offset.y >= conv.max_scroll_y - 24
+        app.shutdown()
+
+
+async def test_follow_releases_when_user_scrolls_up(tmp_path: Path) -> None:
+    """Scrolling up to read history is never fought by the auto-follow."""
+
+    async def slow_many_lines(self, messages, config):
+        for i in range(300):
+            yield AgentTokenEvent(content=f"line {i}\n\n")
+            await asyncio.sleep(0.02)
+        yield AgentDoneEvent(result=_done_result(messages, "done"))
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(60, 15)) as pilot:
+        await pilot.pause()
+        app._controller.engine.stream = slow_many_lines.__get__(app._controller.engine)
+        with _patch_models():
+            await _submit(app, pilot, "hi")
+            conv = app.conversation()
+            for _ in range(100):
+                await pilot.pause()
+                if conv.max_scroll_y > 200:
+                    break
+            assert conv.max_scroll_y > 200
+            # user scrolls up one page to read history
+            await pilot.press("pageup")
+            await pilot.pause()
+            assert conv.scroll_offset.y < conv.max_scroll_y - 24
+            before = conv.scroll_offset.y
+            # more tokens keep arriving — the viewport must NOT be pulled
+            # back down (a couple of pages of growth is well over a page)
+            await pilot.pause(1.0)
+            assert conv.scroll_offset.y < conv.max_scroll_y - 24
+            assert conv.scroll_offset.y <= before + 5
+        app.shutdown()
+
+
+async def test_pageup_pagedown_scroll_with_composer_focused(tmp_path: Path) -> None:
+    """PgUp/PgDn page-scroll the conversation with the composer focused.
+
+    The auto-follow pins the viewport to the bottom while content is
+    mounted; PgUp releases the pin and moves up a page, PgDn moves back
+    down and re-arms the pin at the bottom.
+    """
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(60, 15)) as pilot:
+        await pilot.pause()
+        # build a tall conversation without streaming
+        for i in range(40):
+            await app.conversation().mount(
+                AssistantTurn(f"answer {i}\n\n" + "word " * 40)
+            )
+        await pilot.pause()
+        conv = app.conversation()
+        assert conv.max_scroll_y > 50
+        # the auto-follow pins the viewport to the bottom (poll: layout
+        # and the 0.1s tick converge within a few passes)
+        for _ in range(30):
+            if conv.scroll_offset.y >= conv.max_scroll_y - 24:
+                break
+            await pilot.pause()
+        assert conv.scroll_offset.y >= conv.max_scroll_y - 24
+        first = conv.scroll_offset.y
+        await pilot.press("pageup")
+        await pilot.pause()
+        assert conv.scroll_offset.y < first - 2  # a whole page up
+        assert app._follow is False
+        second = conv.scroll_offset.y
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert conv.scroll_offset.y > second  # a whole page down
+        # focus is still on the composer (the bindings must not steal it)
+        assert app.focused is not None
+        assert app.focused.id == "composer"
+        app.shutdown()
+
+
+async def test_debug_log_records_keys_and_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PHOSON_TEXTUAL_DEBUG captures what the user's terminal sent."""
+    log_file = tmp_path / "tui-debug.log"
+    monkeypatch.setenv("PHOSON_TEXTUAL_DEBUG", str(log_file))
+    app = _make_app(tmp_path)
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            composer = app.query_one("#composer")
+            composer.focus()
+            await pilot.press("a")
+            await pilot.press("b")
+            await pilot.press("c")
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            text = log_file.read_text(encoding="utf-8")
+    finally:
+        monkeypatch.delenv("PHOSON_TEXTUAL_DEBUG", raising=False)
+
+    assert "mounted" in text
+    # printable chars go through the composer hook (Input stops their
+    # propagation, so the app-level hook would not see them)
+    for ch in ("a", "b", "c"):
+        assert f"composer-key key={ch} character={ch}" in text
+    # control keys bubble to the app level
+    assert "app-key key=ctrl+t" in text
+
+
+async def test_legacy_keys_env_forces_xterm_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PHOSON_TEXTUAL_LEGACY_KEYS maps onto Textual's kitty-key opt-out."""
+    from phoson_cli.__main__ import _apply_textual_key_env
+
+    monkeypatch.delenv("TEXTUAL_DISABLE_KITTY_KEY", raising=False)
+    monkeypatch.delenv("PHOSON_TEXTUAL_LEGACY_KEYS", raising=False)
+    _apply_textual_key_env()
+    assert "TEXTUAL_DISABLE_KITTY_KEY" not in os.environ
+
+    monkeypatch.setenv("PHOSON_TEXTUAL_LEGACY_KEYS", "1")
+    _apply_textual_key_env()
+    assert os.environ["TEXTUAL_DISABLE_KITTY_KEY"] == "1"
+
+
+def test_kitty_associated_text_flag_is_zeroed_for_tui() -> None:
+    """The TUI never asks Kitty for associated-text key reports.
+
+    Textual 8.2.8's XTermParser mis-parses the ``u;<codepoint>`` suffix
+    (see the canary test below), so the flag must be off before the
+    driver starts its input thread — otherwise every key typed in
+    Kitty turns into ``key + ';<digits>'`` garbage in the composer.
+    """
+    from textual.drivers import linux_driver
+
+    from phoson_cli.__main__ import _workaround_kitty_associated_text
+
+    saved = getattr(linux_driver, "KITTY_REPORT_ASSOCIATED_TEXT", 0)
+    try:
+        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = 0b00010000
+        _workaround_kitty_associated_text()
+        assert linux_driver.KITTY_REPORT_ASSOCIATED_TEXT == 0
+        # the other flags are untouched (Ctrl combos keep working)
+        assert linux_driver.KITTY_DISAMBIGUATE_ESCAPE_CODES == 0b00000001
+    finally:
+        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = saved
+
+
+def test_canary_kitty_associated_text_parser_bug() -> None:
+    """Canary: the Textual 8.2.8 parser still mis-parses ``u;<codepoint>``.
+
+    If a future Textual release parses the associated-text suffix
+    correctly (one Key event, no leftover ``;97``), this test fails —
+    remove the canary and the _workaround_kitty_associated_text call,
+    since the flag will no longer need to be disabled.
+    """
+    from textual._xterm_parser import XTermParser
+
+    events = list(XTermParser().feed("\x1b[97u;97"))  # Kitty: key 'a'
+    assert events and events[0].character == "a"
+    # BUG: the leftover ';97' surfaces as extra keys (';' '9' '7')
+    assert len(events) > 1

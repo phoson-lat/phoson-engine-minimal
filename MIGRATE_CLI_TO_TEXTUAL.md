@@ -207,6 +207,25 @@ Convertir `PhosonRepl` de `phoson_cli/repl.py` en una capa delgada de entrada/sa
 > (headless con `App.run_test`).
 > Pendiente de la fase (se mueve a Fase 4/6): Composer multilínea
 > (Cmd+Enter), `SubagentStatusPanel` dedicado y `Ctrl+Enter`.
+>
+> **Correcciones post-MVP (PR #45):** (1) `StreamingTurn` heredaba
+> `height: 1fr` + `overflow: hidden` de `Vertical` y recortaba cualquier
+> respuesta más alta que el viewport (no había nada que scrollear) —
+> ahora `height: auto` y la conversación crece; (2) auto-follow: el
+> viewport sigue al fondo mientras streama (flag `_follow` + tick de 0.1 s
+> que cubre la cola de render asíncrono de `Markdown`), se libera con
+> rueda/PgUp y se re-arma al volver al fondo o en un mensaje nuevo;
+> (3) `PgUp`/`PgDn` hacen scroll de página aunque el composer tenga el
+> foco; (4) **bug de entrada en Kitty**: Textual 8.2.8 malinterpreta los
+> reports de "associated text" de Kitty (cada tecla llegaba como
+> `tecla + ';<dígitos>'` — imposible escribir `/help`), por lo que el
+> TUI desactiva ese flag al arrancar (`_workaround_kitty_associated_text`
+> en `__main__.py`, con test canary documentando el bug del parser);
+> (5) diagnóstico de entrada: `PHOSON_TEXTUAL_DEBUG=1` loguea las teclas
+> que llegan (el `Input` detiene la propagación de caracteres
+> imprimibles, por eso el hook va en un subclase del composer) y
+> `PHOSON_TEXTUAL_LEGACY_KEYS=1` fuerza secuencias xterm legacy
+> (`TEXTUAL_DISABLE_KITTY_KEY`) como último recurso.
 
 ### Archivos nuevos
 

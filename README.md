@@ -446,6 +446,20 @@ modal confirmation for safe-mode bash (requires the optional extra:
 plan — the TUI is a second front end over the same session runtime, and
 the classic REPL keeps full parity). One-shot mode (`phoson-cli "task"`)
 is always stdout-only and ignores UI flags.
+
+**TUI:** shortcuts are `Ctrl+T` (reasoning), `Ctrl+C` (cancel the running
+turn, quit when idle), `Ctrl+L` (clear the view), `Ctrl+Q` (quit),
+`PgUp`/`PgDn` (scroll the conversation). The viewport auto-follows the
+streaming answer to the bottom; scroll up (mouse wheel or `PgUp`) to read
+history and the pin releases until you return to the bottom. Known
+Kitty-terminal quirk: Textual 8.2.8's parser mis-reads Kitty's
+"associated text" key reports, so the TUI disables that flag itself at
+startup (disambiguated Ctrl combos keep working). If keys still do not
+respond in your terminal emulator, start with `PHOSON_TEXTUAL_LEGACY_KEYS=1
+phoson-cli --textual` to force legacy xterm key sequences, and capture
+what the app receives with `PHOSON_TEXTUAL_DEBUG=1 phoson-cli --textual`
+(append-mode log at `~/.phoson/tui-debug.log`, or set it to a path to
+choose the file).
 ---
 
 ## 🔒 CI and security workflows

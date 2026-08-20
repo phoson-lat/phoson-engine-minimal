@@ -20,11 +20,15 @@ Importing this module requires the optional ``tui`` extra — it is only
 imported by ``__main__`` when ``--textual`` is requested.
 """
 
+import os
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+from pathlib import Path
 from collections.abc import Iterable, Awaitable
 
 from textual.app import App
+from textual.timer import Timer
+from textual.events import Key, Paste, MouseScrollUp, MouseScrollDown
 from textual.widget import Widget
 from textual.widgets import Input, Static
 from textual.containers import VerticalScroll
@@ -37,6 +41,50 @@ from .dialogs import BashConfirmation
 from .widgets import ReasoningView, StreamingTurn
 from ..controller import SessionController
 from .confirmation import TextualConfirmationService
+
+
+class _ConversationScroll(VerticalScroll):
+    """Conversation viewport with scroll-intent hooks.
+
+    Textual stops consumed scroll events, so the app cannot observe
+    wheel input at the app level; the auto-follow flag is maintained
+    right here (wheel up releases the pin, wheel back to the bottom
+    re-arms it).
+    """
+
+    @property
+    def app(self) -> "PhosonTextualApp":
+        return cast("PhosonTextualApp", super().app)
+
+    def _on_mouse_scroll_up(self, event: MouseScrollUp) -> None:  # noqa: D102
+        super()._on_mouse_scroll_up(event)
+        self.app._user_scrolled_up()
+
+    def _on_mouse_scroll_down(self, event: MouseScrollDown) -> None:  # noqa: D102
+        super()._on_mouse_scroll_down(event)
+        if self.app._conversation_at_bottom():
+            self.app._user_scrolled_to_bottom()
+
+
+class _ComposerInput(Input):
+    """Composer with an input-level debug hook.
+
+    ``Input`` stops propagation of printable keys, so the app-level
+    ``on_key`` never sees them — the PHOSON_TEXTUAL_DEBUG log needs a
+    hook right here to prove keys reach the app at all.
+    """
+
+    @property
+    def app(self) -> "PhosonTextualApp":
+        return cast("PhosonTextualApp", super().app)
+
+    async def _on_key(self, event: Key) -> None:  # noqa: D102
+        self.app._debug_log("composer-key", key=event.key, character=event.character)
+        await super()._on_key(event)
+
+    def _on_paste(self, event: Paste) -> None:  # noqa: D102
+        self.app._debug_log("paste", text=event.text[:60])
+        super()._on_paste(event)
 
 
 class PhosonTextualApp(App):
@@ -71,6 +119,8 @@ class PhosonTextualApp(App):
         ("ctrl+l", "clear_view", "clear view"),
         ("ctrl+c", "interrupt_or_quit", "cancel/quit"),
         ("ctrl+q", "quit_app", "quit"),
+        ("pageup", "page_up", "page up"),
+        ("pagedown", "page_down", "page down"),
     ]
 
     def __init__(
@@ -90,6 +140,22 @@ class PhosonTextualApp(App):
         self._expanded_reasoning: set[str] = set()
         self._pending_confirmation: asyncio.Future[bool] | None = None
         self._shutdown_done = False
+        # Auto-follow: keep the viewport pinned to the bottom while the
+        # answer grows — until the user scrolls up (wheel/PgUp) to read.
+        self._follow = True
+        self._last_max_scroll = -1
+        self._follow_timer: Timer | None = None
+        # Optional input/lifecycle debug log — PHOSON_TEXTUAL_DEBUG=1
+        # (logs to ~/.phoson/tui-debug.log) or =/path/to/file.
+        debug_env = os.environ.get("PHOSON_TEXTUAL_DEBUG", "").strip()
+        if debug_env.lower() in {"", "0", "false", "no"}:
+            self._debug_path: Path | None = None
+        else:
+            self._debug_path = (
+                Path(debug_env)
+                if "/" in debug_env or "\\" in debug_env
+                else Path.home() / ".phoson" / "tui-debug.log"
+            )
 
     # ── lifecycle ─────────────────────────────────────────────────
 
@@ -102,11 +168,26 @@ class PhosonTextualApp(App):
         )
         self.update_status_bar()
         self.query_one(Input).focus()
+        # The Markdown widget renders its blocks asynchronously, so the
+        # turn's height keeps growing for a while after the last token;
+        # a cheap change-guarded tick re-arms the pin through that tail.
+        self._follow_timer = self.set_interval(0.1, self._tick_follow)
+        self._debug_log(
+            "mounted",
+            model=self._controller.current_model,
+            provider=self._config.provider,
+            kitty_keys_disabled=os.environ.get("TEXTUAL_DISABLE_KITTY_KEY", ""),
+        )
+
+    def on_unmount(self) -> None:
+        """Stop the follow tick once the app is gone (no post-mortem ticks)."""
+        if self._follow_timer is not None:
+            self._follow_timer.stop()
 
     def compose(self) -> Iterable[Widget]:
-        yield VerticalScroll(id="conversation")
+        yield _ConversationScroll(id="conversation")
         yield Static("", id="status")
-        yield Input(
+        yield _ComposerInput(
             placeholder=(
                 "Ask Phos — /help for commands · Ctrl+T reasoning · "
                 "Ctrl+C cancel · Ctrl+Q quit"
@@ -137,6 +218,7 @@ class PhosonTextualApp(App):
 
     def _quit(self) -> None:
         """Shutdown the runtime inside the loop, then exit."""
+        self._debug_log("quit")
         self._fire(self._shutdown_and_quit())
 
     async def _shutdown_and_quit(self) -> None:
@@ -171,6 +253,80 @@ class PhosonTextualApp(App):
     def scroll_conversation(self) -> None:
         # scroll_end(animate=False) is synchronous — no task needed.
         self.conversation().scroll_end(animate=False)
+
+    def _conversation_at_bottom(self, threshold: int = 24) -> bool:
+        """Whether the conversation viewport sits at (near) the bottom."""
+        conv = self.conversation()
+        if conv.max_scroll_y <= 0:
+            return True
+        return conv.scroll_offset.y >= conv.max_scroll_y - threshold
+
+    def follow_if_pinned(self) -> None:
+        """Re-pin the viewport to the bottom after a conversation mutation.
+
+        The pin is armed (``_follow``) and released by explicit user
+        scroll-up (wheel or PgUp), re-armed at the bottom or on a new
+        message — so reading history mid-stream is never fought. The
+        0.1s ``_tick_follow`` interval is the safety net for the async
+        Markdown growth that outlives the last token.
+        """
+        conv = self.conversation()
+        if not self._follow:
+            return
+        if conv.max_scroll_y <= 0:
+            return  # no scrollable overflow yet
+        conv.scroll_end(animate=False)
+
+    def _tick_follow(self) -> None:
+        """Follow the bottom whenever the scrollable height changed.
+
+        A diagnostic tick: it must never raise (an exception here would
+        kill the app's message pump, e.g. if it fires during teardown).
+        """
+        try:
+            conv = self.conversation()
+            mx = conv.max_scroll_y
+            if mx == self._last_max_scroll:
+                return
+            self._last_max_scroll = mx
+            if self._follow and mx > 0:
+                conv.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001 - diagnostics never break the app
+            pass
+
+    def _user_scrolled_up(self) -> None:
+        self._follow = False
+
+    def _user_scrolled_to_bottom(self) -> None:
+        self._follow = True
+
+    def action_page_up(self) -> None:
+        """Scroll the conversation up one page (releases the auto-follow)."""
+        self._follow = False
+        self.conversation().scroll_page_up(animate=False, force=True)
+
+    def action_page_down(self) -> None:
+        """Scroll the conversation down one page (re-arms at the bottom)."""
+        self.conversation().scroll_page_down(animate=False, force=True)
+        if self._conversation_at_bottom():
+            self._follow = True
+
+    def _debug_log(self, event: str, **fields: object) -> None:
+        """Append a lifecycle/input line to the debug log (when enabled)."""
+        if self._debug_path is None:
+            return
+        try:
+            detail = " ".join(f"{k}={v}" for k, v in fields.items())
+            line = f"{event}" + (f" {detail}" if detail else "")
+            with self._debug_path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass  # diagnostics must never break the app
+
+    def on_key(self, event: Key) -> None:  # noqa: D102
+        # Catch-all for keys the focused widget does not stop (arrows,
+        # ctrl combos, Enter). Printable chars are logged by the composer.
+        self._debug_log("app-key", key=event.key, character=event.character)
 
     def conversation(self) -> VerticalScroll:
         return self.query_one("#conversation", VerticalScroll)
@@ -215,6 +371,7 @@ class PhosonTextualApp(App):
         if text.startswith("/"):
             self._handle_command(text)
         else:
+            self._follow = True  # a new message re-arms the auto-follow
             self._start_run(text)
 
     # ── run lifecycle ─────────────────────────────────────────────
@@ -223,6 +380,7 @@ class PhosonTextualApp(App):
         if self._is_running():
             self._notify("warn", "a turn is still running — press Ctrl+C to cancel")
             return
+        self._debug_log("run_start", prompt=text[:60])
         turn = StreamingTurn()
         self._current_turn = turn
         self.update_status_bar()
@@ -246,6 +404,7 @@ class PhosonTextualApp(App):
             self._current_turn = None
             self._run_task = None
             self.update_status_bar()
+            self._debug_log("run_end")
 
     # ── slash commands (TUI subset) ───────────────────────────────
 
@@ -371,6 +530,8 @@ class PhosonTextualApp(App):
         self._current_turn = None
         self._last_turn = None
         self._expanded_reasoning.clear()
+        self._follow = True
+        self._last_max_scroll = -1
 
     def action_toggle_reasoning(self) -> None:
         turn = self._current_turn or self._last_turn
@@ -434,4 +595,7 @@ class PhosonTextualApp(App):
 
         self._pending_confirmation = future
         self.push_screen(BashConfirmation(prompt), callback=_on_result)
-        return await future
+        answer = await future
+        self._debug_log("confirmation", prompt=prompt[:60], answer=answer)
+        self.query_one(Input).focus()
+        return answer

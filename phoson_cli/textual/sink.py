@@ -52,8 +52,10 @@ class TextualSink:
         match event:
             case AgentTokenEvent():
                 self._current_turn().append_token(event.content)
+                self._app.follow_if_pinned()
             case AgentReasoningEvent():
                 self._app.schedule(self._current_turn().append_reasoning(event.content))
+                self._app.follow_if_pinned()
             case AgentToolStartEvent():
                 self._on_tool_start(event)
             case AgentToolDoneEvent():
@@ -112,6 +114,7 @@ class TextualSink:
         self._last_card = card
         turn = self._current_turn()
         self._app.schedule(turn.mount(card, before=turn.status_view))
+        self._app.follow_if_pinned()
 
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
         if self._last_card is not None:
@@ -123,6 +126,7 @@ class TextualSink:
             else:
                 self._last_card.set_result(f"{event.duration_ms}ms")
             self._last_card = None
+        self._app.follow_if_pinned()
 
     def _on_step_done(self, event: AgentStepDoneEvent) -> None:
         self._app.update_status_bar()
@@ -131,8 +135,10 @@ class TextualSink:
         turn = self._app.current_turn()
         if turn is not None and not turn.finished:
             turn.finalize()
+        self._app.follow_if_pinned()
 
     def _on_error(self, event: AgentErrorEvent) -> None:
         turn = self._app.current_turn()
         if turn is not None and not turn.finished:
             turn.set_error(event.message)
+        self._app.follow_if_pinned()

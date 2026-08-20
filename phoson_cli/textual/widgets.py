@@ -103,6 +103,7 @@ class StreamingTurn(Vertical):
     DEFAULT_CSS = """
     StreamingTurn {
         width: 100%;
+        height: auto;
         padding: 1 0 0 1;
     }
     StreamingTurn > Markdown {
