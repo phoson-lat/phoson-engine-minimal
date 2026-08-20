@@ -206,6 +206,13 @@ class Renderer:
         self._reasoning_active = False
         self._stream_had_tokens = False
 
+        # ── Reasoning (Ctrl+T) ─────────────────────────────────────────
+        # Full reasoning text captured during the last finished run, until
+        # the REPL persists it to the tree node (see take_last_reasoning).
+        self._last_reasoning: str = ""
+        # Live toggle: show/hide the "thinking" section while streaming.
+        self._live_show_reasoning: bool = True
+
         # ── Live panel for streaming ─────────────────────────────────
         self._live: Live | None = None
         self._live_content: str = ""
@@ -256,6 +263,46 @@ class Renderer:
             self._streaming = False
         self._reasoning_active = False
 
+    # ── Reasoning (Ctrl+T) ────────────────────────────────────────────
+
+    def take_last_reasoning(self) -> str:
+        """Pop the reasoning text captured during the last finished run.
+
+        The REPL persists it on the last assistant node so it survives
+        resume and can be expanded later with Ctrl+T.
+        """
+        text, self._last_reasoning = self._last_reasoning, ""
+        return text
+
+    def capture_partial_reasoning(self) -> None:
+        """Snapshot reasoning collected so far when a run ends without a
+        normal finish (cancellation or agent error)."""
+        if self._reasoning_buf:
+            self._last_reasoning = "".join(self._reasoning_buf)
+            self._reasoning_buf.clear()
+
+    def toggle_live_reasoning(self) -> bool:
+        """Toggle the live "thinking" section while a run is streaming.
+
+        Returns:
+            True when the thinking section is now visible.
+        """
+        self._live_show_reasoning = not self._live_show_reasoning
+        if self._live is not None:
+            self._update_live_streaming()
+        return self._live_show_reasoning
+
+    def render_reasoning_panel(self, reasoning: str) -> Panel:
+        """Build the expanded reasoning panel (Ctrl+T post-turn)."""
+        return Panel(
+            Text(reasoning, style=self.theme.reasoning),
+            title="reasoning",
+            title_align="left",
+            border_style=self.theme.muted_deep,
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+
     # ── Live streaming panel ────────────────────────────────────────────────
 
     def _start_live_streaming(self) -> None:
@@ -289,7 +336,7 @@ class Renderer:
         """Render the current stream with separate thinking and answer blocks."""
         renderables = []
 
-        if self._live_reasoning:
+        if self._live_reasoning and self._live_show_reasoning:
             thinking_text = self._live_reasoning.strip() or "thinking..."
             renderables.append(
                 Panel(
@@ -334,14 +381,21 @@ class Renderer:
         """
         self._stop_live_streaming()
 
-        # Reasoning summary
+        # Reasoning summary — the full text is kept for Ctrl+T expansion
+        # (the REPL persists it to the node's metadata).
         if self._reasoning_buf:
-            chars = len("".join(self._reasoning_buf))
-            approx_tokens = max(1, chars // 4)
+            reasoning = "".join(self._reasoning_buf)
+            self._last_reasoning = reasoning
+            approx_tokens = max(1, len(reasoning) // 4)
             self.console.print(
-                Text(f"  ◦  reasoning  (~{approx_tokens} tok)", style=self.theme.muted)
+                Text(
+                    f"  ◦  reasoning  (~{approx_tokens} tok)  —  Ctrl+T to expand",
+                    style=self.theme.muted,
+                )
             )
             self._reasoning_buf.clear()
+        else:
+            self._last_reasoning = ""
 
         # Assistant response - only if not streamed (fallback)
         content = "".join(self._token_buf).strip()
@@ -424,6 +478,7 @@ class Renderer:
 
             case AgentErrorEvent():
                 self.flush_line()
+                self.capture_partial_reasoning()
                 self._on_error(event)
                 self._stream_had_tokens = False
 

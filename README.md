@@ -426,6 +426,10 @@ flow from outside the REPL (e.g. from a script).
 `~/.phoson/config.toml`) switches the color tier; `NO_COLOR` / `CLICOLOR=0`
 always produce plain output (scripts, CI).
 
+**Reasoning:** press `Ctrl+T` to toggle the live "thinking" view while a
+run is streaming, or to expand the full reasoning of the last turn after
+it finishes (persisted with the session, so it survives resume).
+
 ---
 
 ## 🔒 CI and security workflows
