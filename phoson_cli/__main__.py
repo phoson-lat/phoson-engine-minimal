@@ -88,13 +88,12 @@ def _textual_available() -> bool:
         return False
 
 
-def _start_textual_ui() -> bool:
-    """Attempt to start the Textual TUI. Returns True if it took over.
+def _start_textual_ui(config: "PhosonConfig") -> bool:
+    """Launch the Textual TUI. Returns True if it took over.
 
-    Phase 0 of the Textual migration (MIGRATE_CLI_TO_TEXTUAL.md): the TUI
-    does not exist in this version yet, so a missing dependency is a
-    friendly error and an installed one falls back to the classic REPL
-    with a notice.
+    Phase 3 of the Textual migration (MIGRATE_CLI_TO_TEXTUAL.md): the
+    TUI is a second front end over the same SessionController. The
+    classic REPL remains the default (``--classic`` or no flag).
     """
     if not _textual_available():
         print("Error: the Textual TUI requires the optional 'tui' extra.")
@@ -103,11 +102,12 @@ def _start_textual_ui() -> bool:
             "   (or: pip install 'phoson-engine-minimal[tui]')"
         )
         sys.exit(1)
-    print(
-        "The Textual TUI is under construction (MIGRATE_CLI_TO_TEXTUAL.md) — "
-        "using the classic REPL for now."
-    )
-    return False
+    from phoson_cli.textual import PhosonTextualApp
+
+    app = PhosonTextualApp(config)
+    app.run()  # blocks until the user quits
+    app.shutdown()  # close the chat client and plugins
+    return True
 
 
 def _parse_oneshot_task(args: list[str]) -> str | None:
@@ -262,7 +262,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if ui_mode == "textual" and _start_textual_ui():
+    if ui_mode == "textual" and _start_textual_ui(config):
         return
 
     repl = PhosonRepl(config)
