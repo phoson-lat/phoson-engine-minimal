@@ -430,6 +430,12 @@ always produce plain output (scripts, CI).
 run is streaming, or to expand the full reasoning of the last turn after
 it finishes (persisted with the session, so it survives resume).
 
+**Models file:** `~/.phoson/models.json` (optional) holds model overrides
+(context window, labels — user-defined models appear in `/model`),
+non-sensitive provider settings (`default_model`, `base_url` for
+self-hosted/proxied endpoints) and an automatic 24 h model-list cache
+that makes `/model` instant and works offline. API keys never live there;
+see [docs/api/phoson_cli.md](docs/api/phoson_cli.md).
 ---
 
 ## 🔒 CI and security workflows
