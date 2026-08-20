@@ -101,25 +101,36 @@ def _apply_textual_key_env() -> None:
 
 
 def _workaround_kitty_associated_text() -> None:
-    """Disable Kitty's "associated text" key reporting for the TUI.
+    """Narrow the Kitty keyboard protocol flags Textual enables.
 
-    Textual 8.2.8's XTermParser does not understand the ``u;<codepoint>``
-    suffix that Kitty appends to every key when the associated-text flag
-    is enabled, so on Kitty each typed key becomes ``key + ';<digits>'``
-    garbage in the composer (``/help`` is untypeable, shortcuts look
-    dead). The disambiguate and report-all-keys flags — the ones that
-    make the Ctrl combos work — are kept. Must run after ``import
-    textual.drivers.linux_driver`` (the driver reads these globals when
-    it starts the input thread) and before ``App.run()``.
+    Textual 8.2.8 turns on three flags: disambiguate, report-all-keys and
+    associated-text. Two of them break typing in Kitty and Alacritty:
+
+    - Associated-text: the parser mis-reads the ``u;<codepoint>`` suffix,
+      so each key becomes ``key + ';<digits>'`` garbage.
+    - Report-all-keys: every key (including Shift+7, which is ``/`` on a
+      Spanish layout) is sent as a CSI-u event *without* the produced
+      character. ``TextArea`` then sees ``shift+7`` with ``character=None``
+      and inserts nothing. GNOME Terminal is unaffected because it never
+      speaks the Kitty protocol.
+
+    Disambiguate is kept so Ctrl combos (Ctrl+C / Ctrl+T / Ctrl+Q) still
+    work. Must run after ``import textual.drivers.linux_driver`` (the
+    driver reads these globals when it starts the input thread) and
+    before ``App.run()``.
     """
     try:
         from textual.drivers import linux_driver
     except ModuleNotFoundError:  # pragma: no cover - non-Linux platform
         return
-    try:
-        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = 0  # type: ignore[misc]
-    except (AttributeError, TypeError):  # pragma: no cover - defensive
-        pass  # driver layout changed: leave the flag as Textual sets it
+    for flag in (
+        "KITTY_REPORT_ASSOCIATED_TEXT",
+        "KITTY_REPORT_ALL_KEYS",
+    ):
+        try:
+            setattr(linux_driver, flag, 0)
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            pass
 
 
 def _start_textual_ui(config: "PhosonConfig") -> bool:

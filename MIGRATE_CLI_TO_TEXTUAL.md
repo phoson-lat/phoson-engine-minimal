@@ -200,13 +200,10 @@ Convertir `PhosonRepl` de `phoson_cli/repl.py` en una capa delgada de entrada/sa
 > async controlada por la app; Ctrl+C cancela (semántica idéntica al REPL:
 > parcial persistido), Ctrl+T toggla reasoning (live o persistido), Ctrl+L
 > limpia la vista, Ctrl+Q / `/exit` cierran con `controller.shutdown()`.
-> Comandos TUI: `/help /new /tree /undo /label /env /cost /tokens /steps
-> /model [id] /sessions [id] /exit` — los pickers interactivos se quedan en
-> el REPL clásico (Fase 4). `--textual` lanza la app; el REPL clásico sigue
-> siendo el default. Tests: `tests/phoson_cli/test_textual_tui.py`
-> (headless con `App.run_test`).
-> Pendiente de la fase (se mueve a Fase 4/6): Composer multilínea
-> (Cmd+Enter), `SubagentStatusPanel` dedicado y `Ctrl+Enter`.
+> Comandos TUI: el mismo `CommandHandler` / `COMMAND_SPECS` que el REPL
+> clásico, a través de `TextualCommandHost` (Fase 4). `--textual` lanza
+> la app; el REPL clásico sigue siendo el default. Tests:
+> `tests/phoson_cli/test_textual_tui.py` (headless con `App.run_test`).
 >
 > **Correcciones post-MVP (PR #45):** (1) `StreamingTurn` heredaba
 > `height: 1fr` + `overflow: hidden` de `Vertical` y recortaba cualquier
@@ -305,6 +302,19 @@ El modo clásico y one-shot siguen pasando sus pruebas.
 ---
 
 ## Fase 4 — Diálogos, selección y árbol navegable
+
+> **Hecho (parcial):** `CommandHandler` ya no habla con Rich directo —
+> usa `CommandHost`. La TUI inyecta `TextualCommandHost` +
+> `TextualSessionFacade`, así `/help /new /tree /undo /label /attach
+> /env /cost /tokens /steps /model /provider /sessions /delete /mcp
+> /update /exit` son los mismos que el clásico. Pickers Textual:
+> `ModelPickerScreen`, `ProviderPickerScreen`, `SessionPickerScreen`.
+> Composer multilínea (`Enter` envía, `Shift+Enter` newline, Tab
+> completa `/`). Tools concurrentes van por `tool_call_id`; subagentes
+> tienen `SubagentStatusPanel`. Resume (`/sessions`) ya no borra el
+> historial y `print_history` usa la cola (`path[-tail:]`).
+> Pendiente de esta fase: `AttachmentDialog` visual, árbol navegable
+> (hoy `/tree` sigue siendo texto) y wizard Textual (Fase 5).
 
 ### Cambios
 

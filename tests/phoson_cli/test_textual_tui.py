@@ -15,8 +15,6 @@ import pytest
 
 textual = pytest.importorskip("textual")
 
-from textual.widgets import Input  # noqa: E402
-
 from phoson_agent import (  # noqa: E402
     RunStep,
     AgentDoneEvent,
@@ -32,8 +30,10 @@ from phoson_cli.textual import PhosonTextualApp  # noqa: E402
 from phoson_cli.controller import SessionController  # noqa: E402
 from phoson_llm.schemas.inputs import Message  # noqa: E402
 from phoson_cli.textual.widgets import (  # noqa: E402
+    ToolCard,
     UserTurn,
     StatusLine,
+    HistoryRule,
     AssistantTurn,
     StreamingTurn,
 )
@@ -77,8 +77,9 @@ def _patch_models() -> "patch":
 
 async def _submit(app: PhosonTextualApp, pilot, text: str) -> None:
     composer = app.query_one("#composer")
-    composer.value = text
-    composer.post_message(Input.Submitted(composer, text))
+    composer.text = text
+    app.submit_composer()
+    await pilot.pause()
 
 
 async def _wait_idle(app: PhosonTextualApp, pilot, max_pauses: int = 60) -> None:
@@ -287,17 +288,21 @@ async def test_slash_commands(tmp_path: Path) -> None:
                 return _notify_text(app)
 
             assert "commands:" in await _cmd("/help")
-            assert "provider ollama" in await _cmd("/env")
-            assert "session cost" in await _cmd("/cost")
-            assert "session tokens" in await _cmd("/tokens")
-            assert "session steps" in await _cmd("/steps")
-            assert "current model" in await _cmd("/model")
+            assert "/provider" in await _cmd("/help")
+            assert "provider=" in await _cmd("/env")
+            assert "cost=$" in await _cmd("/cost")
+            assert "tokens=" in await _cmd("/tokens")
+            assert "steps=" in await _cmd("/steps")
+            with patch("phoson_cli.commands.save_config"):
+                assert "Model →" in await _cmd("/model test-model")
             tree_out = await _cmd("/tree")
             assert (
-                "(empty tree)" in tree_out or "←" in tree_out or "current" in tree_out
+                "(empty session)" in tree_out
+                or "←" in tree_out
+                or "current" in tree_out
             )
-            assert "unknown command" in await _cmd("/bogus")
-            assert "new session" in await _cmd("/new")
+            assert "Unknown command" in await _cmd("/bogus")
+            assert "New session" in await _cmd("/new")
         app.shutdown()
 
 
@@ -491,26 +496,34 @@ async def test_legacy_keys_env_forces_xterm_mode(
 
 
 def test_kitty_associated_text_flag_is_zeroed_for_tui() -> None:
-    """The TUI never asks Kitty for associated-text key reports.
+    """The TUI never asks Kitty for associated-text or report-all-keys.
 
     Textual 8.2.8's XTermParser mis-parses the ``u;<codepoint>`` suffix
-    (see the canary test below), so the flag must be off before the
-    driver starts its input thread — otherwise every key typed in
+    (see the canary test below), so associated-text must be off before
+    the driver starts its input thread — otherwise every key typed in
     Kitty turns into ``key + ';<digits>'`` garbage in the composer.
+
+    Report-all-keys is also off: without associated text it delivers
+    Shift+digit as ``shift+7`` with ``character=None``, so Spanish ``/``
+    (Shift+7) never inserts. Disambiguate stays on so Ctrl combos work.
     """
     from textual.drivers import linux_driver
 
     from phoson_cli.__main__ import _workaround_kitty_associated_text
 
-    saved = getattr(linux_driver, "KITTY_REPORT_ASSOCIATED_TEXT", 0)
+    saved_associated = getattr(linux_driver, "KITTY_REPORT_ASSOCIATED_TEXT", 0)
+    saved_all_keys = getattr(linux_driver, "KITTY_REPORT_ALL_KEYS", 0)
     try:
         linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = 0b00010000
+        linux_driver.KITTY_REPORT_ALL_KEYS = 0b00001000
         _workaround_kitty_associated_text()
         assert linux_driver.KITTY_REPORT_ASSOCIATED_TEXT == 0
-        # the other flags are untouched (Ctrl combos keep working)
+        assert linux_driver.KITTY_REPORT_ALL_KEYS == 0
+        # Ctrl combos keep working via disambiguate
         assert linux_driver.KITTY_DISAMBIGUATE_ESCAPE_CODES == 0b00000001
     finally:
-        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = saved
+        linux_driver.KITTY_REPORT_ASSOCIATED_TEXT = saved_associated
+        linux_driver.KITTY_REPORT_ALL_KEYS = saved_all_keys
 
 
 def test_canary_kitty_associated_text_parser_bug() -> None:
@@ -527,3 +540,157 @@ def test_canary_kitty_associated_text_parser_bug() -> None:
     assert events and events[0].character == "a"
     # BUG: the leftover ';97' surfaces as extra keys (';' '9' '7')
     assert len(events) > 1
+
+
+# ── resume, parallel tools, composer, pickers ──────────────────────────────
+
+
+async def test_print_history_replays_tail_not_head(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        messages = [
+            Message(role="user", content=f"u{i}")
+            if i % 2 == 0
+            else Message(role="assistant", content=f"a{i}")
+            for i in range(10)
+        ]
+        app._sink.print_history(messages, tail=4)
+        for _ in range(20):
+            await pilot.pause()
+        rows = _rows(app)
+        texts = []
+        for row in rows:
+            if isinstance(row, HistoryRule):
+                texts.append("rule")
+            elif isinstance(row, UserTurn):
+                texts.append(str(row.render()))
+            elif isinstance(row, AssistantTurn):
+                texts.append(row._text)
+        assert texts[0] == "rule"
+        joined = "\n".join(texts)
+        assert "u0" not in joined and "a1" not in joined
+        assert "u8" in joined and "a9" in joined
+        app.shutdown()
+
+
+async def test_load_session_keeps_replayed_history(tmp_path: Path) -> None:
+    async def fake_stream(self, messages, config):
+        yield AgentTokenEvent(content="hello-session")
+        yield AgentDoneEvent(result=_done_result(messages, "hello-session"))
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app._controller.engine.stream = fake_stream.__get__(app._controller.engine)
+        with _patch_models():
+            await _submit(app, pilot, "remember this")
+            await _wait_idle(app, pilot)
+            session_id = app._controller.tree.session_id
+            await _submit(app, pilot, "/new")
+            for _ in range(20):
+                await pilot.pause()
+            assert not any(isinstance(r, UserTurn) for r in _rows(app))
+            facade = app._command_handler.repl
+            ok = await facade.load_session(session_id)
+            assert ok is True
+            for _ in range(20):
+                await pilot.pause()
+        rows = _rows(app)
+        assert any(isinstance(r, UserTurn) for r in rows)
+        assert any(isinstance(r, AssistantTurn) for r in rows)
+        app.shutdown()
+
+
+async def test_parallel_tool_cards_do_not_clobber(tmp_path: Path) -> None:
+    async def fake_stream(self, messages, config):
+        yield AgentToolStartEvent(
+            tool_name="bash", args={"command": "one"}, tool_call_id="c1"
+        )
+        yield AgentToolStartEvent(
+            tool_name="bash", args={"command": "two"}, tool_call_id="c2"
+        )
+        yield AgentToolDoneEvent(
+            tool_name="bash", result="ok", duration_ms=5, tool_call_id="c1"
+        )
+        yield AgentToolDoneEvent(
+            tool_name="bash",
+            result="ok",
+            duration_ms=9,
+            error="boom",
+            tool_call_id="c2",
+        )
+        yield AgentDoneEvent(result=_done_result(messages, "done"))
+
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app._controller.engine.stream = fake_stream.__get__(app._controller.engine)
+        with _patch_models():
+            await _submit(app, pilot, "hi")
+            await _wait_idle(app, pilot)
+        turn = next(r for r in _rows(app) if isinstance(r, StreamingTurn))
+        cards = [c for c in turn.children if isinstance(c, ToolCard)]
+        assert len(cards) == 2
+        rendered = " ".join(str(c.render()) for c in cards)
+        assert "✓" in rendered and "✗" in rendered
+        app.shutdown()
+
+
+async def test_composer_enter_sends_shift_enter_is_newline(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        composer = app.query_one("#composer")
+        composer.focus()
+        composer.text = "line1"
+        composer.cursor_location = (0, len("line1"))
+        await composer._on_key(textual.events.Key("shift+enter", "\n"))
+        assert composer.text.startswith("line1\n")
+        composer.text = "/bogus"
+        await composer._on_key(textual.events.Key("enter", "\n"))
+        for _ in range(20):
+            await pilot.pause()
+        assert composer.text == ""
+        assert "Unknown command" in _notify_text(app)
+        app.shutdown()
+
+
+async def test_model_picker_screen_selects(tmp_path: Path) -> None:
+    from phoson_cli.models import ModelOption
+
+    app = _make_app(tmp_path)
+    models = [
+        ModelOption(id="aaa", label="A", provider="ollama"),
+        ModelOption(id="bbb", label="B", provider="ollama"),
+    ]
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        task = asyncio.ensure_future(
+            app._command_handler.host.pick_model(models, "aaa")
+        )
+        for _ in range(20):
+            await pilot.pause()
+            if not task.done():
+                break
+        await pilot.press("down")
+        await pilot.press("enter")
+        for _ in range(30):
+            await pilot.pause()
+            if task.done():
+                break
+        assert task.done()
+        assert task.result().model_id == "bbb"
+        app.shutdown()
+
+
+async def test_user_markup_is_escaped(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        app._sink.on_user_message("[red]boom[/]", Message(role="user", content="x"))
+        for _ in range(10):
+            await pilot.pause()
+        row = next(r for r in _rows(app) if isinstance(r, UserTurn))
+        assert r"\[red]boom" in str(row.render()) or "[red]boom" in str(row.render())
+        app.shutdown()

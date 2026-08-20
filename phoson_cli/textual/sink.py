@@ -1,4 +1,4 @@
-"""Textual implementation of :class:`AgentEventSink` (phase 3).
+"""Textual implementation of :class:`AgentEventSink` (phase 3+).
 
 The sink is called from inside the app's event loop (the controller
 runs as a task the app owns), so it updates the conversation widgets
@@ -19,8 +19,17 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 
-from .widgets import ToolCard, UserTurn, StatusLine, AssistantTurn, StreamingTurn
-from ..renderer import _tool_label, _args_preview
+from .widgets import (
+    ToolCard,
+    UserTurn,
+    StatusLine,
+    HistoryRule,
+    AssistantTurn,
+    StreamingTurn,
+    SubagentStatusPanel,
+)
+from ..renderer import _tool_label, _args_preview, _subagent_tasks_from_args
+from ..tools.subagent_panel import parse_subagent_metrics
 
 if TYPE_CHECKING:
     from .app import PhosonTextualApp
@@ -31,14 +40,17 @@ class TextualSink:
 
     def __init__(self, app: "PhosonTextualApp") -> None:
         self._app = app
-        self._last_card: ToolCard | None = None
 
     # ── AgentEventSink ────────────────────────────────────────────
 
     def on_user_message(self, text: str, message: "object") -> None:
-        # The user row goes above the (already created) assistant turn.
         turn = self._app.current_turn()
-        self._app.schedule(self._app.conversation().mount(UserTurn(text), before=turn))
+        if turn is not None:
+            self._app.schedule(
+                self._app.conversation().mount(UserTurn(text), before=turn)
+            )
+        else:
+            self._app.schedule(self._app.conversation().mount(UserTurn(text)))
         self._app.scroll_conversation()
 
     def on_attachments(self, sources: "list[str]") -> None:
@@ -68,12 +80,9 @@ class TextualSink:
                 self._on_error(event)
 
     def flush_line(self) -> None:
-        # No spinner in the TUI: nothing to flush.
         return
 
     def capture_partial_reasoning(self) -> None:
-        # Reasoning already lives in the current turn widget; nothing
-        # to copy (the classic renderer copies its live buffer).
         return
 
     def take_reasoning(self) -> str:
@@ -86,7 +95,12 @@ class TextualSink:
         self._app.update_status_bar()
 
     def print_history(self, path: Sequence["object"], tail: int) -> None:
-        for node in path[: max(0, tail)]:
+        messages = list(path)
+        if tail and len(messages) > tail:
+            above = len(messages) - tail
+            self._app.schedule(self._app.conversation().mount(HistoryRule(above)))
+            messages = messages[-tail:]
+        for node in messages:
             text = str(getattr(node, "content", "") or "")
             role = getattr(node, "role", "")
             if role == "user":
@@ -108,24 +122,43 @@ class TextualSink:
         return turn
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
+        turn = self._current_turn()
+        if event.tool_name in {"agent", "agents"}:
+            tasks = _subagent_tasks_from_args(event.tool_name, event.args or {})
+            if tasks:
+                panel = SubagentStatusPanel(tasks)
+                turn.register_subagent_panel(panel)
+                self._app.schedule(turn.mount(panel, before=turn.status_view))
+                self._app.follow_if_pinned()
+                return
         label = _tool_label(event)
         detail = _args_preview(event.tool_name, event.args or {})
-        card = ToolCard(label, detail)
-        self._last_card = card
-        turn = self._current_turn()
+        card = ToolCard(label, detail, tool_call_id=event.tool_call_id or "")
+        turn.register_card(card)
         self._app.schedule(turn.mount(card, before=turn.status_view))
         self._app.follow_if_pinned()
 
     def _on_tool_done(self, event: AgentToolDoneEvent) -> None:
-        if self._last_card is not None:
+        turn = self._current_turn()
+        if event.tool_name in {"agent", "agents"} and turn.subagent_panel is not None:
+            metrics = parse_subagent_metrics(event.result or "")
+            if metrics:
+                done = sum(1 for m in metrics if m.status.value == "done")
+                summary = f"{done}/{len(metrics)} done · {event.duration_ms}ms"
+            elif event.error:
+                summary = event.error.splitlines()[0][:80]
+            else:
+                summary = f"{event.duration_ms}ms"
+            turn.subagent_panel.set_summary(summary)
+            self._app.follow_if_pinned()
+            return
+        card = turn.card_for(event.tool_call_id or "")
+        if card is not None:
             if event.error:
                 err_short = event.error.splitlines()[0][:80]
-                self._last_card.set_result(
-                    f"{event.duration_ms}ms · {err_short}", error=True
-                )
+                card.set_result(f"{event.duration_ms}ms · {err_short}", error=True)
             else:
-                self._last_card.set_result(f"{event.duration_ms}ms")
-            self._last_card = None
+                card.set_result(f"{event.duration_ms}ms")
         self._app.follow_if_pinned()
 
     def _on_step_done(self, event: AgentStepDoneEvent) -> None:
