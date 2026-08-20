@@ -143,7 +143,8 @@ def print_banner(
     console.print(
         Text(
             "  /help for commands  ·  /sessions to resume work"
-            "  ·  /attach to add images  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
+            "  ·  /attach to add images  ·  Ctrl+T reasoning"
+            "  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
             style=theme.muted_deep,
         )
     )

@@ -10,6 +10,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
 
 from phoson_agent import (
@@ -169,6 +170,9 @@ class PhosonRepl:
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
         self.attachments = AttachmentManager()
+        # Node ids whose reasoning has already been expanded this session
+        # (the terminal is append-only, so a node's reasoning prints once).
+        self._expanded_reasoning: set[str] = set()
 
         # Sub-agent model: explicit override or fallback to main model.
         self.subagent_model: str = config.subagent_model or config.model
@@ -310,12 +314,20 @@ class PhosonRepl:
 
         history_path = Path("~/.phoson/history.txt").expanduser()
         history_path.parent.mkdir(parents=True, exist_ok=True)
+
+        key_bindings = KeyBindings()
+
+        @key_bindings.add("c-t")
+        def _handle_ctrl_t(event: object) -> None:  # noqa: ARG001
+            self._on_reasoning_toggle()
+
         session = PromptSession(
             history=FileHistory(str(history_path)),
             style=Style.from_dict(build_prompt_style(self.theme)),
             completer=_SlashCompleter(),
             complete_while_typing=True,
             reserve_space_for_menu=6,
+            key_bindings=key_bindings,
         )
         command_handler = CommandHandler(self)
 
@@ -471,7 +483,9 @@ class PhosonRepl:
             terminal_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
             self.renderer.flush_line()
+            self.renderer.capture_partial_reasoning()
             self._append_partial_history(base_count)
+            self._persist_run_reasoning()
             await self.storage.save(self.tree)
             await self.storage.save_meta(
                 self.tree.session_id, self.session_metrics.to_meta()
@@ -488,6 +502,7 @@ class PhosonRepl:
             # retried or /undo'd — then return to the prompt instead of
             # crashing the REPL.
             self._append_partial_history(base_count)
+            self._persist_run_reasoning()
             await self.storage.save(self.tree)
             await self.storage.save_meta(
                 self.tree.session_id, self.session_metrics.to_meta()
@@ -500,10 +515,64 @@ class PhosonRepl:
             return
 
         self._finalize_run(terminal_event, base_count)
+        self._persist_run_reasoning()
         await self.storage.save(self.tree)
         await self.storage.save_meta(
             self.tree.session_id, self.session_metrics.to_meta()
         )
+
+    def _persist_run_reasoning(self) -> None:
+        """Attach captured reasoning to the last assistant node on the path.
+
+        Stored in ``node.metadata["reasoning"]`` (a generic, backward
+        compatible dict) so it survives session resume and can be
+        expanded later with Ctrl+T.
+        """
+        reasoning = self.renderer.take_last_reasoning()
+        if not reasoning or self.current_node_id is None:
+            return
+        node = self.tree.nodes.get(self.current_node_id)
+        if node is not None and node.message.role == "assistant":
+            node.metadata["reasoning"] = reasoning
+
+    def _on_reasoning_toggle(self) -> None:
+        """Ctrl+T handler.
+
+        While a run is streaming, toggles the live "thinking" panel on
+        the fly. Otherwise expands the reasoning of the newest node on
+        the current path that has any (a node's reasoning is printed at
+        most once per REPL session — the terminal is append-only).
+        """
+        task = self.current_task
+        if task is not None and not task.done():
+            self.renderer.toggle_live_reasoning()
+            return
+
+        cursor: str | None = self.current_node_id
+        path_ids: list[str] = []
+        while cursor is not None:
+            path_ids.append(cursor)
+            node = self.tree.nodes.get(cursor)
+            cursor = node.parent_id if node is not None else None
+        path_ids.reverse()
+
+        for node_id in path_ids:
+            node = self.tree.nodes.get(node_id)
+            reasoning = node.metadata.get("reasoning") if node else None
+            if not reasoning:
+                continue
+            if node_id in self._expanded_reasoning:
+                self.renderer.print_info(
+                    "Reasoning already expanded (the terminal is append-only)."
+                )
+                return
+            self._expanded_reasoning.add(node_id)
+            self.renderer.console.print(
+                self.renderer.render_reasoning_panel(str(reasoning))
+            )
+            return
+
+        self.renderer.print_info("No reasoning captured in the current conversation.")
 
     # ── Session / model management ─────────────────────────────────────────────
 
