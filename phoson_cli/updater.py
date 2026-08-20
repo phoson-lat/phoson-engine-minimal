@@ -19,6 +19,7 @@ import re
 import sys
 import asyncio
 from pathlib import Path
+from collections.abc import Callable, Awaitable
 
 import httpx
 
@@ -177,13 +178,18 @@ async def _update_confirm(question: str) -> bool:
     return answer.strip().lower() in {"y", "yes"}
 
 
-async def perform_self_update(assume_yes: bool = False) -> str:
+async def perform_self_update(
+    assume_yes: bool = False,
+    confirm: Callable[[str], Awaitable[bool]] | None = None,
+) -> str:
     """Check PyPI and, with confirmation, install the latest release.
 
     Args:
         assume_yes: Skip the interactive confirmation. Used by the
             explicit ``--self-update`` flag; the ``/update`` command
             always asks first.
+        confirm: Optional async ``(prompt) -> bool``. Defaults to the
+            prompt_toolkit y/N prompt so classic callers stay unchanged.
 
     Returns:
         One or more human-readable lines describing what happened.
@@ -227,7 +233,8 @@ async def perform_self_update(assume_yes: bool = False) -> str:
         )
         return "\n".join(lines)
 
-    if not assume_yes and not await _update_confirm(
+    ask = confirm if confirm is not None else _update_confirm
+    if not assume_yes and not await ask(
         f"Update {PACKAGE} {current} → {latest}? Run: {' '.join(command)}"
     ):
         lines.append("Update cancelled.")

@@ -16,21 +16,22 @@ To add a new command:
 That's it; the dispatch table picks it up automatically.
 """
 
+import inspect
 from typing import TYPE_CHECKING, Final
 from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
 from .config import save_config, enabled_providers_from_config
 from .updater import perform_self_update
-from .installer import run_install_wizard
-from .model_picker import pick_model
+from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
+from .command_host import CommandHost, RendererCommandHost
+from .model_picker import pick_model  # noqa: F401 - patched by tests / host
 from ._mcp_commands import _MCPSubcommands
 from .model_selector import list_available_models
-from .provider_picker import pick_provider
+from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
 
 if TYPE_CHECKING:
     from .repl import PhosonRepl
-    from .renderer import Renderer
 
 
 # ─── Command spec ─────────────────────────────────────────────────────────────
@@ -149,13 +150,17 @@ class CommandHandler:
     The dispatch table is built once per instance from :data:`COMMAND_SPECS`.
     """
 
-    def __init__(self, repl: "PhosonRepl") -> None:
-        """Initialize handler with a REPL reference.
+    def __init__(self, repl: "PhosonRepl", host: CommandHost | None = None) -> None:
+        """Initialize handler with a session host and a presentation host.
 
         Args:
-            repl: The PhosonRepl instance to operate on.
+            repl: Session facade (classic REPL or the TUI adapter).
+            host: Presentation adapter. Defaults to the Rich/prompt_toolkit
+                host so existing ``CommandHandler(repl)`` call sites keep
+                working.
         """
         self.repl = repl
+        self.host = host if host is not None else RendererCommandHost(repl)
         self._dispatch: dict[str, CommandHandlerFn] = {}
         for spec in COMMAND_SPECS:
             method = getattr(self.__class__, spec.method, None)
@@ -171,16 +176,16 @@ class CommandHandler:
         """Execute ``cmd``. Return ``False`` if the REPL should exit."""
         handler = self._dispatch.get(cmd.name)
         if handler is None:
-            self.repl.renderer.print_error(f"Unknown command: {cmd.name}")
+            self.host.print_error(f"Unknown command: {cmd.name}")
             return True
         return await handler(self, cmd)
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
     @property
-    def _r(self) -> "Renderer":
-        """Shortcut to the renderer."""
-        return self.repl.renderer
+    def _r(self) -> CommandHost:
+        """Shortcut to the presentation host (historically the renderer)."""
+        return self.host
 
     def _available_providers(self) -> list[str]:
         return enabled_providers_from_config(self.repl.config)
@@ -220,9 +225,7 @@ class CommandHandler:
             if not models:
                 r.print_info("No models available.")
                 return
-            result = await pick_model(
-                models=models, current_model=current, theme=self.repl.theme
-            )
+            result = await self.host.pick_model(models, current)
             if result.cancelled or not result.model_id:
                 r.print_info("Cancelled.")
                 return
@@ -245,7 +248,9 @@ class CommandHandler:
         return False
 
     async def _cmd_new(self, cmd: Command) -> bool:  # noqa: ARG002
-        self.repl.new_session()
+        maybe = self.repl.new_session()
+        if inspect.isawaitable(maybe):
+            await maybe  # type: ignore[misc]
         self._r.print_info(f"New session  {self.repl.tree.session_id[:8]}")
         return True
 
@@ -273,11 +278,7 @@ class CommandHandler:
 
         target_provider = cmd.args or None
         if not target_provider:
-            result = await pick_provider(
-                providers=providers,
-                current_provider=self.repl.config.provider,
-                theme=self.repl.theme,
-            )
+            result = await self.host.pick_provider(providers, self.repl.config.provider)
             if result.cancelled or not result.provider:
                 r.print_info("Cancelled.")
                 return True
@@ -300,11 +301,7 @@ class CommandHandler:
             r.print_info("No models available for the selected provider.")
             return True
 
-        model_result = await pick_model(
-            models=models,
-            current_model=self.repl.current_model,
-            theme=self.repl.theme,
-        )
+        model_result = await self.host.pick_model(models, self.repl.current_model)
         if model_result.cancelled or not model_result.model_id:
             save_config(self.repl.config)
             r.print_info(f"Provider → {self.repl.config.provider}  ·  saved")
@@ -373,9 +370,7 @@ class CommandHandler:
         return True
 
     async def _cmd_setup(self, cmd: Command) -> bool:  # noqa: ARG002
-        self.repl.config = await run_install_wizard(self.repl.config)
-        self.repl.set_model(self.repl.config.model)
-        self._r.print_info("Setup completed.")
+        await self.host.run_setup()
         return True
 
     async def _cmd_sessions(self, cmd: Command) -> bool:  # noqa: ARG002
@@ -385,14 +380,7 @@ class CommandHandler:
             r.print_info("No saved sessions.")
             return True
 
-        from phoson_cli.session_picker import pick_session
-
-        result = await pick_session(
-            sessions=sessions,
-            current_id=self.repl.tree.session_id,
-            page_size=15,
-            theme=self.repl.theme,
-        )
+        result = await self.host.pick_session(sessions, self.repl.tree.session_id)
 
         if result.cancelled:
             r.print_info("Cancelled.")
@@ -468,7 +456,7 @@ class CommandHandler:
 
     async def _cmd_update(self, cmd: Command) -> bool:  # noqa: ARG002
         """Check PyPI and install the latest CLI release (asks first)."""
-        summary = await perform_self_update(assume_yes=False)
+        summary = await perform_self_update(assume_yes=False, confirm=self.host.confirm)
         for line in summary.splitlines():
             self._r.print_info(line)
         return True
