@@ -69,6 +69,49 @@ Four tiers, selected by `PHOSON_THEME` (env var) or `theme = "..."` in
 selection — scripts and CI get plain output. Unknown theme names warn and
 fall back to `dark`.
 
+### Model registry (`~/.phoson/models.json`)
+
+Optional user-managed file (0600, created lazily) with three sections:
+
+```jsonc
+{
+  // Model overrides. Keys are bare model ids. User values always win
+  // over fetched data; models not in the provider's listing are appended
+  // to the /model picker (local or custom models).
+  "models": {
+    "qwen3.8-27b": {
+      "context_window": 262144,   // used for the prompt usage display
+      "label": "Qwen 3.8 27B",    // optional display name
+      "description": "local"      // optional
+    }
+  },
+  // Non-sensitive provider settings. API keys never live here — they stay
+  // in config.toml / env vars because this file may be synced or shared.
+  "providers": {
+    "openrouter": {
+      "default_model": "qwen3.8-27b",        // picked on provider switch
+      "base_url": "https://proxy.example/v1" // OpenAI-compatible override
+    }
+  },
+  // Cache (managed by the CLI, do not edit): provider model listings
+  // with a fetch timestamp, refreshed automatically by /model.
+  "cache": { "fetched_at": 1755700000.0, "providers": { "openrouter": [ ... ] } }
+}
+```
+
+Behavior:
+
+- **Instant picker:** while the cache is fresh (TTL 24 h) `/model` shows
+  the cached listing without any network call — it works offline.
+- **Offline fallback:** if a live fetch fails, the stale cache is shown
+  (with a warning) instead of a single-model list.
+- **Context window:** for the prompt usage display the resolution order is
+  `models` override → cache → engine registry.
+- **base_url:** honored by all OpenAI-compatible providers, OpenAI,
+  OpenRouter and Anthropic (proxies / self-hosted gateways).
+- The file is user-editable; invalid JSON never crashes the CLI (a warning
+  is printed and defaults are used).
+
 ## REPL Usage
 
 Start the REPL and type natural language or commands.

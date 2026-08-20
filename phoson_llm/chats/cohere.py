@@ -9,9 +9,13 @@ ENV_VAR = "COHERE_API_KEY"
 class CohereChat(OpenAICompatibleChat):
     """Adapter for Cohere (OpenAI-compatible endpoint)."""
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         super().__init__(
-            base_url=COHERE_BASE_URL,
+            base_url=base_url or COHERE_BASE_URL,
             api_key=api_key,
             api_key_env=ENV_VAR,
             provider_name="Cohere",

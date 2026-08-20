@@ -213,14 +213,20 @@ class AnthropicChat(BaseLLMChat):
     Supports: streaming, extended thinking, tool use, prompt caching, multimodal inputs.
     """
 
-    def __init__(self, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         """Initialize the Anthropic client.
 
         Args:
             api_key: Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.
+            base_url: Optional override for the API base URL (proxies, etc.).
         """
         self._client = anthropic.AsyncAnthropic(
-            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
+            api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            base_url=base_url,
         )
 
     async def aclose(self) -> None:

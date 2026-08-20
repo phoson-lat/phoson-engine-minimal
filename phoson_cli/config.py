@@ -464,37 +464,49 @@ def has_configured_provider(config: PhosonConfig) -> bool:
     return bool(_credential_providers(config))
 
 
+def _models_provider_base_url(config: PhosonConfig, provider: str) -> str | None:
+    """``base_url`` override for ``provider`` from models.json, if any."""
+    from .models import load_models_file, provider_settings
+
+    return provider_settings(load_models_file(), provider).get("base_url")
+
+
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
     """Build the appropriate LLM chat client based on configuration."""
     provider = config.provider.lower()
+    base_url = _models_provider_base_url(config, provider)
     if provider == "openrouter":
         if not config.openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY is required for provider=openrouter")
+        if base_url:
+            return OpenRouterChat(api_key=config.openrouter_api_key, base_url=base_url)
         return OpenRouterChat(api_key=config.openrouter_api_key)
     if provider == "openai":
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for provider=openai")
-        return OpenAIChat(api_key=config.openai_api_key)
+        return OpenAIChat(api_key=config.openai_api_key, base_url=base_url)
     if provider == "anthropic":
         if not config.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for provider=anthropic")
-        return AnthropicChat(api_key=config.anthropic_api_key)
+        return AnthropicChat(api_key=config.anthropic_api_key, base_url=base_url)
     if provider == "ollama":
-        return OllamaChat(base_url=config.ollama_base_url or "http://localhost:11434")
+        return OllamaChat(
+            base_url=base_url or config.ollama_base_url or "http://localhost:11434"
+        )
     if provider == "github":
-        return GitHubModelsChat(api_key=config.github_token)
+        return GitHubModelsChat(api_key=config.github_token, base_url=base_url)
     if provider == "nvidia":
-        return NVIDIAChat(api_key=config.nvidia_api_key)
+        return NVIDIAChat(api_key=config.nvidia_api_key, base_url=base_url)
     if provider in ("xai", "grok"):
-        return GrokChat(api_key=config.xai_api_key)
+        return GrokChat(api_key=config.xai_api_key, base_url=base_url)
     if provider == "groq":
-        return GroqChat(api_key=config.groq_api_key)
+        return GroqChat(api_key=config.groq_api_key, base_url=base_url)
     if provider == "deepseek":
-        return DeepSeekChat(api_key=config.deepseek_api_key)
+        return DeepSeekChat(api_key=config.deepseek_api_key, base_url=base_url)
     if provider == "together":
-        return TogetherChat(api_key=config.together_api_key)
+        return TogetherChat(api_key=config.together_api_key, base_url=base_url)
     if provider == "perplexity":
-        return PerplexityChat(api_key=config.perplexity_api_key)
+        return PerplexityChat(api_key=config.perplexity_api_key, base_url=base_url)
     if provider == "azure":
         return AzureChat(
             azure_endpoint=config.azure_openai_endpoint,
@@ -508,16 +520,16 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
     if provider in ("bedrock", "aws"):
         return BedrockChat()
     if provider == "fireworks":
-        return FireworksChat(api_key=config.fireworks_api_key)
+        return FireworksChat(api_key=config.fireworks_api_key, base_url=base_url)
     if provider == "cohere":
-        return CohereChat(api_key=config.cohere_api_key)
+        return CohereChat(api_key=config.cohere_api_key, base_url=base_url)
     if provider == "vllm":
         return VLLMChat(
-            base_url=config.vllm_base_url or "http://localhost:8000/v1",
+            base_url=base_url or config.vllm_base_url or "http://localhost:8000/v1",
             api_key=config.vllm_api_key,
         )
     if provider == "lmstudio":
         return LMStudioChat(
-            base_url=config.lmstudio_base_url or "http://localhost:1234/v1"
+            base_url=base_url or config.lmstudio_base_url or "http://localhost:1234/v1"
         )
     raise ValueError(f"Unsupported provider: {config.provider}")

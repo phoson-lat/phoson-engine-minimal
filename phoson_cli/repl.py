@@ -28,6 +28,7 @@ from .theme import Theme, load_theme, build_prompt_style
 from .tools import build_tools, build_tools_dict
 from ._views import print_banner, render_tree_ascii
 from .config import PhosonConfig, build_chat
+from .models import load_models_file, provider_settings, resolve_context_window
 from ._session import SessionState, SessionMetrics
 from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer
@@ -473,10 +474,19 @@ class PhosonRepl:
             system=self._build_system_prompt(),
         )
 
-        # Resolve context window and estimate current tokens
-        self._context_window = await self._cw_resolver.resolve(
-            self.config.provider, self.current_model
+        # Resolve context window: models.json (user override or cache)
+        # wins, then the engine's registry.
+        _models_data = load_models_file()
+        _model_bare = self.current_model.split("/", 1)[-1]
+        _override = resolve_context_window(
+            _models_data, self.config.provider, _model_bare
         )
+        if _override is not None:
+            self._context_window = _override
+        else:
+            self._context_window = await self._cw_resolver.resolve(
+                self.config.provider, self.current_model
+            )
         self._context_tokens = self.summarizer.estimate_tokens(path)
 
         try:
@@ -637,9 +647,16 @@ class PhosonRepl:
         pass
 
     def set_provider(self, provider: str) -> None:
-        """Switch to a different provider and rebuild runtime state."""
+        """Switch to a different provider and rebuild runtime state.
+
+        If ``models.json`` defines a ``default_model`` for the new
+        provider, that model is selected; otherwise the current model
+        name is kept.
+        """
         self.config.provider = provider
-        self.set_model(self.config.model)
+        settings = provider_settings(load_models_file(), provider)
+        default_model = settings.get("default_model")
+        self.set_model(default_model or self.config.model)
 
     def set_model(self, model: str) -> None:
         """Switch to a different model and rebuild the engine.
