@@ -145,7 +145,7 @@ Convertir `PhosonRepl` de `phoson_cli/repl.py` en una capa delgada de entrada/sa
 
 ---
 
-## Fase 2 — Abstraer renderizado y confirmaciones
+## Fase 2 — Abstraer renderizado y confirmaciones ✅ (PR #41)
 
 ### 2A. Renderizado
 
@@ -190,7 +190,23 @@ Convertir `PhosonRepl` de `phoson_cli/repl.py` en una capa delgada de entrada/sa
 
 ---
 
-## Fase 3 — TUI Textual mínima viable
+## Fase 3 — TUI Textual mínima viable ✅ (PR #42)
+
+> **Implementado (MVP):** paquete `phoson_cli/textual/` con `PhosonTextualApp`,
+> `TextualSink` (AgentEventSink sobre widgets), `TextualConfirmationService`
+> (modal `BashConfirmation` para safe_mode), widgets `UserTurn` /
+> `StreamingTurn` (Markdown + `ReasoningView` Collapsible + `ToolCard`) /
+> `StatusLine`, barra de estado y composer `Input`. Cada turno es una tarea
+> async controlada por la app; Ctrl+C cancela (semántica idéntica al REPL:
+> parcial persistido), Ctrl+T toggla reasoning (live o persistido), Ctrl+L
+> limpia la vista, Ctrl+Q / `/exit` cierran con `controller.shutdown()`.
+> Comandos TUI: `/help /new /tree /undo /label /env /cost /tokens /steps
+> /model [id] /sessions [id] /exit` — los pickers interactivos se quedan en
+> el REPL clásico (Fase 4). `--textual` lanza la app; el REPL clásico sigue
+> siendo el default. Tests: `tests/phoson_cli/test_textual_tui.py`
+> (headless con `App.run_test`).
+> Pendiente de la fase (se mueve a Fase 4/6): Composer multilínea
+> (Cmd+Enter), `SubagentStatusPanel` dedicado y `Ctrl+Enter`.
 
 ### Archivos nuevos
 

@@ -439,9 +439,13 @@ see [docs/api/phoson_cli.md](docs/api/phoson_cli.md).
 
 **UI modes:** the interactive REPL (Rich + prompt_toolkit) is the default.
 `phoson-cli --classic` selects it explicitly; `phoson-cli --textual` selects
-the Textual TUI, which is under migration (see `MIGRATE_CLI_TO_TEXTUAL.md`)
-and requires the optional extra: `uv sync --extra tui`. One-shot mode
-(`phoson-cli "task"`) is always stdout-only and ignores UI flags.
+the Textual TUI — streaming conversation with markdown, tool cards, a
+collapsible reasoning panel (Ctrl+T), a status bar, slash commands and a
+modal confirmation for safe-mode bash (requires the optional extra:
+`uv sync --extra tui`; see `MIGRATE_CLI_TO_TEXTUAL.md` for the migration
+plan — the TUI is a second front end over the same session runtime, and
+the classic REPL keeps full parity). One-shot mode (`phoson-cli "task"`)
+is always stdout-only and ignores UI flags.
 ---
 
 ## 🔒 CI and security workflows

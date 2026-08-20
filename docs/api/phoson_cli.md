@@ -24,13 +24,40 @@ the session runtime is decoupled from the front end:
   dependencies on Rich, prompt_toolkit or Textual**.
 - `AgentEventSink` (`ui_protocols.py`) — the narrow presentation contract
   the controller uses to show anything (events, user turns, notices).
+- `ConfirmationService` (`ui_protocols.py`) — interactive yes/no
+  contract. The bash tool (safe_mode) receives one through engine
+  context injection: the classic REPL injects a prompt_toolkit service
+  (`confirmation.py`), the Textual TUI a modal (textual/dialogs.py), and front ends that
+  cannot confirm (one-shot) inject nothing — the tool then **fails
+  closed** with an actionable message instead of hanging or running.
+- `formatting.py` / `tools/subagent_panel.py` — pure data→renderable
+  formatters shared by both front ends (Textual renders Rich
+  renderables natively).
 - `PhosonRepl` (`repl.py`) — the classic front end: prompt_toolkit input
   loop, key bindings, completer, prompt display, banner. It adapts the
   Rich `Renderer` to the sink via `ClassicSink` and delegates all
   runtime calls to the controller.
-- The upcoming Textual TUI will be a second front end over the same
-  controller (a sink, not a fork); `phoson-cli --textual` / `--classic`
-  select the mode.
+- `phoson_cli/textual/` — the Textual TUI front end (optional `tui`
+  extra), a second consumer of the same controller:
+  - `app.py` — `PhosonTextualApp`: conversation `VerticalScroll`, status
+    bar and composer `Input`; owns the run task (one `asyncio` task per
+    turn); bindings `Ctrl+C` (cancel run / quit), `Ctrl+T` (toggle
+    reasoning — live while streaming, persisted afterwards), `Ctrl+L`
+    (clear view), `Ctrl+Q` (quit); TUI-native slash commands
+    (`/help /new /tree /undo /label /env /cost /tokens /steps /model
+    [id] /sessions [id] /exit`) routed through the controller; quit
+    paths await `controller.shutdown()` before exiting.
+  - `sink.py` — `TextualSink`: `AgentEventSink` over the conversation
+    widgets (dispatches by event type, same contract as `ClassicSink`).
+  - `widgets.py` — `UserTurn`, `StreamingTurn` (markdown content +
+    `ReasoningView` collapsible + `ToolCard` rows + status line),
+    `AssistantTurn`, `StatusLine`. Pure widget updates inside the app
+    loop — no `Rich.Live`, no threads, no console writes.
+  - `dialogs.py` — `BashConfirmation` modal (the TUI body of
+    `ConfirmationService`: y/n keys or buttons; Escape declines).
+  - `confirmation.py` — `TextualConfirmationService` (awaitable modal).
+  `phoson-cli --textual` launches the app; `--classic` (or no flag) runs
+  the classic REPL.
 
 ## Running the CLI
 
