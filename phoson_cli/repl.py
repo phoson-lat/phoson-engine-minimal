@@ -16,6 +16,7 @@ from phoson_agent import (
     Plugin,
     AgentEngine,
     AgentDoneEvent,
+    AgentErrorEvent,
 )
 from phoson_llm.schemas import Message, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
@@ -385,30 +386,37 @@ class PhosonRepl:
 
     async def _consume_stream(
         self, path: list[Message], config: ModelConfig
-    ) -> AgentDoneEvent:
+    ) -> AgentDoneEvent | AgentErrorEvent:
         """Run the agent stream loop via renderer.on_event().
+
+        Returns the terminal event — ``AgentDoneEvent`` on success or
+        ``AgentErrorEvent`` when the run failed (auth errors, tool
+        failures, max iterations). The engine's contract is that exactly
+        one terminal event is emitted; a stream that ends without either
+        is a protocol bug and raises ``RuntimeError``.
 
         Re-raises ``asyncio.CancelledError`` without catching — the caller
         (``_run_agent``) handles it so that ``base_count`` stays in scope
         for ``_save_partial``.
         """
-        done_event: AgentDoneEvent | None = None
+        terminal: AgentDoneEvent | AgentErrorEvent | None = None
 
         async def consume() -> None:
-            nonlocal done_event
+            nonlocal terminal
             async for event in self.engine.stream(path, config):
                 self.renderer.on_event(event)
-                if isinstance(event, AgentDoneEvent):
-                    done_event = event
+                if isinstance(event, (AgentDoneEvent, AgentErrorEvent)):
+                    terminal = event
 
         self.current_task = asyncio.create_task(consume())
         await self.current_task
         self.current_task = None
 
-        # consume() always sets done_event before the task completes.
-        if done_event is None:
-            raise RuntimeError("Agent stream ended without emitting AgentDoneEvent")
-        return done_event
+        if terminal is None:
+            raise RuntimeError(
+                "Agent stream ended without a terminal AgentDoneEvent/AgentErrorEvent"
+            )
+        return terminal
 
     def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
         """Append new messages to tree, update metrics, save session."""
@@ -460,7 +468,7 @@ class PhosonRepl:
         self._context_tokens = self.summarizer.estimate_tokens(path)
 
         try:
-            done_event = await self._consume_stream(path, config)
+            terminal_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
             self.renderer.flush_line()
             self._append_partial_history(base_count)
@@ -473,7 +481,25 @@ class PhosonRepl:
         finally:
             self.current_task = None
 
-        self._finalize_run(done_event, base_count)
+        if isinstance(terminal_event, AgentErrorEvent):
+            # The renderer already printed the error panel. Persist what
+            # exists (the user turn, plus any steps that succeeded before
+            # the failure) so the conversation is not lost and can be
+            # retried or /undo'd — then return to the prompt instead of
+            # crashing the REPL.
+            self._append_partial_history(base_count)
+            await self.storage.save(self.tree)
+            await self.storage.save_meta(
+                self.tree.session_id, self.session_metrics.to_meta()
+            )
+            if terminal_event.code == "auth":
+                self.renderer.print_warn(
+                    "Check your credentials — run /setup or set the "
+                    "provider API key env var."
+                )
+            return
+
+        self._finalize_run(terminal_event, base_count)
         await self.storage.save(self.tree)
         await self.storage.save_meta(
             self.tree.session_id, self.session_metrics.to_meta()
