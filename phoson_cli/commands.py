@@ -220,7 +220,9 @@ class CommandHandler:
             if not models:
                 r.print_info("No models available.")
                 return
-            result = await pick_model(models=models, current_model=current)
+            result = await pick_model(
+                models=models, current_model=current, theme=self.repl.theme
+            )
             if result.cancelled or not result.model_id:
                 r.print_info("Cancelled.")
                 return
@@ -274,6 +276,7 @@ class CommandHandler:
             result = await pick_provider(
                 providers=providers,
                 current_provider=self.repl.config.provider,
+                theme=self.repl.theme,
             )
             if result.cancelled or not result.provider:
                 r.print_info("Cancelled.")
@@ -300,6 +303,7 @@ class CommandHandler:
         model_result = await pick_model(
             models=models,
             current_model=self.repl.current_model,
+            theme=self.repl.theme,
         )
         if model_result.cancelled or not model_result.model_id:
             save_config(self.repl.config)
@@ -387,6 +391,7 @@ class CommandHandler:
             sessions=sessions,
             current_id=self.repl.tree.session_id,
             page_size=15,
+            theme=self.repl.theme,
         )
 
         if result.cancelled:

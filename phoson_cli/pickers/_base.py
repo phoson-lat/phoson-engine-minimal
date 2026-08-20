@@ -27,31 +27,24 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import HSplit, Window
 
+from phoson_cli.theme import Theme, load_theme, build_picker_style_dict
+
 # ─── Shared style ────────────────────────────────────────────────────────────
 
-# All pickers share the same purple-on-dark palette used elsewhere by the
-# renderer. Pickers that need extra style classes can extend this dict
-# via ``Style.from_dict({**BASE_PICKER_STYLE_DICT, ...})``.
-BASE_PICKER_STYLE_DICT: dict[str, str] = {
-    "title": "bold #b57bee",
-    "header": "#808080",
-    "row.selected": "bg:#3d2b6e bold #ffffff",
-    "row": "#9a8faa",
-    "row.active": "bold #00ff9c",
-    "footer": "#5a5a5a",
-    "key-hint": "bold #b57bee",
-    "search": "bold #e0d0ff",
-    "search.label": "#b57bee bold",
-    "search.hint": "#6f6780",
-    "empty": "#ff9aa2",
-}
 
+def picker_style(
+    extra: dict[str, str] | None = None, theme: Theme | None = None
+) -> Style:
+    """Build a ``Style`` from the active theme's picker palette.
 
-def picker_style(extra: dict[str, str] | None = None) -> Style:
-    """Build a ``Style`` from the shared palette plus optional overrides."""
+    Args:
+        extra: Optional style overrides layered on top of the base dict.
+        theme: The active theme; resolved via ``load_theme()`` when None.
+    """
+    base = build_picker_style_dict(theme or load_theme())
     if not extra:
-        return Style.from_dict(BASE_PICKER_STYLE_DICT)
-    return Style.from_dict({**BASE_PICKER_STYLE_DICT, **extra})
+        return Style.from_dict(base)
+    return Style.from_dict({**base, **extra})
 
 
 # ─── BasePicker ──────────────────────────────────────────────────────────────

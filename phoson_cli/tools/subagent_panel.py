@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from rich import box
 from rich.table import Table
 
+from phoson_cli.theme import Theme, load_theme
+
 
 class AgentStatus(Enum):
     """Represent the execution state of a subagent."""
@@ -32,12 +34,6 @@ _SUBAGENT_STATUS = {
 }
 
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-_ACCENT = "medium_purple1"
-_ACCENT2 = "plum3"
-_MUTED = "grey50"
-_TOOL_OK = "medium_spring_green"
-_TOOL_ERR = "indian_red1"
 
 # ─── Wire format ──────────────────────────────────────────────────────────────
 # Producer: ``phoson_cli.tools.subagent.agents``.
@@ -107,22 +103,25 @@ class SubagentMetrics:
     error: str | None = None
 
 
-def _build_running_table(tasks: list[str], frame_index: int) -> Table:
+def _build_running_table(
+    tasks: list[str], frame_index: int, theme: Theme | None = None
+) -> Table:
     """Build the live "running parallel agents" table for a spinner frame."""
+    theme = theme or load_theme()
     table = Table(
         box=box.ROUNDED,
         title="Running parallel agents",
-        title_style=f"bold {_ACCENT}",
+        title_style=f"bold {theme.accent}",
         padding=(0, 1),
         show_lines=False,
     )
 
-    table.add_column("#", style=_MUTED, width=3, justify="right")
-    table.add_column("Status", style=_ACCENT2, width=8)
-    table.add_column("Task", style="white")
-    table.add_column("Time", style=_MUTED, width=8)
-    table.add_column("Tokens", style=_MUTED, width=14)
-    table.add_column("Cost", style=_MUTED, width=10)
+    table.add_column("#", style=theme.muted, width=3, justify="right")
+    table.add_column("Status", style=theme.accent_soft, width=8)
+    table.add_column("Task", style=theme.text)
+    table.add_column("Time", style=theme.muted, width=8)
+    table.add_column("Tokens", style=theme.muted, width=14)
+    table.add_column("Cost", style=theme.muted, width=10)
 
     for idx, task in enumerate(tasks):
         task_preview = task[:35] + "..." if len(task) > 35 else task
@@ -218,34 +217,39 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
     return metrics
 
 
-def render_subagent_panel(tasks: list[str]) -> Table:
+def render_subagent_panel(tasks: list[str], theme: Theme | None = None) -> Table:
     """Render the initial subagent panel with pending tasks."""
-    return _build_running_table(tasks, frame_index=0)
+    return _build_running_table(tasks, frame_index=0, theme=theme)
 
 
-def render_subagent_panel_frame(tasks: list[str], frame_index: int) -> Table:
+def render_subagent_panel_frame(
+    tasks: list[str], frame_index: int, theme: Theme | None = None
+) -> Table:
     """Render the live subagent panel for a given spinner frame."""
-    return _build_running_table(tasks, frame_index)
+    return _build_running_table(tasks, frame_index, theme=theme)
 
 
-def render_subagent_summary(metrics: list[SubagentMetrics]) -> Table | None:
+def render_subagent_summary(
+    metrics: list[SubagentMetrics], theme: Theme | None = None
+) -> Table | None:
     """Render summary panel with all agent results."""
+    theme = theme or load_theme()
     if not metrics:
         return None
     done_count = sum(1 for m in metrics if m.status == AgentStatus.DONE)
     table = Table(
         box=box.ROUNDED,
         title=f"{done_count}/{len(metrics)} parallel agents completed",
-        title_style=f"bold {_ACCENT}",
+        title_style=f"bold {theme.accent}",
         padding=(0, 1),
         show_lines=True,
     )
-    table.add_column("#", style=_MUTED, width=3, justify="right")
-    table.add_column("Status", style=_ACCENT2, width=8)
-    table.add_column("Task", style="white")
-    table.add_column("Time", style=_MUTED, width=8)
-    table.add_column("Tokens", style=_MUTED, width=14)
-    table.add_column("Cost", style=_MUTED, width=10)
+    table.add_column("#", style=theme.muted, width=3, justify="right")
+    table.add_column("Status", style=theme.accent_soft, width=8)
+    table.add_column("Task", style=theme.text)
+    table.add_column("Time", style=theme.muted, width=8)
+    table.add_column("Tokens", style=theme.muted, width=14)
+    table.add_column("Cost", style=theme.muted, width=10)
     total_duration, total_input, total_output, total_cost = 0, 0, 0, 0.0
     for m in metrics:
         status_icon = _SUBAGENT_STATUS.get(m.status.value, "○")
@@ -271,7 +275,7 @@ def render_subagent_summary(metrics: list[SubagentMetrics]) -> Table | None:
                 "—",
                 "—",
                 m.error[:20] if m.error else "error",
-                style=_TOOL_ERR,
+                style=theme.err,
             )
     if total_duration > 0:
         table.add_row(
@@ -281,6 +285,6 @@ def render_subagent_summary(metrics: list[SubagentMetrics]) -> Table | None:
             _format_duration(total_duration),
             _format_tokens(total_input, total_output),
             _format_cost(total_cost),
-            style=f"bold {_ACCENT}",
+            style=f"bold {theme.accent}",
         )
     return table

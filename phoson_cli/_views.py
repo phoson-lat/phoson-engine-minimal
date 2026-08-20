@@ -13,6 +13,7 @@ from rich.text import Text
 from rich.columns import Columns
 from rich.console import Console
 
+from phoson_cli.theme import Theme
 from phoson_agent.sessions.models import ConversationTree
 
 # Loaded once at import time so the banner prints instantly on cold REPL start.
@@ -96,6 +97,7 @@ def print_banner(
     provider: str,
     model: str,
     session_id: str,
+    theme: Theme | None = None,
 ) -> None:
     """Print the welcome banner with the active provider/model/session.
 
@@ -106,10 +108,15 @@ def print_banner(
             in the status line.
         session_id: The current session id; only the first 8 chars are
             shown.
+        theme: Optional :class:`Theme`. Resolved via ``load_theme()``
+            when None.
     """
+    from phoson_cli.theme import load_theme
+
+    theme = theme or load_theme()
     console.print()
 
-    art = Text(_PHOS_ART, style="medium_purple1 bold")
+    art = Text(_PHOS_ART, style=theme.art)
 
     # Wordmark column aligned vertically to the middle of the ASCII art.
     art_lines = _PHOS_ART.splitlines()
@@ -118,8 +125,8 @@ def print_banner(
     word_lines[mid - 1] = "phoson"
     word_lines[mid] = "terminal agent"
     wordmark = Text("\n".join(word_lines))
-    wordmark.highlight_words(["phoson"], style="bold medium_purple1")
-    wordmark.highlight_words(["terminal agent"], style="grey50")
+    wordmark.highlight_words(["phoson"], style=f"bold {theme.accent}")
+    wordmark.highlight_words(["terminal agent"], style=theme.muted)
 
     console.print(Columns([art, wordmark], padding=(0, 4)))
     console.print()
@@ -129,15 +136,15 @@ def print_banner(
         Text(
             f"  provider {provider}  ·  model {short_model}"
             f"  ·  session {session_id[:8]}",
-            style="grey50",
+            style=theme.muted,
         )
     )
-    console.print(Rule(style="plum4"))
+    console.print(Rule(style=theme.accent_soft))
     console.print(
         Text(
             "  /help for commands  ·  /sessions to resume work"
             "  ·  /attach to add images  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
-            style="grey42",
+            style=theme.muted_deep,
         )
     )
     console.print()

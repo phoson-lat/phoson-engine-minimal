@@ -10,6 +10,8 @@ from rich.console import Console
 from prompt_toolkit.styles import Style
 from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 
+from phoson_cli.theme import load_theme, build_wizard_prompt_style
+
 from .config import PhosonConfig, save_config
 from .model_selector import list_available_models
 
@@ -34,15 +36,6 @@ _PROVIDER_LABELS = {
     "fireworks": "Fireworks AI",
     "cohere": "Cohere",
 }
-
-_PROMPT_STYLE = Style.from_dict(
-    {
-        "": "#9a8faa",
-        "wizard.label": "#b57bee bold",
-        "wizard.default": "#6f6780",
-        "wizard.input": "#e0d0ff",
-    }
-)
 
 _PHOS_ART = (
     (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
@@ -70,7 +63,10 @@ class SetupWizard:
         self.console = console or Console(highlight=False)
         self.config = config or PhosonConfig()
         self.enabled_providers = self._infer_enabled_providers(self.config)
-        self.session = PromptSession(style=_PROMPT_STYLE)
+        self.theme = load_theme(getattr(self.config, "theme", None))
+        self.session = PromptSession(
+            style=Style.from_dict(build_wizard_prompt_style(self.theme))
+        )
 
     async def run(self) -> PhosonConfig:
         """Run the full wizard and return the final configuration.
@@ -95,29 +91,31 @@ class SetupWizard:
             self.console.print(
                 Panel.fit(
                     f"Saved configuration to [bold]{path}[/bold]",
-                    border_style="medium_spring_green",
+                    border_style=self.theme.ok,
                 )
             )
             self.config = updated
         else:
             self.console.print(
-                Panel.fit("Configuration not saved.", border_style="gold3")
+                Panel.fit("Configuration not saved.", border_style=self.theme.warn)
             )
         return self.config
 
     def _print_banner(self) -> None:
         """Render the ASCII art banner and wizard title."""
-        art = Text(_PHOS_ART, style="medium_purple1 bold")
+        art = Text(_PHOS_ART, style=self.theme.art)
         subtitle = Text()
-        subtitle.append("phoson setup wizard\n", style="bold medium_purple1")
+        subtitle.append("phoson setup wizard\n", style=f"bold {self.theme.accent}")
         subtitle.append(
             "configure multiple providers, defaults, and secrets",
-            style="grey58",
+            style=self.theme.muted,
         )
         self.console.print()
-        self.console.print(Panel.fit(art, border_style="plum4", box=box.SQUARE))
+        self.console.print(
+            Panel.fit(art, border_style=self.theme.accent_soft, box=box.SQUARE)
+        )
         self.console.print(subtitle)
-        self.console.print(Rule(style="plum4"))
+        self.console.print(Rule(style=self.theme.accent_soft))
 
     def _print_intro(self) -> None:
         """Print the introductory welcome panel."""
@@ -130,7 +128,7 @@ class SetupWizard:
         self.console.print(
             Panel(
                 welcome,
-                border_style="grey35",
+                border_style=self.theme.muted_deep,
                 box=box.ROUNDED,
             )
         )
@@ -166,11 +164,13 @@ class SetupWizard:
 
         while True:
             self.console.print()
-            self.console.print(Text("Enable providers", style="bold medium_purple1"))
+            self.console.print(
+                Text("Enable providers", style=f"bold {self.theme.accent}")
+            )
             for idx, provider in enumerate(providers, start=1):
                 marker = "[x]" if provider in selected else "[ ]"
                 state_style = (
-                    "medium_spring_green" if provider in selected else "grey58"
+                    self.theme.ok if provider in selected else self.theme.muted
                 )
                 line = Text(f"  {idx}. ")
                 line.append(f"{marker} ", style=state_style)
@@ -179,7 +179,7 @@ class SetupWizard:
             self.console.print(
                 Text(
                     "\nType numbers to toggle (e.g. 1 3), Enter to continue.",
-                    style="grey50",
+                    style=self.theme.muted,
                 )
             )
             raw = (await self._prompt_text("providers", default="")).strip()
@@ -188,7 +188,9 @@ class SetupWizard:
                     self.enabled_providers = [p for p in providers if p in selected]
                     return
                 self.console.print(
-                    "[indian_red1]Select at least one provider.[/indian_red1]"
+                    Text(
+                        "Select at least one provider.", style=f"bold {self.theme.err}"
+                    )
                 )
                 continue
             for token in raw.replace(",", " ").split():
@@ -209,7 +211,9 @@ class SetupWizard:
             The updated configuration.
         """
         self.console.print()
-        self.console.print(Text("Provider credentials", style="bold medium_purple1"))
+        self.console.print(
+            Text("Provider credentials", style=f"bold {self.theme.accent}")
+        )
 
         if "openrouter" in self.enabled_providers:
             config.openrouter_api_key = await self._secret_prompt(
@@ -305,8 +309,11 @@ class SetupWizard:
             )
         if "bedrock" in self.enabled_providers:
             self.console.print(
-                "[grey58]  AWS Bedrock uses your environment credentials "
-                "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).[/grey58]"
+                Text(
+                    "  AWS Bedrock uses your environment credentials "
+                    "(AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).",
+                    style=self.theme.muted,
+                )
             )
         if "fireworks" in self.enabled_providers:
             config.fireworks_api_key = await self._secret_prompt(
@@ -334,7 +341,7 @@ class SetupWizard:
         """
         self.console.print()
         self.console.print(
-            Text("Default runtime selection", style="bold medium_purple1")
+            Text("Default runtime selection", style=f"bold {self.theme.accent}")
         )
 
         default_provider = await self._choose_default_provider(config.provider)
@@ -344,7 +351,7 @@ class SetupWizard:
         suggested = [option.id for option in models[:8]]
 
         if suggested:
-            table = Table(box=box.SIMPLE_HEAD, border_style="plum4")
+            table = Table(box=box.SIMPLE_HEAD, border_style=self.theme.accent_soft)
             table.add_column("Suggested models", style="white")
             for model in suggested:
                 table.add_row(model)
@@ -370,7 +377,7 @@ class SetupWizard:
             The updated configuration.
         """
         self.console.print()
-        self.console.print(Text("Runtime options", style="bold medium_purple1"))
+        self.console.print(Text("Runtime options", style=f"bold {self.theme.accent}"))
         config.sessions_dir = Path(
             await self._prompt_text("Sessions directory", str(config.sessions_dir))
         ).expanduser()
@@ -391,7 +398,7 @@ class SetupWizard:
             config: The configuration to display.
         """
         table = Table(title="Phoson configuration summary", box=box.ROUNDED)
-        table.add_column("Setting", style="medium_purple1 bold")
+        table.add_column("Setting", style=f"{self.theme.accent} bold")
         table.add_column("Value", style="white")
         table.add_row("Enabled providers", ", ".join(self.enabled_providers))
         table.add_row("Default provider", config.provider)
@@ -441,7 +448,7 @@ class SetupWizard:
             self.console.print(
                 Text(
                     "\nChoose the default provider for the main REPL:",
-                    style="grey50",
+                    style=self.theme.muted,
                 )
             )
             for idx, provider in enumerate(self.enabled_providers, start=1):
@@ -458,7 +465,9 @@ class SetupWizard:
                 return self.enabled_providers[int(raw) - 1]
             if raw in self.enabled_providers:
                 return raw
-            self.console.print("[indian_red1]Invalid provider selection.[/indian_red1]")
+            self.console.print(
+                Text("Invalid provider selection.", style=f"bold {self.theme.err}")
+            )
 
     async def _prompt_text(self, label: str, default: str | None = None) -> str:
         """Display a labeled text prompt and return the user's input.
@@ -499,7 +508,9 @@ class SetupWizard:
                 return int(value)
             except ValueError:
                 self.console.print(
-                    "[indian_red1]Please enter a valid integer.[/indian_red1]"
+                    Text(
+                        "Please enter a valid integer.", style=f"bold {self.theme.err}"
+                    )
                 )
 
     async def _secret_prompt(

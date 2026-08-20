@@ -3,6 +3,7 @@
 from typing import TypedDict
 from dataclasses import dataclass
 
+from .theme import Theme
 from .pickers import BasePicker, picker_style
 
 
@@ -80,6 +81,7 @@ def _render_providers(
 async def pick_provider(
     providers: list[str],
     current_provider: str,
+    theme: "Theme | None" = None,
 ) -> ProviderPickerResult:
     """Prompt the user for a provider via a full-screen picker."""
     if not providers:
@@ -95,7 +97,7 @@ async def pick_provider(
         render=lambda: _render_providers(
             providers, current_provider, state["selected"]
         ),
-        style=picker_style(),
+        style=picker_style(theme=theme),
     )
 
     picker.bind_list_nav(

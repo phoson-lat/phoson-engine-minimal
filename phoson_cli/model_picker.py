@@ -3,6 +3,7 @@
 from typing import TypedDict
 from dataclasses import dataclass
 
+from .theme import Theme
 from .pickers import BasePicker, picker_style
 from .model_selector import ModelOption
 
@@ -185,6 +186,7 @@ async def pick_model(
     models: list[ModelOption],
     current_model: str,
     page_size: int = 12,
+    theme: "Theme | None" = None,
 ) -> ModelPickerResult:
     """Show an interactive picker over ``models`` with fuzzy search."""
     if not models:
@@ -212,7 +214,7 @@ async def pick_model(
 
     picker: BasePicker[ModelPickerResult] = BasePicker(
         render=render,
-        style=picker_style(),
+        style=picker_style(theme=theme),
     )
 
     def _refresh_selection() -> None:
