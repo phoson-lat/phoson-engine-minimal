@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.6.0 (2026-08-20)
+
+### Feat
+
+- **cli**: TUI phase 4 — the Textual TUI now runs the *same*
+  `CommandHandler`/`COMMAND_SPECS` as the classic REPL via a new
+  `CommandHost` protocol (`RendererCommandHost` for Rich/prompt_toolkit,
+  `TextualCommandHost` for the TUI): `/help /new /tree /undo /label
+  /attach /env /cost /tokens /steps /model /provider /sessions /delete
+  /mcp /update /exit` work identically on both front ends.
+- **cli**: native Textual pickers — `ModelPickerScreen` (fuzzy filter),
+  `ProviderPickerScreen` and `SessionPickerScreen` (load / `d` delete),
+  replacing the prompt_toolkit pickers inside the TUI.
+- **cli**: multiline composer — `Enter` sends, `Shift+Enter` inserts a
+  newline, `Tab` completes slash commands; the composer is disabled
+  while a turn runs and re-focused when it ends.
+- **cli**: tool cards are keyed by `tool_call_id` so parallel tool calls
+  no longer clobber each other's results; `SubagentStatusPanel` shows
+  parallel sub-agent tasks live.
+- **cli**: session resume in the TUI replays the *tail* of the history
+  (was: the head, and the replay was wiped after `print_history`).
+- **cli**: `/model <id>` and `/provider <id>` persist to
+  `~/.phoson/config.toml` (parity with the classic REPL); `/update`
+  confirmation is injectable (works inside the TUI).
+
+### Fix
+
+- **cli**: Kitty/Alacritty input — in addition to the associated-text
+  workaround, "report all keys" is now disabled too: without associated
+  text it delivers Shift+digit with no character, so the Spanish `/`
+  (Shift+7) could not be typed. GNOME Terminal was unaffected.
+- **cli**: user/tool text is markup-escaped in TUI rows (a message
+  containing `[red]` can no longer restyle the conversation).
+- **cli**: the safe-mode bash modal now shows the command itself
+  instead of duplicating the prompt text.
+- **cli**: `Ctrl+L` during a run no longer destroys the live
+  `StreamingTurn` (asks to cancel first).
+
 ## v0.5.0 (2026-08-19)
 
 ### Feat
