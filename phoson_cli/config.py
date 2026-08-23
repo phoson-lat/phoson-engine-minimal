@@ -6,6 +6,7 @@ the LLM chat clients.
 """
 
 import os
+import shutil
 import tomllib
 import warnings
 from typing import Any
@@ -52,6 +53,7 @@ class PhosonConfig:
 
     model: str = "minimax/minimax-m2.5"
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
+    reasoning_effort: str | None = None
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -211,6 +213,9 @@ def load_config() -> PhosonConfig:
         subagent_model=_resolve_optional_str(
             "PHOSON_SUBAGENT_MODEL", "subagent_model", fd, d.subagent_model
         ),
+        reasoning_effort=_resolve_optional_str(
+            "PHOSON_REASONING_EFFORT", "reasoning_effort", fd, d.reasoning_effort
+        ),
         provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
         openrouter_api_key=_resolve_optional_str(
             "OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key
@@ -315,7 +320,9 @@ def load_config() -> PhosonConfig:
     return cfg
 
 
-def save_config(config: PhosonConfig) -> Path:
+def save_config(
+    config: PhosonConfig, *, only_fields: frozenset[str] | set[str] | None = None
+) -> Path:
     """Persist configuration defaults to ~/.phoson/config.toml.
 
     The existing file is updated **in place**: only the managed keys of the
@@ -323,10 +330,36 @@ def save_config(config: PhosonConfig) -> Path:
     appended when missing, removed when now ``None``). Every other line —
     comments, user-added keys, extra sections — is preserved byte-for-byte,
     so saving never clobbers content the CLI does not own.
+
+    Args:
+        only_fields: When given, restrict this save to just these field
+            names (e.g. ``{"model"}``). Every other managed key is left
+            exactly as it already is in the file — this is what ``/model``,
+            ``/provider``, and the ``/mcp`` commands use so that a narrow
+            action never re-persists unrelated settings (including any
+            value currently coming from an environment variable rather
+            than the file). Ignored — treated as a full save — when the
+            file does not exist yet, so the very first save always writes
+            a complete ``[defaults]`` section.
+
+    Before writing, the previous file (if any) is copied to
+    ``config.toml.bak`` so a previous configuration is never truly lost,
+    even if an unexpected value slips into this save.
     """
     config_dir = Path("~/.phoson").expanduser()
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
+
+    if only_fields is not None and not config_path.exists():
+        only_fields = None  # first save ever: always write a full section
+
+    if config_path.exists():
+        try:
+            backup_path = config_path.parent / f"{config_path.name}.bak"
+            shutil.copy2(config_path, backup_path)
+            os.chmod(backup_path, 0o600)
+        except OSError:  # pragma: no cover - best-effort safety net
+            pass
 
     def _line(key: str, value: str | int | float | bool | None) -> str | None:
         if value is None:
@@ -348,6 +381,7 @@ def save_config(config: PhosonConfig) -> Path:
         ("enabled_providers", ",".join(enabled_providers)),
         ("model", getattr(config, "model", None)),
         ("subagent_model", getattr(config, "subagent_model", None)),
+        ("reasoning_effort", getattr(config, "reasoning_effort", None)),
         ("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
         ("openai_api_key", getattr(config, "openai_api_key", None)),
         ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
@@ -378,6 +412,8 @@ def save_config(config: PhosonConfig) -> Path:
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
     ]:
+        if only_fields is not None and key not in only_fields:
+            continue  # not part of this narrow save — leave the file's line alone
         managed[key] = _line(key, value)
 
     def _is_complete_value(line: str) -> bool:

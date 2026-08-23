@@ -187,6 +187,81 @@ def test_subagent_keys_invalid_env_falls_back(monkeypatch, tmp_path) -> None:
     assert config.subagent_timeout_seconds == 300.0
 
 
+def test_reasoning_effort_defaults_to_none(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_REASONING_EFFORT", raising=False)
+
+    assert load_config().reasoning_effort is None
+
+
+def test_reasoning_effort_env_override(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PHOSON_REASONING_EFFORT", "high")
+
+    assert load_config().reasoning_effort == "high"
+
+
+def test_reasoning_effort_round_trip_save_load(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import PhosonConfig, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_REASONING_EFFORT", raising=False)
+
+    save_config(PhosonConfig(provider="ollama", reasoning_effort="medium"))
+
+    assert load_config().reasoning_effort == "medium"
+
+
+def test_reasoning_effort_narrow_save_only_touches_that_key(
+    monkeypatch, tmp_path
+) -> None:
+    """``/reasoning-effort`` uses ``only_fields={"reasoning_effort"}`` —
+
+    the model set by a previous full save must survive untouched.
+    """
+    from phoson_cli.config import PhosonConfig, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("PHOSON_MODEL", raising=False)
+
+    save_config(PhosonConfig(provider="ollama", model="llama3"))
+    save_config(
+        PhosonConfig(provider="ollama", model="llama3", reasoning_effort="low"),
+        only_fields={"reasoning_effort"},
+    )
+
+    loaded = load_config()
+    assert loaded.reasoning_effort == "low"
+    assert loaded.model == "llama3"  # untouched by the narrow save
+
+
+def test_reasoning_effort_off_clears_the_managed_key(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import PhosonConfig, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_REASONING_EFFORT", raising=False)
+
+    save_config(PhosonConfig(provider="ollama", reasoning_effort="high"))
+    path = save_config(
+        PhosonConfig(provider="ollama", reasoning_effort=None),
+        only_fields={"reasoning_effort"},
+    )
+
+    assert "reasoning_effort" not in path.read_text()
+    assert load_config().reasoning_effort is None
+
+
 def test_subagent_keys_round_trip_save_load(monkeypatch, tmp_path) -> None:
     from phoson_cli.config import PhosonConfig, load_config, save_config
 

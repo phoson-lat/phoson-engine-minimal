@@ -6,7 +6,6 @@ isolated in :class:`WaitingSpinner` and :class:`SubagentSpinner` so that
 :class:`Renderer` only holds rendering state.
 """
 
-import json
 import threading
 from time import sleep
 from typing import TYPE_CHECKING
@@ -36,7 +35,27 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 from phoson_cli.theme import Theme, load_theme
-from phoson_cli.formatting import render_reasoning_panel
+from phoson_cli.formatting import (
+    tool_label as _tool_label,
+)
+from phoson_cli.formatting import (
+    render_notice,
+    render_history,
+    render_done_line,
+    render_user_turn,
+    render_start_line,
+    render_error_panel,
+    render_tool_done_line,
+    render_reasoning_panel,
+    render_streaming_panel,
+    render_subagent_start_line,
+)
+from phoson_cli.formatting import (
+    tool_args_preview as _args_preview,
+)
+from phoson_cli.formatting import (
+    subagent_tasks_from_args as _subagent_tasks_from_args,
+)
 from phoson_cli.tools.subagent_panel import (
     render_subagent_panel,
     parse_subagent_metrics,
@@ -296,8 +315,8 @@ class Renderer:
     def render_reasoning_panel(self, reasoning: str) -> Panel:
         """Build the expanded reasoning panel (Ctrl+T post-turn).
 
-        Thin delegate over the pure formatter in :mod:`.formatting` (the
-        Textual TUI reuses the same renderable).
+        Thin delegate over the pure formatter in :mod:`.formatting` (a
+        future front end can reuse the same renderable).
         """
         return render_reasoning_panel(reasoning, self.theme)
 
@@ -330,45 +349,13 @@ class Renderer:
         self._live.stop()
         self._live = None
 
-    def _render_live_panel(self) -> Panel:
-        """Render the current stream with separate thinking and answer blocks."""
-        renderables = []
-
-        if self._live_reasoning and self._live_show_reasoning:
-            thinking_text = self._live_reasoning.strip() or "thinking..."
-            renderables.append(
-                Panel(
-                    Text(thinking_text, style=self.theme.reasoning),
-                    title="thinking",
-                    title_align="left",
-                    border_style=self.theme.muted_deep,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                )
-            )
-
-        if self._live_content:
-            try:
-                answer_render = Markdown(
-                    self._live_content,
-                    code_theme=self.theme.code_theme,
-                    style="none",
-                )
-            except Exception:
-                answer_render = Text(self._live_content, style=self.theme.text)
-            renderables.append(answer_render)
-
-        if not renderables:
-            renderables.append(Text("thinking...", style=self.theme.muted))
-
-        return Panel(
-            Group(*renderables),
-            title="assistant",
-            title_align="left",
-            border_style=self.theme.accent_soft,
-            box=box.ROUNDED,
-            style=self.theme.panel_bg,
-            padding=(0, 1),
+    def _render_live_panel(self) -> Group:
+        """Render the current stream: a label, then thinking/answer blocks."""
+        return render_streaming_panel(
+            self._live_content,
+            self._live_reasoning,
+            self._live_show_reasoning,
+            self.theme,
         )
 
     def finish_turn(self) -> None:
@@ -400,7 +387,14 @@ class Renderer:
         self._token_buf.clear()
         if content and not self._stream_had_tokens:
             self.console.print(Rule(style=self.theme.muted_deep))
-            self.console.print(Markdown(content, code_theme=self.theme.code_theme))
+            self.console.print(
+                Markdown(
+                    content,
+                    code_theme=self.theme.code_theme,
+                    style=self.theme.text,
+                    hyperlinks=False,
+                )
+            )
 
     # ── Event dispatch ────────────────────────────────────────────────────────
 
@@ -484,28 +478,12 @@ class Renderer:
 
     def _on_start(self, event: AgentStartEvent) -> None:
         """Render session/model badge at the start of a run."""
-        session = (self.session_id or "")[:8] or "—"
-        badge = Text(" assistant ", style=self.theme.badge_assistant)
-        meta = Text.assemble(
-            badge,
-            Text("  ", style=self.theme.muted),
-            Text(event.model, style=f"bold {self.theme.accent}"),
-            Text(
-                f"  session {session}  ·  {event.message_count} msgs",
-                style=self.theme.muted,
-            ),
-        )
-        self.console.print(meta)
+        self.console.print(render_start_line(event, self.session_id, self.theme))
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
         """Handle tool start: update spinner for regular tools, start subagent panel."""
         if event.tool_name in {"agent", "agents"}:
-            label = _tool_label(event)
-            line = Text()
-            line.append("  │ ", style=self.theme.accent_soft)
-            line.append("◌ ", style=self.theme.accent_soft)
-            line.append(f"spawning {label}", style=f"bold {self.theme.accent}")
-            self.console.print(line)
+            self.console.print(render_subagent_start_line(event, self.theme))
             tasks = _subagent_tasks_from_args(event.tool_name, event.args)
             if tasks:
                 self.start_subagent_waiting(tasks)
@@ -528,77 +506,35 @@ class Renderer:
                 self.console.print(render_subagent_summary(metrics, theme=self.theme))
                 return
 
-        label = _tool_label(event)
-        line = Text()
-        if event.error:
-            line.append("  │ ", style=self.theme.accent_soft)
-            line.append("✗ ", style=self.theme.err)
-            line.append(label, style=f"bold {self.theme.err}")
-            line.append(f"  ·  {event.duration_ms}ms", style=self.theme.muted)
-            err_short = event.error.splitlines()[0][:72]
-            line.append(f"  ·  {err_short}", style=self.theme.err)
-        else:
-            line.append("  │ ", style=self.theme.accent_soft)
-            if event.tool_name in {"agent", "agents"}:
-                line.append("◍ ", style=self.theme.ok)
-                line.append(f"spawned {label}", style=self.theme.ok)
-            else:
-                line.append("✓ ", style=self.theme.ok)
-                line.append(label, style=self.theme.ok)
-            line.append(f"  ·  {event.duration_ms}ms", style=self.theme.muted)
-        self.console.print(line)
+        self.console.print(render_tool_done_line(event, self.theme))
 
     def _on_done(self, event: AgentDoneEvent) -> None:
         """Render run summary line."""
-        r = event.result
-        parts: list[str] = []
-        if r.total_cost_usd > 0:
-            parts.append(f"${r.total_cost_usd:.5f}")
-        steps = len(r.steps)
-        parts.append(f"{steps} step{'s' if steps != 1 else ''}")
-        if parts:
-            self.console.print(
-                Text(f"  {chr(183)} ".join(["", *parts]), style=self.theme.muted)
-            )
+        line = render_done_line(event, self.theme)
+        if line is not None:
+            self.console.print(line)
 
     def _on_error(self, event: AgentErrorEvent) -> None:
         """Render error panel."""
-        body = Text()
-        body.append(event.message, style="bold")
-        if event.code:
-            body.append(f"\ncode={event.code}", style=self.theme.muted)
-        if event.retryable:
-            body.append("  retryable", style=self.theme.warn)
-        self.console.print(
-            Panel(
-                body,
-                title="error",
-                border_style=self.theme.err,
-                padding=(0, 1),
-                box=box.SQUARE,
-                style=self.theme.panel_bg,
-            )
-        )
+        self.console.print(render_error_panel(event, self.theme))
 
     # ── Utility ───────────────────────────────────────────────────────────────
 
     def print_user_turn(self, text: str) -> None:
         """Render a user message with a lightweight badge + plain text."""
-        badge = Text(" user ", style=self.theme.badge_user)
-        self.console.print(badge)
-        self.console.print(Text(f"  {text}", style=self.theme.text))
+        self.console.print(render_user_turn(text, self.theme))
 
     def print_info(self, message: str) -> None:
         """Print an informational message."""
-        self.console.print(Text(f"  {message}", style=self.theme.muted))
+        self.console.print(render_notice("info", message, self.theme))
 
     def print_warn(self, message: str) -> None:
         """Print a warning message."""
-        self.console.print(Text(f"  ⚠ {message}", style=self.theme.warn))
+        self.console.print(render_notice("warn", message, self.theme))
 
     def print_error(self, message: str) -> None:
         """Print an error message."""
-        self.console.print(Text(f"  ✗ {message}", style=self.theme.err))
+        self.console.print(render_notice("error", message, self.theme))
 
     def print_history(self, messages: "list[Message]", tail: int | None = None) -> None:
         """Re-render a list of Message objects as a conversation replay.
@@ -608,65 +544,7 @@ class Renderer:
             tail: If set, only render the last ``tail`` messages and print
                   a ``"N messages above"`` rule when the list is longer.
         """
-        from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
-
-        if tail is not None and len(messages) > tail:
-            above = len(messages) - tail
-            self.console.print(
-                Rule(f"{above} messages above", style=self.theme.muted_deep)
-            )
-            messages = messages[-tail:]
-
-        self.console.print(Text(" session history ", style=self.theme.badge_history))
-
-        for msg in messages:
-            role = getattr(msg, "role", "?")
-            content = getattr(msg, "content", "")
-
-            if role == "system":
-                continue
-
-            if role == "user":
-                if not isinstance(content, str) and all(
-                    isinstance(b, ToolResultBlock) for b in content
-                ):
-                    continue
-                badge = Text(" user ", style=self.theme.badge_user)
-                self.console.print(badge)
-                if isinstance(content, str):
-                    self.console.print(Text(f"  {content}", style=self.theme.text))
-                else:
-                    for block in content:
-                        if isinstance(block, TextBlock):
-                            self.console.print(
-                                Text(f"  {block.text}", style=self.theme.text)
-                            )
-
-            elif role == "assistant":
-                badge = Text(" assistant ", style=self.theme.badge_assistant)
-                self.console.print(badge)
-                if isinstance(content, str) and content.strip():
-                    self.console.print(Rule(style=self.theme.muted_deep))
-                    self.console.print(
-                        Markdown(content.strip(), code_theme=self.theme.code_theme)
-                    )
-                elif not isinstance(content, str):
-                    text_parts = [b.text for b in content if isinstance(b, TextBlock)]
-                    tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
-                    combined = "\n".join(text_parts).strip()
-                    if combined:
-                        self.console.print(Rule(style=self.theme.muted_deep))
-                        self.console.print(
-                            Markdown(combined, code_theme=self.theme.code_theme)
-                        )
-                    for b in tool_uses:
-                        t = Text()
-                        t.append("  │ ", style=self.theme.accent_soft)
-                        t.append("⚙ ", style=self.theme.accent_soft)
-                        t.append(b.tool_name, style=f"bold {self.theme.accent}")
-                        self.console.print(t)
-
-        self.console.print(Rule(style=self.theme.muted_deep))
+        self.console.print(render_history(messages, self.theme, tail=tail))
 
     def print_sessions_table(self, sessions: "list[SessionMeta]") -> None:
         """Print a table of sessions."""
@@ -711,51 +589,6 @@ class Renderer:
         self.console.print(table)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _args_preview(tool_name: str, args: dict) -> str:
-    """Return a compact one-line preview of tool args."""
-    if not args:
-        return ""
-    if len(args) == 1:
-        val = next(iter(args.values()))
-        s = str(val)
-        if len(s) > 72:
-            s = s[:69] + "…"
-        return f"`{s}`"
-    parts = []
-    total = 0
-    for k, v in args.items():
-        s = f"{k}={json.dumps(v)}"
-        total += len(s)
-        if total > 80:
-            parts.append("…")
-            break
-        parts.append(s)
-    return "  ".join(parts)
-
-
-def _tool_label(event: AgentToolStartEvent | AgentToolDoneEvent) -> str:
-    if event.label:
-        return event.label
-    if event.tool_name == "agent":
-        return "subagent"
-    if event.tool_name == "agents":
-        return "subagents"
-    return event.tool_name
-
-
-def _subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:
-    if tool_name == "agent":
-        task = args.get("task")
-        return [task] if isinstance(task, str) and task else []
-    tasks = args.get("tasks")
-    if isinstance(tasks, list):
-        return [task for task in tasks if isinstance(task, str) and task]
-    return []
-
-
 # ── AgentEventSink adapter ────────────────────────────────────────────────────
 
 
@@ -763,9 +596,9 @@ class ClassicSink:
     """``AgentEventSink`` implementation over the classic Rich ``Renderer``.
 
     This is the presentation adapter used by the classic REPL (and by
-    :class:`~phoson_cli.controller.SessionController` in tests). The
-    Textual TUI (MIGRATE_CLI_TO_TEXTUAL.md, phase 3) will provide its
-    own sink; nothing in the controller depends on this class.
+    :class:`~phoson_cli.controller.SessionController` in tests). A
+    future front end will provide its own sink; nothing in the
+    controller depends on this class.
     """
 
     def __init__(self, renderer: "Renderer") -> None:

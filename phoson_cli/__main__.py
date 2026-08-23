@@ -1,13 +1,11 @@
 """Entry point for the Phoson CLI application."""
 
-import os
 import sys
 import shutil
 import asyncio
 import subprocess
 from pathlib import Path
 
-from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import (
     PhosonConfig,
     build_chat,
@@ -16,6 +14,7 @@ from phoson_cli.config import (
 )
 from phoson_cli.updater import perform_self_update
 from phoson_cli.installer import run_install_wizard
+from phoson_cli.fullscreen.app import PhosonApp
 
 
 def self_update() -> None:
@@ -55,106 +54,6 @@ def _read_stdin_task() -> str:
         return sys.stdin.read().strip()
     except OSError:
         return ""
-
-
-#: UI mode flags. They never reach the one-shot task parser.
-UI_MODE_FLAGS = {"--textual", "--classic"}
-
-
-def _resolve_ui_mode(args: list[str]) -> tuple[str, list[str]]:
-    """Split the UI mode flag out of ``args``.
-
-    Returns ``(mode, remaining_args)`` where mode is ``"textual"`` or
-    ``"classic"`` (the default). ``--classic`` is accepted for explicitness
-    and future compatibility; the classic REPL is the default.
-    """
-    mode = "classic"
-    rest: list[str] = []
-    for arg in args:
-        if arg in UI_MODE_FLAGS:
-            if arg == "--textual":
-                mode = "textual"
-        else:
-            rest.append(arg)
-    return mode, rest
-
-
-def _textual_available() -> bool:
-    """True when the optional ``textual`` dependency is importable."""
-    import importlib.util
-
-    try:
-        return importlib.util.find_spec("textual") is not None
-    except ModuleNotFoundError:
-        return False
-
-
-def _apply_textual_key_env() -> None:
-    """Map PHOSON_TEXTUAL_LEGACY_KEYS onto Textual's kitty-key opt-out.
-
-    Some terminal emulators misbehave with the Kitty keyboard protocol;
-    the legacy xterm sequences are a solid fallback. Must run before
-    the first ``import textual`` (Textual reads the env var at import).
-    """
-    if os.environ.get("PHOSON_TEXTUAL_LEGACY_KEYS", "").strip() not in ("", "0"):
-        os.environ["TEXTUAL_DISABLE_KITTY_KEY"] = "1"
-
-
-def _workaround_kitty_associated_text() -> None:
-    """Narrow the Kitty keyboard protocol flags Textual enables.
-
-    Textual 8.2.8 turns on three flags: disambiguate, report-all-keys and
-    associated-text. Two of them break typing in Kitty and Alacritty:
-
-    - Associated-text: the parser mis-reads the ``u;<codepoint>`` suffix,
-      so each key becomes ``key + ';<digits>'`` garbage.
-    - Report-all-keys: every key (including Shift+7, which is ``/`` on a
-      Spanish layout) is sent as a CSI-u event *without* the produced
-      character. ``TextArea`` then sees ``shift+7`` with ``character=None``
-      and inserts nothing. GNOME Terminal is unaffected because it never
-      speaks the Kitty protocol.
-
-    Disambiguate is kept so Ctrl combos (Ctrl+C / Ctrl+T / Ctrl+Q) still
-    work. Must run after ``import textual.drivers.linux_driver`` (the
-    driver reads these globals when it starts the input thread) and
-    before ``App.run()``.
-    """
-    try:
-        from textual.drivers import linux_driver
-    except ModuleNotFoundError:  # pragma: no cover - non-Linux platform
-        return
-    for flag in (
-        "KITTY_REPORT_ASSOCIATED_TEXT",
-        "KITTY_REPORT_ALL_KEYS",
-    ):
-        try:
-            setattr(linux_driver, flag, 0)
-        except (AttributeError, TypeError):  # pragma: no cover - defensive
-            pass
-
-
-def _start_textual_ui(config: "PhosonConfig") -> bool:
-    """Launch the Textual TUI. Returns True if it took over.
-
-    Phase 3 of the Textual migration (MIGRATE_CLI_TO_TEXTUAL.md): the
-    TUI is a second front end over the same SessionController. The
-    classic REPL remains the default (``--classic`` or no flag).
-    """
-    if not _textual_available():
-        print("Error: the Textual TUI requires the optional 'tui' extra.")
-        print(
-            "Install it with:  uv sync --extra tui"
-            "   (or: pip install 'phoson-engine-minimal[tui]')"
-        )
-        sys.exit(1)
-    _apply_textual_key_env()
-    _workaround_kitty_associated_text()
-    from phoson_cli.textual import PhosonTextualApp
-
-    app = PhosonTextualApp(config)
-    app.run()  # blocks until the user quits
-    app.shutdown()  # close the chat client and plugins
-    return True
 
 
 def _parse_oneshot_task(args: list[str]) -> str | None:
@@ -263,14 +162,9 @@ def main() -> None:
         asyncio.run(run_install_wizard(config))
         return
 
-    # UI mode selection happens before one-shot parsing so the flags never
-    # leak into the task text.
-    ui_mode, args = _resolve_ui_mode(args)
-
     # One-shot mode: phoson-cli "task" | -p "task" | piped stdin.
     # Skips the interactive wizard — missing credentials surface as the
     # friendly pre-check error below, which is what scripts need.
-    # (One-shot is always stdout-only; --textual/--classic are ignored.)
     oneshot_task = _parse_oneshot_task(args)
     if oneshot_task is not None:
         config = load_config()
@@ -309,11 +203,8 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if ui_mode == "textual" and _start_textual_ui(config):
-        return
-
-    repl = PhosonRepl(config)
-    asyncio.run(repl.run())
+    app = PhosonApp(config)
+    asyncio.run(app.run_async())
 
 
 if __name__ == "__main__":

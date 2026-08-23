@@ -21,11 +21,12 @@ or extra actions register additional handlers via
 from collections.abc import Callable
 
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.containers import HSplit, Window
+from prompt_toolkit.layout.containers import Float, HSplit, Window
 
 from phoson_cli.theme import Theme, load_theme, build_picker_style_dict
 
@@ -75,6 +76,14 @@ class BasePicker[TResult]:
         style: Optional ``Style`` instance; defaults to
             :func:`picker_style`.
         initial: Default result when the input list is empty.
+        on_done: When set, :meth:`done` reports through this callback
+            instead of exiting an owned ``Application`` — used when the
+            picker is hosted as a Float inside another running
+            Application (see :meth:`as_float`) rather than via
+            :meth:`run`.
+        invalidate: Paired with ``on_done`` — :meth:`refresh` calls this
+            instead of the (nonexistent, in Float mode) owned
+            ``Application``.
     """
 
     def __init__(
@@ -83,14 +92,22 @@ class BasePicker[TResult]:
         render: Callable[[], list[tuple[str, str]]],
         style: Style | None = None,
         initial: TResult | None = None,
+        on_done: Callable[[TResult], None] | None = None,
+        invalidate: Callable[[], None] | None = None,
     ) -> None:
         self._render = render
         self._style = style or picker_style()
         self._initial = initial
+        self._on_done = on_done
+        self._invalidate = invalidate
 
         self._kb = KeyBindings()
         self._window = Window(
-            content=FormattedTextControl(render),
+            # Focusable so a Float host can move focus onto it — otherwise
+            # the host's own focused input keeps first claim on keystrokes
+            # (the focused control's key bindings take priority over the
+            # Application-level ones the picker's kb is merged into).
+            content=FormattedTextControl(render, focusable=True),
             always_hide_cursor=True,
         )
         self._app: Application | None = None
@@ -118,12 +135,20 @@ class BasePicker[TResult]:
 
     def refresh(self) -> None:
         """Force the window to re-render on the next tick."""
-        if self._app is not None:
+        if self._invalidate is not None:
+            self._invalidate()
+        elif self._app is not None:
             self._app.invalidate()
 
     def done(self, result: TResult) -> None:
-        """Exit the picker with ``result``."""
-        if self._app is not None:
+        """Report ``result``.
+
+        Exits an owned ``Application`` normally, or calls ``on_done``
+        when hosted as a Float (see :meth:`as_float`).
+        """
+        if self._on_done is not None:
+            self._on_done(result)
+        elif self._app is not None:
             self._app.exit(result=result)
 
     # ── Convenience: register the standard navigation set ───────────────
@@ -237,6 +262,21 @@ class BasePicker[TResult]:
             mouse_support=False,
         )
         return await self._app.run_async()
+
+    def as_float(self, *, title: str | None = None) -> Float:
+        """Wrap this picker's window in a ``Float`` for a host Application.
+
+        The picker's own key bindings (:attr:`_kb`) are NOT part of the
+        returned ``Float`` — a ``Float`` has no independent key-binding
+        stack, so the host must merge them into its own ``Application``
+        scoped to "this Float is the active one" (e.g. via
+        ``ConditionalKeyBindings``/``DynamicKeyBindings``). Construct the
+        picker with ``on_done``/``invalidate`` (or set them directly)
+        before using this — :meth:`run` is not called in Float mode, so
+        :meth:`done`/:meth:`refresh` have nothing else to report to.
+        """
+        content = Frame(self._window, title=title) if title else self._window
+        return Float(content=content, left=2, right=2, top=1, bottom=1)
 
     def _is_empty(self) -> bool:
         """Subclasses can override to short-circuit run() on empty input."""

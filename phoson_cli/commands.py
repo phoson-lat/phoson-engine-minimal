@@ -70,6 +70,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         "Pick or set the model used by sub-agents",
         "_cmd_subagent_model",
     ),
+    CommandSpec(
+        ("/reasoning-effort", "/effort"),
+        "Show or set reasoning effort: low, medium, high, or off",
+        "_cmd_reasoning_effort",
+    ),
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
     CommandSpec(("/sessions",), "List, load or delete saved sessions", "_cmd_sessions"),
     CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
@@ -117,6 +122,12 @@ def get_command_help() -> list[tuple[str, str]]:
         )
         for spec in COMMAND_SPECS
     ]
+
+
+#: Valid values for /reasoning-effort — matches ModelConfig.reasoning_effort
+#: (phoson_llm/schemas/inputs.py), which OpenAI-compatible backends forward
+#: as-is (e.g. o1/o3's ``reasoning_effort`` request parameter).
+_REASONING_EFFORTS: Final[frozenset[str]] = frozenset({"low", "medium", "high"})
 
 
 # ─── Parsing ─────────────────────────────────────────────────────────────────
@@ -233,13 +244,13 @@ class CommandHandler:
 
         if target == "main":
             self.repl.set_model(chosen)
-            save_config(self.repl.config)
+            save_config(self.repl.config, only_fields={"model"})
             r.print_info(f"Model → {self.repl.current_model}  ·  saved")
         else:
             self.repl.subagent_model = chosen
             self.repl.config.subagent_model = chosen
             self.repl.engine.context.extra["default_model"] = chosen
-            save_config(self.repl.config)
+            save_config(self.repl.config, only_fields={"subagent_model"})
             r.print_info(f"Sub-agent model → {chosen}  ·  saved")
 
     # ── Command implementations ─────────────────────────────────────────
@@ -260,6 +271,33 @@ class CommandHandler:
 
     async def _cmd_subagent_model(self, cmd: Command) -> bool:
         await self._pick_and_set_model(target="subagent", explicit=cmd.args or None)
+        return True
+
+    async def _cmd_reasoning_effort(self, cmd: Command) -> bool:
+        r = self._r
+        current = self.repl.config.reasoning_effort
+
+        arg = cmd.args.strip().lower()
+        if not arg:
+            r.print_info(
+                f"Reasoning effort: {current or 'off'}"
+                "  ·  usage: /reasoning-effort <low|medium|high|off>"
+            )
+            return True
+
+        if arg in {"off", "none", "default"}:
+            chosen = None
+        elif arg in _REASONING_EFFORTS:
+            chosen = arg
+        else:
+            r.print_error(
+                f"Unknown reasoning effort: {arg!r}  ·  use low, medium, high, or off"
+            )
+            return True
+
+        self.repl.config.reasoning_effort = chosen
+        save_config(self.repl.config, only_fields={"reasoning_effort"})
+        r.print_info(f"Reasoning effort → {chosen or 'off'}  ·  saved")
         return True
 
     async def _cmd_provider(self, cmd: Command) -> bool:
@@ -294,27 +332,13 @@ class CommandHandler:
             r.print_error(str(exc))
             return True
 
-        models = await list_available_models(self.repl.config)
-        if not models:
-            save_config(self.repl.config)
-            r.print_info(f"Provider → {self.repl.config.provider}  ·  saved")
-            r.print_info("No models available for the selected provider.")
-            return True
-
-        model_result = await self.host.pick_model(models, self.repl.current_model)
-        if model_result.cancelled or not model_result.model_id:
-            save_config(self.repl.config)
-            r.print_info(f"Provider → {self.repl.config.provider}  ·  saved")
-            r.print_info("Model selection cancelled; kept current model.")
-            return True
-
-        self.repl.set_model(model_result.model_id)
-        save_config(self.repl.config)
+        save_config(self.repl.config, only_fields={"provider", "model"})
         r.print_info(
             "Provider → "
             f"{self.repl.config.provider}  ·  "
             f"Model → {self.repl.current_model}  ·  saved"
         )
+        r.print_info("Use /model <name> to pick a model for this provider.")
         return True
 
     async def _cmd_tree(self, cmd: Command) -> bool:  # noqa: ARG002
@@ -429,6 +453,7 @@ class CommandHandler:
             f"provider={self.repl.config.provider} "
             f"model={self.repl.current_model} "
             f"subagent_model={self.repl.subagent_model} "
+            f"reasoning_effort={self.repl.config.reasoning_effort or 'off'} "
             f"cwd={self.repl.config.sessions_dir}"
         )
         return True

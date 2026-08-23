@@ -94,3 +94,74 @@ async def test_picker_returns_result_when_done_called() -> None:
     # terminal, so we exercise the binding directly. ``done`` exits cleanly
     # because there is no Application yet.
     _trigger(picker, "enter")  # exercises the no-op path
+
+
+# ── Float mode: on_done/invalidate + as_float ─────────────────────────────────
+
+
+def test_done_reports_through_on_done_when_set() -> None:
+    """In Float mode, done() reports to on_done instead of an owned App."""
+    results: list[str] = []
+    picker: BasePicker[str] = BasePicker(
+        render=lambda: [], on_done=lambda r: results.append(r)
+    )
+
+    picker.done("chosen")
+
+    assert results == ["chosen"]
+
+
+def test_refresh_calls_invalidate_when_set() -> None:
+    ticks: list[int] = []
+    picker: BasePicker[str] = BasePicker(
+        render=lambda: [], invalidate=lambda: ticks.append(1)
+    )
+
+    picker.refresh()
+
+    assert ticks == [1]
+
+
+def test_on_done_takes_priority_over_owned_app() -> None:
+    """Even if ``_app`` were set, on_done (Float mode) wins."""
+    results: list[str] = []
+    picker: BasePicker[str] = BasePicker(
+        render=lambda: [], on_done=lambda r: results.append(r)
+    )
+    picker._app = object()  # sentinel — must not be touched
+
+    picker.done("chosen")
+
+    assert results == ["chosen"]
+
+
+def test_as_float_wraps_window_without_title() -> None:
+    from prompt_toolkit.layout.containers import Float
+
+    picker: BasePicker[str] = BasePicker(render=lambda: [])
+    float_ = picker.as_float()
+
+    assert isinstance(float_, Float)
+    assert float_.content is picker._window
+
+
+def test_as_float_wraps_window_in_a_frame_with_title() -> None:
+    from prompt_toolkit.layout.containers import Float
+
+    picker: BasePicker[str] = BasePicker(render=lambda: [])
+    float_ = picker.as_float(title="Pick one")
+
+    assert isinstance(float_, Float)
+    # Frame.__init__ converts to its own HSplit container — a title means
+    # it's wrapped in a Frame rather than the bare window (no-title case).
+    assert float_.content is not picker._window
+
+
+def test_window_is_focusable_for_float_hosting() -> None:
+    """The picker's window must be focusable — otherwise a Float host
+
+    can't move focus onto it, and the host's own focused input keeps
+    first claim on keystrokes (fuzzy-search typing would leak through).
+    """
+    picker: BasePicker[str] = BasePicker(render=lambda: [])
+    assert picker._window.content.is_focusable()

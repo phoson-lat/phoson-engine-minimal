@@ -1,8 +1,8 @@
-"""Tests for the UI-independent SessionController (Textual migration, phase 1).
+"""Tests for the UI-independent SessionController.
 
 The controller must run a full session lifecycle against a fake sink —
-no prompt_toolkit, no Rich, no TTY. This is the guarantee that a second
-front end (the Textual TUI) is a sink, not a fork.
+no prompt_toolkit, no Rich, no TTY. This is the guarantee that a new
+front end is a sink, not a fork.
 """
 
 import datetime
@@ -126,6 +126,40 @@ def test_controller_requires_no_ui_dependencies(tmp_path) -> None:
 
 
 # ── Run lifecycle: success / error / cancel ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_turn_forwards_reasoning_effort_to_model_config(tmp_path) -> None:
+    controller, _sink = _make_controller(tmp_path, reasoning_effort="high")
+    seen_configs = []
+
+    async def stream(path, config):
+        seen_configs.append(config)
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield _done_event("hello")
+
+    controller.engine.stream = stream
+
+    await controller.run_turn("q")
+
+    assert seen_configs[0].reasoning_effort == "high"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_reasoning_effort_defaults_to_none(tmp_path) -> None:
+    controller, _sink = _make_controller(tmp_path)
+    seen_configs = []
+
+    async def stream(path, config):
+        seen_configs.append(config)
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield _done_event("hello")
+
+    controller.engine.stream = stream
+
+    await controller.run_turn("q")
+
+    assert seen_configs[0].reasoning_effort is None
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,15 @@
 """Classic interactive REPL (prompt_toolkit + Rich).
 
-Textual migration (MIGRATE_CLI_TO_TEXTUAL.md), phase 1: all session
-runtime — engine, tree, metrics, run lifecycle, persistence — now lives
-in :class:`~phoson_cli.controller.SessionController`, which is free of
-UI dependencies. ``PhosonRepl`` is the *classic front end* over that
-controller: it owns the prompt loop, key bindings, completer, prompt
-fragments and banner, and adapts its Rich ``Renderer`` to the
-controller's :class:`~phoson_cli.ui_protocols.AgentEventSink` via
-``ClassicSink``.
+All session runtime — engine, tree, metrics, run lifecycle,
+persistence — lives in :class:`~phoson_cli.controller.SessionController`,
+which is free of UI dependencies. ``PhosonRepl`` is the *classic front
+end* over that controller: it owns the prompt loop, key bindings,
+completer, prompt fragments and banner, and adapts its Rich
+``Renderer`` to the controller's
+:class:`~phoson_cli.ui_protocols.AgentEventSink` via ``ClassicSink``.
 
-The future Textual TUI will be a second front end over the same
-controller — a sink, not a fork.
+A future full-screen front end will be a second front end over the
+same controller — a sink, not a fork.
 """
 
 import asyncio
@@ -41,6 +40,7 @@ from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
 from .renderer import Renderer, ClassicSink
 from .controller import SessionController
 from .confirmation import PromptToolkitConfirmationService
+from .ui_protocols import AgentEventSink, ConfirmationService
 from .session_utils import (  # noqa: F401
     close_plugins,
     build_mcp_plugins,
@@ -48,6 +48,11 @@ from .session_utils import (  # noqa: F401
 )
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
+
+# Sentinel distinguishing "confirmation not passed" (use the classic
+# prompt_toolkit prompt) from an explicit ``confirmation=None`` (fail
+# closed — e.g. the full-screen front end before it has its own modal).
+_DEFAULT_CONFIRMATION = object()
 
 # Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
 # completer's meta column stays in sync with /help and the dispatch table.
@@ -90,11 +95,23 @@ class PhosonRepl:
     and the existing test suite.
     """
 
-    def __init__(self, config: PhosonConfig) -> None:
+    def __init__(
+        self,
+        config: PhosonConfig,
+        sink: AgentEventSink | None = None,
+        confirmation: ConfirmationService | None = _DEFAULT_CONFIRMATION,
+    ) -> None:
         """Initialize the REPL with configuration.
 
         Args:
             config: PhosonConfig containing provider, model, and session settings.
+            sink: Presentation target for the session run. Defaults to
+                ``ClassicSink(self.renderer)`` — a full-screen front end
+                injects its own sink instead.
+            confirmation: Interactive yes/no service (bash safe_mode).
+                Defaults to a prompt_toolkit prompt when not passed at
+                all; pass ``None`` explicitly to fail closed (no
+                confirmation available), or a modal-based implementation.
         """
         self._config = config
         # Theme is resolved once at startup (env NO_COLOR/PHOSON_THEME, then
@@ -110,8 +127,12 @@ class PhosonRepl:
         # prompt_toolkit front end.
         self._controller = SessionController(
             config,
-            ClassicSink(self.renderer),
-            confirmation=PromptToolkitConfirmationService(),
+            sink if sink is not None else ClassicSink(self.renderer),
+            confirmation=(
+                PromptToolkitConfirmationService()
+                if confirmation is _DEFAULT_CONFIRMATION
+                else confirmation
+            ),
         )
 
     # ── Config / controller state ─────────────────────────────────────────
@@ -208,6 +229,15 @@ class PhosonRepl:
     @current_task.setter
     def current_task(self, value: asyncio.Task | None) -> None:
         self._controller.current_task = value
+
+    @property
+    def is_running(self) -> bool:
+        """True while an agent run stream is being consumed."""
+        return self._controller.is_running
+
+    def cancel_current(self) -> bool:
+        """Cancel the in-flight run, if any. Returns True if one was cancelled."""
+        return self._controller.cancel_current()
 
     # ── Private-state passthroughs (tests, prompt display) ─────────────────
 

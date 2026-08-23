@@ -1,4 +1,4 @@
-"""UI-independent session runtime (Textual migration, phase 1).
+"""UI-independent session runtime.
 
 :class:`SessionController` owns everything that is *not* presentation:
 the LLM client, agent engine, tools, plugins, session state (tree,
@@ -7,10 +7,10 @@ run lifecycle (stream consumption, partial persistence, reasoning
 capture, session saves).
 
 It presents nothing itself — every user-visible effect goes through the
-injected :class:`~phoson_cli.ui_protocols.AgentEventSink`. The classic
-REPL adapts its Rich ``Renderer`` with ``ClassicSink``; the future
-Textual TUI (MIGRATE_CLI_TO_TEXTUAL.md) will provide a widget-based
-sink. This is what makes the second front end a sink, not a fork.
+injected :class:`~phoson_cli.ui_protocols.AgentEventSink`. This is what
+lets the front end change (classic ``Renderer``/``ClassicSink`` today,
+a full-screen UI going forward) without touching this module — a new
+front end is a new sink, not a fork.
 """
 
 import asyncio
@@ -247,7 +247,7 @@ class SessionController:
         """Release the chat client and any loaded engine plugins.
 
         Idempotent. Called by front ends on exit (classic REPL on EOF,
-        Textual app on shutdown) so no HTTP pools or MCP subprocesses
+        front end on shutdown) so no HTTP pools or MCP subprocesses
         outlive the session.
         """
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
@@ -403,6 +403,7 @@ class SessionController:
         config = ModelConfig(
             model=self.current_model,
             system=build_system_prompt(self.engine.tools),
+            reasoning_effort=self.config.reasoning_effort,
         )
 
         # Resolve context window: models.json (user override or cache)

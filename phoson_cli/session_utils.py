@@ -1,6 +1,6 @@
 """Shared session-runtime helpers (UI-independent).
 
-Moved out of ``repl.py`` during the Textual migration (phase 1) so the
+Moved out of ``repl.py`` so the
 :class:`~phoson_cli.controller.SessionController` — and any future
 front end — can use them without importing the prompt_toolkit REPL.
 ``repl.py`` re-exports them for backward compatibility.

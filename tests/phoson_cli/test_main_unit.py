@@ -36,32 +36,79 @@ def test_main_does_not_run_setup_when_config_file_exists(monkeypatch, tmp_path) 
     (config_dir / "config.toml").write_text("[defaults]\n", encoding="utf-8")
 
     setup_called = False
-    repl_ran = False
+    app_ran = False
 
     async def fake_setup(config):
         nonlocal setup_called
         setup_called = True
         return config
 
-    class FakeRepl:
+    class FakeApp:
         def __init__(self, config):
             self.config = config
 
-        async def run(self):
-            nonlocal repl_ran
-            repl_ran = True
+        async def run_async(self):
+            nonlocal app_ran
+            app_ran = True
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(sys, "argv", ["phoson-cli"])
     monkeypatch.setattr(main_module, "load_config", lambda: PhosonConfig())
     monkeypatch.setattr(main_module, "build_chat", lambda config: None)
     monkeypatch.setattr(main_module, "run_install_wizard", fake_setup)
-    monkeypatch.setattr(main_module, "PhosonRepl", FakeRepl)
+    monkeypatch.setattr(main_module, "PhosonApp", FakeApp)
 
     main_module.main()
 
     assert not setup_called
-    assert repl_ran
+    assert app_ran
+
+
+def test_main_runs_setup_wizard_then_launches_the_full_screen_app(
+    monkeypatch, tmp_path
+) -> None:
+    """First run (no config.toml, no configured provider): the wizard runs
+
+    as a pre-flight step — plain stdout, no full-screen mode — and only
+    once it's done does ``main()`` construct ``PhosonApp``. No change was
+    needed for this to keep working: the wizard call sits entirely
+    before ``PhosonApp(config)`` in ``main()``.
+    """
+    import sys
+
+    import phoson_cli.__main__ as main_module
+
+    home = tmp_path / "home"  # deliberately does NOT create ~/.phoson
+
+    setup_called = False
+    app_ran = False
+
+    async def fake_setup(config):
+        nonlocal setup_called
+        setup_called = True
+        return config
+
+    class FakeApp:
+        def __init__(self, config):
+            self.config = config
+
+        async def run_async(self):
+            nonlocal app_ran
+            app_ran = True
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(sys, "argv", ["phoson-cli"])
+    monkeypatch.setattr(
+        main_module, "load_config", lambda: PhosonConfig(provider="openrouter")
+    )
+    monkeypatch.setattr(main_module, "build_chat", lambda config: None)
+    monkeypatch.setattr(main_module, "run_install_wizard", fake_setup)
+    monkeypatch.setattr(main_module, "PhosonApp", FakeApp)
+
+    main_module.main()
+
+    assert setup_called
+    assert app_ran
 
 
 def test_main_friendly_error_when_active_provider_lacks_credential(

@@ -2,6 +2,7 @@
 
 from typing import TypedDict
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from phoson_agent.sessions.models import SessionMeta
 
@@ -95,7 +96,24 @@ async def pick_session(
     """Show an interactive session picker. Returns the selected session_id or None."""
     if not sessions:
         return SessionPickerResult(cancelled=True)
+    return await build_session_picker(sessions, current_id, page_size, theme).run()
 
+
+def build_session_picker(
+    sessions: list[SessionMeta],
+    current_id: str,
+    page_size: int = 15,
+    theme: "Theme | None" = None,
+    *,
+    on_done: Callable[[SessionPickerResult], None] | None = None,
+    invalidate: Callable[[], None] | None = None,
+) -> BasePicker[SessionPickerResult]:
+    """Build the picker's state/renderer/bindings without running it.
+
+    Lets a host embed it as a Float (:meth:`BasePicker.as_float`) instead
+    of it spinning up its own full-screen ``Application`` via ``run()``
+    (``pick_session`` above does that for the classic REPL).
+    """
     state: _SessionState = {"selected": 0, "page": 0}
 
     picker: BasePicker[SessionPickerResult] = BasePicker(
@@ -103,6 +121,8 @@ async def pick_session(
             sessions, current_id, state["selected"], state["page"], page_size
         ),
         style=picker_style(theme=theme),
+        on_done=on_done,
+        invalidate=invalidate,
     )
 
     picker.bind_paged_nav(
@@ -125,4 +145,4 @@ async def pick_session(
         ),
     )
 
-    return await picker.run()
+    return picker

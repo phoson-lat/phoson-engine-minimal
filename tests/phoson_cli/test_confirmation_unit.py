@@ -1,4 +1,4 @@
-"""Tests for the ConfirmationService classic implementation + wiring."""
+"""Tests for the ConfirmationService classic + full-screen implementations."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,12 +6,42 @@ import pytest
 
 from phoson_cli.confirmation import PromptToolkitConfirmationService
 from phoson_cli.ui_protocols import ConfirmationService
+from phoson_cli.fullscreen.confirmation import FullScreenConfirmationService
 
 # ── Conformance ──────────────────────────────────────────────────────────────
 
 
 def test_classic_service_conforms_to_protocol() -> None:
     assert isinstance(PromptToolkitConfirmationService(), ConfirmationService)
+
+
+def test_fullscreen_service_conforms_to_protocol() -> None:
+    fake_app = MagicMock()
+    assert isinstance(FullScreenConfirmationService(fake_app), ConfirmationService)
+
+
+# ── FullScreenConfirmationService ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fullscreen_confirm_bash_delegates_to_float_with_the_command() -> None:
+    fake_app = MagicMock()
+    fake_app.run_float_confirm = AsyncMock(return_value=True)
+
+    result = await FullScreenConfirmationService(fake_app).confirm_bash("rm -rf /tmp/x")
+
+    assert result is True
+    fake_app.run_float_confirm.assert_awaited_once()
+    (prompt,), _ = fake_app.run_float_confirm.call_args
+    assert "rm -rf /tmp/x" in prompt
+
+
+@pytest.mark.asyncio
+async def test_fullscreen_confirm_bash_returns_false_when_float_declines() -> None:
+    fake_app = MagicMock()
+    fake_app.run_float_confirm = AsyncMock(return_value=False)
+
+    assert await FullScreenConfirmationService(fake_app).confirm_bash("ls") is False
 
 
 # ── PromptToolkitConfirmationService ─────────────────────────────────────────

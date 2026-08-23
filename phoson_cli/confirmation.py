@@ -1,11 +1,11 @@
 """Classic (prompt_toolkit) implementation of ConfirmationService.
 
-Textual migration (phase 2): the safe-mode bash confirmation used to
-live inside the bash tool, creating its own ``PromptSession``. The tool
-now receives a :class:`~phoson_cli.ui_protocols.ConfirmationService`
-through engine context injection; this module is the classic front end's
-implementation. The Textual TUI will inject a modal-based service
-instead — no tool change required.
+The safe-mode bash confirmation used to live inside the bash tool,
+creating its own ``PromptSession``. The tool now receives a
+:class:`~phoson_cli.ui_protocols.ConfirmationService` through engine
+context injection; this module is the classic front end's
+implementation. A full-screen front end can inject a modal-based
+service instead — no tool change required.
 """
 
 from prompt_toolkit import PromptSession

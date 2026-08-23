@@ -2,13 +2,12 @@
 
 The handler is fully async so it never blocks the event loop.
 
-Safe-mode confirmation (Textual migration, phase 2): the tool no longer
-opens its own prompt. It receives an optional
-:class:`~phoson_cli.ui_protocols.ConfirmationService` through engine
-context injection (``bash_confirmation``):
+Safe-mode confirmation: the tool no longer opens its own prompt. It
+receives an optional :class:`~phoson_cli.ui_protocols.ConfirmationService`
+through engine context injection (``bash_confirmation``):
 
 - classic REPL: a prompt_toolkit-based service (interactive prompt);
-- Textual TUI: a modal-based service;
+- full-screen front end: a modal-based service;
 - nothing injected (one-shot / scripts): **fail closed** — the command
   is refused with an actionable message instead of hanging or running.
 """

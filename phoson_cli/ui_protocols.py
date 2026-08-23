@@ -1,15 +1,13 @@
 """UI-facing protocols for the session runtime.
 
 The :class:`~phoson_cli.controller.SessionController` is deliberately free
-of Rich / prompt_toolkit / Textual dependencies. It talks to whatever
-presents the session through the :class:`AgentEventSink` protocol:
-
-- Classic REPL: :class:`phoson_cli.renderer.ClassicSink` (wraps the Rich
-  ``Renderer``).
-- Textual TUI (MIGRATE_CLI_TO_TEXTUAL.md, phase 3+): a widget-based sink.
+of any specific Rich/prompt_toolkit presentation dependency. It talks to
+whatever presents the session through the :class:`AgentEventSink`
+protocol — today :class:`phoson_cli.renderer.ClassicSink` (wraps the Rich
+``Renderer``), soon a full-screen ``prompt_toolkit`` app's own sink.
 
 Keeping this protocol narrow is the point: anything the controller needs
-to *show* goes through it, so a second front end is a sink, not a fork.
+to *show* goes through it, so a new front end is a sink, not a fork.
 """
 
 from typing import Protocol, runtime_checkable
@@ -23,8 +21,7 @@ class AgentEventSink(Protocol):
     """Presentation target for a session run.
 
     All methods are synchronous: they run on the UI's own event loop
-    (the prompt_toolkit loop for the classic sink, the Textual message
-    loop for the TUI sink) and must not block.
+    and must not block.
     """
 
     def on_user_message(self, text: str, message: Message) -> None:
@@ -58,14 +55,14 @@ class AgentEventSink(Protocol):
 
 @runtime_checkable
 class ConfirmationService(Protocol):
-    """Human-in-the-loop confirmations (Textual migration, phase 2).
+    """Human-in-the-loop confirmations.
 
     Tools that need an interactive yes/no (bash in ``safe_mode``) receive
     a service through engine context injection instead of opening a
     prompt themselves: the classic REPL injects a prompt_toolkit-based
-    implementation; the Textual TUI will inject a modal; front ends that
-    cannot confirm (one-shot / scripts) inject nothing and the tool must
-    fail closed.
+    implementation; a full-screen front end can inject a modal; front
+    ends that cannot confirm (one-shot / scripts) inject nothing and the
+    tool must fail closed.
     """
 
     async def confirm_bash(self, command: str) -> bool:
