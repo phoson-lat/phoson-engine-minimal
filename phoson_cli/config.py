@@ -51,7 +51,7 @@ NO_CREDENTIAL_PROVIDERS: frozenset[str] = frozenset(
 class PhosonConfig:
     """Application configuration."""
 
-    model: str = "minimax/minimax-m2.5"
+    model: str = "qwen/qwen3.6-plus"
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     reasoning_effort: str | None = None
     provider: str = "openrouter"
