@@ -9,7 +9,7 @@ patch ``PhosonRepl._run_agent`` to avoid a real network call.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -454,3 +454,44 @@ def test_slash_completer_only_completes_the_command_word() -> None:
 
     # Args already typed — the command word itself is no longer completed.
     assert list(completer.get_completions(Document("/model gpt", 10), None)) == []
+
+
+async def test_escape_cancels_a_run_in_flight(app: PhosonApp) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    # Make the controller report an in-flight task so Esc takes the
+    # cancel branch (in production this task is the stream consumer).
+    fake_task = MagicMock()
+    fake_task.done.return_value = False
+
+    with (
+        patch.object(app.repl, "_run_agent", new=slow_run_agent),
+        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        patch.object(
+            type(app.repl),
+            "current_task",
+            new_callable=PropertyMock,
+            return_value=fake_task,
+        ),
+    ):
+        app._prompt_input.text = "go"
+        _trigger(app, "enter")
+        await started.wait()
+
+        _trigger(app, "escape")
+        mock_cancel.assert_called_once()
+
+    release.set()
+    await app._run_task
+
+
+def test_escape_is_a_noop_when_idle(app: PhosonApp) -> None:
+    # No run in flight: Esc must not touch the controller.
+    with patch.object(app.repl, "cancel_current") as mock_cancel:
+        _trigger(app, "escape")
+        mock_cancel.assert_not_called()

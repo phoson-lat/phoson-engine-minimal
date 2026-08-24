@@ -236,6 +236,8 @@ class SessionController:
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
         self.engine.context.extra["available_tools"] = self.tools_dict
         self.engine.context.extra["default_model"] = self.subagent_model
+        # Fallback for sub-agents when the subagent model is unavailable.
+        self.engine.context.extra["main_model"] = self.current_model
         self.engine.context.extra["max_iterations"] = self.config.max_iterations
         self.engine.context.extra["subagent_max_parallel"] = (
             self.config.subagent_max_parallel

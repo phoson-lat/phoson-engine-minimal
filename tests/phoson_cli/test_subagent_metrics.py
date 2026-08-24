@@ -116,3 +116,84 @@ def test_metrics_parse_handles_missing_metrics_line() -> None:
     assert metrics[0].status == AgentStatus.DONE
     assert metrics[0].duration_ms == 0
     assert metrics[0].cost_usd == 0.0
+
+
+def test_fallback_model_roundtrip() -> None:
+    """``fallback_model`` survives the wire format and marks the metrics."""
+    line = format_metrics_line(
+        duration_ms=500,
+        input_tokens=10,
+        output_tokens=20,
+        cost_usd=0.0,
+        credits=0,
+        fallback_model="anthropic/claude-3.5-haiku",
+    )
+    block = format_agent_block(
+        index=2, task_preview="tarea", body="ok", metrics_line=line
+    )
+    metrics = parse_subagent_metrics(block)
+    assert len(metrics) == 1
+    assert metrics[0].fallback_model == "anthropic/claude-3.5-haiku"
+    assert metrics[0].status == AgentStatus.DONE
+
+
+def test_no_fallback_model_by_default() -> None:
+    line = format_metrics_line(
+        duration_ms=500,
+        input_tokens=10,
+        output_tokens=20,
+        cost_usd=0.0,
+        credits=0,
+    )
+    metrics = parse_subagent_metrics(
+        format_agent_block(index=0, task_preview="t", body="b", metrics_line=line)
+    )
+    assert metrics[0].fallback_model is None
+
+
+def test_summary_renders_fallback_warning() -> None:
+    """A fallback agent renders with a warning style and a caption note."""
+    from phoson_cli.tools.subagent_panel import render_subagent_summary
+
+    metrics = parse_subagent_metrics(
+        format_agent_block(
+            index=0,
+            task_preview="tarea",
+            body="ok",
+            metrics_line=format_metrics_line(
+                duration_ms=500,
+                input_tokens=10,
+                output_tokens=20,
+                cost_usd=0.0,
+                credits=0,
+                fallback_model="anthropic/claude-3.5-haiku",
+            ),
+        )
+    )
+    table = render_subagent_summary(metrics)
+    assert table is not None
+    assert table.caption is not None
+    assert "fallback" in table.caption
+    assert "anthropic/claude-3.5-haiku" in table.caption
+
+
+def test_summary_without_fallback_has_no_caption() -> None:
+    from phoson_cli.tools.subagent_panel import render_subagent_summary
+
+    metrics = parse_subagent_metrics(
+        format_agent_block(
+            index=0,
+            task_preview="tarea",
+            body="ok",
+            metrics_line=format_metrics_line(
+                duration_ms=500,
+                input_tokens=10,
+                output_tokens=20,
+                cost_usd=0.0,
+                credits=0,
+            ),
+        )
+    )
+    table = render_subagent_summary(metrics)
+    assert table is not None
+    assert table.caption is None

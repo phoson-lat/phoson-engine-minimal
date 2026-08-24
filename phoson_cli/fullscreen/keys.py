@@ -68,6 +68,10 @@ def build_key_bindings(app: "PhosonApp") -> KeyBindings:
     def _paste_image(event: object) -> None:  # noqa: ARG001
         app.paste_image()
 
+    @kb.add("escape", eager=True)
+    def _escape(event: object) -> None:  # noqa: ARG001
+        app.handle_escape()
+
     return kb
 
 
