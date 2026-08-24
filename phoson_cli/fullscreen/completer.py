@@ -25,6 +25,7 @@ from prompt_toolkit.completion import (
 
 from ..commands import COMMANDS, COMMAND_SPECS
 from .model_cache import ModelCache
+from .session_cache import SessionListCache
 
 _CMD_META: dict[str, str] = {
     name: spec.help for spec in COMMAND_SPECS for name in spec.names
@@ -82,6 +83,41 @@ class ModelArgCompleter(Completer):
                 return
 
 
+class SessionsArgCompleter(Completer):
+    """Fuzzy-completes '/sessions load <n>' with session summaries.
+
+    Like :class:`ModelArgCompleter`, but each dropdown entry shows a
+    human-readable label (date · msgs · cost · model) while inserting
+    just the number — sessions are UUIDs, so the number is what the
+    command actually consumes.
+    """
+
+    def __init__(self, cache: SessionListCache) -> None:
+        self._cache = cache
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent
+    ) -> Iterable[Completion]:
+        text = document.text_before_cursor
+        prefix = "/sessions load "
+        if not text.startswith(prefix):
+            return
+        query = text[len(prefix) :]
+        for i, meta in enumerate(self._cache.sessions, start=1):
+            label = f"{i}"
+            if query and not label.startswith(query):
+                continue
+            updated = meta.updated_at.strftime("%m-%d %H:%M")
+            cost = f"${meta.total_cost:.4f}" if meta.total_cost else "—"
+            model = (meta.last_model or "—").split("/")[-1][:24]
+            yield Completion(
+                label,
+                start_position=-len(query),
+                display=f"{i}. {updated}  {meta.message_count} msgs  {cost}",
+                display_meta=model,
+            )
+
+
 class StaticArgCompleter(Completer):
     """Fuzzy-completes a command's argument from a small fixed word list.
 
@@ -115,4 +151,9 @@ class StaticArgCompleter(Completer):
                 return
 
 
-__all__ = ["SlashCompleter", "ModelArgCompleter", "StaticArgCompleter"]
+__all__ = [
+    "SlashCompleter",
+    "ModelArgCompleter",
+    "SessionsArgCompleter",
+    "StaticArgCompleter",
+]

@@ -13,6 +13,7 @@ from .pickers import BasePicker, picker_style
 class _SessionState(TypedDict):
     selected: int
     page: int
+    marked: set[str]
 
 
 @dataclass
@@ -20,6 +21,8 @@ class SessionPickerResult:
     session_id: str | None = None
     cancelled: bool = False
     delete: bool = False
+    #: Session ids to delete (multi-delete mode); empty unless delete_many.
+    delete_ids: list[str] | None = None
 
 
 _HEADER = (
@@ -34,8 +37,10 @@ def _render_sessions(
     selected: int,
     page: int,
     page_size: int,
+    marked: set[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Render the session list as prompt_toolkit-formatted text."""
+    marked = marked or set()
     lines: list[tuple[str, str]] = []
 
     lines.append(("class:title", "  Saved Sessions\n"))
@@ -65,6 +70,8 @@ def _render_sessions(
             style = "class:row"
 
         marker = "▸" if is_selected else ("▶" if is_current else " ")
+        if str(s.id) in marked:
+            marker = f"{marker}✓"
         state = "active" if is_current else "saved"
 
         line = (
@@ -76,11 +83,13 @@ def _render_sessions(
     # Footer
     total_pages = (len(sessions) + page_size - 1) // page_size
     page_info = f" Page {page + 1}/{total_pages} " if total_pages > 1 else ""
+    marked_note = f"  {len(marked)} marked for delete" if marked else ""
     lines.append(("\n", ""))
     lines.append(
         (
             "class:footer",
-            f"  {page_info}↑/↓ navigate  ·  Enter select  ·  q cancel  ·  d delete\n",
+            f"  {page_info}↑/↓ navigate  ·  Enter select  ·  q cancel"
+            f"  ·  d delete  ·  space mark  ·  X delete marked{marked_note}\n",
         )
     )
 
@@ -114,11 +123,16 @@ def build_session_picker(
     of it spinning up its own full-screen ``Application`` via ``run()``
     (``pick_session`` above does that for the classic REPL).
     """
-    state: _SessionState = {"selected": 0, "page": 0}
+    state: _SessionState = {"selected": 0, "page": 0, "marked": set()}
 
     picker: BasePicker[SessionPickerResult] = BasePicker(
         render=lambda: _render_sessions(
-            sessions, current_id, state["selected"], state["page"], page_size
+            sessions,
+            current_id,
+            state["selected"],
+            state["page"],
+            page_size,
+            marked=state["marked"],
         ),
         style=picker_style(theme=theme),
         on_done=on_done,
@@ -144,5 +158,34 @@ def build_session_picker(
             SessionPickerResult(session_id=sessions[state["selected"]].id, delete=True)
         ),
     )
+
+    def _toggle_mark() -> None:
+        """Space: (un)mark the selected session for multi-delete."""
+        sid = str(sessions[state["selected"]].id)
+        if sid in state["marked"]:
+            state["marked"].discard(sid)
+        else:
+            if sid == str(current_id):
+                return  # current active session can't be deleted
+            state["marked"].add(sid)
+        picker.refresh()
+
+    def _delete_marked() -> None:
+        """X: delete all marked sessions; the picker stays open."""
+        if not state["marked"]:
+            return
+        picker.done(
+            SessionPickerResult(
+                session_id=None,
+                delete_ids=sorted(state["marked"]),
+            )
+        )
+        state["marked"].clear()
+
+    picker.bind("space", _toggle_mark)
+
+    # X (shift+x): delete all marked sessions without closing — after the
+    # host applies the deletes it reopens/re-renders with a fresh list.
+    picker.bind("X", _delete_marked)
 
     return picker
