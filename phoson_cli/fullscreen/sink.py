@@ -11,6 +11,8 @@ flag and calls the injected ``on_invalidate`` callback (bound to
 prototype's "mutate state, then invalidate" streaming pattern.
 """
 
+import time
+import asyncio
 from dataclasses import dataclass
 
 from phoson_agent import (
@@ -85,10 +87,52 @@ class FullScreenSink:
         self.blocks: list[object] = []
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""
+        # Streaming repaint throttle state (see touch_streaming).
+        self._last_stream_repaint: float = 0.0
+        self._stream_repaint_pending: asyncio.TimerHandle | None = None
 
     def _touch(self) -> None:
         self.dirty = True
         self._on_invalidate()
+
+    def touch_streaming(self) -> None:
+        """Dirty-flag update throttled during live token streaming.
+
+        Tokens can arrive hundreds of times per second; with the ANSI
+        block cache each frame is cheap, but waking prompt_toolkit's
+        renderer that often is still wasted work. Coalesce repaints to
+        ~16fps (REPAINT_INTERVAL_SECONDS) while a turn is in flight.
+        The final token always schedules a trailing repaint so the last
+        chunk of text is never left unrendered.
+        """
+        self.dirty = True
+        now = time.monotonic()
+        if self.current_turn is None:
+            self._touch()
+            return
+        if now - self._last_stream_repaint >= REPAINT_INTERVAL_SECONDS:
+            self._last_stream_repaint = now
+            self._touch()
+            return
+        if (
+            self._stream_repaint_pending is None
+            or self._stream_repaint_pending.cancelled()
+        ):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop (unit tests, sync callers): repaint now.
+                self._last_stream_repaint = now
+                self._touch()
+                return
+            delay = REPAINT_INTERVAL_SECONDS - (now - self._last_stream_repaint)
+            self._stream_repaint_pending = loop.call_later(max(delay, 0.0), self._touch)
+
+    def cancel_stream_throttle(self) -> None:
+        """Drop any pending throttled repaint timer (turn finished)."""
+        if self._stream_repaint_pending is not None:
+            self._stream_repaint_pending.cancel()
+            self._stream_repaint_pending = None
 
     def status_text(self) -> str:
         """Short status string for the header bar."""
@@ -133,10 +177,12 @@ class FullScreenSink:
             case AgentTokenEvent():
                 if self.current_turn is not None:
                     self.current_turn.content += event.content
+                    self.touch_streaming()
 
             case AgentReasoningEvent():
                 if self.current_turn is not None:
                     self.current_turn.reasoning += event.content
+                    self.touch_streaming()
 
             case AgentToolStartEvent():
                 turn = self.current_turn
@@ -176,6 +222,7 @@ class FullScreenSink:
                     self.current_turn.run_cost_usd += event.step.cost_usd
 
             case AgentDoneEvent():
+                self.cancel_stream_throttle()
                 turn = self.current_turn
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
@@ -186,6 +233,7 @@ class FullScreenSink:
                     self.blocks.append(line)
 
             case AgentErrorEvent():
+                self.cancel_stream_throttle()
                 turn = self.current_turn
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
@@ -292,4 +340,8 @@ class FullScreenSink:
         )
 
 
-__all__ = ["FullScreenSink", "CurrentTurn"]
+__all__ = ["FullScreenSink", "CurrentTurn", "REPAINT_INTERVAL_SECONDS"]
+
+#: Target repaint interval while streaming tokens (~16fps). Token events
+#: coalesce into at most one scheduled repaint per interval.
+REPAINT_INTERVAL_SECONDS = 0.06
