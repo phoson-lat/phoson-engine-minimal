@@ -434,3 +434,57 @@ def test_save_config_idempotent_second_save(monkeypatch, tmp_path) -> None:
     assert second == first
     assert second.count('provider = "groq"') == 1
     assert second.count('model = "llama-3.3-70b"') == 1
+
+
+def test_model_and_reasoning_effort_persist_across_restart(monkeypatch, tmp_path) -> None:
+    """Regression for #49: /model + /reasoning-effort must round-trip config."""
+    from phoson_cli.config import PhosonConfig, load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_MODEL", raising=False)
+    monkeypatch.delenv("PHOSON_REASONING_EFFORT", raising=False)
+
+    # Simulate a mid-session /model + /reasoning-effort change.
+    original = PhosonConfig(
+        model="anthropic/claude-3.5-haiku",
+        reasoning_effort="low",
+        sessions_dir=home / "sessions",
+    )
+    save_config(original)
+
+    # Simulate a fresh CLI process reading the same file.
+    loaded = load_config()
+    assert loaded.model == "anthropic/claude-3.5-haiku"
+    assert loaded.reasoning_effort == "low"
+
+
+def test_show_reasoning_round_trip(monkeypatch, tmp_path) -> None:
+    """Regression for #50: Ctrl+T default persists via show_reasoning field."""
+    from phoson_cli.config import PhosonConfig, load_config, save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_SHOW_REASONING", raising=False)
+
+    original = PhosonConfig(
+        sessions_dir=home / "sessions", show_reasoning=False
+    )
+    path = save_config(original, only_fields={"show_reasoning"})
+    assert path is not None
+
+    loaded = load_config()
+    assert loaded.show_reasoning is False
+
+
+def test_show_reasoning_defaults_true(monkeypatch, tmp_path) -> None:
+    from phoson_cli.config import load_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("PHOSON_SHOW_REASONING", raising=False)
+
+    assert load_config().show_reasoning is True

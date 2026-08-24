@@ -22,6 +22,43 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 
+#: Maximum accepted attachment size. Matches the limit enforced by the
+#: ``view_image`` tool (:data:`phoson_cli.tools.view_image.MAX_IMAGE_BYTES`).
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+#: File types whose real content does not reach every provider as-is.
+#: Maps extension → short per-provider note shown as a warning on attach.
+_PROVIDER_COMPAT_NOTES: dict[str, str] = {
+    ".pdf": "PDFs reach the model as a real document on Anthropic only; "
+    "OpenAI-compatible providers see a text placeholder, and Gemini "
+    "silently drops them.",
+    ".svg": "SVG support varies by provider.",
+}
+_VIDEO_NOTE = (
+    "Video is not sent to the model as media by any provider; it becomes a "
+    "text placeholder."
+)
+
+
+def provider_compat_warning(suffix: str, active_provider: str | None = None) -> str | None:
+    """Return a human-readable warning for a known-degraded file type.
+
+    Args:
+        suffix: Lowercase file extension (with leading dot).
+        active_provider: Currently configured provider, if known.
+
+    Returns:
+        A warning message, or ``None`` when the type is broadly safe.
+    """
+    note = _PROVIDER_COMPAT_NOTES.get(suffix)
+    if suffix in VIDEO_EXTS:
+        note = _VIDEO_NOTE
+    if note is None:
+        return None
+    if active_provider:
+        return f"{note} (active provider: {active_provider})"
+    return note
+
 
 @dataclass
 class Attachment:
@@ -58,6 +95,13 @@ class AttachmentManager:
         p = Path(path).expanduser().resolve()
         if not p.exists():
             raise FileNotFoundError(f"File not found: {path}")
+
+        size = p.stat().st_size
+        if size > MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"File too large: {p.name} is {size / 1_048_576:.1f}MB "
+                f"(max {MAX_ATTACHMENT_BYTES / 1_048_576:.0f}MB)."
+            )
 
         suffix = p.suffix.lower()
         block: ImageBlock | AudioBlock | VideoBlock | DocumentBlock

@@ -54,6 +54,7 @@ class PhosonConfig:
     model: str = "qwen/qwen3.6-plus"
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     reasoning_effort: str | None = None
+    show_reasoning: bool = True
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -215,6 +216,9 @@ def load_config() -> PhosonConfig:
         ),
         reasoning_effort=_resolve_optional_str(
             "PHOSON_REASONING_EFFORT", "reasoning_effort", fd, d.reasoning_effort
+        ),
+        show_reasoning=_resolve_bool(
+            "PHOSON_SHOW_REASONING", "show_reasoning", fd, d.show_reasoning
         ),
         provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
         openrouter_api_key=_resolve_optional_str(
@@ -382,6 +386,7 @@ def save_config(
         ("model", getattr(config, "model", None)),
         ("subagent_model", getattr(config, "subagent_model", None)),
         ("reasoning_effort", getattr(config, "reasoning_effort", None)),
+        ("show_reasoning", getattr(config, "show_reasoning", True)),
         ("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
         ("openai_api_key", getattr(config, "openai_api_key", None)),
         ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
