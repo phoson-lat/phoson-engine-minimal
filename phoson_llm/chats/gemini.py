@@ -1,23 +1,29 @@
 """Google Gemini adapter using the native SDK."""
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
+from phoson_llm.utils import load_file_as_base64
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
     TextBlock,
+    AudioBlock,
     ImageBlock,
     TokenEvent,
     TokenUsage,
     UsageEvent,
+    VideoBlock,
     ModelConfig,
     LLMDoneEvent,
+    ToolUseBlock,
+    DocumentBlock,
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
+    ToolResultBlock,
 )
 from phoson_llm.chats.base import BaseLLMChat
 
@@ -40,32 +46,63 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
             parts.append(types.Part.from_text(text=msg.content))
         else:
             for block in msg.content:
-                if isinstance(block, TextBlock):
-                    parts.append(types.Part.from_text(text=block.text))
-                elif isinstance(block, ImageBlock):
-                    if block.source.startswith("file://"):
-                        # In a real implementation, we'd read the file.
-                        # For now, we assume URL or base64 handling by the SDK
-                        # if supported.
-                        parts.append(
-                            types.Part.from_uri(
-                                file_uri=block.source[7:],
-                                mime_type=block.media_type or "image/jpeg",
-                            )
-                        )
-                    else:
-                        parts.append(
-                            types.Part.from_uri(
-                                file_uri=block.source,
-                                mime_type=block.media_type or "image/jpeg",
-                            )
-                        )
-                # Add other block types as needed
+                part_or_text = _convert_block(types, block)
+                parts.append(part_or_text)
 
         role = "user" if msg.role == "user" else "model"
         gemini_messages.append(types.Content(role=role, parts=parts))
 
     return gemini_messages
+
+
+def _convert_block(types: Any, block: Any) -> Any:
+    """Convert a single Phoson ContentBlock to a Gemini Part.
+
+    Local ``file://`` sources are read and base64-encoded inline
+    (Gemini's ``file_uri`` only accepts Google-hosted resources, never
+    local paths). Unsupported block types become a visible text
+    placeholder instead of being silently dropped, mirroring the other
+    adapters.
+    """
+    from google.genai import types
+
+    if isinstance(block, TextBlock):
+        return types.Part.from_text(text=block.text)
+
+    if isinstance(block, ImageBlock):
+        mime = block.media_type or "image/jpeg"
+        source = block.source
+        if source.startswith("file://"):
+            data = load_file_as_base64(source[7:]).split(",", 1)[-1]
+            return types.Part.from_bytes(data=data.encode("ascii"), mime_type=mime)
+        # Hosted URI (gs:// or https://) — pass through as-is.
+        return types.Part.from_uri(file_uri=source, mime_type=mime)
+
+    if isinstance(block, DocumentBlock):
+        if block.source.startswith("file://"):
+            data = load_file_as_base64(block.source[7:]).split(",", 1)[-1]
+            return types.Part.from_bytes(
+                data=data.encode("ascii"), mime_type="application/pdf"
+            )
+        return types.Part.from_uri(file_uri=block.source, mime_type="application/pdf")
+
+    if isinstance(block, AudioBlock):
+        return types.Part.from_text(
+            text=f"[Audio not supported by Gemini: {block.source}]"
+        )
+
+    if isinstance(block, VideoBlock):
+        return types.Part.from_text(
+            text=f"[Video not supported by Gemini: {block.source}]"
+        )
+
+    if isinstance(block, (ToolUseBlock, ToolResultBlock)):
+        raise TypeError(
+            f"ToolUseBlock/ToolResultBlock should not reach _convert_block. "
+            f"Got: {type(block)}"
+        )
+
+    return types.Part.from_text(text=f"[Unsupported block: {type(block).__name__}]")
 
 
 def _convert_tools(tools: list[ToolDefinition]) -> "list[types.Tool]":
