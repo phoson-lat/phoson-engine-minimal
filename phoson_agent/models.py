@@ -3,12 +3,28 @@ from typing import TYPE_CHECKING, Any, Literal
 from dataclasses import field, dataclass
 from collections.abc import Callable, Awaitable
 
-from phoson_llm.schemas import Message, JsonObject, JsonSchema, TokenUsage
+from phoson_llm.schemas import Message, ImageBlock, JsonObject, JsonSchema, TokenUsage
 
 if TYPE_CHECKING:
     from phoson_agent.context import AgentContext
 
-ToolReturn = str | dict[str, Any]
+
+@dataclass
+class ImageToolResult:
+    """Return from a tool handler to show the model an image, not just text.
+
+    ``text`` is the tool_result text the LLM sees inline (e.g. a caption
+    or filename); ``image`` is appended as a follow-up user-role message
+    so vision-capable models actually see the picture — ``ToolResultBlock``
+    itself only carries a plain string, so an image cannot be smuggled
+    into the tool result proper.
+    """
+
+    text: str
+    image: ImageBlock
+
+
+ToolReturn = str | dict[str, Any] | ImageToolResult
 ToolHandler = Callable[[JsonObject, "AgentContext"], ToolReturn | Awaitable[ToolReturn]]
 
 
