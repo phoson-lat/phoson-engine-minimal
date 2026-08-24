@@ -11,8 +11,7 @@ import logging
 import warnings
 from typing import Any
 from pathlib import Path
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
 from phoson_agent import Plugin
 
@@ -30,23 +29,43 @@ _SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
+def _local_time_info() -> tuple[str, str]:
+    """Return ``(local_time, timezone_label)`` for the *system* timezone.
+
+    Uses the process's local timezone (honouring the ``TZ`` environment
+    variable) so the prompt is correct for users anywhere, not just a
+    single hardcoded zone. Falls back to UTC if the local zone cannot be
+    determined.
+    """
+    try:
+        now = datetime.now().astimezone()
+    except Exception:  # pragma: no cover - defensive; astimezone() rarely fails
+        now = datetime.now(UTC)
+    offset = now.strftime("%z")  # e.g. "+0200" / "-0500" / "+0000"
+    tz_label = now.tzname() or "UTC"
+    return (
+        now.strftime("%Y-%m-%d %H:%M:%S"),
+        f"{tz_label} (UTC{offset[:3]}:{offset[3:]})",
+    )
+
+
 def build_system_prompt(tools: list) -> str:
     """Build the system prompt for the loaded tools.
 
-    Mentions the MCP tools currently loaded so the model knows they
-    exist beyond the built-in set. Shared by the REPL and the one-shot
-    mode.
+    The clock uses the system's local timezone so the prompt is correct
+    for users anywhere. Mentions the MCP tools currently loaded so the
+    model knows they exist beyond the built-in set. Shared by the REPL and
+    the one-shot mode.
     """
     has_mcp = any(t.name.startswith("mcp_") for t in tools)
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
     if not has_mcp:
         mcp_note = ""
-    tz = ZoneInfo("America/Mexico_City")
-    now = datetime.now(tz)
+    local_time, tz_label = _local_time_info()
     return _SYSTEM_PROMPT_TEMPLATE.format(
         cwd=Path.cwd(),
         so=sys.platform,
-        time=f"{now.strftime('%Y-%m-%d %H:%M:%S')} Current timezone is: {tz}",
+        time=f"{local_time} Current timezone is: {tz_label}",
         mcp_note=mcp_note,
     )
 
