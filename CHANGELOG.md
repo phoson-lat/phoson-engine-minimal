@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.7.3 (2026-08-24)
+
+### Feat
+
+- **cli**: lightweight `/provider` and `/sessions` pickers (#55) —
+  `/provider` gains inline fuzzy autocomplete of enabled providers;
+  `/sessions` prints a compact numbered list and `/sessions load <n>`
+  loads a session by number with an autocomplete dropdown; the Float
+  picker remains via `/sessions pick`
+- **cli**: session picker multi-delete — space marks sessions, X deletes
+  all marked without closing the window
+- **cli**: session titles — auto-generated from the first user message,
+  overridable with the new `/title` command, shown in every session list
+
 ## v0.7.2 (2026-08-24)
 
 ### Perf
