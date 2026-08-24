@@ -41,6 +41,11 @@ from .session_utils import (
     build_system_prompt,
 )
 
+#: Upper bound on messages replayed into the chat pane when resuming a
+#: session (#56). The full history is shown for any reasonable session;
+#: beyond this, resume stays instant and the truncation is announced.
+MAX_RESUME_REPLAY_MESSAGES = 200
+
 _LOGGER = logging.getLogger("phoson_cli.controller")
 
 
@@ -477,11 +482,18 @@ class SessionController:
                     self.session_metrics.last_model = meta.last_model or ""
                     break
 
-            # Replay the tail of the session so the user knows where they
-            # left off.
+            # Replay the session so the user knows where they left off.
+            # The full path is rendered (#56) — the chat pane can only
+            # scroll through what's in sink.blocks, so a fixed tail made
+            # older messages unreachable after resuming. Very long paths
+            # are capped to keep resume instant; a notice states how
+            # much was truncated (see render_history's tail rule).
             try:
                 path = self.tree.get_path(self.current_node_id)
-                self.sink.print_history(path, tail=6)
+                if len(path) > MAX_RESUME_REPLAY_MESSAGES:
+                    self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+                else:
+                    self.sink.print_history(path)
             except (ValueError, AttributeError, TypeError):
                 _LOGGER.debug(
                     "Could not replay session history — node may be corrupted",
