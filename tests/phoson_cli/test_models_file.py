@@ -20,13 +20,13 @@ from phoson_cli.model_selector import ModelOption
 
 
 def _make_repl(tmp_path):
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
 
     from phoson_cli.repl import PhosonRepl
     from phoson_cli.config import PhosonConfig
 
     with patch("phoson_cli.controller.build_chat") as mock_build:
-        mock_build.return_value = MagicMock()
+        mock_build.return_value = MagicMock(aclose=AsyncMock())
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
 
@@ -358,31 +358,36 @@ async def test_repl_falls_back_to_engine_resolver_without_override(tmp_path) -> 
     assert repl._context_window == 128_000  # engine resolver value
 
 
-def test_set_provider_uses_default_model(tmp_path) -> None:
+async def test_set_provider_uses_default_model(tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
     import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     data = {"providers": {"openrouter": {"default_model": "qwen3.8-27b"}}}
     with (
         patch.object(controller_mod, "load_models_file", return_value=data),
         patch.object(controller_mod, "build_chat", return_value=None),
     ):
-        repl.set_provider("openrouter")
+        await repl.set_provider("openrouter")
     assert repl.current_model == "qwen3.8-27b"
     assert repl.config.provider == "openrouter"
 
 
-def test_set_provider_without_default_keeps_model(tmp_path) -> None:
+async def test_set_provider_without_default_keeps_model(tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
     import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
-    with patch.object(controller_mod, "build_chat", return_value=None):
-        repl.set_model("keep-me")
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     with (
         patch.object(controller_mod, "load_models_file", return_value={}),
         patch.object(controller_mod, "build_chat", return_value=None),
     ):
-        repl.set_provider("openrouter")
+        await repl.set_model("keep-me")
+        await repl.set_provider("openrouter")
     assert repl.current_model == "keep-me"
 
 

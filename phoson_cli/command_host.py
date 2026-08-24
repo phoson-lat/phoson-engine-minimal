@@ -125,7 +125,7 @@ class RendererCommandHost:
         from phoson_cli import commands as commands_mod
 
         self.repl.config = await commands_mod.run_install_wizard(self.repl.config)
-        self.repl.set_model(self.repl.config.model)
+        await self.repl.set_model(self.repl.config.model)
         self.print_info("Setup completed.")
 
 

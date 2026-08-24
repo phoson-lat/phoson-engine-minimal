@@ -168,7 +168,7 @@ class _MCPSubcommands:
 
         self.repl.config.enable_mcp = True
         save_config(self.repl.config, only_fields={"enable_mcp"})
-        self.repl.set_model(self.repl.current_model)
+        await self.repl.set_model(self.repl.current_model)
 
         self.r.print_info("MCP enabled  ·  saved")
         self.r.print_info(f"Config file: {self.repl.config.mcp_config_file}")
@@ -182,7 +182,7 @@ class _MCPSubcommands:
 
         self.repl.config.enable_mcp = False
         save_config(self.repl.config, only_fields={"enable_mcp"})
-        self.repl.set_model(self.repl.current_model)
+        await self.repl.set_model(self.repl.current_model)
 
         self.r.print_info("MCP disabled  ·  saved")
         return True
@@ -198,7 +198,7 @@ class _MCPSubcommands:
         save_config(self.repl.config, only_fields={"mcp_config_file"})
 
         if self.repl.config.enable_mcp:
-            self.repl.set_model(self.repl.current_model)
+            await self.repl.set_model(self.repl.current_model)
 
         self.r.print_info(f"MCP config file → {path}  ·  saved")
         return True

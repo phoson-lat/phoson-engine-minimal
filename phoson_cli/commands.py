@@ -243,7 +243,7 @@ class CommandHandler:
             chosen = result.model_id
 
         if target == "main":
-            self.repl.set_model(chosen)
+            await self.repl.set_model(chosen)
             save_config(self.repl.config, only_fields={"model"})
             r.print_info(f"Model → {self.repl.current_model}  ·  saved")
         else:
@@ -327,7 +327,7 @@ class CommandHandler:
             return True
 
         try:
-            self.repl.set_provider(target_provider)
+            await self.repl.set_provider(target_provider)
         except ValueError as exc:
             r.print_error(str(exc))
             return True

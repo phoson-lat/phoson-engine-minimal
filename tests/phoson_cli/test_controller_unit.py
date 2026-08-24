@@ -81,7 +81,10 @@ def _make_controller(tmp_path, **cfg) -> tuple[SessionController, FakeSink]:
         sessions_dir=tmp_path,
         **cfg,
     )
-    with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
+    with patch(
+        "phoson_cli.controller.build_chat",
+        return_value=MagicMock(aclose=AsyncMock()),
+    ):
         controller = SessionController(config, sink)
     return controller, sink
 
@@ -336,12 +339,12 @@ def test_context_window_passthrough(tmp_path) -> None:
 # ── Model / provider switching ───────────────────────────────────────────────
 
 
-def test_set_model_rebuilds_engine_and_extras(tmp_path) -> None:
+async def test_set_model_rebuilds_engine_and_extras(tmp_path) -> None:
     controller, _ = _make_controller(tmp_path)
     controller.config.subagent_model = ""  # no explicit override in test
     fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
     with patch("phoson_cli.controller.AgentEngine", return_value=fake_engine):
-        controller.set_model("other-model")
+        await controller.set_model("other-model")
     assert controller.current_model == "other-model"
     assert controller.config.model == "other-model"
     assert controller.engine is fake_engine
@@ -350,18 +353,49 @@ def test_set_model_rebuilds_engine_and_extras(tmp_path) -> None:
     )  # subagent model follows
 
 
-def test_set_provider_uses_default_model_when_configured(tmp_path) -> None:
+async def test_set_model_refreshes_context_window(tmp_path) -> None:
+    """Regression: the header's indicator must update on /model, not just
+
+    after the next turn — set_model has to (re)resolve the context window
+    for the newly selected model immediately. Uses models that hit the
+    resolver's static registry so the test never touches the network.
+    """
+    controller, _ = _make_controller(tmp_path)
+    controller.config.provider = "openai"
+    fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
+    with (
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
+        patch("phoson_cli.controller.load_models_file", return_value={}),
+        patch("phoson_cli.controller.AgentEngine", return_value=fake_engine),
+    ):
+        await controller.set_model("gpt-4o")
+        assert controller.context_window == 128_000
+
+        controller.config.provider = "anthropic"
+        await controller.set_model("claude-sonnet-4-6")
+    assert controller.context_window == 200_000
+
+
+async def test_set_provider_uses_default_model_when_configured(tmp_path) -> None:
     controller, _ = _make_controller(tmp_path)
     data = {"providers": {"openrouter": {"default_model": "qwen3.8-27b"}}}
     fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
+    controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     with (
-        patch("phoson_cli.controller.build_chat", return_value=MagicMock()),
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
         patch("phoson_cli.controller.load_models_file", return_value=data),
         patch("phoson_cli.controller.AgentEngine", return_value=fake_engine),
     ):
-        controller.set_provider("openrouter")
+        await controller.set_provider("openrouter")
     assert controller.config.provider == "openrouter"
     assert controller.current_model == "qwen3.8-27b"
+    assert controller.context_window == 64_000
 
 
 # ── Sessions ─────────────────────────────────────────────────────────────────

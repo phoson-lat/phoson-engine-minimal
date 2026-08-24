@@ -41,7 +41,7 @@ class DummyRepl:
         self.set_model_calls: list[str] = []
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
 
-    def set_model(self, model: str) -> None:
+    async def set_model(self, model: str) -> None:
         self.set_model_calls.append(model)
         self.current_model = model
         self.config.model = model

@@ -36,11 +36,11 @@ class DummyRepl:
         self.provider_calls: list[str] = []
         self.model_calls: list[str] = []
 
-    def set_provider(self, provider: str) -> None:
+    async def set_provider(self, provider: str) -> None:
         self.provider_calls.append(provider)
         self.config.provider = provider
 
-    def set_model(self, model: str) -> None:
+    async def set_model(self, model: str) -> None:
         self.model_calls.append(model)
         self.current_model = model
         self.config.model = model

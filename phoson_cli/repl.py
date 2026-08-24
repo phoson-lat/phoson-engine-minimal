@@ -298,13 +298,13 @@ class PhosonRepl:
         """Deprecated no-op kept for backward compatibility."""
         self._controller.branch_session()
 
-    def set_provider(self, provider: str) -> None:
+    async def set_provider(self, provider: str) -> None:
         """Switch provider (models.json ``default_model`` honored)."""
-        self._controller.set_provider(provider)
+        await self._controller.set_provider(provider)
 
-    def set_model(self, model: str) -> None:
+    async def set_model(self, model: str) -> None:
         """Switch model and rebuild the engine."""
-        self._controller.set_model(model)
+        await self._controller.set_model(model)
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text."""
