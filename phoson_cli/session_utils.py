@@ -23,8 +23,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
     "You are working on a {so} system with a terminal. Current time is {time}. "
-    "Available tools: read_file, write_file, patch_file, list_dir, bash, "
-    "web_search, agent, agents.{mcp_note}"
+    "Available tools: {tools}.{mcp_note}"
     " Be concise, accurate, and use tools when needed."
 )
 
@@ -52,8 +51,9 @@ def _local_time_info() -> tuple[str, str]:
 def build_system_prompt(tools: list) -> str:
     """Build the system prompt for the loaded tools.
 
-    The clock uses the system's local timezone so the prompt is correct
-    for users anywhere. Mentions the MCP tools currently loaded so the
+    The tool list is derived from the actual ``tools`` registry (so it can
+    never drift from what the engine really exposes) and the clock uses the
+    system's local timezone. Mentions the MCP tools currently loaded so the
     model knows they exist beyond the built-in set. Shared by the REPL and
     the one-shot mode.
     """
@@ -61,11 +61,13 @@ def build_system_prompt(tools: list) -> str:
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
     if not has_mcp:
         mcp_note = ""
+    tool_names = ", ".join(sorted(t.name for t in tools))
     local_time, tz_label = _local_time_info()
     return _SYSTEM_PROMPT_TEMPLATE.format(
         cwd=Path.cwd(),
         so=sys.platform,
         time=f"{local_time} Current timezone is: {tz_label}",
+        tools=tool_names,
         mcp_note=mcp_note,
     )
 
