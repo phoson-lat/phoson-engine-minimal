@@ -7,9 +7,9 @@ unavailability heuristic itself.
 
 import pytest
 
-from phoson_cli.tools.subagent import _is_model_unavailable_error, agent, agents
+from phoson_llm.schemas import ModelConfig, LLMDoneEvent
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_llm.schemas import LLMEvent, LLMDoneEvent, Message, ModelConfig
+from phoson_cli.tools.subagent import agent, agents, _is_model_unavailable_error
 
 
 class UnavailableThenFallbackChat(BaseLLMChat):
@@ -25,9 +25,7 @@ class UnavailableThenFallbackChat(BaseLLMChat):
             error = RuntimeError("No endpoints found matching your request")
             error.status_code = 404  # type: ignore[attr-defined]
             raise error
-        yield LLMDoneEvent(
-            content=f"ok:{config.model}", has_tool_calls=False
-        )
+        yield LLMDoneEvent(content=f"ok:{config.model}", has_tool_calls=False)
 
 
 class AlwaysFailingChat(BaseLLMChat):
@@ -88,9 +86,7 @@ async def test_no_fallback_on_unrelated_errors() -> None:
 @pytest.mark.asyncio
 async def test_parallel_agents_fallback() -> None:
     chat = UnavailableThenFallbackChat("google/gemini-flash-lite-preview")
-    result = await agents.handler(
-        {"tasks": ["a", "b"]}, _ctx(chat)
-    )
+    result = await agents.handler({"tasks": ["a", "b"]}, _ctx(chat))
     assert "fallback_model=anthropic/claude-3.5-haiku" in result
     assert "ok:anthropic/claude-3.5-haiku" in result
 

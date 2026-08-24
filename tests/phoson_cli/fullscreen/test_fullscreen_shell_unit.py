@@ -473,7 +473,9 @@ async def test_escape_cancels_a_run_in_flight(app: PhosonApp) -> None:
         patch.object(app.repl, "_run_agent", new=slow_run_agent),
         patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
         patch.object(
-            type(app.repl), "current_task", new_callable=PropertyMock,
+            type(app.repl),
+            "current_task",
+            new_callable=PropertyMock,
             return_value=fake_task,
         ),
     ):

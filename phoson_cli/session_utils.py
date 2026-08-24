@@ -5,6 +5,7 @@ Moved out of ``repl.py`` so the
 front end — can use them without importing the prompt_toolkit REPL.
 ``repl.py`` re-exports them for backward compatibility.
 """
+
 import sys
 import logging
 import warnings
@@ -43,10 +44,10 @@ def build_system_prompt(tools: list) -> str:
     tz = ZoneInfo("America/Mexico_City")
     now = datetime.now(tz)
     return _SYSTEM_PROMPT_TEMPLATE.format(
-        cwd=Path.cwd(), 
-        so=sys.platform, 
-        time = f"{now.strftime('%Y-%m-%d %H:%M:%S')} Current timezone is: {tz}",
-        mcp_note=mcp_note
+        cwd=Path.cwd(),
+        so=sys.platform,
+        time=f"{now.strftime('%Y-%m-%d %H:%M:%S')} Current timezone is: {tz}",
+        mcp_note=mcp_note,
     )
 
 
