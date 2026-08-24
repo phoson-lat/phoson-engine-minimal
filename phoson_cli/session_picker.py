@@ -92,7 +92,7 @@ def _render_sessions(
         (
             "class:footer",
             f"  {page_info}↑/↓ navigate  ·  Enter select  ·  q cancel"
-            f"  ·  d delete  ·  space mark  ·  X delete marked{marked_note}\n",
+            f"  ·  d delete  ·  space mark  ·  X delete marked (asks){marked_note}\n",
         )
     )
 

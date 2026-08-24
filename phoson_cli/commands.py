@@ -511,6 +511,11 @@ class CommandHandler:
                     "Cannot delete the current active session. Use /new first."
                 )
                 return True
+            if not await self.host.confirm(
+                f"Delete session {result.session_id[:8]}? This cannot be undone."
+            ):
+                r.print_info("Delete cancelled.")
+                return True
             await self.repl.storage.delete(result.session_id)
             r.print_info(
                 f"Session {result.session_id[:8]} deleted."
@@ -531,6 +536,11 @@ class CommandHandler:
         session_id = cmd.args.strip()
         if session_id == self.repl.tree.session_id:
             r.print_error("Cannot delete the current active session. Use /new first.")
+            return True
+        if not await self.host.confirm(
+            f"Delete session {session_id[:8]}? This cannot be undone."
+        ):
+            r.print_info("Delete cancelled.")
             return True
         try:
             await self.repl.storage.delete(session_id)
