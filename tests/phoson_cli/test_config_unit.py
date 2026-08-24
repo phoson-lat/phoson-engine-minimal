@@ -436,7 +436,9 @@ def test_save_config_idempotent_second_save(monkeypatch, tmp_path) -> None:
     assert second.count('model = "llama-3.3-70b"') == 1
 
 
-def test_model_and_reasoning_effort_persist_across_restart(monkeypatch, tmp_path) -> None:
+def test_model_and_reasoning_effort_persist_across_restart(
+    monkeypatch, tmp_path
+) -> None:
     """Regression for #49: /model + /reasoning-effort must round-trip config."""
     from phoson_cli.config import PhosonConfig, load_config, save_config
 
@@ -469,9 +471,7 @@ def test_show_reasoning_round_trip(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("PHOSON_SHOW_REASONING", raising=False)
 
-    original = PhosonConfig(
-        sessions_dir=home / "sessions", show_reasoning=False
-    )
+    original = PhosonConfig(sessions_dir=home / "sessions", show_reasoning=False)
     path = save_config(original, only_fields={"show_reasoning"})
     assert path is not None
 

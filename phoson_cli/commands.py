@@ -17,15 +17,15 @@ That's it; the dispatch table picks it up automatically.
 """
 
 import inspect
-from pathlib import Path
 from typing import TYPE_CHECKING, Final
+from pathlib import Path
 from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
 
 from .config import save_config, enabled_providers_from_config
-from .attachments import provider_compat_warning
 from .updater import perform_self_update
 from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
+from .attachments import provider_compat_warning
 from .command_host import CommandHost, RendererCommandHost
 from .model_picker import pick_model  # noqa: F401 - patched by tests / host
 from ._mcp_commands import _MCPSubcommands
@@ -388,7 +388,9 @@ class CommandHandler:
             return True
 
         r.print_info(f"Attached  {cmd.args}")
-        warning = provider_compat_warning(Path(cmd.args).suffix.lower(), self.repl.config.provider)
+        warning = provider_compat_warning(
+            Path(cmd.args).suffix.lower(), self.repl.config.provider
+        )
         if warning:
             r.print_info(f"⚠ {warning}")
 

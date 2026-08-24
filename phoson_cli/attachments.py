@@ -40,7 +40,9 @@ _VIDEO_NOTE = (
 )
 
 
-def provider_compat_warning(suffix: str, active_provider: str | None = None) -> str | None:
+def provider_compat_warning(
+    suffix: str, active_provider: str | None = None
+) -> str | None:
     """Return a human-readable warning for a known-degraded file type.
 
     Args:

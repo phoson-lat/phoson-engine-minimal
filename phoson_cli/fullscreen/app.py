@@ -47,12 +47,12 @@ from ..theme import load_theme, build_prompt_style, build_picker_style_dict
 from .render import render_chat
 from .._views import render_banner
 from ..config import PhosonConfig, save_config
-from ..attachments import provider_compat_warning
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import read_clipboard_image
 from .completer import SlashCompleter, ModelArgCompleter, StaticArgCompleter
 from .model_cache import ModelCache
+from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 
