@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.8.0 (2026-08-24)
+
+### Feat
+
+- **cli**: `Esc` cancels the in-flight run in the full-screen app (#68) —
+  same semantics as the existing cancel path (partial progress saved,
+  session stays open); no-op when idle so Float/autocomplete dismissal
+  is unaffected
+- **cli**: sub-agent model fallback (#61) — when `subagent_model` fails
+  with an availability error (404 / deprecated / no endpoints), the task
+  automatically retries once on the main agent's model; auth (401/403)
+  and rate-limit (429) errors deliberately do not fall back
+- **cli**: fallback visibility — the parallel-agents summary marks
+  fallback agents with `✓ ↻` in warning style and a `⚠ fallback: ...`
+  caption; sequential `agent` results carry a `[fallback to <model>]`
+  note; real metrics are reported for fallback runs
+- **cli**: suppress logging's stderr last-resort handler while the
+  full-screen TUI runs, so raw provider errors can no longer corrupt
+  the UI
+- **cli**: system prompt now includes the OS platform, current time and
+  timezone
+
 ## v0.7.3 (2026-08-24)
 
 ### Feat

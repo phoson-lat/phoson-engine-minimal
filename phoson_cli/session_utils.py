@@ -5,11 +5,13 @@ Moved out of ``repl.py`` so the
 front end — can use them without importing the prompt_toolkit REPL.
 ``repl.py`` re-exports them for backward compatibility.
 """
-
+import sys
 import logging
 import warnings
 from typing import Any
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from phoson_agent import Plugin
 
@@ -20,6 +22,7 @@ _LOGGER = logging.getLogger("phoson_cli.session_utils")
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are Phos, a terminal coding agent, created by the Phoson.lat team. "
     "You are running in working directory: {cwd}. "
+    "You are working on a {so} system with a terminal. Current time is {time}. "
     "Available tools: read_file, write_file, patch_file, list_dir, bash, "
     "web_search, agent, agents.{mcp_note}"
     " Be concise, accurate, and use tools when needed."
@@ -37,7 +40,14 @@ def build_system_prompt(tools: list) -> str:
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
     if not has_mcp:
         mcp_note = ""
-    return _SYSTEM_PROMPT_TEMPLATE.format(cwd=Path.cwd(), mcp_note=mcp_note)
+    tz = ZoneInfo("America/Mexico_City")
+    now = datetime.now(tz)
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        cwd=Path.cwd(), 
+        so=sys.platform, 
+        time = f"{now.strftime('%Y-%m-%d %H:%M:%S')} Current timezone is: {tz}",
+        mcp_note=mcp_note
+    )
 
 
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:

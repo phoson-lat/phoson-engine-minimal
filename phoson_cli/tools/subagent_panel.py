@@ -56,17 +56,26 @@ def format_metrics_line(
     output_tokens: int,
     cost_usd: float,
     credits: float | int = 0,
+    fallback_model: str | None = None,
 ) -> str:
-    """Build the canonical metrics line consumed by ``parse_subagent_metrics``."""
-    return (
+    """Build the canonical metrics line consumed by ``parse_subagent_metrics``.
+
+    ``fallback_model`` (optional) records that this sub-agent had to run
+    on the fallback model instead of the configured one — the summary
+    panel renders a visible warning for it.
+    """
+    line = (
         f"{METRICS_PREFIX} "
         f"duration_ms={duration_ms} "
         f"input_tokens={input_tokens} "
         f"output_tokens={output_tokens} "
         f"cost_usd={cost_usd} "
         f"credits={credits} "
-        f"{METRICS_SUFFIX}"
     )
+    if fallback_model:
+        # Model ids contain no whitespace, safe for the k=v wire format.
+        line += f"fallback_model={fallback_model} "
+    return f"{line}{METRICS_SUFFIX}"
 
 
 def format_agent_block(
@@ -101,6 +110,7 @@ class SubagentMetrics:
     output_tokens: int = 0
     cost_usd: float = 0.0
     error: str | None = None
+    fallback_model: str | None = None
 
 
 def _build_running_table(
@@ -209,6 +219,7 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
                     m.input_tokens = int(float(kv.get("input_tokens", "0")))
                     m.output_tokens = int(float(kv.get("output_tokens", "0")))
                     m.cost_usd = float(kv.get("cost_usd", "0") or 0)
+                    m.fallback_model = kv.get("fallback_model") or None
                     break
 
             metrics.append(m)
@@ -251,6 +262,7 @@ def render_subagent_summary(
     table.add_column("Tokens", style=theme.muted, width=14)
     table.add_column("Cost", style=theme.muted, width=10)
     total_duration, total_input, total_output, total_cost = 0, 0, 0, 0.0
+    fallback_notes: list[str] = []
     for m in metrics:
         status_icon = _SUBAGENT_STATUS.get(m.status.value, "○")
         task_preview = m.task[:35] + "..." if len(m.task) > 35 else m.task
@@ -259,13 +271,24 @@ def render_subagent_summary(
             total_input += m.input_tokens
             total_output += m.output_tokens
             total_cost += m.cost_usd
+            row_style: str | None = None
+            status_cell = status_icon
+            if m.fallback_model:
+                # Completed, but on the fallback model — surface it
+                # without drowning the panel in raw provider errors.
+                row_style = theme.warn
+                status_cell = f"{status_icon} ↻"
+                fallback_notes.append(
+                    f"#{m.index} → {m.fallback_model} (configured model unavailable)"
+                )
             table.add_row(
                 str(m.index),
-                status_icon,
+                status_cell,
                 task_preview,
                 _format_duration(m.duration_ms),
                 _format_tokens(m.input_tokens, m.output_tokens),
                 _format_cost(m.cost_usd),
+                style=row_style,
             )
         elif m.status == AgentStatus.ERROR:
             table.add_row(
@@ -287,4 +310,7 @@ def render_subagent_summary(
             _format_cost(total_cost),
             style=f"bold {theme.accent}",
         )
+    if fallback_notes:
+        table.caption = "⚠ fallback: " + "; ".join(fallback_notes)
+        table.caption_style = theme.warn
     return table

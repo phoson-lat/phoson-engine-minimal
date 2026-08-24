@@ -14,6 +14,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 import uuid
 import shutil
 import asyncio
+import logging
 import tempfile
 import mimetypes
 from typing import Any
@@ -549,6 +550,21 @@ class PhosonApp:
             self.sink.expand_reasoning(str(reasoning))
             return
 
+    def handle_escape(self) -> None:
+        """Escape: cancel the in-flight run; do nothing when idle.
+
+        Only fires while a run is actually streaming (``_is_run_in_flight``
+        covers the whole dispatch, including the invisible trailing save —
+        but cancelling during that window is a harmless no-op because the
+        controller's cancel path is idempotent once the stream task is
+        done). When idle, Esc keeps its overlay-cancel role inside Float
+        pickers (which bind it separately and take precedence) and does
+        nothing here, so dismissing an autocomplete never kills a turn.
+        """
+        if self._is_run_in_flight():
+            self.repl.cancel_current()
+            self.sink.notify("info", "Cancelling current run (Esc)...")
+
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
 
@@ -644,6 +660,13 @@ class PhosonApp:
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
         asyncio.create_task(self.session_cache.refresh(self.repl.storage))
+        # While the full-screen TUI is up, any library/app logger without
+        # configured handlers would hit logging's "last resort" handler
+        # and print raw warnings over the rendered UI (seen with sub-agent
+        # fallbacks). Silence that path for the duration of the session;
+        # libraries still emit records for real handler setups.
+        logging.getLogger().handlers.append(logging.NullHandler())
+        logging.getLogger().propagate = False
         try:
             await self.app.run_async()
         finally:

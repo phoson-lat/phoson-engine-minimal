@@ -115,6 +115,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         engine.context.extra["safe_mode"] = config.safe_mode
         engine.context.extra["available_tools"] = build_tools_dict()
         engine.context.extra["default_model"] = config.subagent_model or config.model
+        engine.context.extra["main_model"] = config.model
         engine.context.extra["max_iterations"] = config.max_iterations
         engine.context.extra["subagent_max_parallel"] = config.subagent_max_parallel
         engine.context.extra["subagent_timeout_seconds"] = (

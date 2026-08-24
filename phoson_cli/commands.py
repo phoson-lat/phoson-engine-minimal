@@ -259,6 +259,10 @@ class CommandHandler:
             self.repl.subagent_model = chosen
             self.repl.config.subagent_model = chosen
             self.repl.engine.context.extra["default_model"] = chosen
+            self.repl.engine.context.extra["main_model"] = (
+                self.repl.engine.context.extra.get("main_model")
+                or self.repl.config.model
+            )
             save_config(self.repl.config, only_fields={"subagent_model"})
             r.print_info(f"Sub-agent model → {chosen}  ·  saved")
 
