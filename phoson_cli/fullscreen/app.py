@@ -46,12 +46,13 @@ from ..repl import PhosonRepl
 from ..theme import load_theme, build_prompt_style, build_picker_style_dict
 from .render import render_chat
 from .._views import render_banner
-from ..config import PhosonConfig
+from ..config import PhosonConfig, save_config
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import read_clipboard_image
 from .completer import SlashCompleter, ModelArgCompleter, StaticArgCompleter
 from .model_cache import ModelCache
+from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 
@@ -93,7 +94,11 @@ class PhosonApp:
         self.app: Application = self._build_application()
         self._apply_style()
 
-        self.sink = FullScreenSink(on_invalidate=self.app.invalidate, theme=self.theme)
+        self.sink = FullScreenSink(
+            on_invalidate=self.app.invalidate,
+            theme=self.theme,
+            show_reasoning=getattr(config, "show_reasoning", True),
+        )
         self.repl = PhosonRepl(
             config, sink=self.sink, confirmation=FullScreenConfirmationService(self)
         )
@@ -491,7 +496,12 @@ class PhosonApp:
         session (the transcript is append-only).
         """
         if self.sink.current_turn is not None:
-            self.sink.toggle_live_reasoning()
+            new_state = self.sink.toggle_live_reasoning()
+            # Persist the default for future turns/sessions (#50).
+            if getattr(self.repl.config, "show_reasoning", True) != new_state:
+                self.repl.config.show_reasoning = new_state
+                save_config(self.repl.config, only_fields={"show_reasoning"})
+                self.sink.show_reasoning_default = new_state
             return
 
         cursor: str | None = self.repl.current_node_id
@@ -587,6 +597,13 @@ class PhosonApp:
         except (FileNotFoundError, ValueError) as exc:
             self.sink.notify("error", str(exc))
             return
+
+        suffix = target.suffix.lower()
+        warning = provider_compat_warning(
+            suffix, getattr(self.repl.config, "provider", None)
+        )
+        if warning:
+            self.sink.notify("warn", warning)
 
         # Terminal chat inputs can't show a real thumbnail chip — a text
         # placeholder inserted at the cursor is the next best thing: it

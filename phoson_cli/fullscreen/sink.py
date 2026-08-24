@@ -73,11 +73,14 @@ class FullScreenSink:
         theme: The active theme, for building renderables.
     """
 
-    def __init__(self, on_invalidate, theme: Theme) -> None:
+    def __init__(
+        self, on_invalidate, theme: Theme, show_reasoning: bool = True
+    ) -> None:
         self._on_invalidate = on_invalidate
         self.theme = theme
         self.session_id: str | None = None
         self.dirty = True
+        self.show_reasoning_default: bool = show_reasoning
 
         self.blocks: list[object] = []
         self.current_turn: CurrentTurn | None = None
@@ -124,6 +127,7 @@ class FullScreenSink:
                     model=event.model,
                     message_count=event.message_count,
                     max_steps=event.max_iterations,
+                    show_reasoning=self.show_reasoning_default,
                 )
 
             case AgentTokenEvent():

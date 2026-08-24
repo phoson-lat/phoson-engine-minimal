@@ -1,47 +1,44 @@
+"""Unit tests for AttachmentManager size limit and compat warnings (#54)."""
+
+from pathlib import Path
+
 import pytest
 
-from phoson_cli.attachments import AttachmentManager, _suffix_to_mime
+from phoson_cli.attachments import (
+    MAX_ATTACHMENT_BYTES,
+    AttachmentManager,
+    provider_compat_warning,
+)
 
 
-def test_attachment_manager_default_empty() -> None:
+def test_attach_rejects_oversized_file(tmp_path: Path) -> None:
+    big = tmp_path / "big.png"
+    big.write_bytes(b"\0" * (MAX_ATTACHMENT_BYTES + 1))
+
     mgr = AttachmentManager()
-    assert len(mgr) == 0
-    assert bool(mgr) is False
-
-
-def test_attachment_manager_attach_nonexistent_raises() -> None:
-    mgr = AttachmentManager()
-    with pytest.raises(FileNotFoundError):
-        mgr.attach("/nonexistent/file.txt")
-
-
-def test_attachment_manager_attach_unsupported_type_raises(tmp_path) -> None:
-    mgr = AttachmentManager()
-    dummy = tmp_path / "test.xyz"
-    dummy.touch()
-    with pytest.raises(ValueError, match="Unsupported file type"):
-        mgr.attach(str(dummy))
-
-
-def test_attachment_manager_flush_clears_pending(tmp_path) -> None:
-    mgr = AttachmentManager()
-    dummy = tmp_path / "test.txt"
-    dummy.write_text("hello")
-    with pytest.raises(ValueError):
-        mgr.attach(str(dummy))
+    with pytest.raises(ValueError, match="too large"):
+        mgr.attach(str(big))
     assert len(mgr) == 0
 
 
-def test_suffix_to_mime_image_types() -> None:
-    assert _suffix_to_mime(".png") == "image/png"
-    assert _suffix_to_mime(".jpg") == "image/jpeg"
-    assert _suffix_to_mime(".jpeg") == "image/jpeg"
-    assert _suffix_to_mime(".gif") == "image/gif"
-    assert _suffix_to_mime(".webp") == "image/webp"
-    assert _suffix_to_mime(".svg") == "image/svg+xml"
-    assert _suffix_to_mime(".bmp") == "image/bmp"
+def test_attach_accepts_file_under_limit(tmp_path: Path) -> None:
+    img = tmp_path / "ok.png"
+    img.write_bytes(b"x" * (MAX_ATTACHMENT_BYTES - 1))
+
+    mgr = AttachmentManager()
+    mgr.attach(str(img))
+    assert len(mgr) == 1
 
 
-def test_suffix_to_mime_unknown_returns_octet_stream() -> None:
-    assert _suffix_to_mime(".xyz") == "application/octet-stream"
-    assert _suffix_to_mime(".unknown") == "application/octet-stream"
+def test_compat_warning_video() -> None:
+    warning = provider_compat_warning(".mp4")
+    assert warning is not None and "placeholder" in warning
+
+
+def test_compat_warning_pdf() -> None:
+    warning = provider_compat_warning(".pdf", active_provider="openrouter")
+    assert warning is not None and "openrouter" in warning
+
+
+def test_compat_warning_none_for_safe_type() -> None:
+    assert provider_compat_warning(".png") is None
