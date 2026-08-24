@@ -96,7 +96,9 @@ def test_text_interleaves_with_tool_calls_in_chronological_order() -> None:
     sink.on_event(AgentToolDoneEvent(tool_name="bash", result="ok", duration_ms=10))
 
     sink.on_event(AgentTokenEvent(content="All green, done."))
-    result = AgentRunResult(final_content="All green, done.", history=[], input_messages=[])
+    result = AgentRunResult(
+        final_content="All green, done.", history=[], input_messages=[]
+    )
     sink.on_event(AgentDoneEvent(result=result))
 
     text = render_chat(sink, width=100)

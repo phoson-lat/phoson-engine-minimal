@@ -11,7 +11,7 @@ from pathlib import Path
 from rich.rule import Rule
 from rich.text import Text
 from rich.columns import Columns
-from rich.console import Group, Console
+from rich.console import Group, Console, RenderableType
 
 from phoson_cli.theme import Theme
 from phoson_agent.sessions.models import ConversationTree
@@ -131,7 +131,11 @@ def render_banner(
     wordmark.highlight_words(["phoson"], style=f"bold {theme.accent}")
     wordmark.highlight_words(["terminal agent"], style=theme.muted)
 
-    items: list[object] = [Text(""), Columns([art, wordmark], padding=(0, 4)), Text("")]
+    items: list[RenderableType] = [
+        Text(""),
+        Columns([art, wordmark], padding=(0, 4)),
+        Text(""),
+    ]
     if show_meta:
         short_model = model.split("/")[-1]
         items.extend(

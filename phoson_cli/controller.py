@@ -400,10 +400,13 @@ class SessionController:
 
         self.sink.on_user_message(user_input, user_message)
 
+        reasoning_effort = self.config.reasoning_effort
+        if reasoning_effort not in ("low", "medium", "high"):
+            reasoning_effort = None
         config = ModelConfig(
             model=self.current_model,
             system=build_system_prompt(self.engine.tools),
-            reasoning_effort=self.config.reasoning_effort,
+            reasoning_effort=reasoning_effort,
         )
 
         await self._refresh_context_window()

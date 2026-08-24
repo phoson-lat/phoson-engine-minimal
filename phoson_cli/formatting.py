@@ -16,7 +16,7 @@ from rich import box
 from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 
 from phoson_agent import (
@@ -59,7 +59,7 @@ def render_streaming_panel(
     rendered Markdown, matching a plain chat-transcript look rather than
     a bordered panel.
     """
-    renderables: list[object] = [render_assistant_label(theme)]
+    renderables: list[RenderableType] = [render_assistant_label(theme)]
 
     if reasoning and show_reasoning:
         thinking_text = reasoning.strip() or "thinking..."
@@ -241,7 +241,7 @@ def render_history(
     """Re-render a list of Message objects as a conversation replay."""
     from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
-    items: list[object] = []
+    items: list[RenderableType] = []
 
     if tail is not None and len(messages) > tail:
         above = len(messages) - tail

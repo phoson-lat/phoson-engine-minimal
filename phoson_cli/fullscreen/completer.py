@@ -18,6 +18,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import (
     Completer,
     Completion,
+    CompleteEvent,
     WordCompleter,
     FuzzyCompleter,
 )
@@ -36,7 +37,7 @@ class SlashCompleter(Completer):
     """Completes slash commands only when the buffer starts with '/'."""
 
     def get_completions(
-        self, document: Document, complete_event: object
+        self, document: Document, complete_event: CompleteEvent
     ) -> Iterable[Completion]:
         text = document.text_before_cursor
         if not text.startswith("/"):
@@ -67,7 +68,7 @@ class ModelArgCompleter(Completer):
         self._cache = cache
 
     def get_completions(
-        self, document: Document, complete_event: object
+        self, document: Document, complete_event: CompleteEvent
     ) -> Iterable[Completion]:
         text = document.text_before_cursor
         for prefix in _MODEL_ARG_PREFIXES:
@@ -95,7 +96,7 @@ class StaticArgCompleter(Completer):
         self._inner = FuzzyCompleter(WordCompleter(words, sentence=True))
 
     def get_completions(
-        self, document: Document, complete_event: object
+        self, document: Document, complete_event: CompleteEvent
     ) -> Iterable[Completion]:
         text = document.text_before_cursor
         for prefix in self._prefixes:

@@ -14,6 +14,7 @@ same controller — a sink, not a fork.
 
 import asyncio
 import logging
+from typing import Any
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -52,7 +53,7 @@ _LOGGER = logging.getLogger("phoson_cli.repl")
 # Sentinel distinguishing "confirmation not passed" (use the classic
 # prompt_toolkit prompt) from an explicit ``confirmation=None`` (fail
 # closed — e.g. the full-screen front end before it has its own modal).
-_DEFAULT_CONFIRMATION = object()
+_DEFAULT_CONFIRMATION: Any = object()
 
 # Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
 # completer's meta column stays in sync with /help and the dispatch table.

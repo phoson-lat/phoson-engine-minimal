@@ -95,9 +95,7 @@ async def test_read_clipboard_image_tries_jpeg_when_png_empty() -> None:
 
 
 async def test_read_clipboard_image_none_when_no_tool_available() -> None:
-    with patch(
-        "phoson_cli.fullscreen.clipboard._clipboard_command", return_value=None
-    ):
+    with patch("phoson_cli.fullscreen.clipboard._clipboard_command", return_value=None):
         assert await read_clipboard_image() is None
 
 

@@ -392,9 +392,7 @@ async def test_ctrl_v_placeholder_inserts_at_cursor_and_numbers_multiple_pastes(
         _trigger(app, "c-v")
         await asyncio.sleep(0)
 
-    assert app._prompt_input.text == (
-        "look at this[image #1] [image #2]  and that"
-    )
+    assert app._prompt_input.text == ("look at this[image #1] [image #2]  and that")
     assert len(app.repl.attachments) == 2
 
 
