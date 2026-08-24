@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fix
+
+- **cli**: system prompt now uses the *system* timezone instead of a
+  hardcoded `America/Mexico_City` — the clock is derived from the process's
+  local zone (honours `TZ`), with a UTC fallback, so users outside CDMX no
+  longer get a wrong time in the agent's context (IMPROVEMENTS.md B1)
+- **cli**: system prompt tool list is now derived from the actual tool
+  registry (`sorted` names) instead of a hardcoded string, so it can never
+  advertise removed tools or omit new ones (IMPROVEMENTS.md B2)
+- **cli**: destructive session deletes now ask for confirmation — the
+  session picker's `d` / `X` (delete marked) and `/delete <id>` all route
+  through the existing confirm prompt and delete nothing when declined; the
+  picker footer reads `X delete marked (asks)` (IMPROVEMENTS.md B3)
+
 ## v0.8.0 (2026-08-24)
 
 ### Feat
