@@ -74,7 +74,9 @@ class FullScreenCommandHost:
         ``X`` (delete marked) resolves the picker with ``delete_ids``
         instead of a selection; the deletes are applied here against
         storage and the picker **reopens with the fresh list** so several
-        batches can be deleted without closing the window (#55).
+        batches can be deleted without closing the window (#55). Destructive
+        deletes always ask for confirmation first (B3) — a cancelled
+        confirm deletes nothing and just reopens the picker.
         """
         remaining = list(sessions)
         while True:
@@ -82,13 +84,18 @@ class FullScreenCommandHost:
             result = await self.app.run_float_picker(picker)
             if not result.delete_ids:
                 return result
-            for sid in result.delete_ids:
-                if sid != str(current_id):
-                    await self.app.repl.storage.delete(sid)
-                    remaining = [s for s in remaining if str(s.id) != sid]
-            self.app.sink.notify(
-                "info", f"Deleted {len(result.delete_ids)} session(s)."
-            )
+            ids = [sid for sid in result.delete_ids if sid != str(current_id)]
+            if not ids:
+                continue
+            if not await self.app.run_float_confirm(
+                f"Delete {len(ids)} session(s)? This cannot be undone."
+            ):
+                self.app.sink.notify("info", "Delete cancelled.")
+                continue
+            for sid in ids:
+                await self.app.repl.storage.delete(sid)
+                remaining = [s for s in remaining if str(s.id) != sid]
+            self.app.sink.notify("info", f"Deleted {len(ids)} session(s).")
 
     async def confirm(self, prompt: str) -> bool:
         return await self.app.run_float_confirm(prompt)
