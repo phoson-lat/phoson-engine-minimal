@@ -69,8 +69,26 @@ class FullScreenCommandHost:
     async def pick_session(
         self, sessions: list[SessionMeta], current_id: str
     ) -> SessionPickerResult:
-        picker = build_session_picker(sessions, current_id, theme=self.app.theme)
-        return await self.app.run_float_picker(picker)
+        """Show the session picker, looping on multi-delete requests.
+
+        ``X`` (delete marked) resolves the picker with ``delete_ids``
+        instead of a selection; the deletes are applied here against
+        storage and the picker **reopens with the fresh list** so several
+        batches can be deleted without closing the window (#55).
+        """
+        remaining = list(sessions)
+        while True:
+            picker = build_session_picker(remaining, current_id, theme=self.app.theme)
+            result = await self.app.run_float_picker(picker)
+            if not result.delete_ids:
+                return result
+            for sid in result.delete_ids:
+                if sid != str(current_id):
+                    await self.app.repl.storage.delete(sid)
+                    remaining = [s for s in remaining if str(s.id) != sid]
+            self.app.sink.notify(
+                "info", f"Deleted {len(result.delete_ids)} session(s)."
+            )
 
     async def confirm(self, prompt: str) -> bool:
         return await self.app.run_float_confirm(prompt)

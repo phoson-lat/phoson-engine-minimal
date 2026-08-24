@@ -46,15 +46,21 @@ from ..repl import PhosonRepl
 from ..theme import load_theme, build_prompt_style, build_picker_style_dict
 from .render import BlockAnsiCache, render_chat
 from .._views import render_banner
-from ..config import PhosonConfig, save_config
+from ..config import PhosonConfig, save_config, enabled_providers_from_config
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import read_clipboard_image
-from .completer import SlashCompleter, ModelArgCompleter, StaticArgCompleter
+from .completer import (
+    SlashCompleter,
+    ModelArgCompleter,
+    StaticArgCompleter,
+    SessionsArgCompleter,
+)
 from .model_cache import ModelCache
 from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
+from .session_cache import SessionListCache
 
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+T] Reasoning'
@@ -91,6 +97,7 @@ class PhosonApp:
         # — refreshed in the background, not fetched synchronously while
         # typing. Needed before `_build_layout` wires up the completer.
         self.model_cache = ModelCache()
+        self.session_cache = SessionListCache()
 
         self._build_layout()
         self.app: Application = self._build_application()
@@ -152,6 +159,13 @@ class PhosonApp:
                         ("/reasoning-effort ", "/effort "),
                         ["low", "medium", "high", "off"],
                     ),
+                    # /provider <name> — small static set, same inline
+                    # autocomplete pattern as /reasoning-effort (#55).
+                    StaticArgCompleter(
+                        ("/provider ",),
+                        lambda: enabled_providers_from_config(self.repl.config),
+                    ),
+                    SessionsArgCompleter(self.session_cache),
                 ]
             ),
             complete_while_typing=True,
@@ -387,6 +401,12 @@ class PhosonApp:
             # changed — refresh in the background so autocomplete stays
             # accurate without blocking on another network round trip.
             self.app.create_background_task(self.model_cache.refresh(self.repl.config))
+        if cmd.name in {"/sessions", "/new", "/delete"}:
+            # Session list may have changed (load/new/delete) — refresh the
+            # /sessions autocomplete cache in the background as well.
+            self.app.create_background_task(
+                self.session_cache.refresh(self.repl.storage)
+            )
         if not should_continue:
             self.app.exit()
 
@@ -623,6 +643,7 @@ class PhosonApp:
         # delaying first paint. Plain create_task (not create_background_task)
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
+        asyncio.create_task(self.session_cache.refresh(self.repl.storage))
         try:
             await self.app.run_async()
         finally:

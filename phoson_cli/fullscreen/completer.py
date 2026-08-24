@@ -12,7 +12,7 @@ than a modal picker — picking a model is just "type and autocomplete",
 same as any other command.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import (
@@ -25,6 +25,7 @@ from prompt_toolkit.completion import (
 
 from ..commands import COMMANDS, COMMAND_SPECS
 from .model_cache import ModelCache
+from .session_cache import SessionListCache
 
 _CMD_META: dict[str, str] = {
     name: spec.help for spec in COMMAND_SPECS for name in spec.names
@@ -82,6 +83,41 @@ class ModelArgCompleter(Completer):
                 return
 
 
+class SessionsArgCompleter(Completer):
+    """Fuzzy-completes '/sessions load <n>' with session summaries.
+
+    Like :class:`ModelArgCompleter`, but each dropdown entry shows a
+    human-readable label (date · msgs · cost · model) while inserting
+    just the number — sessions are UUIDs, so the number is what the
+    command actually consumes.
+    """
+
+    def __init__(self, cache: SessionListCache) -> None:
+        self._cache = cache
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent
+    ) -> Iterable[Completion]:
+        text = document.text_before_cursor
+        prefix = "/sessions load "
+        if not text.startswith(prefix):
+            return
+        query = text[len(prefix) :]
+        for i, meta in enumerate(self._cache.sessions, start=1):
+            label = f"{i}"
+            if query and not label.startswith(query):
+                continue
+            title = getattr(meta, "title", None) or "(untitled)"
+            updated = meta.updated_at.strftime("%m-%d %H:%M")
+            cost = f"${meta.total_cost:.4f}" if meta.total_cost else "—"
+            yield Completion(
+                label,
+                start_position=-len(query),
+                display=f"{i}. [{title}]  {updated}  {meta.message_count} msgs",
+                display_meta=cost,
+            )
+
+
 class StaticArgCompleter(Completer):
     """Fuzzy-completes a command's argument from a small fixed word list.
 
@@ -89,11 +125,17 @@ class StaticArgCompleter(Completer):
     :class:`ModelArgCompleter`, for commands whose valid values are
     known upfront (e.g. ``/reasoning-effort <low|medium|high|off>``)
     rather than fetched from a provider.
+
+    ``words`` may be a plain list or a zero-arg callable returning the
+    list (evaluated per completion pass), so callers can feed dynamic
+    values like the currently enabled providers.
     """
 
-    def __init__(self, prefixes: tuple[str, ...], words: list[str]) -> None:
+    def __init__(
+        self, prefixes: tuple[str, ...], words: list[str] | Callable[[], list[str]]
+    ) -> None:
         self._prefixes = prefixes
-        self._inner = FuzzyCompleter(WordCompleter(words, sentence=True))
+        self._words = words
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
@@ -102,9 +144,16 @@ class StaticArgCompleter(Completer):
         for prefix in self._prefixes:
             if text.startswith(prefix):
                 query = text[len(prefix) :]
+                words = self._words() if callable(self._words) else self._words
+                inner = FuzzyCompleter(WordCompleter(words, sentence=True))
                 sub_document = Document(query, len(query))
-                yield from self._inner.get_completions(sub_document, complete_event)
+                yield from inner.get_completions(sub_document, complete_event)
                 return
 
 
-__all__ = ["SlashCompleter", "ModelArgCompleter", "StaticArgCompleter"]
+__all__ = [
+    "SlashCompleter",
+    "ModelArgCompleter",
+    "SessionsArgCompleter",
+    "StaticArgCompleter",
+]

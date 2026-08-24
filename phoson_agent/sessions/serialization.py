@@ -183,6 +183,7 @@ def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
         "total_tokens": tree.total_tokens,
         "step_count": tree.step_count,
         "last_model": tree.last_model,
+        "title": tree.title,
     }
 
 
@@ -193,4 +194,5 @@ def apply_tree_meta(tree: ConversationTree, data: dict[str, Any]) -> None:
         total_tokens=int(data.get("total_tokens", 0)),
         step_count=int(data.get("step_count", 0)),
         last_model=data.get("last_model"),
+        title=data.get("title"),
     )

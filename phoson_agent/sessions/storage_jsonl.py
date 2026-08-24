@@ -81,6 +81,7 @@ class JsonlStorage(SessionStorage):
             + int(meta.get("total_output_tokens", 0)),
             step_count=int(meta.get("step_count", 0)),
             last_model=meta.get("last_model") or None,
+            title=meta.get("title"),
         )
         await self.save(tree)
 
@@ -209,4 +210,5 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         total_tokens=int(meta_values.get("total_tokens", 0)) if meta_values else 0,
         step_count=int(meta_values.get("step_count", 0)) if meta_values else 0,
         last_model=meta_values.get("last_model") if meta_values else None,
+        title=meta_values.get("title") if meta_values else None,
     )
