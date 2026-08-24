@@ -24,7 +24,7 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
-from phoson_llm.schemas import Message, ModelConfig, ContentBlock
+from phoson_llm.schemas import Message, TextBlock, ModelConfig, ContentBlock
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
@@ -383,10 +383,43 @@ class SessionController:
             node.metadata["reasoning"] = reasoning
 
     async def _save_session(self) -> None:
+        self._ensure_session_title()
         await self.storage.save(self.tree)
         await self.storage.save_meta(
             self.tree.session_id, self.session_metrics.to_meta()
         )
+
+    def _ensure_session_title(self) -> None:
+        """Auto-generate a session title from the first user message (#55).
+
+        Only fires once, and only when the session has no title yet (the
+        user's explicit ``/title`` always wins). The heuristic is cheap
+        on purpose — first line of the first user message, truncated to
+        60 chars — so no extra LLM round trip is spent on naming.
+        """
+        if self.tree.title:
+            return
+        for node in self.tree.nodes.values():
+            msg = node.message
+            if msg.role != "user":
+                continue
+            content = msg.content
+            text = (
+                content
+                if isinstance(content, str)
+                else " ".join(
+                    b.text for b in content if isinstance(b, TextBlock) and b.text
+                )
+            ).strip()
+            if not text:
+                continue
+            # Skip command-ish inputs; they make poor titles.
+            if text.startswith("/"):
+                return
+            first_line = text.splitlines()[0].strip()
+            title = first_line[:57] + "…" if len(first_line) > 60 else first_line
+            self.tree.title = title or None
+            return
 
     async def run_turn(self, user_input: str) -> RunOutcome:
         """Execute one agent turn (run, persist, notify the sink).
