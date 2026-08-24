@@ -17,7 +17,7 @@ That's it; the dispatch table picks it up automatically.
 """
 
 import inspect
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
 from dataclasses import dataclass
 from collections.abc import Callable, Awaitable
@@ -33,6 +33,8 @@ from .model_selector import list_available_models
 from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
 
 if TYPE_CHECKING:
+    from phoson_agent.sessions.models import SessionMeta
+
     from .repl import PhosonRepl
 
 
@@ -78,7 +80,9 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         "_cmd_reasoning_effort",
     ),
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
-    CommandSpec(("/sessions",), "List, load or delete saved sessions", "_cmd_sessions"),
+    CommandSpec(
+        ("/sessions",), "List, load (#) or pick saved sessions", "_cmd_sessions"
+    ),
     CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
     CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
     CommandSpec(
@@ -404,13 +408,60 @@ class CommandHandler:
         await self.host.run_setup()
         return True
 
-    async def _cmd_sessions(self, cmd: Command) -> bool:  # noqa: ARG002
+    async def _cmd_sessions(self, cmd: Command) -> bool:
         r = self._r
+        arg = cmd.args.strip()
+
+        # Inline numbered-list flow (#55): `/sessions` prints a compact
+        # recent-sessions table; `/sessions load <n>` loads entry n.
+        # The modal Float picker remains available via `/sessions pick`.
+        if arg.startswith("load"):
+            num_part = arg[len("load") :].strip()
+            if not num_part.isdigit():
+                r.print_info("Usage:  /sessions load <number>  (see /sessions)")
+                return True
+            sessions = await self.repl.storage.list_meta()
+            idx = int(num_part) - 1
+            if idx < 0 or idx >= len(sessions):
+                r.print_error(f"No session #{num_part}. Run /sessions to list.")
+                return True
+            ok = await self.repl.load_session(str(sessions[idx].id))
+            if ok:
+                r.print_info(f"Loaded session  {str(sessions[idx].id)[:8]}")
+            return True
+
         sessions = await self.repl.storage.list_meta()
         if not sessions:
             r.print_info("No saved sessions.")
             return True
 
+        if not arg or arg == "list":
+            self._print_session_list(r, sessions)
+            if not arg:
+                r.print_info("Load: /sessions load <#> · picker: /sessions pick")
+            return True
+
+        if arg == "pick":
+            return await self._pick_session_modal(r, sessions)
+
+        r.print_info("Usage:  /sessions [list] · /sessions load <#> · /sessions pick")
+        return True
+
+    def _print_session_list(self, r: Any, sessions: list[Any]) -> None:
+        """Print the inline numbered recent-sessions table (#55)."""
+        current = self.repl.tree.session_id
+        r.print_info(f"{len(sessions)} saved session(s) — most recent first:")
+        for i, s in enumerate(sessions, start=1):
+            marker = "▶" if str(s.id) == str(current) else " "
+            updated = s.updated_at.strftime("%m-%d %H:%M")
+            cost = f"${s.total_cost:.4f}" if s.total_cost else "—"
+            model = (s.last_model or "—").split("/")[-1][:20]
+            r.print_info(
+                f" {marker} {i:>2}. {updated}  {s.message_count:>3} msgs"
+                f"  {cost:>9}  {model}"
+            )
+
+    async def _pick_session_modal(self, r: Any, sessions: "list[SessionMeta]") -> bool:
         result = await self.host.pick_session(sessions, self.repl.tree.session_id)
 
         if result.cancelled:

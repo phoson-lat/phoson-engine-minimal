@@ -12,7 +12,7 @@ than a modal picker — picking a model is just "type and autocomplete",
 same as any other command.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import (
@@ -89,11 +89,17 @@ class StaticArgCompleter(Completer):
     :class:`ModelArgCompleter`, for commands whose valid values are
     known upfront (e.g. ``/reasoning-effort <low|medium|high|off>``)
     rather than fetched from a provider.
+
+    ``words`` may be a plain list or a zero-arg callable returning the
+    list (evaluated per completion pass), so callers can feed dynamic
+    values like the currently enabled providers.
     """
 
-    def __init__(self, prefixes: tuple[str, ...], words: list[str]) -> None:
+    def __init__(
+        self, prefixes: tuple[str, ...], words: list[str] | Callable[[], list[str]]
+    ) -> None:
         self._prefixes = prefixes
-        self._inner = FuzzyCompleter(WordCompleter(words, sentence=True))
+        self._words = words
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
@@ -102,8 +108,10 @@ class StaticArgCompleter(Completer):
         for prefix in self._prefixes:
             if text.startswith(prefix):
                 query = text[len(prefix) :]
+                words = self._words() if callable(self._words) else self._words
+                inner = FuzzyCompleter(WordCompleter(words, sentence=True))
                 sub_document = Document(query, len(query))
-                yield from self._inner.get_completions(sub_document, complete_event)
+                yield from inner.get_completions(sub_document, complete_event)
                 return
 
 

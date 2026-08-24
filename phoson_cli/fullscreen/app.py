@@ -46,7 +46,7 @@ from ..repl import PhosonRepl
 from ..theme import load_theme, build_prompt_style, build_picker_style_dict
 from .render import BlockAnsiCache, render_chat
 from .._views import render_banner
-from ..config import PhosonConfig, save_config
+from ..config import PhosonConfig, save_config, enabled_providers_from_config
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import read_clipboard_image
@@ -151,6 +151,12 @@ class PhosonApp:
                     StaticArgCompleter(
                         ("/reasoning-effort ", "/effort "),
                         ["low", "medium", "high", "off"],
+                    ),
+                    # /provider <name> — small static set, same inline
+                    # autocomplete pattern as /reasoning-effort (#55).
+                    StaticArgCompleter(
+                        ("/provider ",),
+                        lambda: enabled_providers_from_config(self.repl.config),
                     ),
                 ]
             ),
