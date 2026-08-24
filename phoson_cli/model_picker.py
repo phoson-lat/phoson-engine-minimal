@@ -2,6 +2,7 @@
 
 from typing import TypedDict
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from .theme import Theme
 from .pickers import BasePicker, picker_style
@@ -191,7 +192,24 @@ async def pick_model(
     """Show an interactive picker over ``models`` with fuzzy search."""
     if not models:
         return ModelPickerResult(cancelled=True)
+    return await build_model_picker(models, current_model, page_size, theme).run()
 
+
+def build_model_picker(
+    models: list[ModelOption],
+    current_model: str,
+    page_size: int = 12,
+    theme: "Theme | None" = None,
+    *,
+    on_done: Callable[[ModelPickerResult], None] | None = None,
+    invalidate: Callable[[], None] | None = None,
+) -> BasePicker[ModelPickerResult]:
+    """Build the picker's state/renderer/bindings without running it.
+
+    Lets a host embed it as a Float (:meth:`BasePicker.as_float`) instead
+    of it spinning up its own full-screen ``Application`` via ``run()``
+    (``pick_model`` above does that for the classic REPL).
+    """
     initial_selected = next(
         (i for i, m in enumerate(models) if m.id == current_model), 0
     )
@@ -215,6 +233,8 @@ async def pick_model(
     picker: BasePicker[ModelPickerResult] = BasePicker(
         render=render,
         style=picker_style(theme=theme),
+        on_done=on_done,
+        invalidate=invalidate,
     )
 
     def _refresh_selection() -> None:
@@ -256,4 +276,4 @@ async def pick_model(
     picker.bind("backspace", backspace)
     picker.bind_typing(on_type)
 
-    return await picker.run()
+    return picker

@@ -11,7 +11,7 @@ from pathlib import Path
 from rich.rule import Rule
 from rich.text import Text
 from rich.columns import Columns
-from rich.console import Console
+from rich.console import Group, Console, RenderableType
 
 from phoson_cli.theme import Theme
 from phoson_agent.sessions.models import ConversationTree
@@ -91,18 +91,17 @@ def _message_preview(content: object, max_len: int = 56) -> str:
 # ─── Banner ──────────────────────────────────────────────────────────────────
 
 
-def print_banner(
-    console: Console,
+def render_banner(
     *,
     provider: str,
     model: str,
     session_id: str,
     theme: Theme | None = None,
-) -> None:
-    """Print the welcome banner with the active provider/model/session.
+    show_meta: bool = True,
+) -> Group:
+    """Build the welcome banner as a single renderable (no console I/O).
 
     Args:
-        console: A rich :class:`Console` to print to.
         provider: The active provider name (``openrouter``, ``openai`` …).
         model: The full model id; the part after the last ``/`` is used
             in the status line.
@@ -110,11 +109,15 @@ def print_banner(
             shown.
         theme: Optional :class:`Theme`. Resolved via ``load_theme()``
             when None.
+        show_meta: Include the "provider/model/session" line and the
+            command-hint line below the art. The classic REPL has no
+            header/footer bar, so it needs this here; the full-screen
+            front end shows the same info in its header instead and
+            passes ``False`` to avoid showing it twice.
     """
     from phoson_cli.theme import load_theme
 
     theme = theme or load_theme()
-    console.print()
 
     art = Text(_PHOS_ART, style=theme.art)
 
@@ -128,24 +131,44 @@ def print_banner(
     wordmark.highlight_words(["phoson"], style=f"bold {theme.accent}")
     wordmark.highlight_words(["terminal agent"], style=theme.muted)
 
-    console.print(Columns([art, wordmark], padding=(0, 4)))
-    console.print()
+    items: list[RenderableType] = [
+        Text(""),
+        Columns([art, wordmark], padding=(0, 4)),
+        Text(""),
+    ]
+    if show_meta:
+        short_model = model.split("/")[-1]
+        items.extend(
+            [
+                Text(
+                    f"  provider {provider}  ·  model {short_model}"
+                    f"  ·  session {session_id[:8]}",
+                    style=theme.muted,
+                ),
+                Rule(style=theme.accent_soft),
+                Text(
+                    "  /help for commands  ·  /sessions to resume work"
+                    "  ·  /attach to add images  ·  Ctrl+T reasoning"
+                    "  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
+                    style=theme.muted_deep,
+                ),
+            ]
+        )
+    items.append(Text(""))
+    return Group(*items)
 
-    short_model = model.split("/")[-1]
+
+def print_banner(
+    console: Console,
+    *,
+    provider: str,
+    model: str,
+    session_id: str,
+    theme: Theme | None = None,
+) -> None:
+    """Print the welcome banner with the active provider/model/session."""
     console.print(
-        Text(
-            f"  provider {provider}  ·  model {short_model}"
-            f"  ·  session {session_id[:8]}",
-            style=theme.muted,
+        render_banner(
+            provider=provider, model=model, session_id=session_id, theme=theme
         )
     )
-    console.print(Rule(style=theme.accent_soft))
-    console.print(
-        Text(
-            "  /help for commands  ·  /sessions to resume work"
-            "  ·  /attach to add images  ·  Ctrl+T reasoning"
-            "  ·  Ctrl+C interrupt  ·  Ctrl+D exit",
-            style=theme.muted_deep,
-        )
-    )
-    console.print()

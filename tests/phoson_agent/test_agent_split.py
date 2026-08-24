@@ -178,6 +178,53 @@ async def test_tool_runner_invokes_handler_and_records_step() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_runner_appends_image_message_for_image_tool_result() -> None:
+    """A tool returning ``ImageToolResult`` must append a *second* history
+
+    message carrying the raw ``ImageBlock`` — ``ToolResultBlock.result`` is
+    a plain string and cannot carry an image itself, so the image rides
+    along as its own follow-up user-role message (the same content-block
+    path ``/attach`` already uses) so vision-capable models can see it.
+    """
+    from phoson_llm.schemas import ImageBlock, ToolCallEvent, ToolResultBlock
+    from phoson_agent.models import ImageToolResult
+
+    @tool
+    def look(path: str) -> ImageToolResult:
+        return ImageToolResult(
+            text=f"Viewing {path}",
+            image=ImageBlock(source=f"file://{path}", media_type="image/png"),
+        )
+
+    runner = ToolRunner(
+        tools_by_name={"look": look},
+        context=AgentContext(),
+        apply_before_tool=_passthrough,
+        apply_after_tool=_passthrough_after,
+        prepare_event=_passthrough_event,
+    )
+
+    history: list[Message] = []
+    steps: list = []
+    call = ToolCallEvent(
+        index=0, tool_call_id="t1", tool_name="look", args={"path": "shot.png"}
+    )
+
+    events = [
+        ev
+        async for ev in runner.execute(tool_calls=[call], history=history, steps=steps)
+    ]
+
+    assert len(events) == 3
+    assert len(history) == 2
+    assert isinstance(history[0].content[0], ToolResultBlock)
+    assert history[0].content[0].result == "Viewing shot.png"
+    assert history[1].role == "user"
+    assert isinstance(history[1].content[0], ImageBlock)
+    assert history[1].content[0].source == "file://shot.png"
+
+
+@pytest.mark.asyncio
 async def test_tool_runner_blocks_when_middleware_returns_none() -> None:
     @tool
     def noop() -> str:

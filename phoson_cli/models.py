@@ -1,7 +1,7 @@
-"""User model registry + provider config + model-list cache.
+"""User model registry + provider config.
 
 Lives at ``~/.phoson/models.json`` (0600, created lazily). The file holds
-three sections:
+two sections:
 
 - ``models``:    user-defined model overrides. Keys are bare model ids
   (as used in ``provider/model`` strings, e.g. ``"qwen3.8-27b"``).
@@ -12,19 +12,19 @@ three sections:
   ``"base_url"`` overrides for OpenAI-compatible endpoints
   (local servers, proxies). **API keys never live here** — keys stay in
   ``config.toml`` / env vars because this file may be synced or shared.
-- ``cache``:    cached provider model listings with a fetch timestamp.
-  Used for instant/offline ``/model`` pickers and as fallback when the
-  network is down.
+
+The ``/model`` picker always queries the provider live (see
+:func:`phoson_cli.model_selector.list_available_models`); nothing about
+the available model list is written here. A ``cache`` section written by
+older Phoson versions may still be present on disk — :func:`resolve_context_window`
+reads it (read-only, for its context-window hints) but the CLI no longer
+writes new entries to it.
 """
 
 import json
-import time
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
-
-#: Default cache lifetime: 24 hours.
-CACHE_TTL_SECONDS: float = 86_400.0
 
 #: File name inside the Phoson home directory.
 MODELS_FILE_NAME = "models.json"
@@ -239,7 +239,13 @@ def provider_settings(data: dict[str, Any], provider: str) -> dict[str, Any]:
     return out
 
 
-# ── cache section ────────────────────────────────────────────────────────────
+# ── cache section (legacy, read-only) ─────────────────────────────────────
+#
+# Older Phoson versions wrote a ``cache`` section with fetched provider
+# listings. The CLI no longer writes it (the /model picker always queries
+# live — see model_selector.list_available_models), but existing files may
+# still carry one, so resolve_context_window keeps reading it as a source
+# of context-window hints.
 
 
 def _cache_providers(data: dict[str, Any]) -> dict[str, Any]:
@@ -248,86 +254,3 @@ def _cache_providers(data: dict[str, Any]) -> dict[str, Any]:
         return {}
     providers = cache.get("providers", {})
     return providers if isinstance(providers, dict) else {}
-
-
-def cache_fetched_at(data: dict[str, Any]) -> float:
-    """Epoch seconds of the last successful fetch (0.0 if never)."""
-    cache = data.get("cache", {})
-    if not isinstance(cache, dict):
-        return 0.0
-    value = cache.get("fetched_at", 0)
-    return float(value) if isinstance(value, (int, float)) else 0.0
-
-
-def cache_is_fresh(data: dict[str, Any], ttl: float = CACHE_TTL_SECONDS) -> bool:
-    """True if the cache exists and is younger than ``ttl`` seconds."""
-    fetched = cache_fetched_at(data)
-    return fetched > 0 and (time.time() - fetched) < ttl
-
-
-def update_cache(
-    data: dict[str, Any], listings: dict[str, list[dict[str, Any]]]
-) -> dict[str, Any]:
-    """Return a copy of ``data`` with the cache section refreshed.
-
-    Listings from previously cached providers are preserved so a single
-    successful fetch never wipes the others.
-    """
-    new_data = dict(data)
-    old_cache = data.get("cache", {})
-    old_providers = (
-        old_cache.get("providers", {})
-        if isinstance(old_cache, dict)
-        and isinstance(old_cache.get("providers", {}), dict)
-        else {}
-    )
-    merged = dict(old_providers)
-    merged.update(listings)
-    new_data["cache"] = {
-        "fetched_at": time.time(),
-        "providers": merged,
-    }
-    return new_data
-
-
-def option_to_dict(option: ModelOption) -> dict[str, Any]:
-    """Serialize a ModelOption for the cache section."""
-    return {
-        "id": option.id,
-        "label": option.label,
-        "provider": option.provider,
-        "description": option.description,
-        "context_length": option.context_length,
-        "pricing": option.pricing,
-    }
-
-
-def cached_options(data: dict[str, Any], provider: str) -> list[ModelOption]:
-    """Build options from the cached listing of one provider."""
-    listing = _cache_providers(data).get(provider)
-    if not isinstance(listing, list):
-        return []
-    options: list[ModelOption] = []
-    for entry in listing:
-        if not isinstance(entry, dict):
-            continue
-        model_id = entry.get("id")
-        if not isinstance(model_id, str) or not model_id:
-            continue
-        window = entry.get("context_length")
-        pricing = entry.get("pricing")
-        description = entry.get("description")
-        label = entry.get("label")
-        options.append(
-            ModelOption(
-                id=model_id,
-                provider=provider,
-                label=(str(label) if isinstance(label, str) and label else model_id),
-                description=(str(description) if isinstance(description, str) else ""),
-                context_length=(
-                    window if isinstance(window, int) and window > 0 else None
-                ),
-                pricing=str(pricing) if isinstance(pricing, str) else "",
-            )
-        )
-    return options

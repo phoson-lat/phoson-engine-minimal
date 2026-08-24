@@ -16,6 +16,7 @@ from collections.abc import Callable, Awaitable, AsyncIterator
 
 from phoson_llm.schemas import (
     Message,
+    ImageBlock,
     ToolCallEvent,
     ToolResultBlock,
 )
@@ -23,6 +24,7 @@ from phoson_agent.models import (
     RunStep,
     AgentTool,
     AgentEvent,
+    ImageToolResult,
     AgentStepDoneEvent,
     AgentToolDoneEvent,
     AgentToolStartEvent,
@@ -133,7 +135,9 @@ class ToolRunner:
         )
 
         tool_started = now_utc()
-        result_text, error_text, error_flag = await self._invoke_handler(call)
+        result_text, error_text, error_flag, result_image = await self._invoke_handler(
+            call
+        )
 
         result_text = await self._apply_after_tool(call, result_text, error_flag)
 
@@ -165,6 +169,13 @@ class ToolRunner:
                 ],
             )
         )
+        if result_image is not None:
+            # ToolResultBlock.result is a plain string — an image cannot
+            # live inside it. Append it as its own user-role message
+            # right after the tool result so vision-capable models see
+            # the picture, reusing the same content-block path /attach
+            # already uses for user-supplied images.
+            history.append(Message(role="user", content=[result_image]))
 
         yield (
             await self._prepare_event(
@@ -188,31 +199,36 @@ class ToolRunner:
     async def _invoke_handler(
         self,
         call: ToolCallEvent,
-    ) -> tuple[str, str | None, bool]:
-        """Invoke a tool handler and return ``(result_text, error_text, error_flag)``.
+    ) -> tuple[str, str | None, bool, ImageBlock | None]:
+        """Invoke a tool handler.
 
+        Returns ``(result_text, error_text, error_flag, image)``.
         Catches every exception raised by the handler and surfaces it as a
         tool-level error so the agent loop can inform the LLM and continue.
         """
         tool = self._tools_by_name.get(call.tool_name)
         if tool is None:
             error_text = f"Tool '{call.tool_name}' is not registered."
-            return error_text, error_text, True
+            return error_text, error_text, True, None
 
         try:
             tool_result = tool.handler(call.args, self._context)
             if asyncio.iscoroutine(tool_result):
                 tool_result = await tool_result
 
+            if isinstance(tool_result, ImageToolResult):
+                return tool_result.text, None, False, tool_result.image
+
             if not isinstance(tool_result, (str, dict)):
                 raise TypeError(
-                    "Tool handler must return str, dict, or awaitable of those types."
+                    "Tool handler must return str, dict, ImageToolResult, or "
+                    "awaitable of those types."
                 )
 
-            return to_result_text(tool_result), None, False
+            return to_result_text(tool_result), None, False, None
         except Exception as exc:
             error_text = str(exc)
-            return error_text, error_text, True
+            return error_text, error_text, True, None
 
     async def _handle_blocked(
         self,

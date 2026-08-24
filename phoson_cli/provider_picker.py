@@ -2,6 +2,7 @@
 
 from typing import TypedDict
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from .theme import Theme
 from .pickers import BasePicker, picker_style
@@ -86,7 +87,23 @@ async def pick_provider(
     """Prompt the user for a provider via a full-screen picker."""
     if not providers:
         return ProviderPickerResult(cancelled=True)
+    return await build_provider_picker(providers, current_provider, theme).run()
 
+
+def build_provider_picker(
+    providers: list[str],
+    current_provider: str,
+    theme: "Theme | None" = None,
+    *,
+    on_done: Callable[[ProviderPickerResult], None] | None = None,
+    invalidate: Callable[[], None] | None = None,
+) -> BasePicker[ProviderPickerResult]:
+    """Build the picker's state/renderer/bindings without running it.
+
+    Lets a host embed it as a Float (:meth:`BasePicker.as_float`) instead
+    of it spinning up its own full-screen ``Application`` via ``run()``
+    (``pick_provider`` above does that for the classic REPL).
+    """
     state: _ProviderState = {
         "selected": next(
             (i for i, p in enumerate(providers) if p == current_provider), 0
@@ -98,6 +115,8 @@ async def pick_provider(
             providers, current_provider, state["selected"]
         ),
         style=picker_style(theme=theme),
+        on_done=on_done,
+        invalidate=invalidate,
     )
 
     picker.bind_list_nav(
@@ -110,4 +129,4 @@ async def pick_provider(
         on_cancel=lambda: picker.done(ProviderPickerResult(cancelled=True)),
     )
 
-    return await picker.run()
+    return picker

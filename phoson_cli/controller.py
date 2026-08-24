@@ -1,4 +1,4 @@
-"""UI-independent session runtime (Textual migration, phase 1).
+"""UI-independent session runtime.
 
 :class:`SessionController` owns everything that is *not* presentation:
 the LLM client, agent engine, tools, plugins, session state (tree,
@@ -7,10 +7,10 @@ run lifecycle (stream consumption, partial persistence, reasoning
 capture, session saves).
 
 It presents nothing itself — every user-visible effect goes through the
-injected :class:`~phoson_cli.ui_protocols.AgentEventSink`. The classic
-REPL adapts its Rich ``Renderer`` with ``ClassicSink``; the future
-Textual TUI (MIGRATE_CLI_TO_TEXTUAL.md) will provide a widget-based
-sink. This is what makes the second front end a sink, not a fork.
+injected :class:`~phoson_cli.ui_protocols.AgentEventSink`. This is what
+lets the front end change (classic ``Renderer``/``ClassicSink`` today,
+a full-screen UI going forward) without touching this module — a new
+front end is a new sink, not a fork.
 """
 
 import asyncio
@@ -247,7 +247,7 @@ class SessionController:
         """Release the chat client and any loaded engine plugins.
 
         Idempotent. Called by front ends on exit (classic REPL on EOF,
-        Textual app on shutdown) so no HTTP pools or MCP subprocesses
+        front end on shutdown) so no HTTP pools or MCP subprocesses
         outlive the session.
         """
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
@@ -400,24 +400,16 @@ class SessionController:
 
         self.sink.on_user_message(user_input, user_message)
 
+        reasoning_effort = self.config.reasoning_effort
+        if reasoning_effort not in ("low", "medium", "high"):
+            reasoning_effort = None
         config = ModelConfig(
             model=self.current_model,
             system=build_system_prompt(self.engine.tools),
+            reasoning_effort=reasoning_effort,
         )
 
-        # Resolve context window: models.json (user override or cache)
-        # wins, then the engine's registry.
-        _models_data = load_models_file()
-        _model_bare = self.current_model.split("/", 1)[-1]
-        _override = resolve_context_window(
-            _models_data, self.config.provider, _model_bare
-        )
-        if _override is not None:
-            self._context_window = _override
-        else:
-            self._context_window = await self._cw_resolver.resolve(
-                self.config.provider, self.current_model
-            )
+        await self._refresh_context_window()
         self._context_tokens = self.summarizer.estimate_tokens(path)
 
         try:
@@ -511,7 +503,25 @@ class SessionController:
         """Deprecated no-op kept for backward compatibility."""
         pass
 
-    def set_provider(self, provider: str) -> None:
+    async def _refresh_context_window(self) -> None:
+        """Resolve and cache the context window for ``current_model``.
+
+        Same resolution order as ``run_turn``: a ``models.json`` override
+        wins, otherwise the live registry is queried. Also called from
+        ``set_model``/``set_provider`` so the header's indicator reflects
+        the new model immediately, not just after the next turn.
+        """
+        models_data = load_models_file()
+        model_bare = self.current_model.split("/", 1)[-1]
+        override = resolve_context_window(models_data, self.config.provider, model_bare)
+        if override is not None:
+            self._context_window = override
+        else:
+            self._context_window = await self._cw_resolver.resolve(
+                self.config.provider, self.current_model
+            )
+
+    async def set_provider(self, provider: str) -> None:
         """Switch to a different provider and rebuild runtime state.
 
         If ``models.json`` defines a ``default_model`` for the new
@@ -521,15 +531,16 @@ class SessionController:
         self.config.provider = provider
         settings = provider_settings(load_models_file(), provider)
         default_model = settings.get("default_model")
-        self.set_model(default_model or self.config.model)
+        await self.set_model(default_model or self.config.model)
 
-    def set_model(self, model: str) -> None:
-        """Switch to a different model and rebuild the engine."""
+    async def set_model(self, model: str) -> None:
+        """Switch to a different model, rebuild the engine, refresh context window."""
         self.current_model = model
         self.config.model = model
         # Sub-agent model follows the main model unless explicitly overridden.
         self.subagent_model = self.config.subagent_model or model
         self._rebuild_engine()
+        await self._refresh_context_window()
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text."""

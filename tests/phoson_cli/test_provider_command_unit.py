@@ -36,11 +36,11 @@ class DummyRepl:
         self.provider_calls: list[str] = []
         self.model_calls: list[str] = []
 
-    def set_provider(self, provider: str) -> None:
+    async def set_provider(self, provider: str) -> None:
         self.provider_calls.append(provider)
         self.config.provider = provider
 
-    def set_model(self, model: str) -> None:
+    async def set_model(self, model: str) -> None:
         self.model_calls.append(model)
         self.current_model = model
         self.config.model = model
@@ -60,9 +60,14 @@ async def test_provider_command_lists_available_providers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_command_opens_picker_switches_provider_and_model(
+async def test_provider_command_opens_picker_and_switches_provider(
     monkeypatch,
 ) -> None:
+    """Switching provider no longer auto-opens a model picker afterward —
+
+    model selection is /model's inline autocomplete now, for both front
+    ends, so /provider just switches and hints at /model.
+    """
     repl = DummyRepl()
     handler = CommandHandler(repl)
     saved_configs: list[object] = []
@@ -70,31 +75,25 @@ async def test_provider_command_opens_picker_switches_provider_and_model(
     async def fake_pick_provider(providers, current_provider, theme=None):
         return SimpleNamespace(provider="openai", cancelled=False)
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="gpt-4.1-mini", provider="openai")]
-
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="gpt-4.1-mini", cancelled=False)
-
     monkeypatch.setattr("phoson_cli.commands.pick_provider", fake_pick_provider)
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
-    )
-    monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
-    monkeypatch.setattr(
-        "phoson_cli.commands.save_config", lambda config: saved_configs.append(config)
+        "phoson_cli.commands.save_config",
+        lambda config, **kwargs: saved_configs.append(config),
     )
 
     result = await handler.handle(Command(name="/provider", args=""))
 
     assert result is True
     assert repl.provider_calls == ["openai"]
-    assert repl.model_calls == ["gpt-4.1-mini"]
+    assert repl.model_calls == []  # unchanged — no automatic re-pick
     assert saved_configs
     assert (
+        repl.renderer.infos[-2]
+        == "Provider → openai  ·  Model → openai/gpt-4.1-mini  ·  saved"
+    )
+    assert (
         repl.renderer.infos[-1]
-        == "Provider → openai  ·  Model → gpt-4.1-mini  ·  saved"
+        == "Use /model <name> to pick a model for this provider."
     )
 
 
@@ -104,30 +103,24 @@ async def test_provider_command_switches_provider_directly(monkeypatch) -> None:
     handler = CommandHandler(repl)
     saved_configs: list[object] = []
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="gpt-4.1-mini", provider="openai")]
-
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="gpt-4.1-mini", cancelled=False)
-
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
-    )
-    monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
-    monkeypatch.setattr(
-        "phoson_cli.commands.save_config", lambda config: saved_configs.append(config)
+        "phoson_cli.commands.save_config",
+        lambda config, **kwargs: saved_configs.append(config),
     )
 
     result = await handler.handle(Command(name="/provider", args="openai"))
 
     assert result is True
     assert repl.provider_calls == ["openai"]
-    assert repl.model_calls == ["gpt-4.1-mini"]
+    assert repl.model_calls == []  # unchanged — no automatic re-pick
     assert saved_configs
     assert (
+        repl.renderer.infos[-2]
+        == "Provider → openai  ·  Model → openai/gpt-4.1-mini  ·  saved"
+    )
+    assert (
         repl.renderer.infos[-1]
-        == "Provider → openai  ·  Model → gpt-4.1-mini  ·  saved"
+        == "Use /model <name> to pick a model for this provider."
     )
 
 

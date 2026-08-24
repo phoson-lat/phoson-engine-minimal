@@ -4,7 +4,7 @@ The handler owns command *semantics* (what ``/model`` does). A host owns
 how those effects are shown and how interactive choices are collected:
 
 - Classic REPL: :class:`RendererCommandHost` (Rich + prompt_toolkit pickers).
-- Textual TUI: a widget/modal host (see ``phoson_cli.textual.host``).
+- Full-screen front end: a Float/modal-based host.
 
 Unit tests keep constructing ``CommandHandler(dummy_repl)`` — the
 renderer-backed host is the default when none is injected.
@@ -125,7 +125,7 @@ class RendererCommandHost:
         from phoson_cli import commands as commands_mod
 
         self.repl.config = await commands_mod.run_install_wizard(self.repl.config)
-        self.repl.set_model(self.repl.config.model)
+        await self.repl.set_model(self.repl.config.model)
         self.print_info("Setup completed.")
 
 

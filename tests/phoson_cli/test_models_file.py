@@ -1,7 +1,6 @@
 """Tests for ~/.phoson/models.json — registry, provider config, list cache."""
 
 import os
-import json
 import stat
 import time
 import warnings
@@ -10,11 +9,6 @@ from unittest.mock import patch
 import pytest
 
 from phoson_cli.models import (
-    update_cache,
-    cache_is_fresh,
-    cached_options,
-    option_to_dict,
-    cache_fetched_at,
     load_models_file,
     save_models_file,
     provider_settings,
@@ -26,13 +20,13 @@ from phoson_cli.model_selector import ModelOption
 
 
 def _make_repl(tmp_path):
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
 
     from phoson_cli.repl import PhosonRepl
     from phoson_cli.config import PhosonConfig
 
     with patch("phoson_cli.controller.build_chat") as mock_build:
-        mock_build.return_value = MagicMock()
+        mock_build.return_value = MagicMock(aclose=AsyncMock())
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
 
@@ -173,80 +167,23 @@ def test_provider_settings_allowlist_only() -> None:
     assert provider_settings(data, "unknown") == {}
 
 
-# ── cache section ────────────────────────────────────────────────────────────
-
-
-def test_cache_freshness() -> None:
-    data = {"cache": {"fetched_at": time.time() - 10}}
-    assert cache_is_fresh(data, ttl=3600) is True
-    assert cache_is_fresh(data, ttl=5) is False
-    assert cache_is_fresh({}, ttl=3600) is False
-    assert cache_fetched_at({}) == 0.0
-
-
-def test_update_cache_preserves_other_providers() -> None:
-    data = {
-        "models": {"keep": {"context_window": 1}},
-        "cache": {
-            "fetched_at": time.time() - 9999,
-            "providers": {"groq": [{"id": "g1"}]},
-        },
-    }
-    updated = update_cache(data, {"openrouter": [{"id": "r1"}]})
-    assert set(updated["cache"]["providers"]) == {"groq", "openrouter"}
-    assert cache_fetched_at(updated) > cache_fetched_at(data)
-    assert updated["models"] == {"keep": {"context_window": 1}}
-    # Original untouched (copy semantics).
-    assert "openrouter" not in data["cache"]["providers"]
-
-
-def test_cached_options_roundtrip() -> None:
-    options = [
-        _option("r1", provider="openrouter", context_length=131072, pricing="$1/1M"),
-        _option("r2", provider="openrouter"),
-    ]
-    data = update_cache({}, {"openrouter": [option_to_dict(o) for o in options]})
-    rebuilt = cached_options(data, "openrouter")
-    assert rebuilt == options
-    assert cached_options(data, "unknown-provider") == []
-
-
-def test_cached_options_skips_malformed_entries() -> None:
-    data = {
-        "cache": {
-            "providers": {
-                "p": [
-                    {"id": "ok", "label": "OK"},
-                    "garbage",
-                    {"no-id": True},
-                ]
-            }
-        }
-    }
-    rebuilt = cached_options(data, "p")
-    assert [o.id for o in rebuilt] == ["ok"]
-
-
-def test_option_to_dict_serializable() -> None:
-    d = option_to_dict(_option("m", context_length=42, pricing="$1"))
-    assert json.loads(json.dumps(d)) == d
-
-
-# ── list_available_models: cache-first behavior ──────────────────────────────
+# ── list_available_models: always a live query, nothing cached ───────────────
 
 
 @pytest.mark.asyncio
-async def test_fresh_cache_skips_network(monkeypatch, tmp_path) -> None:
+async def test_list_available_models_always_calls_the_live_fetcher(
+    monkeypatch, tmp_path
+) -> None:
+    """Even with a populated models.json, the picker must hit the provider."""
     from phoson_cli import model_selector
     from phoson_cli.config import PhosonConfig
 
     models_path = tmp_path / "models.json"
-    now = time.time()
     save_models_file(
         {
             "cache": {
-                "fetched_at": now,
-                "providers": {"openrouter": [option_to_dict(_option("r1"))]},
+                "fetched_at": time.time(),
+                "providers": {"openrouter": [{"id": "stale-from-old-version"}]},
             }
         },
         models_path,
@@ -257,88 +194,54 @@ async def test_fresh_cache_skips_network(monkeypatch, tmp_path) -> None:
 
     called = False
 
-    async def _boom(config):
+    async def _fetch(config):
         nonlocal called
         called = True
-        return [_option(config.model, provider="openrouter")]
+        return [_option("live-r1", provider="openrouter")]
 
-    monkeypatch.setattr(model_selector, "_fetch_provider_models", _boom)
+    monkeypatch.setattr(model_selector, "_fetch_provider_models", _fetch)
     config = PhosonConfig(provider="openrouter", model="current")
 
     options = await model_selector.list_available_models(config)
-    assert called is False
     ids = {o.id for o in options}
-    assert "r1" in ids  # from cache
-    assert [o.id for o in options][:1] == ["current"] or "current" in ids
+    assert called is True
+    assert "live-r1" in ids
+    assert "stale-from-old-version" not in ids
 
 
 @pytest.mark.asyncio
-async def test_network_success_refreshes_cache(monkeypatch, tmp_path) -> None:
+async def test_list_available_models_never_writes_models_json(
+    monkeypatch, tmp_path
+) -> None:
     from phoson_cli import model_selector
     from phoson_cli.config import PhosonConfig
 
     models_path = tmp_path / "models.json"
-    data = {}
-    monkeypatch.setattr(model_selector, "load_models_file", lambda: data)
-    save_models_file(data, models_path)  # ensure the path exists as default
-    saved: list[dict] = []
+    monkeypatch.setattr(model_selector, "load_models_file", lambda: {})
+    wrote = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal wrote
+        wrote = True
+
     monkeypatch.setattr(
-        model_selector, "save_models_file", lambda d, p=None: saved.append(d)
+        model_selector, "save_models_file", _fail_if_called, raising=False
     )
 
     async def _fetch(config):
         return [
-            _option("r1", provider="openrouter", context_length=1000),
+            _option("r1", provider="openrouter"),
             _option("r2", provider="openrouter"),
         ]
 
     monkeypatch.setattr(model_selector, "_fetch_provider_models", _fetch)
     config = PhosonConfig(provider="openrouter", model="r1")
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        options = await model_selector.list_available_models(config)
+    options = await model_selector.list_available_models(config)
 
     assert [o.id for o in options] == ["r1", "r2"]
-    assert len(saved) == 1
-    assert "openrouter" in saved[0]["cache"]["providers"]
-
-
-@pytest.mark.asyncio
-async def test_network_fallback_uses_stale_cache(monkeypatch, tmp_path) -> None:
-    from phoson_cli import model_selector
-    from phoson_cli.config import PhosonConfig
-
-    models_path = tmp_path / "models.json"
-    stale = time.time() - 2 * 86400  # 2 days old (> 24h TTL)
-    save_models_file(
-        {
-            "cache": {
-                "fetched_at": stale,
-                "providers": {"openrouter": [option_to_dict(_option("r9"))]},
-            }
-        },
-        models_path,
-    )
-    monkeypatch.setattr(
-        model_selector, "load_models_file", lambda: load_models_file(models_path)
-    )
-
-    async def _fetch(config):
-        # The lister's single-item fallback on network failure.
-        return [_option(config.model, provider="openrouter")]
-
-    monkeypatch.setattr(model_selector, "_fetch_provider_models", _fetch)
-    config = PhosonConfig(provider="openrouter", model="current")
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        options = await model_selector.list_available_models(config)
-
-    assert any("cached" in str(w.message) for w in caught)
-    ids = {o.id for o in options}
-    assert "r9" in ids  # from stale cache
-    assert "current" in ids  # current model always selectable
+    assert wrote is False
+    assert not models_path.exists()
 
 
 @pytest.mark.asyncio
@@ -455,31 +358,36 @@ async def test_repl_falls_back_to_engine_resolver_without_override(tmp_path) -> 
     assert repl._context_window == 128_000  # engine resolver value
 
 
-def test_set_provider_uses_default_model(tmp_path) -> None:
+async def test_set_provider_uses_default_model(tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
     import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     data = {"providers": {"openrouter": {"default_model": "qwen3.8-27b"}}}
     with (
         patch.object(controller_mod, "load_models_file", return_value=data),
         patch.object(controller_mod, "build_chat", return_value=None),
     ):
-        repl.set_provider("openrouter")
+        await repl.set_provider("openrouter")
     assert repl.current_model == "qwen3.8-27b"
     assert repl.config.provider == "openrouter"
 
 
-def test_set_provider_without_default_keeps_model(tmp_path) -> None:
+async def test_set_provider_without_default_keeps_model(tmp_path) -> None:
+    from unittest.mock import AsyncMock
+
     import phoson_cli.controller as controller_mod
 
     repl = _make_repl(tmp_path)
-    with patch.object(controller_mod, "build_chat", return_value=None):
-        repl.set_model("keep-me")
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     with (
         patch.object(controller_mod, "load_models_file", return_value={}),
         patch.object(controller_mod, "build_chat", return_value=None),
     ):
-        repl.set_provider("openrouter")
+        await repl.set_model("keep-me")
+        await repl.set_provider("openrouter")
     assert repl.current_model == "keep-me"
 
 

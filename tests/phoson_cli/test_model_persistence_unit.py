@@ -32,7 +32,7 @@ class DummyRepl:
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
         self.model_calls: list[str] = []
 
-    def set_model(self, model: str) -> None:
+    async def set_model(self, model: str) -> None:
         self.model_calls.append(model)
         self.current_model = model
         self.config.model = model
@@ -57,7 +57,7 @@ async def test_model_command_persists_selected_model(monkeypatch) -> None:
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
     monkeypatch.setattr(
         "phoson_cli.commands.save_config",
-        lambda config: saved_configs.append(config),
+        lambda config, **kwargs: saved_configs.append(config),
     )
 
     result = await handler.handle(Command(name="/model", args=""))
@@ -86,7 +86,7 @@ async def test_subagent_model_command_persists_selected_model(monkeypatch) -> No
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
     monkeypatch.setattr(
         "phoson_cli.commands.save_config",
-        lambda config: saved_configs.append(config),
+        lambda config, **kwargs: saved_configs.append(config),
     )
 
     result = await handler.handle(Command(name="/subagent-model", args=""))
