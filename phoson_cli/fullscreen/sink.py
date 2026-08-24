@@ -252,7 +252,14 @@ class FullScreenSink:
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
 
-    def print_history(self, path: list[Message], tail: int) -> None:
+    def print_history(self, path: list[Message], tail: int | None = None) -> None:
+        """Replay conversation history into the chat pane.
+
+        By default the *full* path is rendered (#56): the chat window can
+        only scroll through what lands in ``blocks``, so a fixed tail
+        made older messages unreachable after resuming. Pass ``tail`` to
+        deliberately truncate (a "N messages above" rule is shown).
+        """
         self.blocks.append(render_history(path, self.theme, tail=tail))
         self._touch()
 

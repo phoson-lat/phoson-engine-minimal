@@ -63,7 +63,7 @@ class FakeSink:
     def set_session(self, session_id) -> None:
         self.session_ids.append(session_id)
 
-    def print_history(self, path, tail) -> None:
+    def print_history(self, path, tail=None) -> None:
         self.history_calls.append((path, tail))
 
     def notify(self, kind, message) -> None:
@@ -448,10 +448,13 @@ async def test_load_session_replays_tail_and_metrics(tmp_path) -> None:
     assert controller2.session_metrics.total_cost_usd == 0.5
     assert controller2.session_metrics.step_count == 3
     assert controller2.session_metrics.last_model == "saved-model"
-    # Tail replayed through the sink.
+    # History replayed through the sink (#56: full path, no fixed tail).
     assert len(sink2.history_calls) == 1
     path, tail = sink2.history_calls[0]
-    assert tail == 6 and path[-1].content == "hello"
+    assert tail is None and path[-1].content == "hello"
+    # Full path replayed, not a fixed-size slice of it.
+    expected = controller2.tree.get_path(controller2.current_node_id)
+    assert len(path) == len(expected)
 
 
 @pytest.mark.asyncio
@@ -551,3 +554,32 @@ def test_system_prompt_lists_loaded_tools(tmp_path) -> None:
     prompt = controller.build_system_prompt()
     assert "bash" in prompt
     assert "Phos" in prompt
+
+
+@pytest.mark.asyncio
+async def test_load_session_replay_caps_very_long_history(tmp_path) -> None:
+    """#56: paths beyond MAX_RESUME_REPLAY_MESSAGES replay truncated,
+    with the tail count so render_history announces the truncation."""
+    from phoson_cli.controller import MAX_RESUME_REPLAY_MESSAGES
+
+    controller, sink = _make_controller(tmp_path)
+    parent = None
+    for i in range(MAX_RESUME_REPLAY_MESSAGES + 25):
+        node = controller.tree.append(
+            parent_id=parent,
+            message=Message(
+                role="user" if i % 2 == 0 else "assistant", content=f"m{i}"
+            ),
+        )
+        parent = node.id
+    await controller.storage.save(controller.tree)
+    saved_id = controller.tree.session_id
+
+    controller2, sink2 = _make_controller(tmp_path)
+    outcome = await controller2.load_session(saved_id)
+
+    assert outcome.ok
+    assert len(sink2.history_calls) == 1
+    path, tail = sink2.history_calls[0]
+    assert tail == MAX_RESUME_REPLAY_MESSAGES
+    assert len(path) == MAX_RESUME_REPLAY_MESSAGES + 25
