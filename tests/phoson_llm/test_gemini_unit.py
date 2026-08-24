@@ -44,9 +44,14 @@ def test_local_image_becomes_inline_base64(tmp_path):
     img.write_bytes(b"\x89PNGfake")
 
     out = _convert(
-        [Message(role="user", content=[
-            ImageBlock(source=f"file://{img}", media_type="image/png"),
-        ])]
+        [
+            Message(
+                role="user",
+                content=[
+                    ImageBlock(source=f"file://{img}", media_type="image/png"),
+                ],
+            )
+        ]
     )
     part = out[0].parts[0]
     assert part.inline_data is not None
@@ -58,9 +63,14 @@ def test_hosted_uri_passes_through_as_file_uri():
     from phoson_llm.schemas import Message, ImageBlock
 
     out = _convert(
-        [Message(role="user", content=[
-            ImageBlock(source="gs://bucket/pic.png", media_type="image/png"),
-        ])]
+        [
+            Message(
+                role="user",
+                content=[
+                    ImageBlock(source="gs://bucket/pic.png", media_type="image/png"),
+                ],
+            )
+        ]
     )
     assert out[0].parts[0].file_data.file_uri == "gs://bucket/pic.png"
 
@@ -72,9 +82,14 @@ def test_local_pdf_becomes_inline_base64(tmp_path):
     pdf.write_bytes(b"%PDF-fake")
 
     out = _convert(
-        [Message(role="user", content=[
-            DocumentBlock(source=f"file://{pdf}"),
-        ])]
+        [
+            Message(
+                role="user",
+                content=[
+                    DocumentBlock(source=f"file://{pdf}"),
+                ],
+            )
+        ]
     )
     part = out[0].parts[0]
     assert part.inline_data is not None
@@ -86,10 +101,15 @@ def test_audio_and_video_get_text_placeholder():
     from phoson_llm.schemas import Message, AudioBlock, VideoBlock
 
     out = _convert(
-        [Message(role="user", content=[
-            AudioBlock(source="file:///tmp/a.mp3", format="mp3"),
-            VideoBlock(source="file:///tmp/v.mp4"),
-        ])]
+        [
+            Message(
+                role="user",
+                content=[
+                    AudioBlock(source="file:///tmp/a.mp3", format="mp3"),
+                    VideoBlock(source="file:///tmp/v.mp4"),
+                ],
+            )
+        ]
     )
     texts = [p.text for p in out[0].parts]
     assert len(texts) == 2
@@ -104,7 +124,12 @@ def test_tool_blocks_raise():
 
     with pytest.raises(TypeError):
         _convert(
-            [Message(role="assistant", content=[
-                ToolUseBlock(id="t1", name="bash", arguments={}),
-            ])]
+            [
+                Message(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(id="t1", name="bash", arguments={}),
+                    ],
+                )
+            ]
         )
