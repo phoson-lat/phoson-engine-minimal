@@ -51,13 +51,22 @@ def render_assistant_label(theme: Theme) -> Text:
 
 
 def render_streaming_panel(
-    content: str, reasoning: str, show_reasoning: bool, theme: Theme
+    content: str,
+    reasoning: str,
+    show_reasoning: bool,
+    theme: Theme,
+    stream_plain: bool = False,
 ) -> Group:
     """Build the assistant response block: a label, then plain content.
 
     No border/box — a colored "Phoson" label line directly above the
     rendered Markdown, matching a plain chat-transcript look rather than
     a bordered panel.
+
+    With ``stream_plain=True`` the content renders as un-parsed text:
+    the cheap path used while tokens are still arriving (perf — see the
+    comment on the fast path below). Frozen/finalized turns always get
+    the full Markdown render.
     """
     renderables: list[RenderableType] = [render_assistant_label(theme)]
 
@@ -66,25 +75,37 @@ def render_streaming_panel(
         renderables.append(Text(thinking_text, style=theme.reasoning))
 
     if content:
-        try:
-            # "none" (Markdown's default) emits no ANSI color at all for
-            # plain paragraph text, so inside the full-screen app it falls
-            # through to prompt_toolkit's own default foreground (a muted
-            # tone, not the terminal's white) — pass the theme color
-            # explicitly so the answer always renders in it.
-            #
-            # hyperlinks=False: Rich's default OSC 8 hyperlink escapes
-            # (``\x1b]8;;URL\x1b\\``) aren't understood by prompt_toolkit's
-            # ANSI() parser — it only recognizes CSI/SGR (``\x1b[...m``)
-            # codes, so an OSC 8 sequence gets torn apart and its raw
-            # bytes ("8;id=...;https://...") show up as literal text
-            # around the link. Rendering links as "text (url)" with plain
-            # SGR color codes avoids that entirely.
-            answer_render = Markdown(
-                content, code_theme=theme.code_theme, style=theme.text, hyperlinks=False
-            )
-        except Exception:
+        if stream_plain:
+            # Streaming fast path (perf/render-cache): Rich's Markdown
+            # parser costs O(content length) per render (~6ms/K chars) and
+            # during token streaming it would re-parse ever-growing text
+            # on every frame. Plain Text is near-free; the full Markdown
+            # render happens once when the turn's text is frozen into the
+            # transcript (_freeze_current_text).
             answer_render = Text(content, style=theme.text)
+        else:
+            try:
+                # "none" (Markdown's default) emits no ANSI color at all for
+                # plain paragraph text, so inside the full-screen app it falls
+                # through to prompt_toolkit's own default foreground (a muted
+                # tone, not the terminal's white) — pass the theme color
+                # explicitly so the answer always renders in it.
+                #
+                # hyperlinks=False: Rich's default OSC 8 hyperlink escapes
+                # (``\x1b]8;;URL\x1b\\``) aren't understood by prompt_toolkit's
+                # ANSI() parser — it only recognizes CSI/SGR (``\x1b[...m``)
+                # codes, so an OSC 8 sequence gets torn apart and its raw
+                # bytes ("8;id=...;https://...") show up as literal text
+                # around the link. Rendering links as "text (url)" with plain
+                # SGR color codes avoids that entirely.
+                answer_render = Markdown(
+                    content,
+                    code_theme=theme.code_theme,
+                    style=theme.text,
+                    hyperlinks=False,
+                )
+            except Exception:
+                answer_render = Text(content, style=theme.text)
         renderables.append(answer_render)
     elif not (reasoning and show_reasoning):
         renderables.append(Text("thinking...", style=theme.muted))

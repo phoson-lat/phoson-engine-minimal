@@ -44,7 +44,7 @@ from .keys import build_key_bindings
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
 from ..theme import load_theme, build_prompt_style, build_picker_style_dict
-from .render import render_chat
+from .render import BlockAnsiCache, render_chat
 from .._views import render_banner
 from ..config import PhosonConfig, save_config
 from ..pickers import BasePicker
@@ -77,6 +77,8 @@ class PhosonApp:
         self._cached_ansi = ANSI("")
         self._cache_dirty = True
         self._last_width = 80
+        # Immutable transcript blocks render to ANSI once per width (#perf).
+        self._block_ansi_cache = BlockAnsiCache()
         self._run_task: asyncio.Task | None = None
 
         # Float overlay state (pickers, confirmations). While a Float is
@@ -338,7 +340,7 @@ class PhosonApp:
         width = max(40, term_width - 4)
 
         if self.sink.dirty or width != self._last_width:
-            text = render_chat(self.sink, width)
+            text = render_chat(self.sink, width, self._block_ansi_cache)
             self._cached_ansi = ANSI(text)
             self._total_chat_lines = max(1, len(text.splitlines()))
             self.sink.dirty = False
