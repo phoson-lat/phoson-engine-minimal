@@ -626,7 +626,7 @@ class ClassicSink:
     def set_session(self, session_id: str) -> None:
         self._renderer.set_session(session_id)
 
-    def print_history(self, path: list["Message"], tail: int) -> None:
+    def print_history(self, path: list["Message"], tail: int | None = None) -> None:
         self._renderer.print_history(path, tail=tail)
 
     def notify(self, kind: str, message: str) -> None:
