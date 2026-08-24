@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.7.1 (2026-08-24)
+
+### Fix
+
+- **cli**: persist the Ctrl+T reasoning-visibility default across sessions
+  (`show_reasoning` config field, `PHOSON_SHOW_REASONING` env var) (#50)
+- **cli**: `/attach` now rejects files over 20MB with a clear error instead of
+  reading and encoding them silently, and warns when a file type (PDF, video)
+  degrades or is dropped by the active provider (#54)
+- **config**: add regression tests proving `/model` and `/reasoning-effort`
+  persist across CLI restarts (#49)
+
 ## v0.7.0 (2026-08-23)
 
 ### Feat
