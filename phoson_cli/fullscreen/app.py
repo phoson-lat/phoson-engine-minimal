@@ -11,9 +11,13 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
+import uuid
 import shutil
 import asyncio
+import tempfile
+import mimetypes
 from typing import Any
+from pathlib import Path
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -45,6 +49,7 @@ from .._views import render_banner
 from ..config import PhosonConfig
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
+from .clipboard import read_clipboard_image
 from .completer import SlashCompleter, ModelArgCompleter, StaticArgCompleter
 from .model_cache import ModelCache
 from .command_host import FullScreenCommandHost
@@ -52,7 +57,7 @@ from .confirmation import FullScreenConfirmationService
 
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+T] Reasoning'
-    "  [Ctrl+L] Clear  [Ctrl+C / Ctrl+Q] Exit</style>"
+    "  [Ctrl+V] Paste image  [Ctrl+L] Clear  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
 # How often the subagent panel animation frame advances while active.
@@ -548,6 +553,49 @@ class PhosonApp:
             self._prompt_input.buffer.delete()
         else:
             self.request_exit()
+
+    def paste_image(self) -> None:
+        """Ctrl+V: attach an image straight from the system clipboard.
+
+        Terminals only ever deliver *text* through their own paste
+        mechanism — an image copied to the OS clipboard (e.g. from a
+        screenshot tool or a browser) has to be read from the clipboard
+        directly (``clipboard.read_clipboard_image``, shelling out to
+        wl-paste/xclip) rather than anything a paste keystroke could
+        hand the ``TextArea``.
+        """
+        self.app.create_background_task(self._paste_image_async())
+
+    async def _paste_image_async(self) -> None:
+        result = await read_clipboard_image()
+        if result is None:
+            self.sink.notify(
+                "warn",
+                "No image on the clipboard (or no clipboard tool available).",
+            )
+            return
+
+        data, mime = result
+        suffix = mimetypes.guess_extension(mime) or ".png"
+        target_dir = Path(tempfile.gettempdir()) / "phoson-clipboard"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"clipboard-{uuid.uuid4().hex[:8]}{suffix}"
+        target.write_bytes(data)
+
+        try:
+            self.repl.attachments.attach(str(target))
+        except (FileNotFoundError, ValueError) as exc:
+            self.sink.notify("error", str(exc))
+            return
+
+        # Terminal chat inputs can't show a real thumbnail chip — a text
+        # placeholder inserted at the cursor is the next best thing: it
+        # marks where the image was pasted, and (since it ends up as
+        # ordinary text in the message) doubles as an inline reference
+        # both the user and the model can read.
+        placeholder = f"[image #{len(self.repl.attachments)}] "
+        self._prompt_input.buffer.insert_text(placeholder)
+        self.app.invalidate()
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 

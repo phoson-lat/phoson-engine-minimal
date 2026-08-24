@@ -361,6 +361,55 @@ def test_ctrl_d_on_empty_line_requests_exit(app: PhosonApp) -> None:
     mock_exit.assert_called_once()
 
 
+async def test_ctrl_v_attaches_an_image_from_the_clipboard(
+    app: PhosonApp, tmp_path
+) -> None:
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    with patch(
+        "phoson_cli.fullscreen.app.read_clipboard_image",
+        new=AsyncMock(return_value=(fake_png, "image/png")),
+    ):
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+
+    assert len(app.repl.attachments) == 1
+    assert app._prompt_input.text == "[image #1] "
+
+
+async def test_ctrl_v_placeholder_inserts_at_cursor_and_numbers_multiple_pastes(
+    app: PhosonApp,
+) -> None:
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    with patch(
+        "phoson_cli.fullscreen.app.read_clipboard_image",
+        new=AsyncMock(return_value=(fake_png, "image/png")),
+    ):
+        app._prompt_input.text = "look at this and that"
+        app._prompt_input.buffer.cursor_position = len("look at this")
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+
+    assert app._prompt_input.text == (
+        "look at this[image #1] [image #2]  and that"
+    )
+    assert len(app.repl.attachments) == 2
+
+
+async def test_ctrl_v_notifies_when_clipboard_has_no_image(app: PhosonApp) -> None:
+    with patch(
+        "phoson_cli.fullscreen.app.read_clipboard_image",
+        new=AsyncMock(return_value=None),
+    ):
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+
+    assert len(app.repl.attachments) == 0
+    assert "No image on the clipboard" in app._render_chat().value
+
+
 def test_header_shows_token_indicator_and_attachment_count(app: PhosonApp) -> None:
     app.repl._context_window = 128_000
     app.repl._context_tokens = 12_400

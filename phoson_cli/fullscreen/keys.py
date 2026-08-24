@@ -64,6 +64,10 @@ def build_key_bindings(app: "PhosonApp") -> KeyBindings:
     def _ctrl_d(event: object) -> None:  # noqa: ARG001
         app.handle_ctrl_d()
 
+    @kb.add("c-v")
+    def _paste_image(event: object) -> None:  # noqa: ARG001
+        app.paste_image()
+
     return kb
 
 
