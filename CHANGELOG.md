@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.7.2 (2026-08-24)
+
+### Perf
+
+- **cli**: cache immutable transcript blocks as ANSI strings, re-rendering
+  only new blocks per frame — ~18x faster on long transcripts
+- **cli**: stream the in-flight answer as plain text and apply the full
+  Markdown render once when the turn is frozen, instead of re-parsing
+  growing content every frame
+- **cli**: coalesce streaming repaints to ~16fps with a guaranteed
+  trailing repaint; structural events still repaint immediately
+- **cli**: reuse a single Rich `Console` instance across cached block renders
+
+### Fix
+
+- **llm**: Gemini adapter — inline local `file://` image/PDF attachments as
+  base64 instead of passing a local path as a hosted URI, and emit visible
+  text placeholders for unsupported block types instead of dropping them (#53)
+- **cli**: replay the full conversation path when resuming a session instead
+  of a fixed 6-message tail; very long histories cap at 200 messages with an
+  explicit truncation notice (#56)
+
 ## v0.7.1 (2026-08-24)
 
 ### Fix
