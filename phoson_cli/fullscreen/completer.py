@@ -107,14 +107,14 @@ class SessionsArgCompleter(Completer):
             label = f"{i}"
             if query and not label.startswith(query):
                 continue
+            title = getattr(meta, "title", None) or "(untitled)"
             updated = meta.updated_at.strftime("%m-%d %H:%M")
             cost = f"${meta.total_cost:.4f}" if meta.total_cost else "—"
-            model = (meta.last_model or "—").split("/")[-1][:24]
             yield Completion(
                 label,
                 start_position=-len(query),
-                display=f"{i}. {updated}  {meta.message_count} msgs  {cost}",
-                display_meta=model,
+                display=f"{i}. [{title}]  {updated}  {meta.message_count} msgs",
+                display_meta=cost,
             )
 
 

@@ -61,6 +61,7 @@ class SessionMeta:
     total_tokens: int = 0
     step_count: int = 0
     last_model: str | None = None
+    title: str | None = None
 
 
 @dataclass
@@ -87,6 +88,7 @@ class ConversationTree:
     total_tokens: int = 0
     step_count: int = 0
     last_model: str | None = None
+    title: str | None = None
 
     @classmethod
     def new(cls, session_id: str | None = None) -> "ConversationTree":
@@ -264,6 +266,7 @@ class ConversationTree:
                 total_tokens=self.total_tokens,
                 step_count=self.step_count,
                 last_model=self.last_model,
+                title=self.title,
             )
 
         return SessionMeta(
@@ -275,6 +278,7 @@ class ConversationTree:
             total_tokens=self.total_tokens,
             step_count=self.step_count,
             last_model=self.last_model,
+            title=self.title,
         )
 
     def label(self, node_id: str, text: str) -> None:
@@ -305,6 +309,7 @@ class ConversationTree:
         total_tokens: int | None = None,
         step_count: int | None = None,
         last_model: str | None = None,
+        title: str | None = None,
     ) -> None:
         """Update session-level metadata."""
         if total_cost is not None:
@@ -315,6 +320,8 @@ class ConversationTree:
             self.step_count = step_count
         if last_model is not None:
             self.last_model = last_model
+        if title is not None:
+            self.title = title
 
 
 class SessionStorage(ABC):

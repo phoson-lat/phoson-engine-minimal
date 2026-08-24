@@ -58,6 +58,7 @@ def _render_sessions(
         updated = s.updated_at.strftime("%m-%d %H:%M")
         has_cost = hasattr(s, "total_cost") and s.total_cost
         cost = f"${s.total_cost:.4f}" if has_cost else "—"
+        title = getattr(s, "title", None)
 
         is_current = str(s.id).startswith(current_id[:4])
         is_selected = i == selected
@@ -76,9 +77,11 @@ def _render_sessions(
 
         line = (
             f"  {marker} {idx:>2}  {sid:<10} {msgs:>5}"
-            f"  {updated:<16} {state:<8} {cost:>8}\n"
+            f"  {updated:<16} {state:<8} {cost:>8}"
         )
-        lines.append((style, line))
+        if title:
+            line += f"  [{title[:24]}]"
+        lines.append((style, line + "\n"))
 
     # Footer
     total_pages = (len(sessions) + page_size - 1) // page_size

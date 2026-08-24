@@ -86,6 +86,9 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
     CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
     CommandSpec(
+        ("/title",), "Set a human-readable title for this session", "_cmd_title"
+    ),
+    CommandSpec(
         ("/undo",),
         "Undo the last turn (branch from before your last message)",
         "_cmd_undo",
@@ -356,8 +359,34 @@ class CommandHandler:
             self._r.print_info("Usage:  /label <text>")
             return True
         self.repl.label_current_node(cmd.args)
-        self._r.print_info(f"Labelled  \u201c{cmd.args}\u201d")
+        self._r.print_info(f"Labelled  “{cmd.args}”")
         return True
+
+    async def _cmd_title(self, cmd: Command) -> bool:
+        r = self._r
+        title = cmd.args.strip()
+        if not title:
+            current = await self._current_session_title()
+            shown = f"“{current}”" if current else "(untitled)"
+            r.print_info(f"Usage:  /title <text>  —  current: {shown}")
+            return True
+        if len(title) > 80:
+            title = title[:80]
+        # Persist on the tree and flush to the session_meta record.
+        self.repl.tree.title = title
+        await self.repl.storage.save(self.repl.tree)
+        meta = self.repl.session_metrics.to_meta()
+        meta["title"] = title
+        await self.repl.storage.save_meta(self.repl.tree.session_id, meta)
+        r.print_info(f"Titled  “{title}”")
+        return True
+
+    async def _current_session_title(self) -> str | None:
+        metas = await self.repl.storage.list_meta()
+        for m in metas:
+            if str(m.id) == str(self.repl.tree.session_id):
+                return m.title
+        return None
 
     async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002
         ok, info = self.repl.undo_last_turn()
@@ -455,10 +484,10 @@ class CommandHandler:
             marker = "▶" if str(s.id) == str(current) else " "
             updated = s.updated_at.strftime("%m-%d %H:%M")
             cost = f"${s.total_cost:.4f}" if s.total_cost else "—"
-            model = (s.last_model or "—").split("/")[-1][:20]
+            title = getattr(s, "title", None) or "(untitled)"
             r.print_info(
-                f" {marker} {i:>2}. {updated}  {s.message_count:>3} msgs"
-                f"  {cost:>9}  {model}"
+                f" {marker} {i:>2}. [{title}]  {updated}  {s.message_count:>3} msgs"
+                f"  {cost:>9}"
             )
 
     async def _pick_session_modal(self, r: Any, sessions: "list[SessionMeta]") -> bool:
