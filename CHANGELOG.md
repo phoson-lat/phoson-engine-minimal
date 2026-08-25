@@ -8,6 +8,8 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.9.1 (2026-08-25)
+
 ### Fix
 
 - **cli**: the full-screen multiline composer now wraps long pasted or typed
