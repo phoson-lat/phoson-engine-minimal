@@ -21,6 +21,13 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   `/permissions` command to list or change tool levels on the fly
   (`/permissions bash ask`); changes persist immediately; one-shot mode
   fails closed for `ask`-level tools
+- **cli**: AGENTS.md filesystem memory (IMPROVEMENTS.md A3) — an
+  `AGENTS.md` at the repo root (or any directory between root and cwd),
+  a global `~/.phoson/AGENTS.md`, or a `CLAUDE.md` alias is injected into
+  the system prompt every turn; supports `@file` imports, caps content at
+  ~2000 tokens with a visible truncation marker, and re-reads files each
+  turn so edits apply immediately; new `/agents-md` command lists what is
+  loaded and the TUI header shows a 📄 indicator when memory is active
 
 ## v0.8.1 (2026-08-24)
 
