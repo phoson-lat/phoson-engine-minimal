@@ -50,6 +50,20 @@ def render_assistant_label(theme: Theme) -> Text:
     return Text("Phoson", style=f"bold {theme.accent}")
 
 
+def render_activity_line(label: str, frame: str, theme: Theme) -> Text:
+    """Build the transient in-chat activity indicator for an active turn.
+
+    Unlike a transcript block this is rendered only while a turn is running:
+    it gives immediate feedback after Enter, before the provider has emitted
+    its first event, and remains animated while thinking, streaming, or
+    running a tool.
+    """
+    return Text.assemble(
+        Text(f"{frame} ", style=f"bold {theme.accent}"),
+        Text(label, style=theme.muted),
+    )
+
+
 def render_streaming_panel(
     content: str,
     reasoning: str,
@@ -342,6 +356,7 @@ def subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:
 __all__ = [
     "render_reasoning_panel",
     "render_assistant_label",
+    "render_activity_line",
     "render_streaming_panel",
     "render_start_line",
     "render_subagent_start_line",

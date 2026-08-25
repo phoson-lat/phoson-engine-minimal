@@ -5,7 +5,7 @@
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
 > **Estado de referencia:** v0.8.1 · 845 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1, B2 y B3 cerrados en v0.8.1 (PR #71).
+> **Progreso:** B1, B2 y B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0.
 
 ---
 
@@ -17,9 +17,9 @@
 | [B2](#b2-lista-de-tools-hardcodeada-en-el-system-prompt) | Lista de tools hardcodeada en system prompt | **P0** | S | 🔴 Alto | — | ✅ v0.8.1 |
 | [B3](#b3-borrado-destructivo-sin-confirmación) | Borrado de sesiones sin confirmación | **P0** | S | 🟠 Medio | — | ✅ v0.8.1 |
 | [A1](#a1-permisos-por-herramienta) | Permisos por herramienta (fase 1) | **P0** | L | 🔴 Crítico | — | ✅ PR #75; sandbox diferido |
-| [A2](#a2-input-multilinea--historial-persistente-en-la-tui) | Input multilinea + historial persistente (TUI) | **P0** | M | 🔴 Alto | — | En integración |
+| [A2](#a2-input-multilinea--historial-persistente-en-la-tui) | Input multilinea + historial persistente (TUI) | **P0** | M | 🔴 Alto | — | ✅ v0.9.0 (PR #76) |
 | [A3](#a3-agentsmd--memoria-persistente-via-filesystem) | `AGENTS.md` / memoria via filesystem | **P0** | M | 🔴 Crítico | — | ✅ PR #74 |
-| [A4](#a4-feedback-de-enter-durante-un-run) | Feedback al presionar Enter durante un run | **P0** | S | 🟡 Bajo-Medio | — | En integración |
+| [A4](#a4-feedback-de-enter-durante-un-run) | Feedback al presionar Enter durante un run | **P0** | S | 🟡 Bajo-Medio | — | ✅ v0.9.0 (PR #76) |
 | [C1](#c1-panel-de-herramientas-en-vivo-pr-2-del-todo) | Panel de herramientas en vivo (diffs, labels) | **P1** | M | 🔴 Alto | — | Sprint 2 |
 | [C2](#c2-comandos-p1-faltantes) | `/compact`, `/status`, `/resume <id>` | **P1** | M | 🔴 Alto | — | Sprint 2 |
 | [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | Sprint 2–3 |
@@ -151,7 +151,7 @@ web_search = "deny"
 ---
 
 ### A2 — Input multilinea + historial persistente en la TUI
-**Archivo:** `phoson_cli/fullscreen/app.py::_build_layout` · **Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** en integración
+**Archivo:** `phoson_cli/fullscreen/app.py::_build_layout` · **Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (PR #76; follow-up de layout en v0.9.1)
 
 **Problema doble:**
 1. `TextArea(height=1, multiline=False)` — no hay forma de escribir prompts largos ni pegar bloques de código multi-línea. El TUI Textual descartado sí tenía Shift+Enter; la TUI actual perdió esa capacidad en la migración.
@@ -164,9 +164,13 @@ web_search = "deny"
 - Opcional (fase 2 del ítem): binding `Ctrl+E` para abrir el input actual en `$EDITOR` (patrón de Claude Code/Aider para prompts largos).
 
 **Criterio de listo.**
-- `Ctrl+J` inserta newline y Enter envía; test de bindings cubre ambos.
-- Al reiniciar la TUI, `↑` recupera el último mensaje de la sesión anterior.
-- El footer refleja el hint correcto según estado.
+- `Ctrl+J` inserta newline y Enter envía; test de bindings cubre ambos. ✅
+- Al reiniciar la TUI, `↑` recupera el último mensaje de la sesión anterior. ✅ (test `test_up_arrow_recalls_previous_session_history` + `test_history_survives_an_app_restart`)
+- El footer refleja el hint correcto según estado. ✅
+
+**Nota de integración (follow-up).** El primer merge (PR #76) dejó dos bugs de layout en el composer:
+1. `wrap_lines=False` — las líneas largas no se envolvían y se perdían por el borde derecho al escribir/pegar código. Corregido a `wrap_lines=True` (el default de `TextArea`).
+2. `D(min=1, max=5)` sin `dont_extend_height` — el pase "fill to max" de `HSplit` inflaba el input vacío hasta su altura máxima: el prompt ocupaba **5 líneas** en vez de 1. Corregido con `dont_extend_height=True` (el composer toma exactamente la altura de su contenido, con tope de 5); el pane de chat absorbe el resto. Tests de regresión: `test_input_window_reports_content_height_not_max` y la aserción de `wrap_lines()` en `test_input_is_multiline_with_dynamic_height`.
 
 ---
 
@@ -193,7 +197,7 @@ web_search = "deny"
 ---
 
 ### A4 — Feedback al presionar Enter durante un run
-**Archivo:** `phoson_cli/fullscreen/app.py::submit` · **Esfuerzo:** S · **Impacto:** 🟡→🟠 (barato pero mejora la percepción) · **Estado:** en integración
+**Archivo:** `phoson_cli/fullscreen/app.py::submit` · **Esfuerzo:** S · **Impacto:** 🟡→🟠 (barato pero mejora la percepción) · **Estado:** ✅ **Hecho** (PR #76)
 
 **Problema.** `_is_run_in_flight()` descarta el envío en silencio: el usuario escribe, da Enter, no pasa nada, y no sabe si el programa colgó, ignoró el texto o hay que reintentar.
 
@@ -203,7 +207,9 @@ web_search = "deny"
 
 Extra barato: mostrar en el header el estado ya existente (`status_text()` devuelve "Streaming"/"Running tool") con un spinner animado junto al status para que sea obvio sin leer.
 
-**Criterio de listo.** Test: submit durante run → buffer conserva texto y sink recibió el warn.
+**Criterio de listo.** Test: submit durante run → buffer conserva texto y sink recibió el warn. ✅ (`test_submit_while_run_in_flight_keeps_text_and_warns`; el estado en vivo del header queda cubierto por `test_header_shows_live_status_while_a_run_is_in_flight`).
+
+**Nota (follow-up v0.9.1).** El feedback visual vive en el **área del chat** (no en el header): al enviar aparece de inmediato un spinner transitorio con frases rotativas de *thinking* (`Thinking…`, `Pondering the problem…`, … — lista editable en `_THINKING_PHRASES` de `sink.py`, una frase nueva cada ~2.5 s), incluso antes del primer evento del provider; el label cambia fijo a `Streaming…`, `Running tool…` o `Running subagents…` según la fase, y toda la línea desaparece al completar o cancelar el turno. Está cubierto por pruebas de inicio inmediato, rotación de frases, fases, limpieza y cancelación pre-provider.
 
 ---
 
@@ -439,11 +445,11 @@ Sección `[keys]` en config.toml mapeando acciones → teclas (`toggle_reasoning
 ## Roadmap sugerido (secuencia de ataque)
 
 ```
-Sprint 0–1 (P0, cerrado salvo integración)
+Sprint 0–1 (P0, cerrado)
 ├── B1/B2/B3 quick wins      ✅ v0.8.1
 ├── A1.fase1 permisos         ✅ PR #75
 ├── A3 AGENTS.md              ✅ PR #74
-└── A2 multiline + history y A4 enter feedback  ← integración actual
+└── A2 multiline + history y A4 enter feedback  ✅ PR #76 (v0.9.0)
 
 Sprint 2 (competitividad, ~1-2 semanas)
 ├── C1 tool cards ricos

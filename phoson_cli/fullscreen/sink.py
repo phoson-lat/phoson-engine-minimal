@@ -64,6 +64,8 @@ class CurrentTurn:
     running_tool: bool = False
     subagent_tasks: list[str] | None = None
     subagent_frame: int = 0
+    activity_frame: int = 0
+    thinking_phrase_index: int = 0
 
 
 class FullScreenSink:
@@ -146,6 +148,84 @@ class FullScreenSink:
         if turn.content or turn.reasoning:
             return "Streaming"
         return f"thinking · step {turn.current_step}/{turn.max_steps}"
+
+    # ── Transient in-chat activity indicator ──────────────────────────────
+
+    def begin_activity(self) -> None:
+        """Show the in-chat spinner immediately after the user sends a turn.
+
+        The provider may take a noticeable time to emit ``AgentStartEvent``.
+        Creating the live turn here covers that otherwise silent interval;
+        the real start event then replaces it with the model/step metadata.
+        """
+        if self.current_turn is None:
+            self.current_turn = CurrentTurn(show_reasoning=self.show_reasoning_default)
+            self._touch()
+
+    def end_pending_activity(self) -> None:
+        """Remove an unclaimed pre-provider placeholder, if any.
+
+        Normal agent completion/error events already clear ``current_turn``.
+        This covers an abnormal provider return/cancellation before it emitted
+        even ``AgentStartEvent`` so a ``Thinking…`` spinner cannot get stuck.
+        """
+        turn = self.current_turn
+        if turn is not None and not (
+            turn.model
+            or turn.content
+            or turn.reasoning
+            or turn.running_tool
+            or turn.subagent_tasks
+        ):
+            self.current_turn = None
+            self._touch()
+
+    def activity_text(self) -> str:
+        """Human-readable phase for the transient chat activity line.
+
+        The *thinking* phase rotates through ``_THINKING_PHRASES`` (one every
+        ``_THINKING_PHRASE_TICKS`` ticks) so a long wait reads as progress
+        rather than a frozen label. The other phases are informational and
+        stay fixed: they describe the real state, not a mood.
+        """
+        turn = self.current_turn
+        if turn is None:
+            return ""
+        if turn.subagent_tasks:
+            return "Running subagents…"
+        if turn.running_tool:
+            return "Running tool…"
+        if turn.content:
+            return "Streaming…"
+        return _THINKING_PHRASES[turn.thinking_phrase_index % len(_THINKING_PHRASES)]
+
+    def activity_frame(self) -> str:
+        """Current spinner glyph for the active turn (empty when idle)."""
+        turn = self.current_turn
+        if turn is None:
+            return ""
+        index = turn.activity_frame % len(_ACTIVITY_SPINNER_FRAMES)
+        return _ACTIVITY_SPINNER_FRAMES[index]
+
+    def tick_activity_frame(self) -> bool:
+        """Advance the in-chat spinner; return whether a turn is active.
+
+        Also rotates the thinking phrase once per ``_THINKING_PHRASE_TICKS``
+        ticks (~2.5 s) — but only while actually thinking, so the phase
+        label doesn't churn under "Streaming…" / "Running tool…".
+        """
+        turn = self.current_turn
+        if turn is None:
+            return False
+        turn.activity_frame += 1
+        if (
+            not turn.content
+            and not turn.running_tool
+            and not turn.subagent_tasks
+            and turn.activity_frame % _THINKING_PHRASE_TICKS == 0
+        ):
+            turn.thinking_phrase_index += 1
+        return True
 
     # ── AgentEventSink ───────────────────────────────────────────────────
 
@@ -345,3 +425,25 @@ __all__ = ["FullScreenSink", "CurrentTurn", "REPAINT_INTERVAL_SECONDS"]
 #: Target repaint interval while streaming tokens (~16fps). Token events
 #: coalesce into at most one scheduled repaint per interval.
 REPAINT_INTERVAL_SECONDS = 0.06
+
+# Braille spinner for the transient activity line rendered in the chat pane.
+_ACTIVITY_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+# Rotating labels for the *thinking* phase of the activity line. Kept short
+# (they share one line with the spinner) and deliberately light on tone —
+# the goal is "still working" feedback, not decoration. Edit freely: this
+# list is the single source of truth.
+_THINKING_PHRASES = (
+    "Thinking…",
+    "Pondering the problem…",
+    "Reading between the lines…",
+    "Weighing the options…",
+    "Tracing the logic…",
+    "Chewing on that…",
+    "Mapping the next move…",
+    "Almost there…",
+)
+
+# How many activity ticks (~0.12 s each) per thinking-phrase rotation,
+# i.e. roughly one new phrase every 2.5 s.
+_THINKING_PHRASE_TICKS = 21
