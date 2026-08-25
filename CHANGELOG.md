@@ -8,6 +8,8 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.9.0 (2026-08-24)
+
 ### Feat
 
 - **agent**: per-tool permission model (IMPROVEMENTS.md A1, phase 1) — a
