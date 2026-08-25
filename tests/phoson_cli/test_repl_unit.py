@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,6 +32,33 @@ def repl(tmp_path):
 
 
 # ── SessionMetrics ─────────────────────────────────────────────────────────────
+
+
+def test_repl_history_path_uses_configured_override(tmp_path) -> None:
+    """The classic REPL shares the configured FileHistory path with the TUI."""
+    history_file = tmp_path / "nested" / "classic-history.txt"
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        repl = PhosonRepl(
+            PhosonConfig(
+                provider="ollama",
+                sessions_dir=tmp_path,
+                history_file=history_file,
+            )
+        )
+
+    assert repl._history_path() == history_file
+
+
+def test_repl_history_path_falls_back_for_legacy_config(tmp_path) -> None:
+    """Legacy config objects without history_file retain the default path."""
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        repl = PhosonRepl(PhosonConfig(provider="ollama", sessions_dir=tmp_path))
+
+    del repl.config.history_file
+
+    assert repl._history_path() == Path("~/.phoson/history.txt").expanduser()
 
 
 def test_session_metrics_load_from_meta() -> None:

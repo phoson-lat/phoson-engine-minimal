@@ -11,6 +11,30 @@ def test_history_file_defaults_to_shared_repl_path() -> None:
     assert PhosonConfig().history_file == Path("~/.phoson/history.txt").expanduser()
 
 
+def test_history_file_override_is_not_serialized_or_loaded(
+    monkeypatch, tmp_path
+) -> None:
+    """history_file is a per-run override, not durable configuration."""
+    from phoson_cli.config import save_config
+
+    home = tmp_path / "home"
+    (home / ".phoson").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    save_config(
+        PhosonConfig(
+            provider="ollama",
+            history_file=tmp_path / "custom" / "history.txt",
+        )
+    )
+
+    content = (home / ".phoson" / "config.toml").read_text(encoding="utf-8")
+    loaded = load_config()
+
+    assert "history_file" not in content
+    assert loaded.history_file == PhosonConfig().history_file
+
+
 def test_load_config_default_subagent_model(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     config_dir = home / ".phoson"

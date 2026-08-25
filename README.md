@@ -475,7 +475,8 @@ One-shot mode (`phoson-cli "task"`) is always stdout-only. The full-screen
 multiline input (`Ctrl+J` inserts a newline, `Enter` sends), persistent
 input history (`~/.phoson/history.txt`, shared with the classic REPL),
 and `/model`/`/provider`/`/sessions` pickers and bash confirmation as
-overlay floats.
+overlay floats. If a turn is already running, `Enter` keeps the draft and
+shows a warning; press `Esc` to cancel the active turn before sending it.
 ---
 
 ## 🔒 CI and security workflows

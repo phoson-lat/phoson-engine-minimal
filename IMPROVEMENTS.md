@@ -242,7 +242,7 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 1. **`/compact`** — disparador manual de la compactación. Hoy `SummarizationMiddleware` auto-corre a 80% de la ventana sin control del usuario. Implementación:
    - Con argumento opcional (`/compact keep last 10`) a futuro; v1: fuerza resumen ahora y muestra tokens antes→después.
    - Requiere exponer un método del summarizer (`force_compact(path) -> (before, after)`) y un evento de feedback en el sink.
-2. **`/status`** — vista única que reemplace los cuatro atomizados (`/env`, `/cost`, `/tokens`, `/steps`): provider · model · cwd · sesión · costo acumulado · tokens usados/ventana · pasos · MCP servers activos · sandbox/permisos activos. Renderizable como tabla Rich compacta. Mantener los comandos viejos como aliases (no romper scripts).
+2. **`/status`** — vista única que reemplace los cuatro atomizados (`/env`, `/cost`, `/tokens`, `/steps`): provider · model · cwd · sesión · costo acumulado · tokens usados/ventana · pasos · MCP servers activos · permisos activos. El estado de sandbox se añadirá solo después de implementar la fase 2 diferida de A1. Renderizable como tabla Rich compacta. Mantener los comandos viejos como aliases (no romper scripts).
 3. **`/resume <id>`** — carga directa por id (hoy solo vía picker). Trivial sobre `load_session` existente; autocomplete con `SessionsArgCompleter` ya preparado para esto.
 
 **Criterio de listo.** `/compact` reduce los tokens estimados y muestra el delta; `/status` imprime todas las dimensiones listadas; `/resume <id-parcial>` carga la sesión correcta (match por prefijo).
@@ -271,13 +271,13 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 
 Completar el PR-3 pendiente del TODO — el último tercio del plan look & feel:
 
-1. **Status bar persistente** (footer enriquecido): `model · provider · $cost sesión · tokens used/window · cwd · MCP n · sandbox state`. Ya casi todo existe disperso en header/prompt; consolidarlo en una línea inferior fija y aligerar el header (dejar marca + status).
+1. **Status bar persistente** (footer enriquecido): `model · provider · $cost sesión · tokens used/window · cwd · MCP n · permisos activos`. El estado de sandbox se añadirá solo después de implementar la fase 2 diferida de A1. Ya casi todo existe disperso en header/prompt; consolidarlo en una línea inferior fija y aligerar el header (dejar marca + status).
 2. **`/tree` coloreado** — árbol ASCII actual es monocromo; colorear nodo actual, ramas abandonadas en muted, labels en accent.
 3. **`/help` agrupado por categorías** (Session / Model / Info / Config / System) — 21 specs en lista plana hoy.
 4. **Error hints**: los paneles de error ganan una línea "hint" cuando el código es conocido (`auth` → "run /setup"; `max_iterations` → "raise with /config max_iterations"; `rate_limit` → "wait or switch model").
 5. **Banner**: animación sutil opcional (frames ASCII del logo) — low priority, detrás de un flag.
 
-**Criterio de listo.** El footer siempre refleja el estado real (probar cambiando modelo/provider/sandbox); `/help` agrupa visualmente; errores comunes muestran hint accionable.
+**Criterio de listo.** El footer siempre refleja el estado real (probar cambiando modelo/provider/permisos; el sandbox se añadirá tras la fase 2 diferida de A1); `/help` agrupa visualmente; errores comunes muestran hint accionable.
 
 ---
 

@@ -76,6 +76,23 @@ def test_shell_builds_full_screen_application(app: PhosonApp) -> None:
     assert app.app.style is not None
 
 
+def test_shell_creates_nested_history_directory(tmp_path) -> None:
+    """A2: FileHistory can use a configured path whose parent is absent."""
+    history_file = tmp_path / "nested" / "history" / "input.txt"
+
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        PhosonApp(
+            PhosonConfig(
+                provider="ollama",
+                sessions_dir=tmp_path,
+                history_file=history_file,
+            )
+        )
+
+    assert history_file.parent.is_dir()
+
+
 async def test_submit_schedules_a_run_and_clears_input(app: PhosonApp) -> None:
     with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)) as run:
         app._prompt_input.text = "hello world"
