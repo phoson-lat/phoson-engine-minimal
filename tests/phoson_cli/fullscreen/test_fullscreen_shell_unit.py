@@ -112,6 +112,19 @@ async def test_submit_ignores_blank_input(app: PhosonApp) -> None:
     run.assert_not_awaited()
 
 
+async def test_submit_preserves_multiline_agent_text(app: PhosonApp) -> None:
+    """Agent turns retain indentation and trailing whitespace verbatim."""
+    snippet = "  def greet():\n    return 'hello'  \n"
+
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)) as run:
+        app._prompt_input.text = snippet
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    run.assert_awaited_once_with(snippet)
+
+
 async def test_submit_ignores_input_while_a_run_is_in_flight(app: PhosonApp) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
@@ -254,6 +267,9 @@ async def test_history_survives_an_app_restart(app: PhosonApp, tmp_path) -> None
     second = build_app()
     strings = second._prompt_input.buffer.history.load_history_strings()
     assert "first session message" in list(strings)
+
+
+def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
     app.sink.blocks = ["one", "two"]
     app.sink.dirty = False
     app._chat_scroll_top = 5

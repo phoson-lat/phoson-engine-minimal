@@ -31,15 +31,15 @@ The session runtime is decoupled from the front end:
   instead of hanging or running.
 - `formatting.py` / `tools/subagent_panel.py` — pure data→renderable
   formatters shared by every front end.
-- `PhosonRepl` (`repl.py`) — the classic front end: prompt_toolkit input
-  loop, key bindings, completer, prompt display, banner. It adapts the
-  Rich `Renderer` to the sink via `ClassicSink` and delegates all
+- `PhosonRepl` (`repl.py`) — the retained classic front end: prompt_toolkit
+  input loop, key bindings, completer, prompt display, banner. It adapts
+  the Rich `Renderer` to the sink via `ClassicSink` and delegates all
   runtime calls to the controller.
-
-A full-screen `prompt_toolkit` front end (persistent scrollable chat
-pane, header/footer, `/model`/`/provider`/`/sessions` pickers and bash
-confirmation as overlay floats) is planned to replace the classic REPL —
-see the project's implementation plan for the phased rollout.
+- `PhosonApp` (`fullscreen/app.py`) — the default full-screen
+  `prompt_toolkit` front end: persistent scrollable chat pane,
+  header/footer, multiline composer, `/model`/`/provider`/`/sessions`
+  pickers, and bash confirmation overlay floats. It uses the same
+  controller and presentation protocols as the retained classic REPL.
 
 ## Running the CLI
 

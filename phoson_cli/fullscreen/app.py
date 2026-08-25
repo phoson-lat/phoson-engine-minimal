@@ -424,8 +424,8 @@ class PhosonApp:
         shows the live status ("Streaming" / "Running tool") so the user can
         see the turn is still going.
         """
-        text = self._prompt_input.text.strip()
-        if not text:
+        text = self._prompt_input.text
+        if not text.strip():
             return
         if self._is_run_in_flight():
             self.sink.notify(
