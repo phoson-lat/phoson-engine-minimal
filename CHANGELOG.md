@@ -46,14 +46,15 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   (`TAVILY_API_KEY`), selected via `PHOSON_WEB_SEARCH_BACKEND` or auto-detected
   from whichever key is present. Both tools integrate with the A1 permission
   model.
-- **cli**: persistent status bar + look & feel pass (IMPROVEMENTS.md C4) — a
-  fixed bottom bar shows model · provider · $session cost · tokens
-  used/window · cwd · MCP count · active permission levels; `/help` renders
-  grouped by category (Session / Model / Info / Config & System); `/tree`
-  prints a colored tree (current node accented, abandoned branches muted,
-  labels highlighted) as a shared Rich renderable; error panels gain an
-  actionable hint line for known codes (`auth` → run /setup, `rate_limit` →
-  wait or switch model, `max_iterations` → raise budget).
+- **cli**: consolidated runtime header + look & feel pass
+  (IMPROVEMENTS.md C4) — the top bar shows `model (provider)` · cwd ·
+  `$session cost` · tokens used/window alongside transient indicators and
+  live status; the lower footer contains keyboard shortcuts only. `/help`
+  renders grouped by category (Session / Model / Info / Config & System);
+  `/tree` prints a colored tree (current node accented, abandoned branches
+  muted, labels highlighted) as a shared Rich renderable; error panels gain
+  an actionable hint line for known codes (`auth` → run /setup,
+  `rate_limit` → wait or switch model, `max_iterations` → raise budget).
 
 ## v0.9.1 (2026-08-25)
 
