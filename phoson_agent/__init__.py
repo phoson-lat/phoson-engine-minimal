@@ -41,6 +41,7 @@ from .exceptions import (
     PhosonSessionNotFoundError,
 )
 from .middleware import AgentMiddleware, RetryMiddleware
+from .permissions import PermissionPolicy, ToolBlockedError, PermissionMiddleware
 from .plugin_loader import PluginRegistry, load_plugin, register_loader
 
 __all__ = [
@@ -88,4 +89,8 @@ __all__ = [
     "PhosonSessionError",
     "PhosonSessionNotFoundError",
     "PhosonSessionCorruptError",
+    # permissions (A1)
+    "PermissionMiddleware",
+    "PermissionPolicy",
+    "ToolBlockedError",
 ]

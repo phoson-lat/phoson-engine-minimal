@@ -36,6 +36,7 @@ from phoson_agent._internals import (
     subagent_label,
     to_result_text,
 )
+from phoson_agent.exceptions import PhosonAgentError
 
 # Type aliases for the middleware-applying callbacks the engine injects.
 # Keeping them typed keeps the runner decoupled from ``AgentEngine``.
@@ -114,7 +115,19 @@ class ToolRunner:
         cancellation handler in :meth:`execute` uses this flag to know
         whether to re-emit a cancellation result for this tool.
         """
-        call = await self._apply_before_tool(original_call)
+        call: ToolCallEvent | None
+        try:
+            call = await self._apply_before_tool(original_call)
+        except PhosonAgentError as exc:
+            # Permission refusals (ToolBlockedError) surface as an
+            # actionable tool result — the model sees *why* the call was
+            # refused and how to proceed — instead of the generic
+            # "blocked by middleware" text.
+            async for event in self._handle_refused(
+                original_call, history, steps, str(exc)
+            ):
+                yield event, True
+            return
 
         if call is None:
             async for event in self._handle_blocked(original_call, history, steps):
@@ -278,6 +291,60 @@ class ToolRunner:
             )
         )
         yield await self._prepare_event(AgentStepDoneEvent(step=blocked_step))
+
+    async def _handle_refused(
+        self,
+        original_call: ToolCallEvent,
+        history: list[Message],
+        steps: list[RunStep],
+        message: str,
+    ) -> AsyncIterator[AgentEvent]:
+        """Handle a call refused by the permission middleware.
+
+        The refusal ``message`` becomes the tool result so the model can
+        adapt (and the user sees an actionable explanation), while the
+        step records a stable ``permission_denied`` error code.
+        """
+        history.append(
+            Message(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_call_id=original_call.tool_call_id,
+                        result=message,
+                        error=True,
+                    )
+                ],
+            )
+        )
+
+        now = now_utc()
+        refused_step = RunStep(
+            kind="tool",
+            started_at=now,
+            ended_at=now,
+            duration_ms=0,
+            tool_name=original_call.tool_name,
+            tool_call_id=original_call.tool_call_id,
+            error="permission_denied",
+            payload={
+                "args": original_call.args,
+                "result": message,
+            },
+        )
+        steps.append(refused_step)
+
+        yield await self._prepare_event(
+            AgentToolDoneEvent(
+                index=original_call.index,
+                tool_call_id=original_call.tool_call_id,
+                tool_name=original_call.tool_name,
+                result=message,
+                error="permission_denied",
+                duration_ms=0,
+            )
+        )
+        yield await self._prepare_event(AgentStepDoneEvent(step=refused_step))
 
     def _fill_cancelled_results(
         self,
