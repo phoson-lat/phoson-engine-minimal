@@ -215,11 +215,8 @@ class PhosonApp:
         )
 
         bottom_margin = Window(height=1, char="—", style="class:separator")
-        # Persistent status bar (IMPROVEMENTS.md C4): model · provider ·
-        # cost · tokens · cwd · MCP · permissions, always visible.
-        status_window = Window(
-            content=FormattedTextControl(self._get_status_bar_text), height=1
-        )
+        # The footer is intentionally keyboard hints only. Stable runtime
+        # facts live in the compact header, avoiding duplicated UI chrome.
         footer_window = Window(
             content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
         )
@@ -231,8 +228,7 @@ class PhosonApp:
                 separator_line,
                 self._prompt_input,
                 bottom_margin,
-                status_window,
-                footer_window,
+                footer_window,  # Now contains only keyboard hints
             ]
         )
 
@@ -273,7 +269,6 @@ class PhosonApp:
                 "header_dim": self.theme.pt_muted,
                 "separator": self.theme.pt_muted_deep,
                 "footer": self.theme.pt_muted_deep,
-                "statusbar": f"bg:{self.theme.completion_bg} {self.theme.pt_accent}",
                 "prompt_text": self.theme.prompt_input,
                 "frame": f"bg:{self.theme.completion_bg}",
                 "frame.border": self.theme.pt_accent,
@@ -362,18 +357,31 @@ class PhosonApp:
     # ── Rendering ────────────────────────────────────────────────────────
 
     def _get_header_text(self) -> HTML:
-        """Lightweight header: brand, transient indicators, live run status.
+        """Compact runtime header: brand · model (provider) · cwd · usage · status.
 
-        Stable runtime facts (provider/model/session/tokens/cost/etc.) belong
-        exclusively to the persistent status bar below. Keeping them out of
-        this line prevents the duplicated chrome reported in PR #81.
+        The header is the single location for session facts in the
+        full-screen UI. The lower line deliberately contains only keyboard
+        hints, so no model/provider/cost/token/cwd value is repeated.
         """
-        status = self.sink.status_text()
-        attachments = len(self.repl.attachments)
+        repl = self.repl
+        cost = repl.session_metrics.total_cost_usd
+        model_provider = f"{repl.current_model} ({repl.config.provider})"
+        cwd = self._short_cwd(Path.cwd())
+        token_cost = f"{self._token_indicator()} tok · ${cost:.4f}"
+
+        attachments = len(repl.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
         memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
+        status = self.sink.status_text()
+
         return HTML(
             '<style class="header"> phoson </style>'
+            '<style class="header_dim"> | </style>'
+            f'<style class="header_dim">{model_provider}</style>'
+            '<style class="header_dim"> | </style>'
+            f'<style class="header_dim">{cwd}</style>'
+            '<style class="header_dim"> | </style>'
+            f'<style class="header_dim">{token_cost}</style>'
             f'<style class="header_dim">{attach_part}{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
@@ -412,43 +420,11 @@ class PhosonApp:
 
         return f"{_fmt(used)}/{_fmt(window)}"
 
-    def _get_status_bar_text(self) -> HTML:
-        """Persistent one-line runtime status (IMPROVEMENTS.md C4).
-
-        ``model · provider · $cost · tokens used/window · cwd · MCP n ·
-        permissions``. The header keeps brand + live status; this bar
-        carries the session's standing facts.
-        """
-        repl = self.repl
-        cost = repl.session_metrics.total_cost_usd
-        mcp_count = 0
-        for plugin in getattr(repl.engine, "_loaded_plugins", []):
-            servers = getattr(plugin, "servers", {})
-            if isinstance(servers, dict):
-                mcp_count += len(servers)
-
-        from ..permissions_store import load_policy
-
-        policy = load_policy()
-        levels = sorted(policy.levels.items())
-        permissions = (
-            " · ".join(f"{tool}:{lvl}" for tool, lvl in levels[:3]) or "allow all"
-        )
-        suffix = f" +{len(levels) - 3}" if len(levels) > 3 else ""
-
-        cwd = Path.cwd()
-
-        def _shorten(p: Path) -> str:
-            parts = p.parts
-            return str(Path(*parts[-2:])) if len(parts) > 2 else str(p)
-
-        return HTML(
-            '<style class="statusbar"> '
-            f"{repl.current_model} · {repl.config.provider} · "
-            f"${cost:.4f} · {self._token_indicator()} tok · "
-            f"{_shorten(cwd)} · MCP {mcp_count} · perms {permissions}{suffix}"
-            " </style>"
-        )
+    @staticmethod
+    def _short_cwd(cwd: Path) -> str:
+        """Compact display path for the fixed-width header."""
+        parts = cwd.parts
+        return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
 
     def _render_chat(self) -> ANSI:
         term_width = shutil.get_terminal_size((80, 24)).columns

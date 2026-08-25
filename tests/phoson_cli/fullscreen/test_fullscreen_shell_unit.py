@@ -9,12 +9,13 @@ patch ``PhosonRepl._run_agent`` to avoid a real network call.
 """
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
 from phoson_cli.config import PhosonConfig
-from phoson_cli.fullscreen.app import PhosonApp
+from phoson_cli.fullscreen.app import _FOOTER_HINT, PhosonApp
 
 
 def _trigger(app: PhosonApp, key: str) -> None:
@@ -655,33 +656,33 @@ async def test_ctrl_v_notifies_when_clipboard_has_no_image(app: PhosonApp) -> No
     assert "No image on the clipboard" in app._render_chat().value
 
 
-def test_status_bar_shows_token_indicator_and_runtime_facts(app: PhosonApp) -> None:
+def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
     app.repl._context_window = 128_000
     app.repl._context_tokens = 12_400
+    app.repl.session_metrics.total_cost_usd = 0.0123
 
-    text = app._get_status_bar_text().value
+    text = app._get_header_text().value
 
     assert "12.4k/128.0k" in text or "12.4k/128k" in text
-    assert app.repl.config.provider in text
-    assert app.repl.current_model in text
+    assert f"{app.repl.current_model} ({app.repl.config.provider})" in text
+    assert "$0.0123" in text
+    assert app._short_cwd(Path.cwd()) in text
 
 
 def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None:
     assert "📎" not in app._get_header_text().value
 
 
-def test_header_is_lightweight_and_does_not_repeat_status_bar_facts(
-    app: PhosonApp,
-) -> None:
-    """Provider/model/session/tokens belong only to the persistent status bar."""
+def test_footer_is_keyboard_hints_only(app: PhosonApp) -> None:
+    """Stable runtime facts belong to the header and are never duplicated below."""
     header = app._get_header_text().value
-    status_bar = app._get_status_bar_text().value
 
-    assert app.repl.config.provider not in header
-    assert app.repl.current_model not in header
+    assert app.repl.config.provider in header
+    assert app.repl.current_model in header
     assert app.repl.tree.session_id[:8] not in header
-    assert app.repl.config.provider in status_bar
-    assert app.repl.current_model in status_bar
+    assert "Send" in _FOOTER_HINT
+    assert app.repl.config.provider not in _FOOTER_HINT
+    assert app.repl.current_model not in _FOOTER_HINT
 
 
 def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:
