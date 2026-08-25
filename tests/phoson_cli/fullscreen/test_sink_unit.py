@@ -52,6 +52,92 @@ def test_on_user_message_appends_block_and_invalidates() -> None:
     assert ticks
 
 
+def test_activity_indicator_is_visible_before_the_first_agent_event() -> None:
+    """A4: Enter feedback starts immediately, not only after provider I/O."""
+    sink, _ = _make_sink()
+
+    sink.begin_activity()
+
+    assert sink.current_turn is not None
+    assert sink.activity_text() == "Thinking…"
+    first_frame = sink.activity_frame()
+    assert sink.tick_activity_frame() is True
+    assert sink.activity_frame() != first_frame
+    assert "Thinking" in render_chat(sink, width=80)
+
+
+def test_activity_indicator_describes_the_live_turn_phase() -> None:
+    sink, _ = _make_sink()
+    sink.begin_activity()
+    assert sink.activity_text() == "Thinking…"
+
+    sink.current_turn.content = "hello"
+    assert sink.activity_text() == "Streaming…"
+
+    sink.current_turn.running_tool = True
+    assert sink.activity_text() == "Running tool…"
+
+    sink.current_turn.subagent_tasks = ["inspect tests"]
+    assert sink.activity_text() == "Running subagents…"
+
+
+def test_thinking_phase_rotates_through_phrases() -> None:
+    """The *thinking* label rotates through the phrase list so a long wait
+    reads as progress; other phases stay fixed."""
+    from phoson_cli.fullscreen.sink import (
+        _THINKING_PHRASES,
+        _THINKING_PHRASE_TICKS,
+    )
+
+    sink, _ = _make_sink()
+    sink.begin_activity()
+    assert sink.activity_text() == _THINKING_PHRASES[0]
+
+    # Ticks below the rotation threshold keep the same phrase.
+    for _ in range(_THINKING_PHRASE_TICKS - 1):
+        sink.tick_activity_frame()
+    assert sink.activity_text() == _THINKING_PHRASES[0]
+
+    # Crossing the threshold advances to the next phrase (and wraps).
+    sink.tick_activity_frame()
+    assert sink.activity_text() == _THINKING_PHRASES[1]
+    for _ in range(len(_THINKING_PHRASES) - 1):
+        for _ in range(_THINKING_PHRASE_TICKS):
+            sink.tick_activity_frame()
+    assert sink.activity_text() == _THINKING_PHRASES[0]  # wrapped around
+
+
+def test_thinking_phrases_do_not_rotate_out_of_the_thinking_phase() -> None:
+    """Once the turn is streaming / running a tool, the phase label is fixed
+    and the phrase index stops advancing."""
+    sink, _ = _make_sink()
+    sink.begin_activity()
+    sink.current_turn.content = "hello"
+
+    for _ in range(10):
+        sink.tick_activity_frame()
+    assert sink.activity_text() == "Streaming…"
+    assert sink.current_turn.thinking_phrase_index == 0
+
+
+def test_hidden_reasoning_does_not_duplicate_the_activity_spinner() -> None:
+    """Regression: while thinking is hidden, the transient activity line is
+    the only in-chat feedback — do not add the streaming panel's separate
+    ``Phoson / thinking...`` placeholder below it.
+    """
+    sink, _ = _make_sink()
+    sink.begin_activity()
+    assert sink.current_turn is not None
+    sink.current_turn.reasoning = "internal reasoning"
+    sink.current_turn.show_reasoning = False
+
+    text = render_chat(sink, width=80)
+
+    assert "Thinking…" in text
+    assert "Phoson" not in text
+    assert "thinking..." not in text
+
+
 def test_start_token_done_builds_streaming_panel_then_finalizes() -> None:
     sink, _ = _make_sink()
     sink.on_event(AgentStartEvent(model="gpt-4o", message_count=1, max_iterations=10))
@@ -72,6 +158,9 @@ def test_start_token_done_builds_streaming_panel_then_finalizes() -> None:
     text = render_chat(sink, width=80)
     assert "Hello world" in text
     assert "1 step" in text
+    # The in-chat spinner is transient, never part of finished scrollback.
+    assert "Thinking…" not in text
+    assert "Streaming…" not in text
 
 
 def test_text_interleaves_with_tool_calls_in_chronological_order() -> None:

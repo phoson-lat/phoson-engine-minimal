@@ -178,7 +178,15 @@ class PhosonApp:
             height=D(min=1, max=_INPUT_MAX_LINES),
             prompt="❯ ",
             multiline=True,
-            wrap_lines=False,
+            # Long lines must wrap (not scroll horizontally off-screen) —
+            # the default is True; an earlier port set it to False and
+            # pasted/typed code disappeared past the right edge (A2).
+            wrap_lines=True,
+            # Take exactly the content height (capped at _INPUT_MAX_LINES)
+            # and let the chat pane absorb the rest. Without this, HSplit's
+            # "fill to max" pass inflates the empty composer to its max
+            # height — a 5-line box around a single line (A2).
+            dont_extend_height=True,
             # Shared with the classic REPL (same file) so input history
             # survives restarts and is consistent across front ends
             # (IMPROVEMENTS.md A2). Overridable via config (tests).
@@ -490,19 +498,26 @@ class PhosonApp:
             self.app.exit()
 
     async def _run_turn(self, text: str) -> None:
-        ticker = self.app.create_background_task(self._tick_subagent_panel())
+        # Start feedback before the controller/provider can emit its first
+        # AgentStartEvent. This removes the otherwise silent post-Enter gap.
+        self.sink.begin_activity()
+        ticker = self.app.create_background_task(self._tick_activity_indicators())
         try:
             await self.repl._run_agent(text)
         except asyncio.CancelledError:
             pass
         finally:
             ticker.cancel()
+            self.sink.end_pending_activity()
             self.app.invalidate()
 
-    async def _tick_subagent_panel(self) -> None:
+    async def _tick_activity_indicators(self) -> None:
+        """Animate the transient in-chat activity and subagent indicators."""
         while True:
             await asyncio.sleep(_SUBAGENT_TICK_SECONDS)
-            if self.sink.tick_subagent_frame():
+            activity_active = self.sink.tick_activity_frame()
+            subagents_active = self.sink.tick_subagent_frame()
+            if activity_active or subagents_active:
                 self.sink.dirty = True
                 self.app.invalidate()
 

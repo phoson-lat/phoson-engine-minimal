@@ -182,6 +182,25 @@ async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -
         await app._run_task
 
 
+def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> None:
+    """A4 (extra): the header already shows the live status
+    ("Streaming" / "Running tool") while a turn is in flight, so it is
+    obvious at a glance that the app is working and not frozen."""
+    from phoson_cli.fullscreen.sink import CurrentTurn
+
+    app.sink.current_turn = CurrentTurn(model="m", max_steps=10)
+    assert "Online" not in app._get_header_text().value
+
+    app.sink.current_turn.content = "partial"
+    assert "Streaming" in app._get_header_text().value
+
+    app.sink.current_turn.running_tool = True
+    assert "Running tool" in app._get_header_text().value
+
+    app.sink.current_turn = None
+    assert "Online" in app._get_header_text().value
+
+
 async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:
     """A2: Ctrl+J is the newline key; Enter keeps submitting.
 
@@ -219,6 +238,78 @@ def test_input_is_multiline_with_dynamic_height(app: PhosonApp) -> None:
     assert isinstance(height, Dimension)
     assert height.max == 5  # _INPUT_MAX_LINES
     assert height.min == 1
+
+    # The composer must wrap long lines instead of scrolling them off the
+    # right edge (A2) — the earlier port set wrap_lines=False.
+    assert window.wrap_lines() is True
+
+
+async def test_input_window_reports_content_height_not_max(app: PhosonApp) -> None:
+    """A2: the composer takes exactly its content height (capped at
+    _INPUT_MAX_LINES) so an empty input is one line, not a 5-line box.
+
+    Regression: with a plain ``D(min=1, max=5)`` and no
+    ``dont_extend_height``, HSplit's "fill to max" pass inflates the empty
+    composer to its max height (verified by rendering the real layout: the
+    prompt occupied 5 lines before the fix).
+
+    Async because ``preferred_height`` → ``BufferControl.create_content``
+    may schedule the buffer's background history load, which needs a
+    running loop.
+    """
+    window = app._prompt_input.window
+    assert window.dont_extend_height() is True
+
+    app._prompt_input.text = ""
+    assert window.preferred_height(150, 45).preferred == 1
+
+    app._prompt_input.text = "line one\nline two\nline three"
+    assert window.preferred_height(150, 45).preferred == 3
+
+    # Beyond the cap the window keeps its max (internal scroll).
+    app._prompt_input.text = "\n".join(f"line {i}" for i in range(7))
+    dim = window.preferred_height(150, 45)
+    assert dim.preferred == 5
+    assert dim.max == 5
+
+
+async def test_up_arrow_recalls_previous_session_history(app: PhosonApp) -> None:
+    """A2 criterio de listo: ↑ recalls the last message of the previous
+    session after a restart.
+
+    Drives the real buffer history path: FileHistory entries (written in
+    prompt_toolkit's on-disk format, as a previous session would have left
+    them) are loaded into the buffer's working lines the same way
+    ``load_history_if_not_yet_loaded`` does on first render, then
+    ``auto_up`` — what the ``up`` key binding calls — must surface them on
+    the first line.
+    """
+    from prompt_toolkit.application.current import set_app
+
+    # What a previous session's submits would have persisted.
+    history_path = app.repl.config.history_file
+    history_path.write_text(
+        "# 2026-08-24 10:00:00\n+first session message\n"
+        "# 2026-08-24 10:05:00\n+remembered message\n",
+        encoding="utf-8",
+    )
+
+    buf = app._prompt_input.buffer
+    with set_app(app.app):
+        # Pre-populate the working lines exactly the way the async history
+        # load does (``load()`` yields newest-first; each is appendleft'd,
+        # so the newest entry sits at ``working_index - 1``).
+        for item in buf.history.load_history_strings():
+            buf._working_lines.appendleft(item)
+            buf.working_index += 1
+
+    assert buf.text == ""
+    buf.auto_up()
+    assert buf.text == "remembered message"
+    buf.auto_up()
+    assert buf.text == "first session message"
+    buf.auto_down()
+    assert buf.text == "remembered message"
 
 
 async def test_submit_persists_input_to_shared_history_file(app: PhosonApp) -> None:
@@ -293,38 +384,38 @@ def test_ctrl_q_and_ctrl_c_request_exit_when_idle(app: PhosonApp) -> None:
     mock_exit.assert_called_once()
 
 
-async def test_ctrl_c_exits_directly_before_any_content_is_visible(
+async def test_ctrl_c_cancels_during_pre_provider_thinking_feedback(
     app: PhosonApp,
 ) -> None:
-    """Whenever ``sink.current_turn`` is None — before AgentStartEvent
+    """A4: Ctrl+C cancels (rather than exits) during the new visible gap
+    between Enter and the provider's first AgentStartEvent.
 
-    fires, or after AgentDoneEvent/AgentErrorEvent/flush_line already
-    cleared it — nothing is visibly happening (no spinner, no status
-    change), whether that's because the turn hasn't started yet or
-    because only invisible trailing bookkeeping (persisting reasoning,
-    saving the session) remains. Either way Ctrl+C/Ctrl+Q should just
-    quit rather than silently "cancel" something the user can't see —
-    the still-pending run task gets cancelled for free by the
-    Application shutting down (prompt_toolkit's own background-task
-    contract), instead of forcing a confusing second keypress.
+    The transient in-chat ``Thinking…`` spinner means the turn is now visibly
+    active immediately, so it deserves the same cancellation semantics as
+    streaming content or a running tool.
     """
     started = asyncio.Event()
 
     async def slow_run_agent(text: str) -> None:
         started.set()
-        await asyncio.sleep(10)  # never touches the sink — nothing visible yet
+        await asyncio.sleep(10)  # deliberately emits no agent events
 
     with patch.object(app.repl, "_run_agent", new=slow_run_agent):
         app._prompt_input.text = "hello"
         _trigger(app, "enter")
         await started.wait()
 
-        assert app.sink.current_turn is None
+        assert app.sink.current_turn is not None
+        assert "Thinking" in app._render_chat().value
 
-        with patch.object(app.app, "exit") as mock_exit:
+        with (
+            patch.object(app.repl, "cancel_current") as mock_cancel,
+            patch.object(app.app, "exit") as mock_exit,
+        ):
             _trigger(app, "c-c")
 
-        mock_exit.assert_called_once()
+        mock_cancel.assert_called_once()
+        mock_exit.assert_not_called()
         app._run_task.cancel()  # tear down the still-pending fake turn
 
 
