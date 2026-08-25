@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.9.1 · 960+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · > C1–C4 cerrados en el sprint P1 (rama `feat/cli-p1-c1-c4`).
+> **Estado de referencia:** v0.10.0 · 960+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81).
 
 ---
 
@@ -220,7 +220,7 @@ Después de P0, estas son las mejoras que más acercan phoson-cli a la experienc
 ---
 
 ### C1 — Panel de herramientas en vivo (PR-2 del TODO)
-**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho en v0.10.0** (PR #81)
 
 **Qué falta.** Las llamadas a herramientas se ven como una línea `⚙ label · preview[:50]…` con spinner. Sin diffs coloreados al editar, sin "writing file (path, +N lines)", sin feedback de progreso. Claude Code y OpenCode muestran tarjetas ricas por herramienta; es de lo primero que nota un usuario nuevo.
 
@@ -238,10 +238,12 @@ Después de P0, estas son las mejoras que más acercan phoson-cli a la experienc
 
 **Nota de arquitectura.** Todo el formato debe vivir en `formatting.py` como renderables puros para que ambos frontends lo reutilicen (patrón ya establecido).
 
+**Follow-up v0.10.0.** En el frontend full-screen, la card final reemplaza in-place su línea de inicio mediante `tool_call_id` (también para calls paralelas), evitando headers duplicados en el transcript.
+
 ---
 
 ### C2 — Comandos P1 faltantes
-**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho en v0.10.0** (PR #81)
 
 Tres comandos que el propio TODO ya identifica como P1 y que completan el control del runtime:
 
@@ -256,7 +258,7 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 ---
 
 ### C3 — Web tools (`web_search`, `web_fetch`)
-**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho en v0.10.0** (PR #81)
 
 **Qué falta.** El sistema de tools del CLI es austero: `read_file/write_file/patch_file/list_dir/bash/search/subagent(s)/view_image`. No hay acceso a la web — capacidad estándar en todos los harnesses comparables (Claude Code, Codex, Qwen, OpenCode). Para un agente de coding esto significa: no puede mirar docs de una librería, verificar un issue, o buscar el error exacto de un stacktrace.
 
@@ -273,11 +275,11 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 ---
 
 ### C4 — Status bar persistente y look & feel final (PR-3)
-**Esfuerzo:** S-M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (sprint P1)
+**Esfuerzo:** S-M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho en v0.10.0** (PR #81)
 
 Completar el PR-3 pendiente del TODO — el último tercio del plan look & feel:
 
-1. **Status bar persistente** (footer enriquecido): `model · provider · $cost sesión · tokens used/window · cwd · MCP n · permisos activos`. El estado de sandbox se añadirá solo después de implementar la fase 2 diferida de A1. Ya casi todo existe disperso en header/prompt; consolidarlo en una línea inferior fija y aligerar el header (dejar marca + status).
+1. **Header consolidado + footer de shortcuts**: `model (provider) · cwd · tokens used/window · $cost sesión` vive en una sola barra superior fija junto con marca, indicadores transitorios y estado de run; el footer inferior conserva solo los shortcuts de teclado. Se evitó deliberadamente repetir provider/model/tokens/costo en ambas barras. MCP y permisos siguen disponibles en `/status`; el estado de sandbox se añadirá solo después de A1 fase 2.
 2. **`/tree` coloreado** — árbol ASCII actual es monocromo; colorear nodo actual, ramas abandonadas en muted, labels en accent.
 3. **`/help` agrupado por categorías** (Session / Model / Info / Config / System) — 21 specs en lista plana hoy.
 4. **Error hints**: los paneles de error ganan una línea "hint" cuando el código es conocido (`auth` → "run /setup"; `max_iterations` → "raise with /config max_iterations"; `rate_limit` → "wait or switch model").
