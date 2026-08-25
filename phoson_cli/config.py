@@ -85,6 +85,10 @@ class PhosonConfig:
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
+    # Input-history file for the front ends. Not a persisted setting (not
+    # loaded from / saved to config.toml) — overridable per run, mainly so
+    # tests can point it at a temp file instead of the user's real history.
+    history_file: Path = Path("~/.phoson/history.txt").expanduser()
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:

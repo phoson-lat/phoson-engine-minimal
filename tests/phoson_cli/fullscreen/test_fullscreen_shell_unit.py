@@ -62,13 +62,35 @@ def _trigger_if_enabled(app: PhosonApp, key: str) -> bool:
 def app(tmp_path) -> PhosonApp:
     with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
-        config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            # Keep input-history writes out of the developer's real file.
+            history_file=tmp_path / "history.txt",
+        )
         return PhosonApp(config)
 
 
 def test_shell_builds_full_screen_application(app: PhosonApp) -> None:
     assert app.app.layout is not None
     assert app.app.style is not None
+
+
+def test_shell_creates_nested_history_directory(tmp_path) -> None:
+    """A2: FileHistory can use a configured path whose parent is absent."""
+    history_file = tmp_path / "nested" / "history" / "input.txt"
+
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        PhosonApp(
+            PhosonConfig(
+                provider="ollama",
+                sessions_dir=tmp_path,
+                history_file=history_file,
+            )
+        )
+
+    assert history_file.parent.is_dir()
 
 
 async def test_submit_schedules_a_run_and_clears_input(app: PhosonApp) -> None:
@@ -88,6 +110,19 @@ async def test_submit_ignores_blank_input(app: PhosonApp) -> None:
         await asyncio.sleep(0)
 
     run.assert_not_awaited()
+
+
+async def test_submit_preserves_multiline_agent_text(app: PhosonApp) -> None:
+    """Agent turns retain indentation and trailing whitespace verbatim."""
+    snippet = "  def greet():\n    return 'hello'  \n"
+
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)) as run:
+        app._prompt_input.text = snippet
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    run.assert_awaited_once_with(snippet)
 
 
 async def test_submit_ignores_input_while_a_run_is_in_flight(app: PhosonApp) -> None:
@@ -111,6 +146,127 @@ async def test_submit_ignores_input_while_a_run_is_in_flight(app: PhosonApp) -> 
 
         release.set()
         await app._run_task
+
+
+async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -> None:
+    """A4: Enter during a run must not be silent — keep the text and warn.
+
+    The user's draft is preserved (not cleared) and a warn notice explains
+    that a turn is already running, so a no-op Enter no longer looks like a
+    frozen app.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with patch.object(app.repl, "_run_agent", new=slow_run_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+
+        blocks_before = len(app.sink.blocks)
+        app._prompt_input.text = "my draft"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+
+        # The draft survives the rejected submit.
+        assert app._prompt_input.text == "my draft"
+        # A warn notice was appended to the transcript.
+        assert len(app.sink.blocks) == blocks_before + 1
+        assert "already running" in app._render_chat().value
+
+        release.set()
+        await app._run_task
+
+
+async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:
+    """A2: Ctrl+J is the newline key; Enter keeps submitting.
+
+    Shift+Enter/Ctrl+Enter are not portable (prompt_toolkit's VT100 parser
+    does not map the CSI-u sequences modern terminals emit), so Ctrl+J — a
+    single universal byte — carries the newline role. The app-level ``enter``
+    binding must keep winning over the buffer's built-in multiline newline.
+    """
+    app._prompt_input.text = "line one"
+    app._prompt_input.buffer.cursor_position = len("line one")
+
+    _trigger(app, "c-j")
+    assert app._prompt_input.text == "line one\n"
+
+    app._prompt_input.buffer.insert_text("line two")
+    assert app._prompt_input.text == "line one\nline two"
+
+    # Enter submits the whole multiline text and clears the input.
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+
+    assert app._run_task is not None
+    await app._run_task
+
+
+def test_input_is_multiline_with_dynamic_height(app: PhosonApp) -> None:
+    """The TextArea grows with content up to a cap, then scrolls internally."""
+    from prompt_toolkit.layout.dimension import Dimension
+
+    assert app._prompt_input.buffer.multiline() is True
+
+    window = app._prompt_input.window
+    height = window.height
+    assert isinstance(height, Dimension)
+    assert height.max == 5  # _INPUT_MAX_LINES
+    assert height.min == 1
+
+
+async def test_submit_persists_input_to_shared_history_file(app: PhosonApp) -> None:
+    """A2: submitted inputs survive restarts via ~/.phoson/history.txt.
+
+    The custom submit path bypasses the buffer's accept handler, so it must
+    append to the history explicitly. The file format is prompt_toolkit's
+    FileHistory one (``+``-prefixed lines), shared with the classic REPL.
+    """
+    history_path = app.repl.config.history_file
+
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        app._prompt_input.text = "remembered message"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    content = history_path.read_text(encoding="utf-8")
+    assert "+remembered message" in content
+
+
+async def test_history_survives_an_app_restart(app: PhosonApp, tmp_path) -> None:
+    """A2 criterio de listo: ↑ after restarting the TUI recalls the last
+    message from the previous session (verified at the storage layer: a new
+    PhosonApp over the same history file loads the previous entries)."""
+    history_path = tmp_path / "history.txt"
+
+    def build_app() -> PhosonApp:
+        with patch("phoson_cli.controller.build_chat") as mock_build:
+            mock_build.return_value = MagicMock()
+            config = PhosonConfig(
+                provider="ollama",
+                sessions_dir=tmp_path,
+                history_file=history_path,
+            )
+            return PhosonApp(config)
+
+    first = build_app()
+    with patch.object(first.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        first._prompt_input.text = "first session message"
+        _trigger(first, "enter")
+        await asyncio.sleep(0)
+        await first._run_task
+
+    # "Restart": a brand-new PhosonApp instance over the same file.
+    second = build_app()
+    strings = second._prompt_input.buffer.history.load_history_strings()
+    assert "first session message" in list(strings)
 
 
 def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:

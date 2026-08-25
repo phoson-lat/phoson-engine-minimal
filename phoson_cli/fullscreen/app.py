@@ -24,7 +24,7 @@ from pathlib import Path
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
-from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.history import FileHistory
 from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
@@ -34,6 +34,7 @@ from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.containers import Float, HSplit, Window, FloatContainer
 from prompt_toolkit.key_binding.key_bindings import (
     KeyBindings,
@@ -65,8 +66,9 @@ from .confirmation import FullScreenConfirmationService
 from .session_cache import SessionListCache
 
 _FOOTER_HINT = (
-    '<style class="footer"> [Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+T] Reasoning'
-    "  [Ctrl+V] Paste image  [Ctrl+L] Clear  [Ctrl+C / Ctrl+Q] Exit</style>"
+    '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
+    "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
+    "  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
 # How often the subagent panel animation frame advances while active.
@@ -76,6 +78,15 @@ _SUBAGENT_TICK_SECONDS = 0.12
 # (IMPROVEMENTS.md A3) — the prompt itself re-reads them every turn; this
 # cache only avoids stat-ing the filesystem on every rendered frame.
 _AGENTS_MD_CACHE_SECONDS = 5.0
+
+# Max height (in lines) the multiline input grows to before it scrolls
+# internally (IMPROVEMENTS.md A2).
+_INPUT_MAX_LINES = 5
+
+# Default persistent input-history file — the *same* file the classic REPL
+# writes (see ``PhosonRepl.run``), so the two front ends share one history.
+# Overridable per-run via ``PhosonConfig.history_file`` (used by tests).
+_DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
 
 
 class PhosonApp:
@@ -108,6 +119,14 @@ class PhosonApp:
         # typing. Needed before `_build_layout` wires up the completer.
         self.model_cache = ModelCache()
         self.session_cache = SessionListCache()
+
+        # Resolved input-history file for the multiline input
+        # (IMPROVEMENTS.md A2) — read here so `_build_layout` (which runs
+        # before the REPL exists) can wire the shared FileHistory.
+        self._history_file = Path(
+            getattr(config, "history_file", None) or _DEFAULT_HISTORY_FILE
+        )
+        self._history_file.parent.mkdir(parents=True, exist_ok=True)
 
         self._build_layout()
         self.app: Application = self._build_application()
@@ -156,11 +175,14 @@ class PhosonApp:
         separator_line = Window(height=1, char="─", style="class:separator")
 
         self._prompt_input = TextArea(
-            height=1,
+            height=D(min=1, max=_INPUT_MAX_LINES),
             prompt="❯ ",
-            multiline=False,
+            multiline=True,
             wrap_lines=False,
-            history=InMemoryHistory(),
+            # Shared with the classic REPL (same file) so input history
+            # survives restarts and is consistent across front ends
+            # (IMPROVEMENTS.md A2). Overridable via config (tests).
+            history=FileHistory(str(self._history_file)),
             completer=merge_completers(
                 [
                     SlashCompleter(),
@@ -394,13 +416,41 @@ class PhosonApp:
     # ── Input handling ───────────────────────────────────────────────────
 
     def submit(self) -> None:
-        """Handle Enter on the input line: dispatch a command or an agent turn."""
-        text = self._prompt_input.text.strip()
-        if not text or self._is_run_in_flight():
+        """Handle Enter on the input line: dispatch a command or an agent turn.
+
+        While a turn is already in flight the input is *kept* (not cleared)
+        and the user is told why nothing happened — otherwise pressing Enter
+        looks like the app froze (IMPROVEMENTS.md A4). The header already
+        shows the live status ("Streaming" / "Running tool") so the user can
+        see the turn is still going.
+        """
+        text = self._prompt_input.text
+        if not text.strip():
             return
+        if self._is_run_in_flight():
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first. "
+                "Your text is kept.",
+            )
+            return
+        # Persist to the input history. The custom submit path bypasses the
+        # buffer's ``accept_handler`` (which normally does this), so it must
+        # be spelled out (IMPROVEMENTS.md A2).
+        self._prompt_input.buffer.append_to_history()
         self._prompt_input.text = ""
         self._auto_scroll = True
         self._run_task = self.app.create_background_task(self._dispatch(text))
+
+    def insert_newline(self) -> None:
+        """Ctrl+J: insert a newline in the multiline input (IMPROVEMENTS.md A2).
+
+        Shift+Enter is not portable (terminals emit CSI-u sequences that
+        prompt_toolkit's VT100 parser does not map, so it arrives as literal
+        garbage), so ``Ctrl+J`` — a single universal byte — is the newline
+        key. It overrides prompt_toolkit's default ``c-j``→Enter remap.
+        """
+        self._prompt_input.buffer.newline(copy_margin=False)
 
     def _is_run_in_flight(self) -> bool:
         """True from the moment Enter is pressed until the turn fully settles.

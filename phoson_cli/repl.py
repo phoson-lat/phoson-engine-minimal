@@ -325,6 +325,18 @@ class PhosonRepl:
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
+    def _history_path(self) -> Path:
+        """Return the configured shared input-history path.
+
+        ``history_file`` is optional for compatibility with legacy config
+        objects used by integrations and tests; those use the historical
+        default path.
+        """
+        history_file = getattr(self.config, "history_file", None)
+        if history_file:
+            return Path(history_file)
+        return Path("~/.phoson/history.txt").expanduser()
+
     async def run(self) -> None:
         """Run the REPL main loop.
 
@@ -333,7 +345,7 @@ class PhosonRepl:
         """
         self._print_banner()
 
-        history_path = Path("~/.phoson/history.txt").expanduser()
+        history_path = self._history_path()
         history_path.parent.mkdir(parents=True, exist_ok=True)
 
         key_bindings = KeyBindings()

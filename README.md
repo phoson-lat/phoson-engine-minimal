@@ -469,11 +469,14 @@ self-hosted/proxied endpoints) and an automatic 24 h model-list cache
 that makes `/model` instant and works offline. API keys never live there;
 see [docs/api/phoson_cli.md](docs/api/phoson_cli.md).
 
-**UI:** the interactive REPL (Rich + prompt_toolkit) is the only front end.
-One-shot mode (`phoson-cli "task"`) is always stdout-only. A full-screen
-`prompt_toolkit` front end (persistent scrollable chat pane, header/footer,
+**UI:** the full-screen `prompt_toolkit` front end is the default interactive
+experience; it offers a persistent scrollable chat pane, multiline input
+(`Ctrl+J` inserts a newline, `Enter` sends), persistent input history
+(`~/.phoson/history.txt`, shared with the retained classic REPL), and
 `/model`/`/provider`/`/sessions` pickers and bash confirmation as overlay
-floats) is planned to replace the classic REPL.
+floats. If a turn is already running, `Enter` keeps the draft and shows a
+warning; press `Esc` to cancel the active turn before sending it. One-shot
+mode (`phoson-cli "task"`) is always stdout-only.
 ---
 
 ## 🔒 CI and security workflows
