@@ -655,29 +655,33 @@ async def test_ctrl_v_notifies_when_clipboard_has_no_image(app: PhosonApp) -> No
     assert "No image on the clipboard" in app._render_chat().value
 
 
-def test_header_shows_token_indicator_and_attachment_count(app: PhosonApp) -> None:
+def test_status_bar_shows_token_indicator_and_runtime_facts(app: PhosonApp) -> None:
     app.repl._context_window = 128_000
     app.repl._context_tokens = 12_400
 
-    text = app._get_header_text().value
+    text = app._get_status_bar_text().value
 
     assert "12.4k/128.0k" in text or "12.4k/128k" in text
+    assert app.repl.config.provider in text
+    assert app.repl.current_model in text
 
 
 def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None:
     assert "📎" not in app._get_header_text().value
 
 
-def test_header_shows_provider_model_and_session(app: PhosonApp) -> None:
-    """provider/model/session live in the header only — not duplicated
+def test_header_is_lightweight_and_does_not_repeat_status_bar_facts(
+    app: PhosonApp,
+) -> None:
+    """Provider/model/session/tokens belong only to the persistent status bar."""
+    header = app._get_header_text().value
+    status_bar = app._get_status_bar_text().value
 
-    in the banner (see ``test_render_chat_shows_the_banner_on_startup``).
-    """
-    text = app._get_header_text().value
-
-    assert app.repl.config.provider in text
-    assert app.repl.current_model in text
-    assert app.repl.tree.session_id[:8] in text
+    assert app.repl.config.provider not in header
+    assert app.repl.current_model not in header
+    assert app.repl.tree.session_id[:8] not in header
+    assert app.repl.config.provider in status_bar
+    assert app.repl.current_model in status_bar
 
 
 def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:

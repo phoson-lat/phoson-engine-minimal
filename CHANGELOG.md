@@ -8,6 +8,15 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Fix
+
+- **cli**: completed full-screen tool cards now replace their live start line
+  in place (keyed by `tool_call_id`) instead of appending a second identical
+  headline; parallel calls replace only their own card. The header is now
+  deliberately lightweight (brand · transient attachment/memory indicators ·
+  live run status), while provider/model/tokens and other stable facts appear
+  only in the persistent lower status bar.
+
 ### Feat
 
 - **cli**: rich tool cards (IMPROVEMENTS.md C1) — tool calls now render as

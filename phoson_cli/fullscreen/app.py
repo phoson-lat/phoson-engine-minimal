@@ -362,24 +362,19 @@ class PhosonApp:
     # ── Rendering ────────────────────────────────────────────────────────
 
     def _get_header_text(self) -> HTML:
-        provider = self.repl.config.provider
-        model = self.repl.current_model
-        session_id = self.repl.tree.session_id[:8]
+        """Lightweight header: brand, transient indicators, live run status.
+
+        Stable runtime facts (provider/model/session/tokens/cost/etc.) belong
+        exclusively to the persistent status bar below. Keeping them out of
+        this line prevents the duplicated chrome reported in PR #81.
+        """
         status = self.sink.status_text()
-        tokens = self._token_indicator()
         attachments = len(self.repl.attachments)
-        attach_part = f" | 📎{attachments}" if attachments else ""
-        memory_part = " | 📄 agents.md" if self._has_agents_md() else ""
+        attach_part = f" · 📎{attachments}" if attachments else ""
+        memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
         return HTML(
             '<style class="header"> phoson </style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{provider} · {model}</style>'
-            '<style class="header_dim"> | session </style>'
-            f'<style class="header_dim">{session_id}</style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{tokens}</style>'
-            f'<style class="header_dim">{attach_part}</style>'
-            f'<style class="header_dim">{memory_part}</style>'
+            f'<style class="header_dim">{attach_part}{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
         )
