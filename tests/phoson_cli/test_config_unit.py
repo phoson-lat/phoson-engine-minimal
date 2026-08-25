@@ -1,8 +1,14 @@
 import os
+from pathlib import Path
 
 import pytest
 
-from phoson_cli.config import load_config
+from phoson_cli.config import PhosonConfig, load_config
+
+
+def test_history_file_defaults_to_shared_repl_path() -> None:
+    """A2: the full-screen and classic front ends share this history file."""
+    assert PhosonConfig().history_file == Path("~/.phoson/history.txt").expanduser()
 
 
 def test_load_config_default_subagent_model(monkeypatch, tmp_path) -> None:

@@ -32,6 +32,12 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   notice ("A turn is already running — press Esc to cancel it first") and
   keeps the typed text in the input, instead of silently ignoring it
   (IMPROVEMENTS.md A4)
+- **cli**: multiline input in the full-screen TUI — `Ctrl+J` inserts a
+  newline (`Enter` still sends) and the input grows up to 5 lines before
+  scrolling internally; input history now persists to
+  `~/.phoson/history.txt` (the same file the classic REPL uses), so `↑`
+  recalls messages from previous sessions after a restart
+  (IMPROVEMENTS.md A2)
 
 ## v0.8.1 (2026-08-24)
 

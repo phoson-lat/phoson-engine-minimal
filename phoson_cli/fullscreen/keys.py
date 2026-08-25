@@ -26,6 +26,10 @@ def build_key_bindings(app: "PhosonApp") -> KeyBindings:
     def _submit(event: object) -> None:  # noqa: ARG001
         app.submit()
 
+    @kb.add("c-j")
+    def _newline(event: object) -> None:  # noqa: ARG001
+        app.insert_newline()
+
     @kb.add("pageup")
     def _page_up(event: object) -> None:  # noqa: ARG001
         app.scroll_page_up()

@@ -62,7 +62,12 @@ def _trigger_if_enabled(app: PhosonApp, key: str) -> bool:
 def app(tmp_path) -> PhosonApp:
     with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
-        config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            # Keep input-history writes out of the developer's real file.
+            history_file=tmp_path / "history.txt",
+        )
         return PhosonApp(config)
 
 
@@ -147,7 +152,91 @@ async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -
         await app._run_task
 
 
-def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
+async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:
+    """A2: Ctrl+J is the newline key; Enter keeps submitting.
+
+    Shift+Enter/Ctrl+Enter are not portable (prompt_toolkit's VT100 parser
+    does not map the CSI-u sequences modern terminals emit), so Ctrl+J — a
+    single universal byte — carries the newline role. The app-level ``enter``
+    binding must keep winning over the buffer's built-in multiline newline.
+    """
+    app._prompt_input.text = "line one"
+    app._prompt_input.buffer.cursor_position = len("line one")
+
+    _trigger(app, "c-j")
+    assert app._prompt_input.text == "line one\n"
+
+    app._prompt_input.buffer.insert_text("line two")
+    assert app._prompt_input.text == "line one\nline two"
+
+    # Enter submits the whole multiline text and clears the input.
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+
+    assert app._run_task is not None
+    await app._run_task
+
+
+def test_input_is_multiline_with_dynamic_height(app: PhosonApp) -> None:
+    """The TextArea grows with content up to a cap, then scrolls internally."""
+    from prompt_toolkit.layout.dimension import Dimension
+
+    assert app._prompt_input.buffer.multiline() is True
+
+    window = app._prompt_input.window
+    height = window.height
+    assert isinstance(height, Dimension)
+    assert height.max == 5  # _INPUT_MAX_LINES
+    assert height.min == 1
+
+
+async def test_submit_persists_input_to_shared_history_file(app: PhosonApp) -> None:
+    """A2: submitted inputs survive restarts via ~/.phoson/history.txt.
+
+    The custom submit path bypasses the buffer's accept handler, so it must
+    append to the history explicitly. The file format is prompt_toolkit's
+    FileHistory one (``+``-prefixed lines), shared with the classic REPL.
+    """
+    history_path = app.repl.config.history_file
+
+    with patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        app._prompt_input.text = "remembered message"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    content = history_path.read_text(encoding="utf-8")
+    assert "+remembered message" in content
+
+
+async def test_history_survives_an_app_restart(app: PhosonApp, tmp_path) -> None:
+    """A2 criterio de listo: ↑ after restarting the TUI recalls the last
+    message from the previous session (verified at the storage layer: a new
+    PhosonApp over the same history file loads the previous entries)."""
+    history_path = tmp_path / "history.txt"
+
+    def build_app() -> PhosonApp:
+        with patch("phoson_cli.controller.build_chat") as mock_build:
+            mock_build.return_value = MagicMock()
+            config = PhosonConfig(
+                provider="ollama",
+                sessions_dir=tmp_path,
+                history_file=history_path,
+            )
+            return PhosonApp(config)
+
+    first = build_app()
+    with patch.object(first.repl, "_run_agent", new=AsyncMock(return_value=None)):
+        first._prompt_input.text = "first session message"
+        _trigger(first, "enter")
+        await asyncio.sleep(0)
+        await first._run_task
+
+    # "Restart": a brand-new PhosonApp instance over the same file.
+    second = build_app()
+    strings = second._prompt_input.buffer.history.load_history_strings()
+    assert "first session message" in list(strings)
     app.sink.blocks = ["one", "two"]
     app.sink.dirty = False
     app._chat_scroll_top = 5

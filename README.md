@@ -470,10 +470,12 @@ that makes `/model` instant and works offline. API keys never live there;
 see [docs/api/phoson_cli.md](docs/api/phoson_cli.md).
 
 **UI:** the interactive REPL (Rich + prompt_toolkit) is the only front end.
-One-shot mode (`phoson-cli "task"`) is always stdout-only. A full-screen
-`prompt_toolkit` front end (persistent scrollable chat pane, header/footer,
-`/model`/`/provider`/`/sessions` pickers and bash confirmation as overlay
-floats) is planned to replace the classic REPL.
+One-shot mode (`phoson-cli "task"`) is always stdout-only. The full-screen
+`prompt_toolkit` front end offers a persistent scrollable chat pane,
+multiline input (`Ctrl+J` inserts a newline, `Enter` sends), persistent
+input history (`~/.phoson/history.txt`, shared with the classic REPL),
+and `/model`/`/provider`/`/sessions` pickers and bash confirmation as
+overlay floats.
 ---
 
 ## 🔒 CI and security workflows
