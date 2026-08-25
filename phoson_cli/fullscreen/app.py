@@ -394,9 +394,23 @@ class PhosonApp:
     # ── Input handling ───────────────────────────────────────────────────
 
     def submit(self) -> None:
-        """Handle Enter on the input line: dispatch a command or an agent turn."""
+        """Handle Enter on the input line: dispatch a command or an agent turn.
+
+        While a turn is already in flight the input is *kept* (not cleared)
+        and the user is told why nothing happened — otherwise pressing Enter
+        looks like the app froze (IMPROVEMENTS.md A4). The header already
+        shows the live status ("Streaming" / "Running tool") so the user can
+        see the turn is still going.
+        """
         text = self._prompt_input.text.strip()
-        if not text or self._is_run_in_flight():
+        if not text:
+            return
+        if self._is_run_in_flight():
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first. "
+                "Your text is kept.",
+            )
             return
         self._prompt_input.text = ""
         self._auto_scroll = True

@@ -28,6 +28,10 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   ~2000 tokens with a visible truncation marker, and re-reads files each
   turn so edits apply immediately; new `/agents-md` command lists what is
   loaded and the TUI header shows a 📄 indicator when memory is active
+- **cli**: pressing Enter while a turn is already running now shows a warn
+  notice ("A turn is already running — press Esc to cancel it first") and
+  keeps the typed text in the input, instead of silently ignoring it
+  (IMPROVEMENTS.md A4)
 
 ## v0.8.1 (2026-08-24)
 
