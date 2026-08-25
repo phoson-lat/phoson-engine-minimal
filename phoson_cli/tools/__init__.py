@@ -4,6 +4,7 @@ from .bash import bash
 from .files import list_dir, read_file, patch_file, write_file
 from .search import web_search
 from .subagent import agent, agents
+from .web_fetch import web_fetch
 from .view_image import view_image
 
 
@@ -16,6 +17,7 @@ def build_tools() -> list[AgentTool]:
         view_image,
         bash,
         web_search,
+        web_fetch,
         agent,
         agents,
     ]
@@ -36,6 +38,7 @@ __all__ = [
     "view_image",
     "bash",
     "web_search",
+    "web_fetch",
     "agent",
     "agents",
 ]

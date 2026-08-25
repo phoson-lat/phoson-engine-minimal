@@ -295,6 +295,10 @@ class PhosonRepl:
         outcome = await self._controller.load_session(session_id)
         return outcome.ok
 
+    async def compact_context(self) -> tuple[int, int, bool]:
+        """Manually compact the conversation (delegates to the controller)."""
+        return await self._controller.compact_context()
+
     def branch_session(self) -> None:  # pragma: no cover - kept for API compat
         """Deprecated no-op kept for backward compatibility."""
         self._controller.branch_session()

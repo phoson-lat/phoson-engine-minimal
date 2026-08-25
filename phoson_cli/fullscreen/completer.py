@@ -118,6 +118,39 @@ class SessionsArgCompleter(Completer):
             )
 
 
+class ResumeArgCompleter(Completer):
+    """Fuzzy-completes '/resume <id>' with saved session ids (C2).
+
+    Shows a human-readable label (title · date · msgs) while inserting the
+    id prefix typed so far — ids are UUIDs and prefix matching is what
+    ``/resume`` consumes.
+    """
+
+    def __init__(self, cache: SessionListCache) -> None:
+        self._cache = cache
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent
+    ) -> Iterable[Completion]:
+        text = document.text_before_cursor
+        prefix = "/resume "
+        if not text.startswith(prefix):
+            return
+        query = text[len(prefix) :]
+        for meta in self._cache.sessions:
+            sid = str(meta.id)
+            if query and not sid.startswith(query):
+                continue
+            title = getattr(meta, "title", None) or "(untitled)"
+            updated = meta.updated_at.strftime("%m-%d %H:%M")
+            yield Completion(
+                sid,
+                start_position=-len(query),
+                display=f"{sid[:8]}  [{title}]",
+                display_meta=updated,
+            )
+
+
 class StaticArgCompleter(Completer):
     """Fuzzy-completes a command's argument from a small fixed word list.
 
@@ -155,5 +188,6 @@ __all__ = [
     "SlashCompleter",
     "ModelArgCompleter",
     "SessionsArgCompleter",
+    "ResumeArgCompleter",
     "StaticArgCompleter",
 ]

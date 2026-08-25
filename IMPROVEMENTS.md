@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.8.1 · 845 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1, B2 y B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0.
+> **Estado de referencia:** v0.9.1 · 960+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · > C1–C4 cerrados en el sprint P1 (rama `feat/cli-p1-c1-c4`).
 
 ---
 
@@ -20,10 +20,10 @@
 | [A2](#a2-input-multilinea--historial-persistente-en-la-tui) | Input multilinea + historial persistente (TUI) | **P0** | M | 🔴 Alto | — | ✅ v0.9.0 (PR #76) |
 | [A3](#a3-agentsmd--memoria-persistente-via-filesystem) | `AGENTS.md` / memoria via filesystem | **P0** | M | 🔴 Crítico | — | ✅ PR #74 |
 | [A4](#a4-feedback-de-enter-durante-un-run) | Feedback al presionar Enter durante un run | **P0** | S | 🟡 Bajo-Medio | — | ✅ v0.9.0 (PR #76) |
-| [C1](#c1-panel-de-herramientas-en-vivo-pr-2-del-todo) | Panel de herramientas en vivo (diffs, labels) | **P1** | M | 🔴 Alto | — | Sprint 2 |
-| [C2](#c2-comandos-p1-faltantes) | `/compact`, `/status`, `/resume <id>` | **P1** | M | 🔴 Alto | — | Sprint 2 |
-| [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | Sprint 2–3 |
-| [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | Sprint 2 |
+| [C1](#c1-panel-de-herramientas-en-vivo-pr-2-del-todo) | Panel de herramientas en vivo (diffs, labels) | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
+| [C2](#c2-comandos-p1-faltantes) | `/compact`, `/status`, `/resume <id>` | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
+| [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
+| [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | ✅ Sprint 2 |
 | [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | Sprint 3+ |
 | [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | Sprint 3 |
@@ -220,7 +220,7 @@ Después de P0, estas son las mejoras que más acercan phoson-cli a la experienc
 ---
 
 ### C1 — Panel de herramientas en vivo (PR-2 del TODO)
-**Esfuerzo:** M · **Impacto:** 🔴
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
 
 **Qué falta.** Las llamadas a herramientas se ven como una línea `⚙ label · preview[:50]…` con spinner. Sin diffs coloreados al editar, sin "writing file (path, +N lines)", sin feedback de progreso. Claude Code y OpenCode muestran tarjetas ricas por herramienta; es de lo primero que nota un usuario nuevo.
 
@@ -241,7 +241,7 @@ Después de P0, estas son las mejoras que más acercan phoson-cli a la experienc
 ---
 
 ### C2 — Comandos P1 faltantes
-**Esfuerzo:** M · **Impacto:** 🔴
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
 
 Tres comandos que el propio TODO ya identifica como P1 y que completan el control del runtime:
 
@@ -256,7 +256,7 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 ---
 
 ### C3 — Web tools (`web_search`, `web_fetch`)
-**Esfuerzo:** M · **Impacto:** 🔴
+**Esfuerzo:** M · **Impacto:** 🔴 · **Estado:** ✅ **Hecho** (sprint P1)
 
 **Qué falta.** El sistema de tools del CLI es austero: `read_file/write_file/patch_file/list_dir/bash/search/subagent(s)/view_image`. No hay acceso a la web — capacidad estándar en todos los harnesses comparables (Claude Code, Codex, Qwen, OpenCode). Para un agente de coding esto significa: no puede mirar docs de una librería, verificar un issue, o buscar el error exacto de un stacktrace.
 
@@ -273,7 +273,7 @@ Tres comandos que el propio TODO ya identifica como P1 y que completan el contro
 ---
 
 ### C4 — Status bar persistente y look & feel final (PR-3)
-**Esfuerzo:** S-M · **Impacto:** 🟠
+**Esfuerzo:** S-M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (sprint P1)
 
 Completar el PR-3 pendiente del TODO — el último tercio del plan look & feel:
 
@@ -452,12 +452,12 @@ Sprint 0–1 (P0, cerrado)
 └── A2 multiline + history y A4 enter feedback  ✅ PR #76 (v0.9.0)
 
 Sprint 2 (competitividad, ~1-2 semanas)
-├── C1 tool cards ricos
-├── C2 /compact /status /resume
-└── C4 status bar + help/tree
+├── C1 tool cards ricos          ✅ sprint P1
+├── C2 /compact /status /resume  ✅ sprint P1
+├── C3 web tools                 ✅ sprint P1 (adelantado)
+└── C4 status bar + help/tree    ✅ sprint P1
 
 Sprint 3 (alcance, ~1-2 semanas)
-├── C3 web tools
 ├── D5 flags CLI
 └── D1 limpieza deuda
 

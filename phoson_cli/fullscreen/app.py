@@ -56,6 +56,7 @@ from .clipboard import read_clipboard_image
 from .completer import (
     SlashCompleter,
     ModelArgCompleter,
+    ResumeArgCompleter,
     StaticArgCompleter,
     SessionsArgCompleter,
 )
@@ -206,6 +207,7 @@ class PhosonApp:
                         lambda: enabled_providers_from_config(self.repl.config),
                     ),
                     SessionsArgCompleter(self.session_cache),
+                    ResumeArgCompleter(self.session_cache),
                 ]
             ),
             complete_while_typing=True,
@@ -213,6 +215,11 @@ class PhosonApp:
         )
 
         bottom_margin = Window(height=1, char="—", style="class:separator")
+        # Persistent status bar (IMPROVEMENTS.md C4): model · provider ·
+        # cost · tokens · cwd · MCP · permissions, always visible.
+        status_window = Window(
+            content=FormattedTextControl(self._get_status_bar_text), height=1
+        )
         footer_window = Window(
             content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
         )
@@ -224,6 +231,7 @@ class PhosonApp:
                 separator_line,
                 self._prompt_input,
                 bottom_margin,
+                status_window,
                 footer_window,
             ]
         )
@@ -265,6 +273,7 @@ class PhosonApp:
                 "header_dim": self.theme.pt_muted,
                 "separator": self.theme.pt_muted_deep,
                 "footer": self.theme.pt_muted_deep,
+                "statusbar": f"bg:{self.theme.completion_bg} {self.theme.pt_accent}",
                 "prompt_text": self.theme.prompt_input,
                 "frame": f"bg:{self.theme.completion_bg}",
                 "frame.border": self.theme.pt_accent,
@@ -407,6 +416,44 @@ class PhosonApp:
             return str(n)
 
         return f"{_fmt(used)}/{_fmt(window)}"
+
+    def _get_status_bar_text(self) -> HTML:
+        """Persistent one-line runtime status (IMPROVEMENTS.md C4).
+
+        ``model · provider · $cost · tokens used/window · cwd · MCP n ·
+        permissions``. The header keeps brand + live status; this bar
+        carries the session's standing facts.
+        """
+        repl = self.repl
+        cost = repl.session_metrics.total_cost_usd
+        mcp_count = 0
+        for plugin in getattr(repl.engine, "_loaded_plugins", []):
+            servers = getattr(plugin, "servers", {})
+            if isinstance(servers, dict):
+                mcp_count += len(servers)
+
+        from ..permissions_store import load_policy
+
+        policy = load_policy()
+        levels = sorted(policy.levels.items())
+        permissions = (
+            " · ".join(f"{tool}:{lvl}" for tool, lvl in levels[:3]) or "allow all"
+        )
+        suffix = f" +{len(levels) - 3}" if len(levels) > 3 else ""
+
+        cwd = Path.cwd()
+
+        def _shorten(p: Path) -> str:
+            parts = p.parts
+            return str(Path(*parts[-2:])) if len(parts) > 2 else str(p)
+
+        return HTML(
+            '<style class="statusbar"> '
+            f"{repl.current_model} · {repl.config.provider} · "
+            f"${cost:.4f} · {self._token_indicator()} tok · "
+            f"{_shorten(cwd)} · MCP {mcp_count} · perms {permissions}{suffix}"
+            " </style>"
+        )
 
     def _render_chat(self) -> ANSI:
         term_width = shutil.get_terminal_size((80, 24)).columns

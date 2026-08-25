@@ -527,6 +527,88 @@ class SessionController:
         self.attachments.clear()
         self.sink.set_session(self._session.tree.session_id)
 
+    async def compact_context(self) -> tuple[int, int, bool]:
+        """Manually compact the conversation (IMPROVEMENTS.md C2, /compact).
+
+        Asks the LLM for a summary of the current path, then rewrites the
+        conversation as a **new branch** off the root: summary message
+        first, followed by the summarizer's recent-tail messages. The old
+        branch stays intact in the tree (visible via ``/tree``), so the
+        compaction is reversible by inspection and the session keeps its
+        identity.
+
+        Returns:
+            ``(before_tokens, after_tokens, ok)`` — token estimates before
+            and after (equal when there was nothing to compact) and whether
+            the path actually changed.
+        """
+        path = self.tree.get_path(self.current_node_id)
+        if not path:
+            self.sink.notify("info", "Nothing to compact yet — the session is empty.")
+            return 0, 0, False
+
+        before = self.summarizer.estimate_tokens(path)
+        system_msgs = [m for m in path if m.role == "system"]
+        others = [m for m in path if m.role != "system"]
+        min_keep = max(2, self.summarizer.min_keep_messages)
+        if len(others) <= min_keep:
+            self.sink.notify(
+                "info",
+                f"Only {len(others)} turn(s) in context — nothing worth compacting.",
+            )
+            return before, before, False
+
+        # One plain LLM round trip for the summary. The chat client is used
+        # directly (no tools, no engine loop); errors propagate to the
+        # caller so /compact can report them without touching the session.
+        from phoson_llm.schemas import LLMDoneEvent
+
+        history_text = self.summarizer.format_for_summary(others[:-min_keep])
+        done: LLMDoneEvent = await self.chat.complete(
+            [
+                Message(
+                    role="user",
+                    content=(
+                        "Summarize the following conversation segment for an AI "
+                        "assistant that will continue this work. Preserve: the "
+                        "user's goal, key decisions, relevant file paths, code "
+                        "snippets, tool results and what remains to be done. "
+                        "Output ONLY the summary.\n\n" + history_text
+                    ),
+                )
+            ],
+            ModelConfig(model=self.current_model, max_tokens=2048, temperature=0.3),
+        )
+
+        summary_text = done.content.strip()
+        if not summary_text:
+            self.sink.notify(
+                "warn", "The model returned an empty summary — no changes."
+            )
+            return before, before, False
+
+        compacted_msgs = list(system_msgs)
+        compacted_msgs.append(
+            Message(role="user", content=f"[Conversation summary]: {summary_text}")
+        )
+        keep_msgs = others[-min_keep:]
+        compacted_msgs.extend(keep_msgs)
+
+        after = self.summarizer.estimate_tokens(compacted_msgs)
+        self.tree.append_many(None, compacted_msgs)
+        leaves = self.tree.get_leaves()
+        latest = max(leaves, key=lambda nid: self.tree.nodes[nid].created_at)
+        self.current_node_id = latest
+
+        # Record the event so telemetry sees manual compactions too.
+        self.summarizer.record_compaction_event(
+            original_tokens=before,
+            compacted_tokens=after,
+            messages_removed=len(path) - len(compacted_msgs),
+            summary_length=len(summary_text),
+        )
+        return before, after, True
+
     async def load_session(self, session_id: str) -> LoadOutcome:
         """Load a session from storage and replay its tail."""
         try:

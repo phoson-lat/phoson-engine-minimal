@@ -89,6 +89,10 @@ class FullScreenSink:
         self.blocks: list[object] = []
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""
+        # Args of in-flight regular tool calls, keyed by tool_call_id (C1):
+        # done events don't carry args, so the start event stashes them and
+        # the done card pops them to render path/command detail + diffs.
+        self._pending_tool_args: dict[str, dict] = {}
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
@@ -276,6 +280,11 @@ class FullScreenSink:
                 else:
                     if turn is not None:
                         turn.running_tool = True
+                    # Remember the call's args so the done card can render
+                    # its detail line and specialized body (done events
+                    # don't carry args) — C1.
+                    if event.tool_call_id:
+                        self._pending_tool_args[event.tool_call_id] = dict(event.args)
                     self.blocks.append(render_tool_start_line(event, self.theme))
 
             case AgentToolDoneEvent():
@@ -294,7 +303,12 @@ class FullScreenSink:
                 else:
                     if turn is not None:
                         turn.running_tool = False
-                    self.blocks.append(render_tool_done_line(event, self.theme))
+                    start_args = self._pending_tool_args.pop(
+                        event.tool_call_id or "", None
+                    )
+                    self.blocks.append(
+                        render_tool_done_line(event, self.theme, args=start_args)
+                    )
 
             case AgentStepDoneEvent():
                 if self.current_turn is not None:

@@ -195,18 +195,18 @@ def test_text_interleaves_with_tool_calls_in_chronological_order() -> None:
         marker: text.index(marker)
         for marker in (
             "Let me check the directory first.",
-            "list_dir",
+            "listing directory",
             "Now running the tests.",
-            "bash",
+            "running command",
             "All green, done.",
         )
     }
     ordered = sorted(positions, key=positions.get)
     assert ordered == [
         "Let me check the directory first.",
-        "list_dir",
+        "listing directory",
         "Now running the tests.",
-        "bash",
+        "running command",
         "All green, done.",
     ]
     # Each answer segment got its own frozen block, not one giant blob.
@@ -270,7 +270,7 @@ def test_tool_start_and_done_append_lines() -> None:
     assert sink.current_turn.running_tool is False
 
     text = render_chat(sink, width=80)
-    assert "read_file" in text
+    assert "reading file" in text
 
 
 def test_step_done_advances_counters() -> None:
