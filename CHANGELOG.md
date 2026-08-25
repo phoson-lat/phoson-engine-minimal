@@ -8,6 +8,53 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.10.0 (2026-08-25)
+
+### Fix
+
+- **cli**: completed full-screen tool cards now replace their live start line
+  in place (keyed by `tool_call_id`) instead of appending a second identical
+  headline; parallel calls replace only their own card. The header is now
+  deliberately lightweight (brand · transient attachment/memory indicators ·
+  live run status), while model (provider), cwd, token usage and session
+  cost are consolidated into that header; the lower footer now contains
+  keyboard shortcuts only.
+
+### Feat
+
+- **cli**: rich tool cards (IMPROVEMENTS.md C1) — tool calls now render as
+  actionable cards instead of raw name+preview lines: human verbs
+  ("writing file", "running command", "editing file"), a detail line with
+  path/command/query, colored unified diffs for `patch_file`, created/updated
+  summaries (`lines · size`) for `write_file`, and first stdout lines for
+  `bash`. Cards are pure Rich renderables in `formatting.py`, shared by the
+  classic REPL and the full-screen front end; front ends remember start-event
+  args keyed by `tool_call_id` so done cards can render their detail.
+- **cli**: `/compact`, `/status` and `/resume <id>` commands (IMPROVEMENTS.md
+  C2). `/compact` forces an LLM summary now and rewrites the conversation as a
+  new branch off the root (old branch preserved, visible in `/tree`),
+  reporting tokens before → after and % saved; short sessions are refused
+  gracefully. `/status` consolidates provider · model · session · cost ·
+  tokens · context window · steps · MCP servers · permissions into one view
+  (`/env` `/cost` `/tokens` `/steps` keep working). `/resume <id-prefix>`
+  loads a session directly with prefix matching, ambiguity listing, and
+  inline autocomplete of saved session ids in the full-screen app.
+- **cli**: `web_fetch` tool (IMPROVEMENTS.md C3) — fetches a URL and returns
+  readable text (HTML stripped to plain text via stdlib only, ~50 KB cap,
+  binary content types rejected); `web_search` gains configurable backends:
+  DuckDuckGo (default, keyless), Brave (`BRAVE_API_KEY`) and Tavily
+  (`TAVILY_API_KEY`), selected via `PHOSON_WEB_SEARCH_BACKEND` or auto-detected
+  from whichever key is present. Both tools integrate with the A1 permission
+  model.
+- **cli**: persistent status bar + look & feel pass (IMPROVEMENTS.md C4) — a
+  fixed bottom bar shows model · provider · $session cost · tokens
+  used/window · cwd · MCP count · active permission levels; `/help` renders
+  grouped by category (Session / Model / Info / Config & System); `/tree`
+  prints a colored tree (current node accented, abandoned branches muted,
+  labels highlighted) as a shared Rich renderable; error panels gain an
+  actionable hint line for known codes (`auth` → run /setup, `rate_limit` →
+  wait or switch model, `max_iterations` → raise budget).
+
 ## v0.9.1 (2026-08-25)
 
 ### Fix

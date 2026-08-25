@@ -10,7 +10,8 @@ Keep this module dependency-free of console I/O: no ``Console``, no
 """
 
 import json
-from typing import TYPE_CHECKING
+import difflib
+from typing import TYPE_CHECKING, Any, Final
 
 from rich import box
 from rich.rule import Rule
@@ -154,43 +155,6 @@ def render_subagent_start_line(event: AgentToolStartEvent, theme: Theme) -> Text
     return line
 
 
-def render_tool_start_line(event: AgentToolStartEvent, theme: Theme) -> Text:
-    """Compact "running tool" line for a regular (non-subagent) tool call."""
-    args_preview = tool_args_preview(event.tool_name, event.args)
-    label = tool_label(event)
-    line = Text()
-    line.append("  │ ", style=theme.accent_soft)
-    line.append("⚙ ", style=theme.accent_soft)
-    line.append(label, style=f"bold {theme.accent}")
-    if args_preview:
-        preview = args_preview[:50] + ("…" if len(args_preview) > 50 else "")
-        line.append(f"  ·  {preview}", style=theme.muted)
-    return line
-
-
-def render_tool_done_line(event: AgentToolDoneEvent, theme: Theme) -> Text:
-    """Compact result line for a finished tool call (success or error)."""
-    label = tool_label(event)
-    line = Text()
-    if event.error:
-        line.append("  │ ", style=theme.accent_soft)
-        line.append("✗ ", style=theme.err)
-        line.append(label, style=f"bold {theme.err}")
-        line.append(f"  ·  {event.duration_ms}ms", style=theme.muted)
-        err_short = event.error.splitlines()[0][:72]
-        line.append(f"  ·  {err_short}", style=theme.err)
-    else:
-        line.append("  │ ", style=theme.accent_soft)
-        if event.tool_name in {"agent", "agents"}:
-            line.append("◍ ", style=theme.ok)
-            line.append(f"spawned {label}", style=theme.ok)
-        else:
-            line.append("✓ ", style=theme.ok)
-            line.append(label, style=theme.ok)
-        line.append(f"  ·  {event.duration_ms}ms", style=theme.muted)
-    return line
-
-
 def render_done_line(event: AgentDoneEvent, theme: Theme) -> Text | None:
     """Run summary line (cost + step count), or None when there's nothing to show."""
     r = event.result
@@ -205,13 +169,20 @@ def render_done_line(event: AgentDoneEvent, theme: Theme) -> Text | None:
 
 
 def render_error_panel(event: AgentErrorEvent, theme: Theme) -> Panel:
-    """Build the error panel shown on ``AgentErrorEvent``."""
+    """Build the error panel shown on ``AgentErrorEvent``.
+
+    Known error codes get a trailing "hint" line with the actionable next
+    step (IMPROVEMENTS.md C4) — e.g. ``auth`` points at /setup.
+    """
     body = Text()
     body.append(event.message, style="bold")
     if event.code:
         body.append(f"\ncode={event.code}", style=theme.muted)
     if event.retryable:
         body.append("  retryable", style=theme.warn)
+    hint = error_hint(event.code)
+    if hint:
+        body.append(f"\nhint: {hint}", style=theme.warn)
     return Panel(
         body,
         title="error",
@@ -268,6 +239,209 @@ def tool_label(event: AgentToolStartEvent | AgentToolDoneEvent) -> str:
     if event.tool_name == "agents":
         return "subagents"
     return event.tool_name
+
+
+# ─── Rich tool cards (IMPROVEMENTS.md C1) ────────────────────────────────────
+
+#: Human verb per tool — the card headline ("writing file src/x.py").
+#: Subagent tools keep their dedicated start/done lines, so they are absent.
+_TOOL_VERBS: Final[dict[str, str]] = {
+    "read_file": "reading file",
+    "write_file": "writing file",
+    "patch_file": "editing file",
+    "list_dir": "listing directory",
+    "view_image": "viewing image",
+    "bash": "running command",
+    "web_search": "searching the web",
+    "web_fetch": "fetching page",
+}
+
+#: Max rendered diff lines before truncation with an explicit notice.
+_DIFF_MAX_LINES: Final[int] = 20
+#: Max lines of bash output echoed in the done card.
+_BASH_PREVIEW_LINES: Final[int] = 6
+_INDENT: Final[str] = "      "
+
+
+def tool_verb(tool_name: str) -> str:
+    """Human action phrase for a tool name ("write_file" → "writing file")."""
+    return _TOOL_VERBS.get(tool_name, tool_name.replace("_", " "))
+
+
+def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
+    """One-line detail of *what* is being acted on (path / command / query).
+
+    Falls back to :func:`tool_args_preview` for tools without a dedicated
+    detail extractor.
+    """
+    if tool_name == "bash":
+        cmd = str(args.get("command") or "")
+        one_line = " ".join(cmd.split())
+        return one_line[:72] + ("…" if len(one_line) > 72 else "")
+    for key in ("path", "query", "url", "pattern"):
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return tool_args_preview(tool_name, args)
+
+
+def unified_diff(
+    old_content: str, new_content: str, path: str, context_lines: int = 3
+) -> list[str]:
+    """Unified diff lines between two file versions (no trailing newlines).
+
+    Returns ``[]`` when the contents are identical.
+    """
+    diff = difflib.unified_diff(
+        old_content.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile=path,
+        tofile=path,
+        n=context_lines,
+    )
+    return [line.rstrip("\n") for line in diff]
+
+
+def _card_header(tool_name: str, args: dict[str, Any], theme: Theme) -> Text:
+    """The ``│ ⚙ <verb> · <detail>`` headline shared by start/done cards."""
+    header = Text()
+    header.append("  │ ", style=theme.accent_soft)
+    header.append("⚙ ", style=theme.accent_soft)
+    header.append(tool_verb(tool_name), style=f"bold {theme.accent}")
+    detail = tool_detail(tool_name, args)
+    if detail:
+        header.append(f"  ·  {detail}", style=theme.muted)
+    return header
+
+
+def render_tool_start_line(event: AgentToolStartEvent, theme: Theme) -> Text:
+    """Compact "running tool" line for a regular (non-subagent) tool call."""
+    return _card_header(event.tool_name, event.args, theme)
+
+
+def render_tool_done_line(
+    event: AgentToolDoneEvent,
+    theme: Theme,
+    args: dict[str, Any] | None = None,
+) -> RenderableType:
+    """Result card for a finished regular (non-subagent) tool call.
+
+    ``args`` should be the call's arguments as captured from the matching
+    :class:`AgentToolStartEvent` (done events don't carry them); front ends
+    remember them keyed by ``tool_call_id``. Without them the card still
+    renders — just without path/command detail or specialized bodies.
+
+    Specialized bodies: colored unified diff for ``patch_file`` (built
+    purely from the ``old_content``/``new_content`` args), a created/updated
+    summary for ``write_file``, first stdout lines for ``bash``.
+    """
+    call_args: dict[str, Any] = args or {}
+    parts: list[RenderableType] = [_card_header(event.tool_name, call_args, theme)]
+
+    # Subagent tools without parseable metrics keep their dedicated
+    # "✓ spawned" outcome line instead of a generic check.
+    if not event.error and event.tool_name in {"agent", "agents"}:
+        label = tool_label(event)
+        spawned = Text("  │ ", style=theme.accent_soft)
+        spawned.append("✓ ", style=theme.ok)
+        spawned.append(f"spawned {label}", style=theme.ok)
+        spawned.append(f"  ·  {event.duration_ms}ms", style=theme.muted)
+        return Group(*parts, spawned)
+
+    if not event.error:
+        parts.extend(_outcome_body(event.tool_name, call_args, event.result, theme))
+
+    footer_bits: list[tuple[str, str]] = []
+    if event.error:
+        first_line = event.error.splitlines()[0][:72]
+        footer_bits.append((f"✗ {first_line}", theme.err))
+    else:
+        footer_bits.append(("✓", theme.ok))
+    footer_bits.append((f"{event.duration_ms}ms", theme.muted))
+    footer = Text("  │ ", style=theme.accent_soft)
+    for i, (bit, style) in enumerate(footer_bits):
+        if i:
+            footer.append("  ·  ", style=theme.muted)
+        footer.append(bit, style=style)
+    parts.append(footer)
+
+    return Group(*parts)
+
+
+def _outcome_body(
+    tool_name: str, args: dict[str, Any], result: str, theme: Theme
+) -> list[RenderableType]:
+    """Specialized outcome lines for the done card (empty for plain tools)."""
+    if tool_name == "patch_file":
+        return _diff_body(args, theme)
+    if tool_name == "write_file":
+        return _write_summary_body(args, theme)
+    if tool_name == "bash":
+        return _bash_output_body(result, theme)
+    return []
+
+
+def _diff_body(args: dict[str, Any], theme: Theme) -> list[RenderableType]:
+    """Colored unified-diff body for a finished patch_file call."""
+    path = str(args.get("path") or "(file)")
+    old_content = args.get("old_content")
+    new_content = args.get("new_content")
+    if not isinstance(old_content, str) or not isinstance(new_content, str):
+        return []
+
+    lines = unified_diff(old_content, new_content, path)
+    rendered: list[RenderableType] = []
+    diff_line: str
+    for i, diff_line in enumerate(lines):
+        if i >= _DIFF_MAX_LINES:
+            hidden = len(lines) - i
+            rendered.append(
+                Text(f"{_INDENT}… +{hidden} more diff lines", style=theme.muted)
+            )
+            break
+        color = theme.ok
+        if diff_line.startswith("-"):
+            color = theme.err
+        elif diff_line.startswith("@@"):
+            color = theme.accent_soft
+        rendered.append(Text(f"{_INDENT}{diff_line}", style=color))
+    return rendered
+
+
+def _write_summary_body(args: dict[str, Any], theme: Theme) -> list[RenderableType]:
+    """``created src/x.py · 42 lines · 1.8 KB`` summary for write_file."""
+    path = str(args.get("path") or "")
+    content = args.get("content")
+    if not isinstance(content, str):
+        return []
+    lines = content.count("\n") + (0 if content.endswith("\n") else 1)
+    size = len(content.encode("utf-8"))
+    size_text = f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
+    summary = Text(_INDENT)
+    summary.append("created ", style=theme.ok)
+    summary.append(path, style=f"bold {theme.text}")
+    summary.append(f"  ·  {lines} lines  ·  {size_text}", style=theme.muted)
+    return [summary]
+
+
+def _bash_output_body(result: str, theme: Theme) -> list[RenderableType]:
+    """First stdout/stderr lines for a finished bash call (timeouts included)."""
+    stripped = result.strip()
+    if not stripped:
+        return []
+    out_lines = stripped.splitlines()
+    shown = out_lines[:_BASH_PREVIEW_LINES]
+    rendered: list[RenderableType] = [
+        Text(f"{_INDENT}{line[:100]}", style=theme.text) for line in shown
+    ]
+    if len(out_lines) > _BASH_PREVIEW_LINES:
+        rendered.append(
+            Text(
+                f"{_INDENT}… +{len(out_lines) - _BASH_PREVIEW_LINES} more lines",
+                style=theme.muted,
+            )
+        )
+    return rendered
 
 
 def render_history(
@@ -353,6 +527,29 @@ def subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:
     return []
 
 
+# ─── Error hints (IMPROVEMENTS.md C4) ────────────────────────────────────────
+
+#: Actionable next step per known AgentErrorEvent code. Rendered as a
+#: trailing line inside the error panel so common failures point at a fix
+#: instead of a dead end.
+_ERROR_HINTS: Final[dict[str, str]] = {
+    "auth": "run /setup or set the provider API key env var",
+    "permission": "check API key scopes and account access",
+    "rate_limit": "wait a moment, or switch model with /model",
+    "overloaded": "provider is busy — retry shortly or switch model",
+    "server_error": "provider-side failure — retry, or switch model",
+    "not_found": "model id may be wrong — pick one with /model",
+    "max_iterations": "raise the budget: /config max_iterations <n>",
+}
+
+
+def error_hint(code: str | None) -> str | None:
+    """Actionable hint for a known error code (None when unknown)."""
+    if not code:
+        return None
+    return _ERROR_HINTS.get(code)
+
+
 __all__ = [
     "render_reasoning_panel",
     "render_assistant_label",
@@ -370,4 +567,8 @@ __all__ = [
     "tool_args_preview",
     "tool_label",
     "subagent_tasks_from_args",
+    "tool_verb",
+    "tool_detail",
+    "unified_diff",
+    "error_hint",
 ]

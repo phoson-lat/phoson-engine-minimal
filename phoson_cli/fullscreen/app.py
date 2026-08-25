@@ -56,6 +56,7 @@ from .clipboard import read_clipboard_image
 from .completer import (
     SlashCompleter,
     ModelArgCompleter,
+    ResumeArgCompleter,
     StaticArgCompleter,
     SessionsArgCompleter,
 )
@@ -206,6 +207,7 @@ class PhosonApp:
                         lambda: enabled_providers_from_config(self.repl.config),
                     ),
                     SessionsArgCompleter(self.session_cache),
+                    ResumeArgCompleter(self.session_cache),
                 ]
             ),
             complete_while_typing=True,
@@ -213,6 +215,8 @@ class PhosonApp:
         )
 
         bottom_margin = Window(height=1, char="—", style="class:separator")
+        # The footer is intentionally keyboard hints only. Stable runtime
+        # facts live in the compact header, avoiding duplicated UI chrome.
         footer_window = Window(
             content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
         )
@@ -224,7 +228,7 @@ class PhosonApp:
                 separator_line,
                 self._prompt_input,
                 bottom_margin,
-                footer_window,
+                footer_window,  # Now contains only keyboard hints
             ]
         )
 
@@ -353,24 +357,32 @@ class PhosonApp:
     # ── Rendering ────────────────────────────────────────────────────────
 
     def _get_header_text(self) -> HTML:
-        provider = self.repl.config.provider
-        model = self.repl.current_model
-        session_id = self.repl.tree.session_id[:8]
+        """Compact runtime header: brand · model (provider) · cwd · usage · status.
+
+        The header is the single location for session facts in the
+        full-screen UI. The lower line deliberately contains only keyboard
+        hints, so no model/provider/cost/token/cwd value is repeated.
+        """
+        repl = self.repl
+        cost = repl.session_metrics.total_cost_usd
+        model_provider = f"{repl.current_model} ({repl.config.provider})"
+        cwd = self._short_cwd(Path.cwd())
+        token_cost = f"{self._token_indicator()} tok · ${cost:.4f}"
+
+        attachments = len(repl.attachments)
+        attach_part = f" · 📎{attachments}" if attachments else ""
+        memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
         status = self.sink.status_text()
-        tokens = self._token_indicator()
-        attachments = len(self.repl.attachments)
-        attach_part = f" | 📎{attachments}" if attachments else ""
-        memory_part = " | 📄 agents.md" if self._has_agents_md() else ""
+
         return HTML(
             '<style class="header"> phoson </style>'
             '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{provider} · {model}</style>'
-            '<style class="header_dim"> | session </style>'
-            f'<style class="header_dim">{session_id}</style>'
+            f'<style class="header_dim">{model_provider}</style>'
             '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{tokens}</style>'
-            f'<style class="header_dim">{attach_part}</style>'
-            f'<style class="header_dim">{memory_part}</style>'
+            f'<style class="header_dim">{cwd}</style>'
+            '<style class="header_dim"> | </style>'
+            f'<style class="header_dim">{token_cost}</style>'
+            f'<style class="header_dim">{attach_part}{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
         )
@@ -407,6 +419,12 @@ class PhosonApp:
             return str(n)
 
         return f"{_fmt(used)}/{_fmt(window)}"
+
+    @staticmethod
+    def _short_cwd(cwd: Path) -> str:
+        """Compact display path for the fixed-width header."""
+        parts = cwd.parts
+        return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
 
     def _render_chat(self) -> ANSI:
         term_width = shutil.get_terminal_size((80, 24)).columns

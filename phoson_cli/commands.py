@@ -26,11 +26,12 @@ from .config import save_config, enabled_providers_from_config
 from .updater import perform_self_update
 from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
 from .attachments import provider_compat_warning
-from .command_host import CommandHost, RendererCommandHost
+from .command_host import CommandHost, HelpEntries, RendererCommandHost
 from .model_picker import pick_model  # noqa: F401 - patched by tests / host
 from ._mcp_commands import _MCPSubcommands
 from .model_selector import list_available_models
 from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
+from .permissions_store import load_policy
 
 if TYPE_CHECKING:
     from phoson_agent.sessions.models import SessionMeta
@@ -63,6 +64,71 @@ class CommandSpec:
 CommandHandlerFn = Callable[["CommandHandler", "Command"], Awaitable[bool]]
 
 
+#: /help sections (IMPROVEMENTS.md C4): each command spec declares the
+#: category it renders under. Commands not listed fall into "Other".
+HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    (
+        "Session",
+        ("/new", "/tree", "/undo", "/compact", "/resume", "/sessions", "/delete"),
+    ),
+    ("Model", ("/model", "/provider", "/subagent-model", "/reasoning-effort")),
+    ("Info", ("/status", "/env", "/cost", "/tokens", "/steps", "/agents-md")),
+    (
+        "Config & System",
+        (
+            "/label",
+            "/title",
+            "/attach",
+            "/permissions",
+            "/mcp",
+            "/setup",
+            "/update",
+            "/help",
+            "/exit",
+        ),
+    ),
+)
+
+#: Spec order is display order inside a category; unknown commands land in
+#: "Other" so a forgotten registration is still visible in /help.
+_CATEGORY_ORDER: Final[dict[str, int]] = {
+    name: idx for idx, (_title, names) in enumerate(HELP_CATEGORIES) for name in names
+}
+
+
+def get_grouped_command_help() -> list[tuple[str, list[tuple[str, str]]]]:
+    """Return ``/help`` entries grouped by category, in category order.
+
+    Returns:
+        A list of ``(category_title, [(name, help), ...])`` pairs. Specs
+        whose primary command (or any alias) is not listed in
+        :data:`HELP_CATEGORIES` are collected under an "Other" section.
+    """
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for spec in COMMAND_SPECS:
+        entry_name = spec.primary if len(spec.names) == 1 else " · ".join(spec.names)
+        entry = (entry_name, spec.help)
+        category = next(
+            (
+                title
+                for title, names in HELP_CATEGORIES
+                if any(n in names for n in spec.names)
+            ),
+            "Other",
+        )
+        grouped.setdefault(category, []).append(entry)
+
+    titles = [title for title, _names in HELP_CATEGORIES]
+    ordered: list[tuple[str, list[tuple[str, str]]]] = []
+    for title in titles + ["Other"]:
+        if title in grouped:
+            ordered.append((title, grouped.pop(title)))
+    # Anything left (unknown categories can't happen today, but stay safe).
+    for title, entries in grouped.items():
+        ordered.append((title, entries))
+    return ordered
+
+
 # Order here is the order they appear in ``/help``.
 COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/exit", "/quit"), "Exit the REPL", "_cmd_exit"),
@@ -80,6 +146,21 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         "_cmd_reasoning_effort",
     ),
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
+    CommandSpec(
+        ("/compact",),
+        "Compact the conversation now (LLM summary replaces old turns)",
+        "_cmd_compact",
+    ),
+    CommandSpec(
+        ("/resume",),
+        "Resume a saved session by id (prefix match works)",
+        "_cmd_resume",
+    ),
+    CommandSpec(
+        ("/status",),
+        "Show provider, model, session, cost, tokens and permissions",
+        "_cmd_status",
+    ),
     CommandSpec(
         ("/sessions",), "List, load (#) or pick saved sessions", "_cmd_sessions"
     ),
@@ -365,7 +446,11 @@ class CommandHandler:
         return True
 
     async def _cmd_tree(self, cmd: Command) -> bool:  # noqa: ARG002
-        self._r.print_info(self.repl.render_tree_ascii())
+        from ._views import render_tree_rich
+
+        self._r.print_renderable(
+            render_tree_rich(self.repl.tree, self.repl.current_node_id, self.repl.theme)
+        )
         return True
 
     async def _cmd_label(self, cmd: Command) -> bool:
@@ -444,7 +529,107 @@ class CommandHandler:
         return True
 
     async def _cmd_help(self, cmd: Command) -> bool:  # noqa: ARG002
-        self._r.print_help(get_command_help())
+        grouped: HelpEntries = get_grouped_command_help()
+        self._r.print_help(grouped)
+        return True
+
+    async def _cmd_compact(self, cmd: Command) -> bool:  # noqa: ARG002
+        """Force a conversation compaction now (IMPROVEMENTS.md C2)."""
+        r = self._r
+        if self.repl.is_running:
+            r.print_warn("A turn is running — press Esc (or Ctrl+C) first.")
+            return True
+        r.print_info("Compacting conversation…")
+        try:
+            before, after, changed = await self.repl.compact_context()
+        except Exception as exc:  # noqa: BLE001
+            r.print_error(f"Compaction failed: {exc}")
+            return True
+        if not changed:
+            return True
+        saved = before - after
+        percent = (saved / before * 100) if before else 0.0
+        r.print_info(
+            f"Compacted: {before:,} → {after:,} tokens"
+            f"  ·  −{saved:,} ({percent:.0f}% smaller)"
+        )
+        return True
+
+    async def _cmd_status(self, cmd: Command) -> bool:  # noqa: ARG002
+        """One consolidated runtime view (IMPROVEMENTS.md C2).
+
+        Replaces the four atomized /env /cost /tokens /steps commands,
+        which remain as aliases of their original behavior.
+        """
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            pkg_version = version("phoson-engine-minimal")
+        except PackageNotFoundError:  # pragma: no cover - not installed
+            pkg_version = "dev"
+
+        r = self._r
+        m = self.repl.session_metrics
+        policy = load_policy()
+        active_levels = [f"{t}:{lvl}" for t, lvl in sorted(policy.levels.items())]
+        permissions = ", ".join(active_levels) if active_levels else "all allow"
+
+        mcp_count = 0
+        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+            servers = getattr(plugin, "servers", {})
+            if isinstance(servers, dict):
+                mcp_count += len(servers)
+
+        window = self.repl._context_window
+        used = self.repl._context_tokens
+        pct = f" ({used / window * 100:.0f}%)" if window > 0 else ""
+
+        lines = [
+            f"version     {pkg_version}",
+            f"provider    {self.repl.config.provider}",
+            f"model       {self.repl.current_model}",
+            f"subagent    {self.repl.subagent_model}",
+            f"effort      {self.repl.config.reasoning_effort or 'off'}",
+            f"session     {self.repl.tree.session_id[:8]}"
+            f"  ·  {self.repl.tree.node_count()} nodes",
+            f"cwd         {Path.cwd()}",
+            f"steps       {m.step_count}",
+            f"tokens      {m.total_input_tokens:,} in / {m.total_output_tokens:,} out",
+            f"context     {used:,}/{window:,}{pct}",
+            f"cost        ${m.total_cost_usd:.5f}  ·  credits {m.total_credits:.5f}",
+            f"mcp         {mcp_count} server(s)",
+            f"permissions {permissions}",
+        ]
+        r.print_info("\n".join(lines))
+        return True
+
+    async def _cmd_resume(self, cmd: Command) -> bool:
+        """Load a session directly by id — prefix match works (C2)."""
+        r = self._r
+        query = cmd.args.strip()
+        if not query:
+            r.print_info("Usage:  /resume <session_id>  (see /sessions)")
+            return True
+
+        sessions = await self.repl.storage.list_meta()
+        matches = [s for s in sessions if str(s.id).startswith(query)]
+        if not matches:
+            r.print_error(f"No session matching {query!r}. Run /sessions to list.")
+            return True
+        if len(matches) > 1:
+            r.print_info(f"{len(matches)} sessions match {query!r}:")
+            for s in matches[:10]:
+                title = getattr(s, "title", None) or "(untitled)"
+                r.print_info(f"  {str(s.id)[:8]}  [{title}]")
+            r.print_info("Be more specific.")
+            return True
+
+        session_id = str(matches[0].id)
+        ok = await self.repl.load_session(session_id)
+        if ok:
+            title = getattr(matches[0], "title", None)
+            suffix = f"  ·  [{title}]" if title else ""
+            r.print_info(f"Resumed session  {session_id[:8]}{suffix}")
         return True
 
     async def _cmd_permissions(self, cmd: Command) -> bool:

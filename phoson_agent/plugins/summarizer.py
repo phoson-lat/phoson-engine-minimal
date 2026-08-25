@@ -340,3 +340,72 @@ class SummarizationMiddleware(AgentMiddleware):
         events = list(self._pending_compact_events)
         self._pending_compact_events.clear()
         return events
+
+    def format_for_summary(self, messages: list[Message]) -> str:
+        """Render *messages* as readable text for a summary LLM call (C2)."""
+        return _format_messages_for_summary(messages)
+
+    def record_compaction_event(
+        self,
+        *,
+        original_tokens: int,
+        compacted_tokens: int,
+        messages_removed: int,
+        summary_length: int,
+    ) -> None:
+        """Register a manual compaction so telemetry sees it like auto ones."""
+        self._pending_compact_events.append(
+            SummarizationEvent(
+                original_tokens=original_tokens,
+                compacted_tokens=compacted_tokens,
+                messages_removed=messages_removed,
+                summary_length=summary_length,
+            )
+        )
+
+    def build_compaction(
+        self, messages: list[Message], summary_text: str
+    ) -> tuple[list[Message], int, int]:
+        """Assemble the compacted message list for a manual compaction.
+
+        Same layout as the automatic path (system messages intact, a
+        summary message, then the last ``min_keep_messages`` turns) but
+        driven by an externally generated *summary_text* — the caller
+        owns the LLM round trip (IMPROVEMENTS.md C2).
+
+        Returns:
+            ``(compacted_messages, before_tokens, after_tokens)``.
+            When there is nothing to compact (at or under
+            ``min_keep_messages`` non-system messages) the input list is
+            returned unchanged with ``before == after``.
+        """
+        before = self._estimator.count_messages(messages)
+        system_msgs = [m for m in messages if m.role == "system"]
+        others = [m for m in messages if m.role != "system"]
+
+        if len(others) <= self.min_keep_messages or not summary_text.strip():
+            return messages, before, before
+
+        keep = others[-self.min_keep_messages :]
+        compacted = list(system_msgs)
+        compacted.append(
+            Message(
+                role="user",
+                content=(
+                    f"[Conversation summary up to this point: {summary_text.strip()}]"
+                ),
+            )
+        )
+        compacted.extend(keep)
+        after = self._estimator.count_messages(compacted)
+
+        # Record the event so metrics/telemetry see manual compactions too.
+        self._pending_compact_events.append(
+            SummarizationEvent(
+                original_tokens=before,
+                compacted_tokens=after,
+                messages_removed=len(messages) - len(compacted),
+                summary_length=len(summary_text),
+            )
+        )
+        return compacted, before, after

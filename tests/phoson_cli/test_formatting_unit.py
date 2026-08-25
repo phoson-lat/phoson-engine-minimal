@@ -138,7 +138,7 @@ def test_render_history_links_avoid_osc8_hyperlink_escapes() -> None:
 def test_render_tool_start_line_includes_label_and_args() -> None:
     event = AgentToolStartEvent(tool_name="read_file", args={"path": "/tmp/x.txt"})
     output = _render(render_tool_start_line(event, DARK))
-    assert "read_file" in output
+    assert "reading file" in output
     assert "/tmp/x.txt" in output
 
 
@@ -151,9 +151,9 @@ def test_render_subagent_start_line_says_spawning() -> None:
 
 def test_render_tool_done_line_success() -> None:
     event = AgentToolDoneEvent(tool_name="bash", result="ok", duration_ms=42)
-    output = _render(render_tool_done_line(event, DARK))
+    output = _render(render_tool_done_line(event, DARK, args={"command": "echo hi"}))
     assert "✓" in output
-    assert "bash" in output
+    assert "running command" in output
     assert "42ms" in output
 
 

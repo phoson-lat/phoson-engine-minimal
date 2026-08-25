@@ -17,11 +17,12 @@ that take an explicit argument (``/model gpt-4o``, ``/provider openai
 list``, ...) are unaffected since they never call into these methods.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from phoson_agent.sessions.models import SessionMeta
 
 from ..models import ModelOption
+from ..command_host import HelpEntry, HelpEntries, is_grouped_help
 from ..model_picker import ModelPickerResult
 from ..session_picker import SessionPickerResult, build_session_picker
 from ..provider_picker import ProviderPickerResult, build_provider_picker
@@ -45,9 +46,33 @@ class FullScreenCommandHost:
     def print_error(self, message: str) -> None:
         self.app.sink.notify("error", message)
 
-    def print_help(self, entries: list[tuple[str, str]]) -> None:
-        lines = "\n".join(f"{name:<16} {help_text}" for name, help_text in entries)
-        self.app.sink.notify("info", lines)
+    def print_help(self, entries: HelpEntries) -> None:
+        """Render ``/help`` into the chat pane, grouped by category (C4).
+
+        Accepts the grouped form ``[(category, [(name, desc), ...]), ...]``
+        or a flat ``(name, help)`` list for backward compatibility.
+        """
+        lines: list[str] = []
+        if is_grouped_help(entries):
+            for category, commands in entries:  # type: ignore[union-attr]
+                lines.append(category)
+                lines.extend(
+                    f"  {name:<18} {help_text}" for name, help_text in commands
+                )
+        else:
+            flat = cast("list[HelpEntry]", entries)
+            lines.extend(f"{name:<16} {help_text}" for name, help_text in flat)
+        self.app.sink.notify("info", "\n".join(lines))
+
+    def print_renderable(self, renderable: object) -> None:
+        """Print a Rich renderable into the chat pane.
+
+        The sink stores *renderables* (not strings) and the ANSI bridge
+        renders them per width — so the object goes in as-is.
+        """
+        self.app.sink.blocks.append(renderable)
+        self.app.sink.dirty = True
+        self.app.app.invalidate()
 
     async def pick_model(
         self, models: list[ModelOption], current_model: str

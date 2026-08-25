@@ -8,7 +8,7 @@ isolated in :class:`WaitingSpinner` and :class:`SubagentSpinner` so that
 
 import threading
 from time import sleep
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from phoson_llm.schemas import Message
@@ -56,6 +56,7 @@ from phoson_cli.formatting import (
 from phoson_cli.formatting import (
     subagent_tasks_from_args as _subagent_tasks_from_args,
 )
+from phoson_cli.command_host import HelpEntry, HelpEntries, is_grouped_help
 from phoson_cli.tools.subagent_panel import (
     render_subagent_panel,
     parse_subagent_metrics,
@@ -237,6 +238,11 @@ class Renderer:
         self._live: Live | None = None
         self._live_content: str = ""
         self._live_reasoning: str = ""
+
+        # Args of in-flight regular tool calls, keyed by tool_call_id (C1):
+        # done events don't carry args, so the start event stashes them and
+        # the done card pops them to render path/command detail + diffs.
+        self._pending_tool_args: dict[str, dict] = {}
 
         # ── Run-time context (reset on AgentStartEvent) ───────────────
         self._current_step: int = 0
@@ -488,6 +494,11 @@ class Renderer:
             if tasks:
                 self.start_subagent_waiting(tasks)
         else:
+            # Remember the call's args so the done card can render its
+            # detail line and specialized body (done events don't carry
+            # args) — C1.
+            if event.tool_call_id:
+                self._pending_tool_args[event.tool_call_id] = dict(event.args)
             args_preview = _args_preview(event.tool_name, event.args)
             label = _tool_label(event)
             spinner_text = f"⚙  {label}"
@@ -506,7 +517,8 @@ class Renderer:
                 self.console.print(render_subagent_summary(metrics, theme=self.theme))
                 return
 
-        self.console.print(render_tool_done_line(event, self.theme))
+        start_args = self._pending_tool_args.pop(event.tool_call_id or "", None)
+        self.console.print(render_tool_done_line(event, self.theme, args=start_args))
 
     def _on_done(self, event: AgentDoneEvent) -> None:
         """Render run summary line."""
@@ -570,12 +582,31 @@ class Renderer:
             table.add_row(str(i), s.id, str(s.message_count), updated, state)
         self.console.print(table)
 
-    def print_help(self, entries: list[tuple[str, str]]) -> None:
-        """Render the ``/help`` table.
+    def print_help(self, entries: HelpEntries) -> None:
+        """Render the ``/help`` listing.
 
-        Args:
-            entries: ``(name, description)`` pairs in display order.
+        Accepts the grouped form ``[(category, [(name, desc), ...]), ...]``
+        (IMPROVEMENTS.md C4) or, for backward compatibility, a flat list of
+        ``(name, description)`` pairs.
         """
+        if is_grouped_help(entries):
+            for category, commands in entries:  # type: ignore[union-attr]
+                self.console.print(
+                    Text(f" {category}", style=f"bold {self.theme.accent}")
+                )
+                table = Table(
+                    show_header=False,
+                    border_style=self.theme.muted_deep,
+                    box=box.SIMPLE,
+                    padding=(0, 1),
+                )
+                table.add_column("cmd", style=f"bold {self.theme.accent}", no_wrap=True)
+                table.add_column("desc", style=self.theme.muted)
+                for name, description in commands:
+                    table.add_row(name, description)
+                self.console.print(table)
+            return
+
         table = Table(
             show_header=False,
             border_style=self.theme.muted_deep,
@@ -584,8 +615,10 @@ class Renderer:
         )
         table.add_column("cmd", style=f"bold {self.theme.accent}", no_wrap=True)
         table.add_column("desc", style=self.theme.muted)
-        for name, description in entries:
-            table.add_row(name, description)
+        flat_entries = cast("list[HelpEntry]", entries)
+        table_rows: list[tuple[str, str]] = list(flat_entries)
+        for row in table_rows:
+            table.add_row(row[0], row[1])
         self.console.print(table)
 
 

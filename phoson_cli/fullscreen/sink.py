@@ -89,6 +89,11 @@ class FullScreenSink:
         self.blocks: list[object] = []
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""
+        # Args + transcript block of in-flight regular tool calls, keyed by
+        # tool_call_id (C1). Done events don't carry args, and the done card
+        # REPLACES the start line so each call renders as exactly one card
+        # (appending would duplicate the header).
+        self._pending_tool_calls: dict[str, tuple[dict, object]] = {}
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
@@ -276,7 +281,13 @@ class FullScreenSink:
                 else:
                     if turn is not None:
                         turn.running_tool = True
-                    self.blocks.append(render_tool_start_line(event, self.theme))
+                    # The start line is live feedback. Keep its object so the
+                    # complete card can replace it in-place rather than append
+                    # another identical header (C1 regression #81).
+                    start_block = render_tool_start_line(event, self.theme)
+                    self.blocks.append(start_block)
+                    key = event.tool_call_id or f"index:{event.index}"
+                    self._pending_tool_calls[key] = (dict(event.args), start_block)
 
             case AgentToolDoneEvent():
                 turn = self.current_turn
@@ -294,7 +305,34 @@ class FullScreenSink:
                 else:
                     if turn is not None:
                         turn.running_tool = False
-                    self.blocks.append(render_tool_done_line(event, self.theme))
+                    key = event.tool_call_id or f"index:{event.index}"
+                    pending = self._pending_tool_calls.pop(key, None)
+                    start_args, start_block = (
+                        pending if pending is not None else ({}, None)
+                    )
+                    done_block = render_tool_done_line(
+                        event, self.theme, args=start_args
+                    )
+                    if start_block is not None:
+                        # Replace by identity: multiple parallel calls may
+                        # share the same tool name and detail, but never the
+                        # same start-block object.
+                        position = next(
+                            (
+                                i
+                                for i, block in enumerate(self.blocks)
+                                if block is start_block
+                            ),
+                            None,
+                        )
+                        if position is None:
+                            # Defensive fallback for a transcript cleared
+                            # while a tool was running.
+                            self.blocks.append(done_block)
+                        else:
+                            self.blocks[position] = done_block
+                    else:
+                        self.blocks.append(done_block)
 
             case AgentStepDoneEvent():
                 if self.current_turn is not None:

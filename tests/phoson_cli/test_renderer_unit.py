@@ -132,21 +132,27 @@ def test_renderer_tool_start_no_print() -> None:
 
 
 def test_renderer_tool_done_compact_success() -> None:
-    """Successful tool done line contains '✓', tool name, and duration."""
+    """Successful tool done card contains '✓', the human verb, and duration."""
     renderer, console = _renderer_with_capture()
 
     with console.capture() as cap:
+        renderer._on_tool_start(
+            AgentToolStartEvent(
+                tool_name="bash", args={"command": "pytest"}, tool_call_id="call-1"
+            )
+        )
         renderer._on_tool_done(
             AgentToolDoneEvent(
                 tool_name="bash",
                 result="ok",
                 duration_ms=42,
+                tool_call_id="call-1",
             )
         )
 
     output = cap.get()
     assert "✓" in output
-    assert "bash" in output
+    assert "running command" in output
     assert "42ms" in output
 
 

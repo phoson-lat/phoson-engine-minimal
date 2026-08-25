@@ -19,6 +19,18 @@ from .model_picker import ModelPickerResult
 from .session_picker import SessionPickerResult
 from .provider_picker import ProviderPickerResult
 
+#: One ``/help`` row: ``(display_name, description)``.
+HelpEntry = tuple[str, str]
+#: A categorized ``/help`` section: ``(category_title, rows)``.
+HelpSection = tuple[str, list[HelpEntry]]
+#: Either form ``print_help`` accepts (grouped since C4, flat legacy).
+HelpEntries = list[HelpEntry] | list[HelpSection]
+
+
+def is_grouped_help(entries: HelpEntries) -> bool:
+    """True when *entries* uses the grouped ``(category, rows)`` form."""
+    return bool(entries) and isinstance(entries[0][1], list)
+
 
 @runtime_checkable
 class CommandHost(Protocol):
@@ -30,7 +42,11 @@ class CommandHost(Protocol):
 
     def print_error(self, message: str) -> None: ...
 
-    def print_help(self, entries: list[tuple[str, str]]) -> None: ...
+    def print_help(self, entries: HelpEntries) -> None: ...
+
+    def print_renderable(self, renderable: object) -> None:
+        """Print a Rich renderable (e.g. the colored /tree). Optional."""
+        ...
 
     async def pick_model(
         self, models: list[ModelOption], current_model: str
@@ -73,14 +89,24 @@ class RendererCommandHost:
     def print_error(self, message: str) -> None:
         self.repl.renderer.print_error(message)
 
-    def print_help(self, entries: list[tuple[str, str]]) -> None:
+    def print_help(self, entries: HelpEntries) -> None:
+        """Render ``/help``; grouped (C4) via the renderer, flat inline."""
         renderer = self.repl.renderer
         printer = getattr(renderer, "print_help", None)
         if printer is not None:
             printer(entries)
             return
-        for name, help_text in entries:
+        if is_grouped_help(entries):
+            for _title, commands in entries:  # type: ignore[union-attr]
+                for name, help_text in commands:
+                    renderer.print_info(f"{name}  {help_text}")
+            return
+        for name, help_text in entries:  # type: ignore[union-attr]
             renderer.print_info(f"{name}  {help_text}")
+
+    def print_renderable(self, renderable: object) -> None:
+        """Print a Rich renderable (e.g. the colored /tree)."""
+        self.repl.renderer.console.print(renderable)
 
     async def pick_model(
         self, models: list[ModelOption], current_model: str
@@ -129,4 +155,11 @@ class RendererCommandHost:
         self.print_info("Setup completed.")
 
 
-__all__ = ["CommandHost", "RendererCommandHost"]
+__all__ = [
+    "CommandHost",
+    "RendererCommandHost",
+    "HelpEntry",
+    "HelpSection",
+    "HelpEntries",
+    "is_grouped_help",
+]

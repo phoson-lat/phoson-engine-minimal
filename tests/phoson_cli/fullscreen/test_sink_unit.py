@@ -195,18 +195,18 @@ def test_text_interleaves_with_tool_calls_in_chronological_order() -> None:
         marker: text.index(marker)
         for marker in (
             "Let me check the directory first.",
-            "list_dir",
+            "listing directory",
             "Now running the tests.",
-            "bash",
+            "running command",
             "All green, done.",
         )
     }
     ordered = sorted(positions, key=positions.get)
     assert ordered == [
         "Let me check the directory first.",
-        "list_dir",
+        "listing directory",
         "Now running the tests.",
-        "bash",
+        "running command",
         "All green, done.",
     ]
     # Each answer segment got its own frozen block, not one giant blob.
@@ -258,19 +258,65 @@ def test_flush_line_is_a_noop_when_idle() -> None:
     assert ticks == []
 
 
-def test_tool_start_and_done_append_lines() -> None:
+def test_tool_start_and_done_replace_the_live_card_header() -> None:
+    """A completed tool must replace its live start line, never duplicate it."""
     sink, _ = _make_sink()
     sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
-    sink.on_event(AgentToolStartEvent(tool_name="read_file", args={"path": "x.txt"}))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="read_file", args={"path": "x.txt"}, tool_call_id="read-1"
+        )
+    )
     assert sink.current_turn.running_tool is True
+    assert len(sink.blocks) == 1
 
     sink.on_event(
-        AgentToolDoneEvent(tool_name="read_file", result="contents", duration_ms=5)
+        AgentToolDoneEvent(
+            tool_name="read_file",
+            result="contents",
+            duration_ms=5,
+            tool_call_id="read-1",
+        )
     )
     assert sink.current_turn.running_tool is False
+    assert len(sink.blocks) == 1
 
     text = render_chat(sink, width=80)
-    assert "read_file" in text
+    assert text.count("reading file") == 1
+    assert "x.txt" in text
+
+
+def test_parallel_tool_cards_replace_their_own_start_lines() -> None:
+    """Parallel calls are replaced by tool_call_id, not tool name/order."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="read_file", args={"path": "a.txt"}, tool_call_id="a"
+        )
+    )
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="read_file", args={"path": "b.txt"}, tool_call_id="b"
+        )
+    )
+    # Complete in reverse order to prove identity-based replacement.
+    sink.on_event(
+        AgentToolDoneEvent(
+            tool_name="read_file", result="B", duration_ms=2, tool_call_id="b"
+        )
+    )
+    sink.on_event(
+        AgentToolDoneEvent(
+            tool_name="read_file", result="A", duration_ms=1, tool_call_id="a"
+        )
+    )
+
+    assert len(sink.blocks) == 2
+    text = render_chat(sink, width=80)
+    assert text.count("reading file") == 2
+    assert text.count("a.txt") == 1
+    assert text.count("b.txt") == 1
 
 
 def test_step_done_advances_counters() -> None:
