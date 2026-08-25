@@ -8,6 +8,17 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Fix
+
+- **cli**: the full-screen multiline composer now wraps long pasted or typed
+  lines instead of scrolling them out of view, and an empty composer occupies
+  one line rather than expanding to its five-line cap
+- **cli**: the chat shows a transient animated activity line immediately after
+  Enter (before the provider's first event), rotates short thinking phrases
+  while waiting, reports streaming/tool/subagent phases, and clears on
+  completion or cancellation; hidden reasoning no longer duplicates a
+  `Phoson / thinking...` placeholder
+
 ## v0.9.0 (2026-08-24)
 
 ### Feat

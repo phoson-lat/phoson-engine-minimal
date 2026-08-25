@@ -474,9 +474,14 @@ experience; it offers a persistent scrollable chat pane, multiline input
 (`Ctrl+J` inserts a newline, `Enter` sends), persistent input history
 (`~/.phoson/history.txt`, shared with the retained classic REPL), and
 `/model`/`/provider`/`/sessions` pickers and bash confirmation as overlay
-floats. If a turn is already running, `Enter` keeps the draft and shows a
-warning; press `Esc` to cancel the active turn before sending it. One-shot
-mode (`phoson-cli "task"`) is always stdout-only.
+floats. The multiline composer wraps long pasted lines, takes only the
+height it needs (up to five lines), and scrolls internally after that cap. If
+a turn is already running, `Enter` keeps the draft and shows a warning; press
+`Esc` to cancel the active turn before sending it. The chat also shows a
+transient animated activity line immediately after sending (`Thinking…` with
+rotating phrases, then `Streaming…` / `Running tool…` as applicable), which
+vanishes when the turn settles. One-shot mode (`phoson-cli "task"`) is always
+stdout-only.
 ---
 
 ## 🔒 CI and security workflows
