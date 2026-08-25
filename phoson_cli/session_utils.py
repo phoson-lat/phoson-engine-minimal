@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from phoson_agent import Plugin
 
 from .config import PhosonConfig
+from .agents_md import load_agents_md
 
 _LOGGER = logging.getLogger("phoson_cli.session_utils")
 
@@ -24,8 +25,19 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are running in working directory: {cwd}. "
     "You are working on a {so} system with a terminal. Current time is {time}. "
     "Available tools: {tools}.{mcp_note}"
-    " Be concise, accurate, and use tools when needed."
+    " Be concise, accurate, and use tools when needed.{memory_block}"
 )
+
+#: Wrapper framing for the AGENTS.md memory injected into the prompt.
+_MEMORY_BLOCK_TEMPLATE = (
+    "\n\n# Project memory (AGENTS.md)"
+    "\nInstructions from AGENTS.md/CLAUDE.md files in this repository and"
+    " the user's home directory follow. They take precedence over your"
+    " defaults when they conflict:\n\n{content}"
+)
+
+#: Default AGENTS.md budget (tokens) when the caller does not override it.
+_AGENTS_MD_MAX_TOKENS_DEFAULT = 2000
 
 
 def _local_time_info() -> tuple[str, str]:
@@ -48,14 +60,19 @@ def _local_time_info() -> tuple[str, str]:
     )
 
 
-def build_system_prompt(tools: list) -> str:
+def build_system_prompt(
+    tools: list,
+    agents_md_max_tokens: int | None = None,
+) -> str:
     """Build the system prompt for the loaded tools.
 
     The tool list is derived from the actual ``tools`` registry (so it can
     never drift from what the engine really exposes) and the clock uses the
     system's local timezone. Mentions the MCP tools currently loaded so the
-    model knows they exist beyond the built-in set. Shared by the REPL and
-    the one-shot mode.
+    model knows they exist beyond the built-in set. AGENTS.md/CLAUDE.md
+    memory files (global + repo hierarchy) are re-read on every call so
+    edits take effect on the next turn (IMPROVEMENTS.md A3). Shared by the
+    REPL and the one-shot mode.
     """
     has_mcp = any(t.name.startswith("mcp_") for t in tools)
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
@@ -63,12 +80,21 @@ def build_system_prompt(tools: list) -> str:
         mcp_note = ""
     tool_names = ", ".join(sorted(t.name for t in tools))
     local_time, tz_label = _local_time_info()
+
+    memory = load_agents_md(
+        max_tokens=agents_md_max_tokens or _AGENTS_MD_MAX_TOKENS_DEFAULT
+    )
+    memory_block = ""
+    if memory:
+        memory_block = _MEMORY_BLOCK_TEMPLATE.format(content=memory)
+
     return _SYSTEM_PROMPT_TEMPLATE.format(
         cwd=Path.cwd(),
         so=sys.platform,
         time=f"{local_time} Current timezone is: {tz_label}",
         tools=tool_names,
         mcp_note=mcp_note,
+        memory_block=memory_block,
     )
 
 

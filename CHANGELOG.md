@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **cli**: AGENTS.md filesystem memory (IMPROVEMENTS.md A3) — an
+  `AGENTS.md` at the repo root (or any directory between root and cwd),
+  a global `~/.phoson/AGENTS.md`, or a `CLAUDE.md` alias is injected into
+  the system prompt every turn; supports `@file` imports, caps content at
+  ~2000 tokens with a visible truncation marker, and re-reads files each
+  turn so edits apply immediately; new `/agents-md` command lists what is
+  loaded and the TUI header shows a 📄 indicator when memory is active
+
 ## v0.8.1 (2026-08-24)
 
 ### Fix

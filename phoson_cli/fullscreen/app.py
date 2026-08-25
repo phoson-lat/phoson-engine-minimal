@@ -11,6 +11,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
+import time
 import uuid
 import shutil
 import asyncio
@@ -71,6 +72,11 @@ _FOOTER_HINT = (
 # How often the subagent panel animation frame advances while active.
 _SUBAGENT_TICK_SECONDS = 0.12
 
+# How often the header re-checks for AGENTS.md/CLAUDE.md memory files
+# (IMPROVEMENTS.md A3) — the prompt itself re-reads them every turn; this
+# cache only avoids stat-ing the filesystem on every rendered frame.
+_AGENTS_MD_CACHE_SECONDS = 5.0
+
 
 class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
@@ -87,6 +93,9 @@ class PhosonApp:
         # Immutable transcript blocks render to ANSI once per width (#perf).
         self._block_ansi_cache = BlockAnsiCache()
         self._run_task: asyncio.Task | None = None
+        # Header AGENTS.md indicator cache (see `_has_agents_md`).
+        self._agents_md_cached: bool | None = None
+        self._agents_md_checked_at: float = 0.0
 
         # Float overlay state (pickers, confirmations). While a Float is
         # open, the base key bindings are entirely disabled and only the
@@ -321,6 +330,7 @@ class PhosonApp:
         tokens = self._token_indicator()
         attachments = len(self.repl.attachments)
         attach_part = f" | 📎{attachments}" if attachments else ""
+        memory_part = " | 📄 agents.md" if self._has_agents_md() else ""
         return HTML(
             '<style class="header"> phoson </style>'
             '<style class="header_dim"> | </style>'
@@ -330,9 +340,27 @@ class PhosonApp:
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{tokens}</style>'
             f'<style class="header_dim">{attach_part}</style>'
+            f'<style class="header_dim">{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
         )
+
+    def _has_agents_md(self) -> bool:
+        """Whether any AGENTS.md/CLAUDE.md memory file applies here.
+
+        Cached for a short window so the header can render every frame
+        without stat-ing the filesystem each time (IMPROVEMENTS.md A3).
+        """
+        now = time.monotonic()
+        if (
+            self._agents_md_cached is None
+            or now - self._agents_md_checked_at > _AGENTS_MD_CACHE_SECONDS
+        ):
+            from ..agents_md import collect_agents_md_files
+
+            self._agents_md_cached = bool(collect_agents_md_files())
+            self._agents_md_checked_at = now
+        return self._agents_md_cached
 
     def _token_indicator(self) -> str:
         """Short token usage string like '12.4k/128k' for the header."""
