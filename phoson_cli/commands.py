@@ -100,6 +100,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(("/help",), "Show this help", "_cmd_help"),
     CommandSpec(
+        ("/permissions", "/perms"),
+        "Show or change per-tool permissions: /permissions <tool> <allow|ask|deny>",
+        "_cmd_permissions",
+    ),
+    CommandSpec(
         ("/agents-md",),
         "Show which AGENTS.md/CLAUDE.md memory files are loaded into the prompt",
         "_cmd_agents_md",
@@ -440,6 +445,62 @@ class CommandHandler:
 
     async def _cmd_help(self, cmd: Command) -> bool:  # noqa: ARG002
         self._r.print_help(get_command_help())
+        return True
+
+    async def _cmd_permissions(self, cmd: Command) -> bool:
+        """List or change per-tool permission levels (IMPROVEMENTS.md A1).
+
+        ``/permissions``                — list configured levels + patterns
+        ``/permissions <tool> <level>`` — set a level in place and persist
+
+        Levels: allow (run freely) · ask (confirm every call) · deny.
+        Changes take effect immediately and persist to permissions.json;
+        allow-patterns live in ~/.phoson/permissions.json too (edited via
+        "[a] always" answers or by hand).
+        """
+        from .permissions_store import (
+            LEVEL_ALLOW,
+            VALID_LEVELS,
+            set_level,
+            load_policy,
+            save_policy,
+        )  # noqa: I001
+
+        r = self._r
+        policy = load_policy()
+
+        if not cmd.args:
+            if not policy.levels and not policy.allow_patterns:
+                r.print_info(
+                    "No permission rules configured — all tools run freely."
+                    "\nUsage: /permissions <tool> <allow|ask|deny>"
+                    "\nExample: /permissions bash ask"
+                )
+                return True
+            r.print_info("Per-tool permissions:")
+            for tool, level in sorted(policy.levels.items()):
+                patterns = policy.allow_patterns.get(tool, [])
+                suffix = f"  (always allows: {', '.join(patterns)})" if patterns else ""
+                r.print_info(f"  {tool}: {level}{suffix}")
+            for tool, patterns in sorted(policy.allow_patterns.items()):
+                if tool not in policy.levels:
+                    r.print_info(f"  {tool}: allow  (patterns: {', '.join(patterns)})")
+            r.print_info("Change with: /permissions <tool> <allow|ask|deny>")
+            return True
+
+        parts = cmd.args.split()
+        if len(parts) != 2 or parts[1] not in VALID_LEVELS:
+            r.print_error("Usage: /permissions <tool> <allow|ask|deny>")
+            return True
+        tool, level = parts
+        if not set_level(policy, tool, level):
+            r.print_error(f"Invalid level: {level!r} — use allow, ask or deny")
+            return True
+        save_policy(policy)
+        note = ""
+        if level == LEVEL_ALLOW:
+            note = " (allow is the default — the entry is dropped from the file)"
+        r.print_info(f"{tool} → {level} · saved{note}")
         return True
 
     async def _cmd_agents_md(self, cmd: Command) -> bool:  # noqa: ARG002

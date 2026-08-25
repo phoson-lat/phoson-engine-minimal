@@ -10,6 +10,17 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Feat
 
+- **agent**: per-tool permission model (IMPROVEMENTS.md A1, phase 1) — a
+  new `PermissionMiddleware` gates every tool call through the standard
+  `on_before_tool` hook with three levels (`allow` / `ask` / `deny`) plus
+  per-tool glob allow-patterns (e.g. `bash: ["git status", "pytest*"]`);
+  `ask` routes to the front end's confirmation and fails closed without
+  one; denials surface as an actionable tool result (`permission_denied`)
+  telling the model how to proceed instead of a generic block
+- **cli**: durable policy in `~/.phoson/permissions.json` and a new
+  `/permissions` command to list or change tool levels on the fly
+  (`/permissions bash ask`); changes persist immediately; one-shot mode
+  fails closed for `ask`-level tools
 - **cli**: AGENTS.md filesystem memory (IMPROVEMENTS.md A3) — an
   `AGENTS.md` at the repo root (or any directory between root and cwd),
   a global `~/.phoson/AGENTS.md`, or a `CLAUDE.md` alias is injected into

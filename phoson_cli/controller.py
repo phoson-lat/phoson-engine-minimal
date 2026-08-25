@@ -40,6 +40,7 @@ from .session_utils import (
     build_mcp_plugins,
     build_system_prompt,
 )
+from .permissions_store import build_permission_middleware
 
 #: Upper bound on messages replayed into the chat pane when resuming a
 #: session (#56). The full history is shown for any reasonable session;
@@ -123,6 +124,13 @@ class SessionController:
             openrouter_api_key=config.openrouter_api_key,
         )
 
+        # Per-tool permission gate (IMPROVEMENTS.md A1). ``ask``-level
+        # calls route through the front end's confirmation service when
+        # one exists; without it the middleware fails closed.
+        self.permission_middleware = build_permission_middleware(
+            on_ask=self._ask_permission,
+        )
+
         # Build the runtime (chat client, tools, plugins, engine).
         self._rebuild_engine()
         sink.set_session(self._session.tree.session_id)
@@ -172,6 +180,26 @@ class SessionController:
     def _build_mcp_plugins(self) -> list[str | dict[str, Any] | Plugin]:
         """MCP plugin specs for the current configuration."""
         return build_mcp_plugins(self.config)
+
+    async def _ask_permission(self, tool_name: str, args: dict) -> bool:
+        """PermissionMiddleware ask-callback: consult the user.
+
+        Uses the front end's bash-style confirmation for the familiar
+        yes/no interaction. Without a confirmation service (one-shot),
+        fails closed — the middleware already handles the None case.
+        """
+        if self.confirmation is None:
+            return False
+        summary = self._summarize_args_for_confirm(tool_name, args)
+        return await self.confirmation.confirm_bash(summary)
+
+    @staticmethod
+    def _summarize_args_for_confirm(tool_name: str, args: dict) -> str:
+        """One-line human summary of a tool call for the confirm prompt."""
+        detail = next((str(v) for v in args.values() if isinstance(v, str) and v), "")
+        if len(detail) > 120:
+            detail = detail[:117] + "..."
+        return f"{tool_name} {detail}".strip()
 
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
@@ -227,7 +255,7 @@ class SessionController:
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
-            middlewares=[self.summarizer],
+            middlewares=[self.summarizer, self.permission_middleware],
             plugins=plugins,
             max_iterations=self.config.max_iterations,
         )
