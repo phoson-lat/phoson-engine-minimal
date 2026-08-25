@@ -99,6 +99,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         "_cmd_attach",
     ),
     CommandSpec(("/help",), "Show this help", "_cmd_help"),
+    CommandSpec(
+        ("/agents-md",),
+        "Show which AGENTS.md/CLAUDE.md memory files are loaded into the prompt",
+        "_cmd_agents_md",
+    ),
     CommandSpec(("/env",), "Show provider, model and session info", "_cmd_env"),
     CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),
     CommandSpec(("/tokens",), "Show running input/output token totals", "_cmd_tokens"),
@@ -435,6 +440,33 @@ class CommandHandler:
 
     async def _cmd_help(self, cmd: Command) -> bool:  # noqa: ARG002
         self._r.print_help(get_command_help())
+        return True
+
+    async def _cmd_agents_md(self, cmd: Command) -> bool:  # noqa: ARG002
+        """List the AGENTS.md/CLAUDE.md files injected into the system prompt."""
+        from .agents_md import collect_agents_md_files
+
+        r = self._r
+        files = collect_agents_md_files()
+        if not files:
+            r.print_info(
+                "No AGENTS.md/CLAUDE.md files loaded."
+                " Create an AGENTS.md in the repo root (or ~/.phoson/AGENTS.md)"
+                " to give the agent persistent project instructions."
+            )
+            return True
+
+        total_chars = sum(len(content) for _, content in files)
+        r.print_info(
+            f"{len(files)} memory file(s) loaded into the system prompt"
+            f" (~{total_chars // 4} tokens, capped at"
+            " 2000):"
+        )
+        for path, content in files:
+            lines = content.count("\n") + 1
+            marker = "*" if path.parent == Path.cwd() else " "
+            r.print_info(f" {marker} {path}  ({lines} lines)")
+        r.print_info("(* in the working directory · re-read every turn)")
         return True
 
     async def _cmd_setup(self, cmd: Command) -> bool:  # noqa: ARG002
