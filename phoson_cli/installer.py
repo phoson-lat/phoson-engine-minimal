@@ -11,31 +11,10 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 
 from phoson_cli.theme import load_theme, build_wizard_prompt_style
+from phoson_cli.labels import PROVIDER_LABELS
 
 from .config import PhosonConfig, save_config
 from .model_selector import list_available_models
-
-_PROVIDER_LABELS = {
-    "openrouter": "OpenRouter",
-    "openai": "OpenAI",
-    "anthropic": "Anthropic",
-    "ollama": "Ollama",
-    "github": "GitHub Models",
-    "nvidia": "NVIDIA",
-    "xai": "Grok (X.AI)",
-    "groq": "Groq",
-    "deepseek": "DeepSeek",
-    "together": "Together AI",
-    "perplexity": "Perplexity",
-    "lmstudio": "LM Studio",
-    "vllm": "vLLM",
-    "azure": "Azure OpenAI",
-    "gemini": "Google Gemini",
-    "mistral": "Mistral AI",
-    "bedrock": "AWS Bedrock",
-    "fireworks": "Fireworks AI",
-    "cohere": "Cohere",
-}
 
 _PHOS_ART = (
     (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
@@ -174,7 +153,7 @@ class SetupWizard:
                 )
                 line = Text(f"  {idx}. ")
                 line.append(f"{marker} ", style=state_style)
-                line.append(_PROVIDER_LABELS[provider], style="white")
+                line.append(PROVIDER_LABELS[provider], style="white")
                 self.console.print(line)
             self.console.print(
                 Text(
@@ -454,7 +433,7 @@ class SetupWizard:
             for idx, provider in enumerate(self.enabled_providers, start=1):
                 marker = "▶" if provider == current else "•"
                 self.console.print(
-                    f"  {idx}. {marker} {_PROVIDER_LABELS[provider]} ({provider})"
+                    f"  {idx}. {marker} {PROVIDER_LABELS[provider]} ({provider})"
                 )
             raw = (await self._prompt_text("default provider", current)).strip().lower()
             if not raw:

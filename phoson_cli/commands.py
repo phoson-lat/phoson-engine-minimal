@@ -20,7 +20,10 @@ import inspect
 from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
 from dataclasses import dataclass
-from collections.abc import Callable, Awaitable
+from collections.abc import Callable, Iterable, Awaitable
+
+from prompt_toolkit.document import Document
+from prompt_toolkit.completion import Completer, Completion
 
 from .config import save_config, enabled_providers_from_config
 from .updater import perform_self_update
@@ -208,6 +211,42 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
 COMMANDS: Final[frozenset[str]] = frozenset(
     name for spec in COMMAND_SPECS for name in spec.names
 )
+
+
+#: ``name -> help`` table built from the central COMMAND_SPECS so the
+#: completer's meta column stays in sync with /help and the dispatch table.
+_CMD_META: Final[dict[str, str]] = {
+    name: spec.help for spec in COMMAND_SPECS for name in spec.names
+}
+
+
+class SlashCompleter(Completer):
+    """Completes slash commands only when the buffer starts with ``/``.
+
+    Shared by both front ends (classic REPL and full-screen app) so the
+    completion list can never drift from ``COMMAND_SPECS``.
+    """
+
+    def get_completions(
+        self, document: Document, complete_event: object
+    ) -> Iterable[Completion]:
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+
+        # Only complete the command word itself (no args)
+        if " " in text:
+            return
+
+        word = text.lower()
+        for cmd in sorted(COMMANDS):
+            if cmd.startswith(word):
+                yield Completion(
+                    cmd,
+                    start_position=-len(text),
+                    display=cmd,
+                    display_meta=_CMD_META.get(cmd, ""),
+                )
 
 
 def get_command_help() -> list[tuple[str, str]]:

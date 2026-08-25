@@ -1,5 +1,10 @@
 # Technical TODO — phoson-engine-minimal
 
+> **2026-08-25:** P0 + P1 CLI work is complete (see
+> [IMPROVEMENTS.md](./IMPROVEMENTS.md) — the active board: B1–B3, A1–A4,
+> C1–C4 shipped in v0.8.1–v0.10.0). This file is kept as the historical
+> index of earlier decisions; new work is tracked in IMPROVEMENTS.md.
+>
 > **2026-08-20:** CLI P1 core (one-shot mode, `/undo`, sub-agent
 > concurrency + timeout) merged in PR #34 and shipped in **v0.5.0**.
 > Look & feel work is starting: the theme foundation is on branch
@@ -62,41 +67,39 @@ user-facing docs translated to English.
 
 ## Pending
 
-### CLI look & feel — in progress
+### CLI look & feel — done (v0.8.1–v0.10.0)
 
 Research (2026-08-20) validated staying on Rich + prompt_toolkit with
 scrollback (the pattern used by Claude Code / Codex / Gemini CLI);
-Textual (full-screen TUI) explicitly rejected. Plan:
+Textual (full-screen TUI) explicitly rejected. All three PRs shipped:
 
-- **PR-1 — theme foundation** (branch `feat/cli-theme-foundation`):
-  `phoson_cli/theme.py` token system consumed by every rendering site
-  (renderer, banner, prompt, pickers, wizard, subagent panel). Four tiers:
-  `dark` (default, historical look), `light`, `ansi` (16-color SSH-safe),
-  `no-color` (auto via `NO_COLOR`/`CLICOLOR=0`). Selected by
-  `PHOSON_THEME` env var or `theme = "..."` in config.toml.
-- **PR-2 — tool visibility**: Live execution panel per tool run with
-  action labels (`writing file`, `running command`…) + detail line (path,
-  size, command), elapsed time, rotating waiting phrases in the spinner,
-  and specialized result renderers (colored diff for `edit_file`,
-  `+N lines · X KB` for `write_file`).
-- **PR-3 — look upgrades**: persistent bottom status bar (model ·
-  session · $ · tokens · cwd), colored `/tree`, grouped `/help`, error
-  hints, banner animation.
+- **PR-1 — theme foundation** (merged): `phoson_cli/theme.py` token
+  system consumed by every rendering site (renderer, banner, prompt,
+  pickers, wizard, subagent panel). Four tiers: `dark` (default,
+  historical look), `light`, `ansi` (16-color SSH-safe), `no-color`
+  (auto via `NO_COLOR`/`CLICOLOR=0`). Selected by `PHOSON_THEME` env var
+  or `theme = "..."` in config.toml.
+- **PR-2 — tool visibility** (merged, v0.10.0): rich tool cards with
+  action labels, detail lines, colored diffs, and specialized result
+  renderers (see IMPROVEMENTS.md C1).
+- **PR-3 — look upgrades** (merged, v0.10.0): consolidated runtime
+  header, colored `/tree`, grouped `/help`, error hints (see
+  IMPROVEMENTS.md C4).
 
 ### CLI P1 (planned)
 
-- `/compact` — manual compaction trigger (summarizer currently auto-runs at 80%).
-- `/status` — single rich view (provider/model/cwd/cost/tokens/MCP/session) replacing the four atomized commands.
-- Configurable system prompt (`PHOSON_SYSTEM_PROMPT` / config.toml).
-- `/resume <id>` — direct session load by id (picker only today).
+Done (v0.10.0): `/compact`, `/status`, `/resume <id>` (IMPROVEMENTS.md C2);
+`/update` + `--self-update` (PR #33); one-shot mode, `/undo`, sub-agent
+concurrency limit + per-task timeout (PR #34).
 
-Done so far: `/update` + `--self-update` (PR #33); one-shot mode, `/undo`,
-sub-agent concurrency limit + per-task timeout (PR #34).
+Remaining:
+
+- Configurable system prompt (`PHOSON_SYSTEM_PROMPT` / config.toml).
 
 ### CLI P2 (planned)
 
 - `config.build_chat` → delegate to `phoson_llm.factory.build_chat` (remove the duplicated 16-provider if-chain and error-type drift).
-- Split `repl.py` (579 LOC god-object) into `RuntimeController` + `SessionManager`; add e2e test for the cancellation path (double KeyboardInterrupt handling is untested).
+- Split `repl.py` (458 LOC) further if it grows; add e2e test for the cancellation path (double KeyboardInterrupt handling is untested). The `RuntimeController` half of this item already landed as `phoson_cli/controller.py` (SessionController).
 - Audit/split `installer.py` (625 LOC).
 
 ### CLI P3 (no date — design work)
@@ -119,6 +122,10 @@ sub-agent concurrency limit + per-task timeout (PR #34).
 - `ConversationTree.branch()` kept: it is an honest tree API ("the node to
   use as parent for the new branch"); only the REPL command around it was
   dead.
+- `PhosonRepl.branch_session` / `SessionController.branch_session`
+  removed in v0.11.0 (D1): they were deprecated no-ops kept only for API
+  compat, and `/undo` is the real branching UX. If you called
+  `branch_session()` directly, simply drop the call — it did nothing.
 
 ## Verification
 

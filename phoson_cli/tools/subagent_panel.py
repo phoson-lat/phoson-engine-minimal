@@ -15,6 +15,7 @@ from rich import box
 from rich.table import Table
 
 from phoson_cli.theme import Theme, load_theme
+from phoson_cli.animations import SPINNER_FRAMES
 
 
 class AgentStatus(Enum):
@@ -32,8 +33,6 @@ _SUBAGENT_STATUS = {
     "done": "✓",
     "error": "✗",
 }
-
-_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 # ─── Wire format ──────────────────────────────────────────────────────────────
 # Producer: ``phoson_cli.tools.subagent.agents``.
@@ -137,7 +136,7 @@ def _build_running_table(
         task_preview = task[:35] + "..." if len(task) > 35 else task
         table.add_row(
             str(idx),
-            _SPINNER_FRAMES[(frame_index + idx) % len(_SPINNER_FRAMES)],
+            SPINNER_FRAMES[(frame_index + idx) % len(SPINNER_FRAMES)],
             task_preview,
             "waiting",
             "—",

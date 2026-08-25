@@ -60,6 +60,7 @@ from .completer import (
     StaticArgCompleter,
     SessionsArgCompleter,
 )
+from ..formatting import format_token_indicator
 from .model_cache import ModelCache
 from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
@@ -406,19 +407,9 @@ class PhosonApp:
 
     def _token_indicator(self) -> str:
         """Short token usage string like '12.4k/128k' for the header."""
-        window = self.repl._context_window
-        if window <= 0:
-            return "?"
-        used = self.repl._context_tokens
-
-        def _fmt(n: int) -> str:
-            if n >= 1_000_000:
-                return f"{n / 1_000_000:.1f}M"
-            if n >= 1_000:
-                return f"{n / 1_000:.1f}k"
-            return str(n)
-
-        return f"{_fmt(used)}/{_fmt(window)}"
+        return format_token_indicator(
+            self.repl._context_tokens, self.repl._context_window
+        )
 
     @staticmethod
     def _short_cwd(cwd: Path) -> str:

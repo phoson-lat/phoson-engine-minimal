@@ -8,6 +8,23 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Refactor
+
+- **cli**: architectural debt cleanup (IMPROVEMENTS.md D1) — removed the
+  leftover empty `phoson_cli/textual/` directory; unified the duplicated
+  provider-label tables into `phoson_cli/labels.py` (the picker's table,
+  with its `grok`/`google`/`aws` aliases, is now the single source and the
+  setup wizard reads from it); unified the braille spinner frames into
+  `phoson_cli/animations.py` (renderer, subagent panel and the full-screen
+  sink now share one sequence); moved the token-usage indicator into
+  `formatting.format_token_indicator(used, window)` shared by both front
+  ends; moved the slash-command completer into `commands.SlashCompleter`
+  (sourced from `COMMAND_SPECS`, imported by both front ends, re-exported
+  from `fullscreen.completer` for compatibility); removed the deprecated
+  no-op `branch_session` from both the REPL and the controller (breaking
+  minor — see migration note); `TODO.md` header/status sections updated
+  and its stale `repl.py` LOC figure corrected.
+
 ## v0.10.0 (2026-08-25)
 
 ### Fix

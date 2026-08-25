@@ -5,37 +5,12 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from .theme import Theme
+from .labels import provider_label
 from .pickers import BasePicker, picker_style
 
 
 class _ProviderState(TypedDict):
     selected: int
-
-
-_PROVIDER_LABELS = {
-    "openrouter": "OpenRouter",
-    "openai": "OpenAI",
-    "anthropic": "Anthropic",
-    "ollama": "Ollama",
-    "github": "GitHub Models",
-    "nvidia": "NVIDIA",
-    "xai": "Grok (X.AI)",
-    "grok": "Grok (X.AI)",
-    "groq": "Groq",
-    "deepseek": "DeepSeek",
-    "together": "Together AI",
-    "perplexity": "Perplexity",
-    "lmstudio": "LM Studio",
-    "vllm": "vLLM",
-    "azure": "Azure OpenAI",
-    "gemini": "Google Gemini",
-    "google": "Google Gemini",
-    "mistral": "Mistral AI",
-    "bedrock": "AWS Bedrock",
-    "aws": "AWS Bedrock",
-    "fireworks": "Fireworks AI",
-    "cohere": "Cohere",
-}
 
 
 @dataclass
@@ -65,7 +40,7 @@ def _render_providers(
             style = "class:row"
 
         marker = "▸" if is_selected else ("▶" if is_current else " ")
-        label = _PROVIDER_LABELS.get(provider, provider)
+        label = provider_label(provider)
         line = f"  {marker} {i + 1:>2}  {label:<12} ({provider})\n"
         lines.append((style, line))
 

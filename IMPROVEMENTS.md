@@ -24,7 +24,7 @@
 | [C2](#c2-comandos-p1-faltantes) | `/compact`, `/status`, `/resume <id>` | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
 | [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
 | [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | ✅ Sprint 2 |
-| [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | Sprint 3+ |
+| [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | ✅ Sprint 3 |
 | [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | Sprint 3 |
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | Sprint 3+ |
@@ -296,17 +296,17 @@ No bloquean, pero su costo crece si se deja pasar y afectan la mantenibilidad ju
 ---
 
 ### D1 — Limpieza de deuda arquitectónica
-**Esfuerzo:** M · **Impacto:** 🟡
+**Esfuerzo:** M · **Impacto:** 🟡 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 Checklist concreto encontrado en la auditoría:
 
-- [ ] **Eliminar `phoson_cli/textual/`** — directorio vacío con solo `__pycache__` (residuo de v0.7.0). Un `git rm -r`.
-- [ ] **Unificar `_PROVIDER_LABELS`** — duplicado en `provider_picker.py` e `installer.py`. Extraer a `models.py` o un módulo compartido.
-- [ ] **Unificar `_SPINNER_FRAMES`** — duplicado en `renderer.py` y `subagent_panel.py`. Extraer a un módulo `animations.py`.
-- [ ] **Unificar `_token_indicator()`** — implementación idéntica en `repl.py` y `fullscreen/app.py`. Mover a `formatting.py` como función pura `format_token_indicator(used, window)`.
-- [ ] **Unificar slash completers** — `_SlashCompleter` (repl.py) vs `SlashCompleter` (fullscreen/completer.py). El del fullscreen es más capaz; migrar y borrar el otro.
-- [ ] **Eliminar `branch_session`** — deprecated no-op en DOS capas (repl + controller). Rompe API pública menor; hacerlo en la próxima minor con entrada en CHANGELOG.
-- [ ] **Actualizar `TODO.md`** — fecha de cabecera (2026-08-20) desactualizada, LOC de repl.py incorrecto ("579", hoy 487). Este documento (`IMPROVEMENTS.md`) puede absorber/reemplazar parte del TODO.
+- [x] **Eliminar `phoson_cli/textual/`** — directorio vacío con solo `__pycache__` (residuo de v0.7.0). Un `git rm -r`.
+- [x] **Unificar `_PROVIDER_LABELS`** — duplicado en `provider_picker.py` e `installer.py`. Extraer a `models.py` o un módulo compartido. → `phoson_cli/labels.py` (`PROVIDER_LABELS` + `provider_label()`); la tabla del picker (con aliases `grok`/`google`/`aws`) se convierte en la única fuente y el wizard pasa a leerla.
+- [x] **Unificar `_SPINNER_FRAMES`** — duplicado en `renderer.py` y `subagent_panel.py`. Extraer a un módulo `animations.py`. → `phoson_cli/animations.py` (`SPINNER_FRAMES` + `spinner_frame()`); también se unifica la copia `_ACTIVITY_SPINNER_FRAMES` del sink full-screen.
+- [x] **Unificar `_token_indicator()`** — implementación idéntica en `repl.py` y `fullscreen/app.py`. Mover a `formatting.py` como función pura `format_token_indicator(used, window)`.
+- [x] **Unificar slash completers** — `_SlashCompleter` (repl.py) vs `SlashCompleter` (fullscreen/completer.py). El del fullscreen es más capaz; migrar y borrar el otro. → `SlashCompleter` vive ahora en `commands.py` (junto a `COMMAND_SPECS`/`COMMANDS`, de donde toma sus datos); ambos frontends lo importan y `fullscreen/completer.py` lo re-exporta por compatibilidad.
+- [x] **Eliminar `branch_session`** — deprecated no-op en DOS capas (repl + controller). Rompe API pública menor; hacerlo en la próxima minor con entrada en CHANGELOG. → eliminada en v0.11.0 (entrada en CHANGELOG).
+- [x] **Actualizar `TODO.md`** — fecha de cabecera (2026-08-20) desactualizada, LOC de repl.py incorrecto ("579", hoy 487). Este documento (`IMPROVEMENTS.md`) puede absorber/reemplazar parte del TODO. → cabecera 2026-08-25, secciones de estado actualizadas, LOC corregido; IMPROVEMENTS.md queda como tablero activo.
 
 **Criterio de listo.** `grep -rn "_PROVIDER_LABELS\|_SPINNER_FRAMES\|_token_indicator\|branch_session" phoson_cli/` devuelve una sola definición por símbolo (o cero para branch_session).
 

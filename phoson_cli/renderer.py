@@ -35,6 +35,7 @@ from phoson_agent import (
     AgentToolStartEvent,
 )
 from phoson_cli.theme import Theme, load_theme
+from phoson_cli.animations import SPINNER_FRAMES
 from phoson_cli.formatting import (
     tool_label as _tool_label,
 )
@@ -65,8 +66,6 @@ from phoson_cli.tools.subagent_panel import (
 )
 
 # Palette lives in phoson_cli.theme (see Renderer.theme).
-
-_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 # ── Animation helpers ──────────────────────────────────────────────────────────
@@ -122,7 +121,7 @@ class WaitingSpinner:
             return
         idx = 0
         while not stop.is_set():
-            frame = _SPINNER_FRAMES[idx % len(_SPINNER_FRAMES)]
+            frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
             with self._lock:
                 label = self._label
             self._console.file.write(f"\r\x1b[2K  {frame}  {label}")

@@ -29,6 +29,7 @@ from phoson_agent import (
 from phoson_llm.schemas import Message
 
 from ..theme import Theme
+from ..animations import SPINNER_FRAMES
 from ..formatting import (
     render_notice,
     render_history,
@@ -209,8 +210,8 @@ class FullScreenSink:
         turn = self.current_turn
         if turn is None:
             return ""
-        index = turn.activity_frame % len(_ACTIVITY_SPINNER_FRAMES)
-        return _ACTIVITY_SPINNER_FRAMES[index]
+        index = turn.activity_frame % len(SPINNER_FRAMES)
+        return SPINNER_FRAMES[index]
 
     def tick_activity_frame(self) -> bool:
         """Advance the in-chat spinner; return whether a turn is active.
@@ -463,9 +464,6 @@ __all__ = ["FullScreenSink", "CurrentTurn", "REPAINT_INTERVAL_SECONDS"]
 #: Target repaint interval while streaming tokens (~16fps). Token events
 #: coalesce into at most one scheduled repaint per interval.
 REPAINT_INTERVAL_SECONDS = 0.06
-
-# Braille spinner for the transient activity line rendered in the chat pane.
-_ACTIVITY_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 # Rotating labels for the *thinking* phase of the activity line. Kept short
 # (they share one line with the spinner) and deliberately light on tone —
