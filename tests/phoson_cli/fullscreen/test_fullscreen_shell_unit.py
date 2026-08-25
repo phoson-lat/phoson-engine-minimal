@@ -113,6 +113,40 @@ async def test_submit_ignores_input_while_a_run_is_in_flight(app: PhosonApp) -> 
         await app._run_task
 
 
+async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -> None:
+    """A4: Enter during a run must not be silent — keep the text and warn.
+
+    The user's draft is preserved (not cleared) and a warn notice explains
+    that a turn is already running, so a no-op Enter no longer looks like a
+    frozen app.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with patch.object(app.repl, "_run_agent", new=slow_run_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+
+        blocks_before = len(app.sink.blocks)
+        app._prompt_input.text = "my draft"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+
+        # The draft survives the rejected submit.
+        assert app._prompt_input.text == "my draft"
+        # A warn notice was appended to the transcript.
+        assert len(app.sink.blocks) == blocks_before + 1
+        assert "already running" in app._render_chat().value
+
+        release.set()
+        await app._run_task
+
+
 def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
     app.sink.blocks = ["one", "two"]
     app.sink.dirty = False

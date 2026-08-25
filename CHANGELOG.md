@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **cli**: pressing Enter while a turn is already running now shows a warn
+  notice ("A turn is already running — press Esc to cancel it first") and
+  keeps the typed text in the input, instead of silently ignoring it
+  (IMPROVEMENTS.md A4)
+
 ## v0.8.1 (2026-08-24)
 
 ### Fix
