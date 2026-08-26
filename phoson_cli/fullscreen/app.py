@@ -60,6 +60,7 @@ from .clipboard import (
     macos_image_tool_hint,
 )
 from .completer import (
+    PathCompleter,
     SlashCompleter,
     ModelArgCompleter,
     ResumeArgCompleter,
@@ -215,6 +216,12 @@ class PhosonApp:
                     ),
                     SessionsArgCompleter(self.session_cache),
                     ResumeArgCompleter(self.session_cache),
+                    # @file mentions in free text (E3) — completes repo
+                    # paths after a trailing "@"; the controller expands
+                    # the picked path into the file's content on send.
+                    # Rooted at Path.cwd() (same as the controller
+                    # resolves mentions) — repl doesn't exist yet here.
+                    PathCompleter(Path.cwd()),
                 ]
             ),
             complete_while_typing=True,

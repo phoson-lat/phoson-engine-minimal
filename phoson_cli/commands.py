@@ -16,6 +16,7 @@ To add a new command:
 That's it; the dispatch table picks it up automatically.
 """
 
+import re
 import inspect
 from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
@@ -23,7 +24,13 @@ from dataclasses import dataclass
 from collections.abc import Callable, Iterable, Awaitable
 
 from prompt_toolkit.document import Document
-from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.completion import (
+    Completer,
+    Completion,
+    CompleteEvent,
+    WordCompleter,
+    FuzzyCompleter,
+)
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
@@ -34,6 +41,7 @@ from .attachments import provider_compat_warning
 from .command_host import CommandHost, HelpEntries, RendererCommandHost
 from .model_picker import pick_model  # noqa: F401 - patched by tests / host
 from ._mcp_commands import _MCPSubcommands
+from .file_mentions import format_file_size, iter_candidate_paths
 from .model_selector import list_available_models
 from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
 from .permissions_store import load_policy
@@ -250,6 +258,78 @@ class SlashCompleter(Completer):
                     display=cmd,
                     display_meta=_CMD_META.get(cmd, ""),
                 )
+
+
+class PathCompleter(Completer):
+    """Completes ``@path`` file mentions in free text (IMPROVEMENTS.md E3).
+
+    The standard ``@``-mention pattern (Cursor / Claude Code): when the text
+    before the cursor ends with ``@`` (at the start of the input or right
+    after whitespace) the completer offers repo paths, filtered fuzzy by what
+    is typed after the ``@``. Selecting a candidate inserts the *path* — the
+    completer does no expansion itself; the controller resolves the mention
+    into the file's content when the message is sent (see
+    :func:`phoson_cli.file_mentions.expand_file_mentions`).
+
+    Shared by both front ends (classic REPL and full-screen app). Candidate
+    paths come from :func:`phoson_cli.file_mentions.iter_candidate_paths`,
+    which walks the working tree lazily (once, on the first ``@``) and caps
+    depth and entry count so a large repo never blocks the input.
+
+    Args:
+        cwd: The directory relative mentions resolve against (and the walk
+            root). Defaults to the current working directory.
+    """
+
+    def __init__(self, cwd: Path | None = None) -> None:
+        self._cwd = (cwd or Path.cwd()).resolve()
+        self._candidates: list[str] = []
+
+    def _refresh(self) -> None:
+        self._candidates = list(iter_candidate_paths(self._cwd))
+
+    def _query_after_mention(self, text: str) -> str | None:
+        """The path query after a trailing ``@``, or ``None`` if no mention.
+
+        The mention is the ``@``-word at the end of the text before the
+        cursor: a bare ``@`` or ``@`` followed by path-ish characters
+        (letters, digits, ``.``, ``_``, ``-``, ``/``). A preceding word
+        char, ``.``, ``-`` or ``@`` (e.g. ``foo@bar.com``, ``v1.@x``) means
+        it is not a mention.
+        """
+        m = re.search(r"(?<![\w.\-@])@([A-Za-z0-9._~/-]*)$", text)
+        return m.group(1) if m else None
+
+    def get_completions(
+        self, document: Document, complete_event: CompleteEvent
+    ) -> Iterable[Completion]:
+        query = self._query_after_mention(document.text_before_cursor)
+        if query is None:
+            return
+
+        # Walk the tree lazily, once, on the first ``@`` — bounded by the
+        # depth/entry caps so it never blocks the input. Cached for the
+        # completer's lifetime; the root is fixed so there is nothing new
+        # to walk for.
+        if not self._candidates:
+            self._refresh()
+
+        inner = FuzzyCompleter(WordCompleter(self._candidates, sentence=True))
+        sub_document = Document(query, len(query))
+        for c in inner.get_completions(sub_document, complete_event):
+            display_meta = c.display_meta
+            if not c.text.endswith("/"):
+                try:
+                    display_meta = format_file_size((self._cwd / c.text).stat().st_size)
+                except OSError:
+                    pass
+            yield Completion(
+                c.text,
+                start_position=c.start_position,
+                display=c.display,
+                display_meta=display_meta,
+                style=c.style,
+            )
 
 
 def get_command_help() -> list[tuple[str, str]]:
