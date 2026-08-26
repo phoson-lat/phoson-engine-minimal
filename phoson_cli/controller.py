@@ -24,7 +24,13 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
-from phoson_llm.schemas import Message, TextBlock, ModelConfig, ContentBlock
+from phoson_llm.schemas import (
+    REASONING_EFFORTS,
+    Message,
+    TextBlock,
+    ModelConfig,
+    ContentBlock,
+)
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
@@ -109,6 +115,7 @@ class SessionController:
         self._cw_resolver = ContextWindowResolver(
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
+            vllm_base_url=self._vllm_base_url(),
         )
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
@@ -122,6 +129,7 @@ class SessionController:
             model=config.model,
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
+            vllm_base_url=self._vllm_base_url(),
         )
 
         # Per-tool permission gate (IMPROVEMENTS.md A1). ``ask``-level
@@ -201,6 +209,17 @@ class SessionController:
             detail = detail[:117] + "..."
         return f"{tool_name} {detail}".strip()
 
+    def _vllm_base_url(self) -> str | None:
+        """Effective vLLM base URL for context-window lookups.
+
+        Mirrors the resolution order used by :func:`build_chat`
+        (models.json override, then ``config.vllm_base_url``) so the
+        resolver queries the same server the chat client talks to.
+        ``None`` lets the resolver fall back to its own default.
+        """
+        base_url = provider_settings(load_models_file(), "vllm").get("base_url")
+        return base_url or self.config.vllm_base_url
+
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
 
@@ -249,6 +268,7 @@ class SessionController:
 
         self.summarizer.provider = self.config.provider
         self.summarizer.model = self.config.model
+        self.summarizer.vllm_base_url = self._vllm_base_url()
 
         plugins = self._build_mcp_plugins()
 
@@ -469,7 +489,7 @@ class SessionController:
         self.sink.on_user_message(user_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
-        if reasoning_effort not in ("low", "medium", "high"):
+        if reasoning_effort not in REASONING_EFFORTS:
             reasoning_effort = None
         config = ModelConfig(
             model=self.current_model,

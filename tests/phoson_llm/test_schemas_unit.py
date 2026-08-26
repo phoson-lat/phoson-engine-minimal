@@ -2,7 +2,10 @@
 
 import datetime
 
+import pytest
+
 from phoson_llm.schemas import (
+    REASONING_EFFORTS,
     Message,
     TextBlock,
     AudioBlock,
@@ -116,6 +119,14 @@ class TestModelConfig:
         )
         assert cfg.temperature == 0.0
         assert cfg.system == "Be concise."
+
+    def test_reasoning_efforts_constant_covers_extended_levels(self):
+        assert REASONING_EFFORTS == ("low", "medium", "high", "xhigh", "max")
+
+    @pytest.mark.parametrize("effort", ["xhigh", "max"])
+    def test_extended_reasoning_efforts_accepted(self, effort):
+        cfg = ModelConfig(model="qwen/qwen3.6-plus", reasoning_effort=effort)
+        assert cfg.reasoning_effort == effort
 
 
 # ── outputs ──────────────────────────────────────────────────────────────────

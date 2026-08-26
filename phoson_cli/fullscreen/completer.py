@@ -129,7 +129,7 @@ class StaticArgCompleter(Completer):
 
     Same "type and autocomplete, no modal" pattern as
     :class:`ModelArgCompleter`, for commands whose valid values are
-    known upfront (e.g. ``/reasoning-effort <low|medium|high|off>``)
+    known upfront (e.g. ``/reasoning-effort <low|medium|high|xhigh|max|off>``)
     rather than fetched from a provider.
 
     ``words`` may be a plain list or a zero-arg callable returning the

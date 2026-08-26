@@ -1,4 +1,5 @@
 from .inputs import (
+    REASONING_EFFORTS,
     Message,
     JsonValue,
     TextBlock,
@@ -13,6 +14,7 @@ from .inputs import (
     ToolUseBlock,
     DocumentBlock,
     ToolDefinition,
+    ReasoningEffort,
     ToolResultBlock,
 )
 from .outputs import (
@@ -40,6 +42,8 @@ __all__ = [
     "Message",
     "ToolDefinition",
     "ModelConfig",
+    "REASONING_EFFORTS",
+    "ReasoningEffort",
     # JSON aliases
     "JsonValue",
     "JsonObject",

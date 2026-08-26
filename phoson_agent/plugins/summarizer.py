@@ -189,6 +189,7 @@ class SummarizationMiddleware(AgentMiddleware):
     model: str = ""
     ollama_base_url: str = "http://localhost:11434"
     openrouter_api_key: str | None = None
+    vllm_base_url: str | None = None
     summary_prompt_template: str = SUMMARY_PROMPT_TEMPLATE
 
     # Internal state. Both are constructed in ``__post_init__``; using
@@ -205,6 +206,7 @@ class SummarizationMiddleware(AgentMiddleware):
         self._resolver = ContextWindowResolver(
             ollama_base_url=self.ollama_base_url,
             openrouter_api_key=self.openrouter_api_key,
+            vllm_base_url=self.vllm_base_url,
         )
         self._estimator = TokenEstimator.for_provider(self.provider)
 

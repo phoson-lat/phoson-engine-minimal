@@ -165,6 +165,43 @@ async def test_run_turn_reasoning_effort_defaults_to_none(tmp_path) -> None:
     assert seen_configs[0].reasoning_effort is None
 
 
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+@pytest.mark.asyncio
+async def test_run_turn_forwards_extended_reasoning_efforts(tmp_path, effort) -> None:
+    controller, _sink = _make_controller(tmp_path, reasoning_effort=effort)
+    seen_configs = []
+
+    async def stream(path, config):
+        seen_configs.append(config)
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield _done_event("hello")
+
+    controller.engine.stream = stream
+
+    await controller.run_turn("q")
+
+    assert seen_configs[0].reasoning_effort == effort
+
+
+@pytest.mark.asyncio
+async def test_run_turn_unknown_reasoning_effort_falls_back_to_none(
+    tmp_path,
+) -> None:
+    controller, _sink = _make_controller(tmp_path, reasoning_effort="extreme")
+    seen_configs = []
+
+    async def stream(path, config):
+        seen_configs.append(config)
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield _done_event("hello")
+
+    controller.engine.stream = stream
+
+    await controller.run_turn("q")
+
+    assert seen_configs[0].reasoning_effort is None
+
+
 @pytest.mark.asyncio
 async def test_run_turn_success_end_to_end(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
