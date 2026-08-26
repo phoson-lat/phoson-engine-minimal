@@ -8,6 +8,8 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.11.0 (2026-08-25)
+
 ### Feat
 
 - **cli**: cross-platform clipboard and text fallback on Ctrl+V

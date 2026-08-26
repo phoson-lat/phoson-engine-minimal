@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.10.0 · 960+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81).
+> **Estado de referencia:** v0.11.0 · 980+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0.
 
 ---
 
@@ -25,10 +25,10 @@
 | [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
 | [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | ✅ Sprint 2 |
 | [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | ✅ Sprint 3 |
-| [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
+| [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | ✅ Sprint 3 |
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
-| [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | Sprint 3 |
+| [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | Post-P1 |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
