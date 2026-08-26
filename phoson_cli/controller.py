@@ -23,6 +23,7 @@ from phoson_agent import (
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentMiddleware,
 )
 from phoson_llm.schemas import (
     REASONING_EFFORTS,
@@ -32,11 +33,12 @@ from phoson_llm.schemas import (
     ContentBlock,
 )
 from phoson_agent.sessions import JsonlStorage, ConversationTree
+from phoson_agent.plugins.offload import OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
-from .config import PhosonConfig, build_chat
+from .config import COMPACT_MODES, PhosonConfig, build_chat, save_config
 from .models import load_models_file, provider_settings, resolve_context_window
 from ._session import SessionState, SessionMetrics
 from .attachments import AttachmentManager
@@ -77,6 +79,24 @@ class LoadOutcome:
 
     ok: bool
     message: str = ""
+
+
+@dataclass
+class CompactPlan:
+    """What a compaction *would* do, before the LLM is consulted (E1).
+
+    Returned by :meth:`SessionController.plan_compaction` so ``/compact``
+    can show a preview ("will summarize N of M turns, keeping K") and let
+    the user confirm before paying for the summary call.
+    """
+
+    ok: bool
+    reason: str = ""
+    total_messages: int = 0
+    summarize_messages: int = 0
+    keep_messages: int = 0
+    estimated_tokens: int = 0
+    profile: str = "balanced"
 
 
 class SessionController:
@@ -121,16 +141,25 @@ class SessionController:
         self._context_tokens: int = 0  # current estimated tokens in context
 
         # Summarization middleware. The provider/model fields are kept in
-        # sync with the active config every time ``_rebuild_engine`` runs.
+        # sync with the active config every time ``_rebuild_engine`` runs;
+        # the E1 context-management knobs (mode presets) are applied via
+        # ``_apply_context_config``.
         self.summarizer = SummarizationMiddleware(
-            threshold=0.80,
-            min_keep_messages=4,
             provider=config.provider,
             model=config.model,
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
             vllm_base_url=self._vllm_base_url(),
         )
+        # Offload middleware (IMPROVEMENTS.md E1): large tool outputs go
+        # to disk and the context keeps head/tail + path.
+        self.offload = OffloadMiddleware(
+            max_chars=config.offload_max_chars,
+            head_chars=config.offload_head_chars,
+            tail_chars=config.offload_tail_chars,
+            output_dir=config.compacted_dir,
+        )
+        self._apply_context_config()
 
         # Per-tool permission gate (IMPROVEMENTS.md A1). ``ask``-level
         # calls route through the front end's confirmation service when
@@ -220,6 +249,29 @@ class SessionController:
         base_url = provider_settings(load_models_file(), "vllm").get("base_url")
         return base_url or self.config.vllm_base_url
 
+    def _apply_context_config(self) -> None:
+        """Project the E1 context-management settings onto the middlewares.
+
+        Called from ``__init__`` and from every path that mutates
+        provider/model/MCP state (via ``_rebuild_engine``) or the
+        compact mode (``/compact on|off|<mode>``):
+
+        - ``compact_mode`` "off" disables *automatic* compaction only —
+          manual ``/compact`` keeps working.
+        - threshold / min_keep come straight from the config (``load_config``
+          already applied the mode presets to values the user left unset).
+        - the offload middleware reflects the ``offload_*`` settings and
+          ``offload_tool_outputs`` toggles it in or out of the chain.
+        """
+        self.summarizer.threshold = self.config.compact_threshold
+        self.summarizer.min_keep_messages = self.config.compact_min_keep_messages
+        self.summarizer.auto_enabled = self.config.compact_mode != "off"
+
+        self.offload.max_chars = self.config.offload_max_chars
+        self.offload.head_chars = self.config.offload_head_chars
+        self.offload.tail_chars = self.config.offload_tail_chars
+        self.offload.output_dir = self.config.compacted_dir
+
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
 
@@ -269,13 +321,24 @@ class SessionController:
         self.summarizer.provider = self.config.provider
         self.summarizer.model = self.config.model
         self.summarizer.vllm_base_url = self._vllm_base_url()
+        self._apply_context_config()
 
         plugins = self._build_mcp_plugins()
+
+        # Middleware order matters: offload rewrites tool results first
+        # (so oversized outputs never reach the summarizer's context
+        # accounting), then the summarizer may compact, then the
+        # permission gate intercepts tool calls. Offload only joins the
+        # chain when ``offload_tool_outputs`` is enabled (E1).
+        middlewares: list[AgentMiddleware] = []
+        if self.config.offload_tool_outputs:
+            middlewares.append(self.offload)
+        middlewares.extend([self.summarizer, self.permission_middleware])
 
         self.engine = AgentEngine(
             chat=self.chat,
             tools=self.tools,
-            middlewares=[self.summarizer, self.permission_middleware],
+            middlewares=middlewares,
             plugins=plugins,
             max_iterations=self.config.max_iterations,
         )
@@ -486,6 +549,12 @@ class SessionController:
         _node_id, path = self._append_user_turn(user_message)
         base_count = len(path)
 
+        # Retained reasoning (IMPROVEMENTS.md E1): register the current
+        # path's captured reasoning so an auto-compaction mid-run can fold
+        # it into the summary (chain of thought, not just conclusions).
+        # Cleared when the run ends, whatever the terminal state.
+        self.summarizer.set_retained_reasoning(path, self._path_reasoning_map(path))
+
         self.sink.on_user_message(user_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
@@ -503,6 +572,7 @@ class SessionController:
         try:
             terminal_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
+            self.summarizer.clear_retained_reasoning()
             self.sink.flush_line()
             self.sink.capture_partial_reasoning()
             self._append_partial_history(base_count)
@@ -512,6 +582,7 @@ class SessionController:
             return RunOutcome(status="cancelled")
 
         if isinstance(terminal_event, AgentErrorEvent):
+            self.summarizer.clear_retained_reasoning()
             # The sink already showed the error panel. Persist what exists
             # (the user turn, plus any steps that succeeded before the
             # failure) so the conversation is not lost and can be retried
@@ -529,6 +600,7 @@ class SessionController:
 
         self._finalize_run(terminal_event, base_count)
         self._persist_run_reasoning()
+        self.summarizer.clear_retained_reasoning()
         await self._save_session()
         return RunOutcome(
             status="done",
@@ -547,15 +619,134 @@ class SessionController:
         self.attachments.clear()
         self.sink.set_session(self._session.tree.session_id)
 
-    async def compact_context(self) -> tuple[int, int, bool]:
-        """Manually compact the conversation (IMPROVEMENTS.md C2, /compact).
+    # ── Manual compaction (IMPROVEMENTS.md C2 + E1) ────────────────────
 
-        Asks the LLM for a summary of the current path, then rewrites the
-        conversation as a **new branch** off the root: summary message
-        first, followed by the summarizer's recent-tail messages. The old
-        branch stays intact in the tree (visible via ``/tree``), so the
-        compaction is reversible by inspection and the session keeps its
-        identity.
+    def set_compact_mode(self, mode: str) -> bool:
+        """Set the automatic-compaction mode (E1: ``/compact on|off|<mode>``).
+
+        Args:
+            mode: ``"on"`` (re-enable with the configured mode), ``"off"``
+                (disable automatic compaction; manual /compact still
+                works), ``"balanced"`` or ``"aggressive"`` (re-enable with
+                that mode, applying its preset).
+
+        Returns:
+            True when the mode was applied and persisted; False on an
+            unknown value (the message is reported via the sink).
+        """
+        if mode not in COMPACT_MODES and mode != "on":
+            self.sink.notify(
+                "error",
+                f"Unknown compact mode {mode!r} — use balanced, aggressive, on or off.",
+            )
+            return False
+
+        if mode == "on":
+            # Re-enable with the previously configured mode when it is a
+            # real mode; "off" (or anything unset) falls back to balanced.
+            current = self.config.compact_mode
+            mode = current if current in ("balanced", "aggressive") else "balanced"
+
+        self.config.compact_mode = mode
+        self._apply_context_config()
+        try:
+            save_config(self.config, only_fields={"compact_mode"})
+        except OSError as exc:  # pragma: no cover - best-effort persist
+            _LOGGER.warning("Could not persist compact_mode: %s", exc)
+        self.sink.notify(
+            "info",
+            f"Auto-compaction {'disabled' if mode == 'off' else f'enabled ({mode})'}."
+            " Manual /compact still works.",
+        )
+        return True
+
+    def _profile_keep(self, profile: str | None) -> int:
+        """Messages kept verbatim for a compaction *profile* (E1).
+
+        ``balanced`` keeps the configured tail; ``aggressive`` halves it
+        (floor of 1) so the compaction cuts deeper.
+        """
+        base = max(2, self.config.compact_min_keep_messages)
+        if profile == "aggressive":
+            return max(1, base // 2)
+        return base
+
+    def _path_reasoning_map(self, path: list[Message]) -> dict[int, str]:
+        """Captured reasoning per path position (retained reasoning, E1).
+
+        Reasoning is persisted on ``node.metadata["reasoning"]`` by
+        :meth:`_persist_run_reasoning`; the tree's Message objects are the
+        same instances the engine history uses, so identity matching is
+        stable.
+
+        Note: after a compaction the tree can hold two nodes referencing
+        the *same* Message object (the old branch's node — with reasoning
+        in its metadata — and the new branch's node, which reuses the
+        object but has empty metadata). A non-empty reasoning therefore
+        wins over an empty one for a given identity, so a re-branch never
+        wipes the retained reasoning.
+        """
+        reasoning_by_msg: dict[int, str] = {}
+        for node in self.tree.nodes.values():
+            text = node.metadata.get("reasoning", "")
+            if text:
+                # First non-empty wins; an empty later node must not clobber it.
+                reasoning_by_msg.setdefault(id(node.message), text)
+        return {
+            idx: text
+            for idx, msg in enumerate(path)
+            if (text := reasoning_by_msg.get(id(msg), ""))
+        }
+
+    def plan_compaction(self, profile: str | None = None) -> "CompactPlan":
+        """Compute what a compaction *would* do, without any LLM call.
+
+        Powers the /compact preview (E1: "preview before applying").
+        """
+        path = self.tree.get_path(self.current_node_id)
+        if not path:
+            return CompactPlan(ok=False, reason="The session is empty.")
+
+        others = [m for m in path if m.role != "system"]
+        min_keep = self._profile_keep(profile)
+        if len(others) <= min_keep:
+            return CompactPlan(
+                ok=False,
+                reason=(
+                    f"Only {len(others)} turn(s) in context — nothing worth compacting."
+                ),
+            )
+
+        summarize = len(others) - min_keep
+        estimated = self.summarizer.estimate_tokens(others[:summarize])
+        return CompactPlan(
+            ok=True,
+            total_messages=len(others),
+            summarize_messages=summarize,
+            keep_messages=min_keep,
+            estimated_tokens=estimated,
+            profile=profile or "balanced",
+        )
+
+    async def compact_context(
+        self, profile: str | None = None
+    ) -> tuple[int, int, bool]:
+        """Manually compact the conversation (IMPROVEMENTS.md C2 + E1).
+
+        Asks the LLM for a **structured handoff summary** of the current
+        path, then rewrites the conversation as a **new branch** off the
+        root: summary message first, followed by the profile's recent-tail
+        messages. The old branch stays intact in the tree (visible via
+        ``/tree``), so the compaction is reversible by inspection and the
+        session keeps its identity.
+
+        E1 upgrades over C2:
+        - the summary is a structured document (Goal/Completed/Decisions/
+          Reasoning highlights/Next steps/Constraints) instead of free
+          text, so the next segment consumes it reliably;
+        - captured reasoning from previous turns (``node.metadata``) is
+          folded into the summary — retained reasoning, not just content;
+        - ``profile="aggressive"`` keeps a shorter tail.
 
         Returns:
             ``(before_tokens, after_tokens, ok)`` — token estimates before
@@ -570,7 +761,7 @@ class SessionController:
         before = self.summarizer.estimate_tokens(path)
         system_msgs = [m for m in path if m.role == "system"]
         others = [m for m in path if m.role != "system"]
-        min_keep = max(2, self.summarizer.min_keep_messages)
+        min_keep = self._profile_keep(profile)
         if len(others) <= min_keep:
             self.sink.notify(
                 "info",
@@ -578,26 +769,24 @@ class SessionController:
             )
             return before, before, False
 
-        # One plain LLM round trip for the summary. The chat client is used
-        # directly (no tools, no engine loop); errors propagate to the
-        # caller so /compact can report them without touching the session.
+        # One plain LLM round trip for the structured summary. The chat
+        # client is used directly (no tools, no engine loop); errors
+        # propagate to the caller so /compact can report them without
+        # touching the session. Retained reasoning from this path is
+        # folded into the prompt (E1).
         from phoson_llm.schemas import LLMDoneEvent
 
-        history_text = self.summarizer.format_for_summary(others[:-min_keep])
+        history_msgs = others[:-min_keep]
+        # Reasoning must be indexed against *history_msgs* (the exact list
+        # handed to the prompt builder), not the full path — otherwise a
+        # leading system message would shift every index.
+        reasoning = self._path_reasoning_map(history_msgs)
+        summary_prompt = self.summarizer.build_summary_prompt(
+            history_msgs, reasoning_for=reasoning
+        )
         done: LLMDoneEvent = await self.chat.complete(
-            [
-                Message(
-                    role="user",
-                    content=(
-                        "Summarize the following conversation segment for an AI "
-                        "assistant that will continue this work. Preserve: the "
-                        "user's goal, key decisions, relevant file paths, code "
-                        "snippets, tool results and what remains to be done. "
-                        "Output ONLY the summary.\n\n" + history_text
-                    ),
-                )
-            ],
-            ModelConfig(model=self.current_model, max_tokens=2048, temperature=0.3),
+            [Message(role="user", content=summary_prompt)],
+            ModelConfig(model=self.current_model, max_tokens=4096, temperature=0.3),
         )
 
         summary_text = done.content.strip()

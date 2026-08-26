@@ -122,28 +122,94 @@ SUMMARY_PROMPT_TEMPLATE = (
     "Conversation history to summarize:\n\n{history}"
 )
 
+#: Structured summary template (IMPROVEMENTS.md E1 — compaction
+#: estructurada, patrón Anthropic long-running agents). Fixed sections
+#: make the artifact reliably consumable by the next context segment,
+#: unlike a free-form summary. ``{reasoning_note}`` is only non-empty
+#: when the caller could supply captured reasoning.
+STRUCTURED_SUMMARY_TEMPLATE = (
+    "Summarize the conversation segment below into a structured handoff "
+    "document that an AI assistant will read to continue this work. "
+    "Output exactly these sections, in this order, as a markdown document "
+    "(skip a section only when it is truly empty):\n\n"
+    "## Goal\nThe user's original goal/task, in one or two sentences.\n\n"
+    "## Completed\nBulleted list of concrete things finished (files "
+    "created/edited, commands run, questions answered).\n\n"
+    "## Key decisions\nBulleted list of decisions and the one-line reason "
+    "for each.\n\n"
+    "## Reasoning highlights\nBulleted distillation of the most important "
+    "reasoning steps — the *why* behind key decisions — so continuity is "
+    "preserved even when the raw thinking is dropped.\n\n"
+    "## Open questions\nAnything unresolved, ambiguous or still to verify.\n\n"
+    "## Next steps\nOrdered list of what to do next.\n\n"
+    "## Constraints and context\nRelevant constraints, file paths, "
+    "environment facts, and technical details that must survive.\n\n"
+    "{reasoning_note}"
+    "Be concise but complete; keep code snippets and file paths verbatim. "
+    "Output ONLY the markdown document, no preamble.\n\n"
+    "Conversation segment to summarize:\n\n{history}"
+)
 
-def _format_messages_for_summary(messages: list[Message]) -> str:
-    """Format messages as readable text for the summary LLM call."""
+_REASONING_NOTE = (
+    "The segment below includes the model's captured reasoning for some "
+    "assistant turns (marked 'Reasoning:'); distill its essence into the "
+    "'Reasoning highlights' section instead of quoting it.\n\n"
+)
+
+
+def _format_messages_for_summary(
+    messages: list[Message],
+    reasoning_for: dict[int, str] | None = None,
+) -> str:
+    """Format messages as readable text for the summary LLM call.
+
+    Args:
+        messages: The messages to format.
+        reasoning_for: Optional mapping of message *index* (within
+            ``messages``) to captured reasoning text. When provided and a
+            key is present, the reasoning is appended to that message's
+            formatted entry — retained-reasoning support (IMPROVEMENTS.md
+            E1) so the summary can preserve the chain of thought, not
+            just its conclusions.
+    """
     parts: list[str] = []
-    for msg in messages:
+    for index, msg in enumerate(messages):
         role = msg.role.upper()
+        entry: list[str]
         if isinstance(msg.content, str):
-            parts.append(f"[{role}] {msg.content}")
-            continue
+            entry = [f"[{role}] {msg.content}"]
+        else:
+            text_parts: list[str] = []
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    text_parts.append(block.text)
+                elif isinstance(block, ToolUseBlock):
+                    args_str = json.dumps(block.args)
+                    text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
+                elif isinstance(block, ToolResultBlock):
+                    error_tag = " [ERROR]" if block.error else ""
+                    text_parts.append(f"[Result{error_tag}] {block.result}")
+            entry = [f"[{role}] {' '.join(text_parts)}"]
 
-        text_parts: list[str] = []
-        for block in msg.content:
-            if isinstance(block, TextBlock):
-                text_parts.append(block.text)
-            elif isinstance(block, ToolUseBlock):
-                args_str = json.dumps(block.args)
-                text_parts.append(f"[Tool: {block.tool_name}({args_str})]")
-            elif isinstance(block, ToolResultBlock):
-                error_tag = " [ERROR]" if block.error else ""
-                text_parts.append(f"[Result{error_tag}] {block.result}")
-        parts.append(f"[{role}] {' '.join(text_parts)}")
+        if (
+            msg.role == "assistant"
+            and reasoning_for
+            and index in reasoning_for
+            and reasoning_for[index]
+        ):
+            entry.append(f"Reasoning:\n{reasoning_for[index]}")
+        parts.append("\n".join(entry))
     return "\n\n".join(parts)
+
+
+def _structured_summary_prompt(
+    history_text: str, *, include_reasoning_note: bool
+) -> str:
+    """Build the structured summary prompt (IMPROVEMENTS.md E1)."""
+    return STRUCTURED_SUMMARY_TEMPLATE.format(
+        reasoning_note=_REASONING_NOTE if include_reasoning_note else "",
+        history=history_text,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -191,6 +257,14 @@ class SummarizationMiddleware(AgentMiddleware):
     openrouter_api_key: str | None = None
     vllm_base_url: str | None = None
     summary_prompt_template: str = SUMMARY_PROMPT_TEMPLATE
+    #: Generate a structured handoff document instead of a free-form
+    #: summary (IMPROVEMENTS.md E1). When True the summary prompt is
+    #: built from :data:`STRUCTURED_SUMMARY_TEMPLATE` and any captured
+    #: reasoning the caller provides is folded into the summary.
+    structured: bool = True
+    #: Disables automatic compaction entirely (``/compact off``). Manual
+    #: compactions keep working; this only gates :meth:`wrap_llm_call`.
+    auto_enabled: bool = True
 
     # Internal state. Both are constructed in ``__post_init__``; using
     # ``init=False`` keeps them out of the dataclass constructor and out of
@@ -199,6 +273,16 @@ class SummarizationMiddleware(AgentMiddleware):
     _estimator: TokenEstimator = field(init=False, repr=False)
     _pending_compact_events: list[SummarizationEvent] = field(
         default_factory=list, repr=False
+    )
+    # Retained-reasoning alignment (IMPROVEMENTS.md E1). The CLI registers
+    # the run's path messages plus the reasoning captured for each of them;
+    # compaction looks it up by object identity so the reasoning follows
+    # the messages into any later view of the history (the engine's lists
+    # and the tree's paths share Message instances). The map is immutable
+    # after ``set_retained_reasoning`` — nothing mutates it mid-run — and
+    # is cleared via :meth:`clear_retained_reasoning` when the run ends.
+    _retained_by_id: dict[int, str] = field(
+        default_factory=dict, init=False, repr=False
     )
 
     def __post_init__(self) -> None:
@@ -258,6 +342,13 @@ class SummarizationMiddleware(AgentMiddleware):
         """
         # Check if compaction is needed
         current_tokens = self._estimator.count_messages(messages)
+        if not self.auto_enabled:
+            # Automatic compaction disabled (``/compact off``) — pass
+            # through untouched; manual compactions are unaffected.
+            async for event in call_next(messages, config):
+                yield event
+            return
+
         context_window = await self._resolver.resolve(self.provider, self.model)
         threshold_tokens = int(context_window * self.threshold)
 
@@ -287,12 +378,14 @@ class SummarizationMiddleware(AgentMiddleware):
                 yield event
             return
 
-        # Generate summary
-        history_text = _format_messages_for_summary(to_summarize)
-        summary_prompt = self.summary_prompt_template.format(history=history_text)
+        # Generate summary — same prompt builder as the manual /compact
+        # path so auto and manual compactions produce identical artifacts.
+        summary_prompt = self.build_summary_prompt(to_summarize)
 
         summary_messages = [Message(role="user", content=summary_prompt)]
-        summary_config = ModelConfig(model=self.model, max_tokens=2048, temperature=0.3)
+        # 4096 (not 2048) because the structured handoff document is longer
+        # than a free-form paragraph; matches the manual /compact path.
+        summary_config = ModelConfig(model=self.model, max_tokens=4096, temperature=0.3)
 
         summary_text = ""
         async for event in call_next(summary_messages, summary_config):
@@ -344,8 +437,97 @@ class SummarizationMiddleware(AgentMiddleware):
         return events
 
     def format_for_summary(self, messages: list[Message]) -> str:
-        """Render *messages* as readable text for a summary LLM call (C2)."""
-        return _format_messages_for_summary(messages)
+        """Render *messages* as readable text for a summary LLM call (C2).
+
+        Retained reasoning (E1): when the caller previously registered
+        reasoning via :meth:`set_retained_reasoning`, matching messages
+        (by object identity) carry their captured reasoning into the
+        rendered text.
+        """
+        return _format_messages_for_summary(
+            messages,
+            reasoning_for=self._retained_index_for(messages) or None,
+        )
+
+    def build_summary_prompt(
+        self,
+        messages: list[Message],
+        *,
+        structured: bool | None = None,
+        reasoning_for: dict[int, str] | None = None,
+    ) -> str:
+        """Build the full summary LLM prompt for *messages* (E1).
+
+        This is the single place where the summary prompt is assembled,
+        so the auto path (:meth:`wrap_llm_call`) and the manual path
+        (``/compact``) produce identical prompts.
+
+        Args:
+            messages: The messages to summarize.
+            structured: Force the structured or legacy template. When
+                ``None`` the middleware's :attr:`structured` flag wins.
+            reasoning_for: Mapping of message *index* (within
+                ``messages``) to captured reasoning text. When given it
+                is used as-is; otherwise the retained reasoning
+                registered via :meth:`set_retained_reasoning` is resolved
+                by object identity.
+
+        Returns:
+            The prompt string to send to the model.
+        """
+        use_structured = self.structured if structured is None else structured
+        if reasoning_for is None:
+            reasoning_for = self._retained_index_for(messages) or None
+        history_text = _format_messages_for_summary(messages, reasoning_for)
+        if use_structured:
+            return _structured_summary_prompt(
+                history_text,
+                include_reasoning_note=bool(reasoning_for),
+            )
+        return self.summary_prompt_template.format(history=history_text)
+
+    # ── Retained reasoning (IMPROVEMENTS.md E1) ─────────────────────────
+
+    def set_retained_reasoning(
+        self,
+        path: list[Message],
+        reasoning: dict[int, str] | list[str],
+    ) -> None:
+        """Register the current run's reasoning for retained-reasoning compaction.
+
+        Args:
+            path: The run's message path in order. Used for object-identity
+                alignment (the engine's history and the tree's path share
+                Message instances).
+            reasoning: Either a dict mapping a *position in ``path``* to
+                the captured reasoning text, or a list of reasoning
+                strings aligned positionally with ``path`` (empty strings
+                for messages without reasoning).
+        """
+        self._retained_by_id = {}
+        if isinstance(reasoning, dict):
+            for idx, text in reasoning.items():
+                if text and 0 <= idx < len(path):
+                    self._retained_by_id[id(path[idx])] = text
+        else:
+            for idx, text in enumerate(reasoning):
+                if text and idx < len(path):
+                    self._retained_by_id[id(path[idx])] = text
+
+    def clear_retained_reasoning(self) -> None:
+        """Drop the registered reasoning (called when a run ends)."""
+        self._retained_by_id = {}
+
+    def _retained_index_for(self, messages: list[Message]) -> dict[int, str]:
+        """Resolve retained reasoning against *messages* by object identity."""
+        if not self._retained_by_id:
+            return {}
+        pairs = {
+            idx: text
+            for idx, msg in enumerate(messages)
+            if (text := self._retained_by_id.get(id(msg)))
+        }
+        return pairs
 
     def record_compaction_event(
         self,

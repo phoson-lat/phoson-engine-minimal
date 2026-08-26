@@ -273,9 +273,22 @@ class PhosonRepl:
         outcome = await self._controller.load_session(session_id)
         return outcome.ok
 
-    async def compact_context(self) -> tuple[int, int, bool]:
+    async def compact_context(
+        self, profile: str | None = None
+    ) -> tuple[int, int, bool]:
         """Manually compact the conversation (delegates to the controller)."""
-        return await self._controller.compact_context()
+        return await self._controller.compact_context(profile)
+
+    def plan_compaction(self, profile: str | None = None):
+        """Preview what a compaction would do (delegates to the controller)."""
+        return self._controller.plan_compaction(profile)
+
+    def set_compact_mode(self, mode: str) -> bool:
+        """Switch automatic compaction mode (delegates to the controller).
+
+        Returns True when the mode was applied.
+        """
+        return self._controller.set_compact_mode(mode)
 
     async def set_provider(self, provider: str) -> None:
         """Switch provider (models.json ``default_model`` honored)."""

@@ -207,7 +207,12 @@ def _controller_with_history(turns: int) -> SessionController:
         controller.summarizer.estimate_tokens = lambda msgs: sum(
             len(str(m.content)) for m in msgs
         )
-        controller.summarizer.format_for_summary = lambda msgs: "HISTORY"
+        controller.summarizer.build_summary_prompt = lambda msgs, **kw: "HISTORY"
+        controller.config = SimpleNamespace(
+            compact_min_keep_messages=4,
+            compact_mode="balanced",
+            model="test-model",
+        )
         controller.chat = MagicMock()
         from phoson_llm.schemas import LLMDoneEvent
 

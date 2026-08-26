@@ -153,7 +153,8 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
     CommandSpec(
         ("/compact",),
-        "Compact the conversation now (LLM summary replaces old turns)",
+        "Compact the conversation (preview + confirm); /compact on|off "
+        "toggles auto-compaction",
         "_cmd_compact",
     ),
     CommandSpec(
@@ -576,15 +577,61 @@ class CommandHandler:
         self._r.print_help(grouped)
         return True
 
-    async def _cmd_compact(self, cmd: Command) -> bool:  # noqa: ARG002
-        """Force a conversation compaction now (IMPROVEMENTS.md C2)."""
+    async def _cmd_compact(self, cmd: Command) -> bool:
+        """Compact the conversation now (IMPROVEMENTS.md C2 + E1).
+
+        Forms:
+          ``/compact``                    — preview + confirm, then compact
+          ``/compact aggressive``         — preview + confirm, deeper cut
+          ``/compact balanced``           — preview + confirm
+          ``/compact on|off``             — enable/disable auto-compaction
+          ``/compact yes``                — apply the last preview without asking
+        """
         r = self._r
+        arg = cmd.args.strip()
+
+        # Mode switch: ``on``/``off`` control *automatic* compaction, not a
+        # compaction run. ``balanced``/``aggressive`` are reserved for the
+        # manual profile below (unambiguous that way).
+        if arg in ("on", "off"):
+            ok = self.repl.set_compact_mode(arg)
+            if not ok:
+                r.print_error(
+                    "Unknown compact mode — use balanced, aggressive, on or off."
+                )
+            return True
+
+        if arg and arg not in ("aggressive", "balanced", "yes"):
+            r.print_error("Usage: /compact [balanced|aggressive|on|off|yes]")
+            return True
+
+        profile = arg if arg in ("aggressive", "balanced") else None
+
         if self.repl.is_running:
             r.print_warn("A turn is running — press Esc (or Ctrl+C) first.")
             return True
+
+        plan = self.repl.plan_compaction(profile)
+        if not plan.ok:
+            r.print_info(plan.reason)
+            return True
+
+        if arg == "yes":
+            confirmed = True  # already previewed; apply directly
+        else:
+            r.print_info(
+                f"Would summarize {plan.summarize_messages} of {plan.total_messages} "
+                f"turns (~{plan.estimated_tokens:,} tokens), keeping the last "
+                f"{plan.keep_messages}. Profile: {plan.profile}."
+            )
+            confirmed = await self.host.confirm("Apply this compaction now?")
+            if not confirmed:
+                r.print_info("Compaction cancelled.")
+                return True
+
         r.print_info("Compacting conversation…")
         try:
-            before, after, changed = await self.repl.compact_context()
+            before, after, changed = await self.repl.compact_context(profile)
         except Exception as exc:  # noqa: BLE001
             r.print_error(f"Compaction failed: {exc}")
             return True
