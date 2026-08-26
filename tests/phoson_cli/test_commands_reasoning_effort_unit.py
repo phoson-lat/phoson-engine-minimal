@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from phoson_cli.theme import NO_COLOR
+from phoson_llm.schemas import REASONING_EFFORTS
 from phoson_cli.commands import Command, CommandHandler
 
 
@@ -66,7 +67,7 @@ async def test_bare_command_shows_current_value_when_set() -> None:
     assert "high" in repl.renderer.infos[-1]
 
 
-@pytest.mark.parametrize("value", ["low", "medium", "high"])
+@pytest.mark.parametrize("value", list(REASONING_EFFORTS))
 @pytest.mark.asyncio
 async def test_sets_and_saves_a_valid_effort(value: str, _no_real_save) -> None:
     repl = DummyRepl()
@@ -128,3 +129,15 @@ async def test_value_is_case_insensitive() -> None:
     await handler.handle(Command(name="/reasoning-effort", args="HIGH"))
 
     assert repl.config.reasoning_effort == "high"
+
+
+@pytest.mark.asyncio
+async def test_error_message_lists_all_supported_efforts(_no_real_save) -> None:
+    repl = DummyRepl()
+    handler = CommandHandler(repl)
+
+    await handler.handle(Command(name="/reasoning-effort", args="extreme"))
+
+    error = repl.renderer.errors[-1]
+    for effort in REASONING_EFFORTS:
+        assert effort in error

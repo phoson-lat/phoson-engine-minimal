@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Final, Literal
 from dataclasses import dataclass
 from collections.abc import Sequence
 
@@ -159,6 +159,19 @@ class ToolDefinition:
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 
+#: Supported ``reasoning_effort`` levels, in ascending order.
+#:
+#: ``low``/``medium``/``high`` are the canonical OpenAI levels; ``xhigh`` and
+#: ``max`` are Phoson's extended levels for its own reasoning models.
+#: OpenAI-compatible backends forward the value as-is (e.g. o1/o3's
+#: ``reasoning_effort`` request parameter), so backends that only know the
+#: canonical levels may reject the extended ones — that is a per-backend
+#: concern, not a schema error.
+type ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+
+REASONING_EFFORTS: Final = ("low", "medium", "high", "xhigh", "max")
+
+
 @dataclass
 class ModelConfig:
     """Configuration for an LLM inference request.
@@ -169,7 +182,8 @@ class ModelConfig:
         max_tokens: Maximum tokens to generate (up to 32,768).
         system: Optional system prompt to prepend.
         thinking_budget: Token budget for extended thinking (Anthropic).
-        reasoning_effort: Reasoning effort level (OpenAI o1/o3).
+        reasoning_effort: Reasoning effort level (OpenAI o1/o3, plus
+            Phoson's extended ``xhigh``/``max`` levels).
     """
 
     model: str
@@ -177,4 +191,4 @@ class ModelConfig:
     max_tokens: int = 32 * 1024
     system: str | None = None
     thinking_budget: int | None = None
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    reasoning_effort: ReasoningEffort | None = None

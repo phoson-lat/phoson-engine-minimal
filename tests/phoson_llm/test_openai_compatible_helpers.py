@@ -10,6 +10,8 @@ import json
 import warnings
 from types import SimpleNamespace
 
+import pytest
+
 from phoson_llm.schemas import (
     Message,
     TextBlock,
@@ -173,6 +175,16 @@ class TestBuildRequestKwargs:
             config=cfg, messages=messages, tools=None, max_tokens_key="max_tokens"
         )
         assert kwargs["reasoning_effort"] == "high"
+        assert "temperature" not in kwargs
+
+    @pytest.mark.parametrize("effort", ["xhigh", "max"])
+    def test_extended_reasoning_effort_forwarded_as_is(self, effort):
+        cfg = ModelConfig(model="qwen/qwen3.6-plus", reasoning_effort=effort)
+        messages = [Message(role="user", content="hi")]
+        kwargs = _build_request_kwargs(
+            config=cfg, messages=messages, tools=None, max_tokens_key="max_tokens"
+        )
+        assert kwargs["reasoning_effort"] == effort
         assert "temperature" not in kwargs
 
     def test_tools_are_converted(self):

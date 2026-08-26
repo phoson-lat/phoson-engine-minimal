@@ -43,6 +43,8 @@ from prompt_toolkit.key_binding.key_bindings import (
     merge_key_bindings,
 )
 
+from phoson_llm.schemas import REASONING_EFFORTS
+
 from .keys import build_key_bindings
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
@@ -203,7 +205,7 @@ class PhosonApp:
                     ModelArgCompleter(self.model_cache),
                     StaticArgCompleter(
                         ("/reasoning-effort ", "/effort "),
-                        ["low", "medium", "high", "off"],
+                        [*REASONING_EFFORTS, "off"],
                     ),
                     # /provider <name> — small static set, same inline
                     # autocomplete pattern as /reasoning-effort (#55).

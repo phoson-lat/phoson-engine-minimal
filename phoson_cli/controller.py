@@ -24,7 +24,13 @@ from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
 )
-from phoson_llm.schemas import Message, TextBlock, ModelConfig, ContentBlock
+from phoson_llm.schemas import (
+    REASONING_EFFORTS,
+    Message,
+    TextBlock,
+    ModelConfig,
+    ContentBlock,
+)
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
@@ -469,7 +475,7 @@ class SessionController:
         self.sink.on_user_message(user_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
-        if reasoning_effort not in ("low", "medium", "high"):
+        if reasoning_effort not in REASONING_EFFORTS:
             reasoning_effort = None
         config = ModelConfig(
             model=self.current_model,

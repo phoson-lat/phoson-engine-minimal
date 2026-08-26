@@ -25,6 +25,8 @@ from collections.abc import Callable, Iterable, Awaitable
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import Completer, Completion
 
+from phoson_llm.schemas import REASONING_EFFORTS
+
 from .config import save_config, enabled_providers_from_config
 from .updater import perform_self_update
 from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
@@ -145,7 +147,7 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(
         ("/reasoning-effort", "/effort"),
-        "Show or set reasoning effort: low, medium, high, or off",
+        "Show or set reasoning effort: low, medium, high, xhigh, max, or off",
         "_cmd_reasoning_effort",
     ),
     CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
@@ -263,10 +265,11 @@ def get_command_help() -> list[tuple[str, str]]:
     ]
 
 
-#: Valid values for /reasoning-effort — matches ModelConfig.reasoning_effort
-#: (phoson_llm/schemas/inputs.py), which OpenAI-compatible backends forward
-#: as-is (e.g. o1/o3's ``reasoning_effort`` request parameter).
-_REASONING_EFFORTS: Final[frozenset[str]] = frozenset({"low", "medium", "high"})
+#: Valid values for /reasoning-effort — single source of truth is
+#: ``phoson_llm.schemas.REASONING_EFFORTS`` (matches
+#: ``ModelConfig.reasoning_effort``), which OpenAI-compatible backends
+#: forward as-is (e.g. o1/o3's ``reasoning_effort`` request parameter).
+_REASONING_EFFORTS: Final[frozenset[str]] = frozenset(REASONING_EFFORTS)
 
 
 # ─── Parsing ─────────────────────────────────────────────────────────────────
@@ -424,7 +427,7 @@ class CommandHandler:
         if not arg:
             r.print_info(
                 f"Reasoning effort: {current or 'off'}"
-                "  ·  usage: /reasoning-effort <low|medium|high|off>"
+                "  ·  usage: /reasoning-effort <low|medium|high|xhigh|max|off>"
             )
             return True
 
@@ -434,7 +437,8 @@ class CommandHandler:
             chosen = arg
         else:
             r.print_error(
-                f"Unknown reasoning effort: {arg!r}  ·  use low, medium, high, or off"
+                f"Unknown reasoning effort: {arg!r}  ·  use "
+                f"{', '.join(REASONING_EFFORTS)}, or off"
             )
             return True
 
