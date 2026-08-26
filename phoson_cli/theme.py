@@ -425,6 +425,7 @@ def build_prompt_style(theme: Theme) -> dict[str, str]:
             "prompt.model": f"{theme.prompt_model} bold",
             "prompt.sep": theme.prompt_bracket,
             "prompt.node": theme.prompt_node,
+            "prompt.update": theme.prompt_tokens,
             "prompt.tokens": theme.prompt_tokens,
             "prompt.arrow": f"{theme.prompt_arrow} bold",
             "completion-menu": f"bg:{theme.completion_bg} {theme.completion_fg}",

@@ -442,6 +442,14 @@ classic REPL is selected automatically with a notice on stderr.
 **Self-update:** `phoson-cli --self-update` performs the same check/upgrade
 flow from outside the REPL (e.g. from a script).
 
+**Startup update check:** at launch the CLI checks PyPI in the
+background — at most once every 24 h (cache in
+`~/.phoson/last_update_check`; a failed check is retried on the next
+start). When a newer release exists it shows a dim one-line hint:
+`⬆ v0.8.1 available — /update` — in the TUI header (full-screen) or the
+prompt line (classic). It never blocks first paint, input, or a run,
+and one-shot mode is untouched. `/update` or `--self-update` install it.
+
 **Appearance:** `PHOSON_THEME=light|ansi|no-color` (or `theme = "..."` in
 `~/.phoson/config.toml`) switches the color tier; `NO_COLOR` / `CLICOLOR=0`
 always produce plain output (scripts, CI).

@@ -422,6 +422,12 @@ class PhosonApp:
         attachments = len(repl.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
         memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
+        # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
+        # very end of the header, shown as soon as the background PyPI
+        # check lands and never blocking the paint. The shared REPL is
+        # the single source of truth for the check result in both
+        # front ends (the TUI starts it in ``run_async``).
+        update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
 
         return HTML(
@@ -435,6 +441,7 @@ class PhosonApp:
             f'<style class="header_dim">{attach_part}{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
+            f'<style class="header_dim">{update_part}</style>'
         )
 
     def _has_agents_md(self) -> bool:
@@ -832,6 +839,11 @@ class PhosonApp:
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
         asyncio.create_task(self.session_cache.refresh(self.repl.storage))
+        # Startup PyPI update check (IMPROVEMENTS.md E5): background, at
+        # most one round trip per day, never blocks first paint. The hint
+        # lands in the header as soon as the check settles; on_settle
+        # invalidates so even a fully idle screen repaints it.
+        self.repl.start_update_check(on_settle=self.app.invalidate)
         # While the full-screen TUI is up, any library/app logger without
         # configured handlers would hit logging's "last resort" handler
         # and print raw warnings over the rendered UI (seen with sub-agent

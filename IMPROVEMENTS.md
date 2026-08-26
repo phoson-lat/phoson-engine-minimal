@@ -5,7 +5,7 @@
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
 > **Estado de referencia:** v0.12.4 · 1224 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5.
 
 ---
 
@@ -33,7 +33,7 @@
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ v0.12.2 (PR #90) |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | ✅ v0.12.3 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | ✅ v0.12.4 |
-| [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | Backlog |
+| [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | ✅ v0.12.5 |
 | [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | Backlog |
 | [G1](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Double-Esc para retroceder a un mensaje anterior (rewind) | **P1** | M | 🟠 Medio | [#51](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Sprint 2–3 |
 | [G2](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Prompt caching (OpenRouter/Anthropic) — tokens cacheados + cabeceras | **P1** | M | 🔴 Alto | [#69](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Sprint 2–3 |
@@ -474,9 +474,18 @@ Patrón estándar (Cursor, Amp, Claude Code @-mentions): escribir `@src/` despli
 ---
 
 ### E5 — Check de updates al arrancar
-**Esfuerzo:** S · **Impacto:** 🟢
+**Esfuerzo:** S · **Impacto:** 🟢 · **Estado:** ✅ **Hecho en v0.12.5**
 
 La infraestructura existe (`updater.py`, check PyPI offline-safe). Añadir check asíncrono no-bloqueante al inicio (una vez cada 24h, cache en `~/.phoson/last_update_check`); si hay versión nueva, una línea discreta en el footer/header: "⬆ v0.8.1 available — /update". Nunca bloquear el paint.
+
+**Implementado.** El work se dividió en un núcleo UI-independent en `updater.py` + wiring mínimo en los dos front ends (mismo principio de "un solo home" que E4):
+
+- **Núcleo** (`phoson_cli/updater.py`): `check_for_startup_update()` — gateo por cadencia sobre un cache JSON (`~/.phoson/last_update_check`, sobrenombrable vía `PHOSON_HOME`) con `{checked_at, ok, latest_version}`. Due cuando el cache falta/corrompe, tiene ≥24 h, o el último *intento* no tuvo éxito (`ok: false`) — el fallo resetea el intervalo para reintentar offline en el siguiente start sin martillear PyPI; un éxito (incluido "no hay update") duerme el intervalo completo. Fetch reutiliza `get_latest_version` (timeout 10 s) y `is_update_available`; escribe el cache de forma atómica (tmp + `os.replace`) y best-effort (HOME read-only → solo no-check). `startup_check_due` es puro y testable (`now` inyectable). Devuelve la versión solo si es estrictamente más nueva; cualquier error degrada a `None` (sin banner, sin mensaje, sin retry loop).
+- **Wiring REPL clásico** (`repl.py`): `start_update_check()` lanza el check como `create_task` desde `run()` (no bloquea el primer prompt ni el input), almacena el resultado en `self.update_hint`, y `shutdown()` cancela el task si sigue en vuelo. El hint se pinta como fragmento propio `class:prompt.update` al final de la línea de prompt (dim, igual que los tokens): `phoson [model·node·12.4k/128.0k] › ⬆ v0.8.1 available — /update`.
+- **Wiring TUI** (`fullscreen/app.py`): `run_async()` arranca el check sobre el REPL compartido (fuente única de verdad en ambos front ends) con `on_settle=self.app.invalidate` para que la cabecera se repinte en cuanto el check aterriza, incluso en pantalla 100 % idle. El hint se renderiza como segmento `header_dim` al final del header compacto (la línea de abajo sigue siendo solo hints de teclado).
+- **Temas** (`theme.py`): `prompt.update` reutiliza `theme.prompt_tokens` (dim, nunca bold/accent) — sin tokens de color nuevos.
+
+**Criterio de listo.** Tests en `tests/phoson_cli/test_e5_update_check_unit.py` (30): path del cache (default + `PHOSON_HOME`), gateo por cadencia (missing, corrupto, shape erróneo, sin `checked_at`, stale, boundary exacto, fallo reciente → retry, éxito → 24 h), texto del hint, flujo completo (escribe cache con la versión, no-newer → `null` en cache, dev → siempre hint, offline → retry next start, not-due → cero fetch, timeout 10 s, escritura no-throw en HOME read-only), wiring clásico (fragmento con/sin hint, orden de fragmentos, `start_update_check` → hint, fallo → `None`, callback `on_settle`, cancel en `shutdown`), wiring TUI (header con/sin hint estilo `header_dim`, `run_async` arranca el check, offline → sin hint), y `prompt.update` en `build_prompt_style`. Suite ahora 1254 passing, pyright 0 errors, ruff clean.
 
 ---
 
@@ -514,7 +523,8 @@ Continuo / paralelo
 ├── E2 subagent panel métricas en vivo  ✅ v0.12.2 (PR #90)
 ├── E3 autocomplete de rutas + @file mentions  ✅ v0.12.3
 ├── E4 themes interactivos + auto-detección light/dark  ✅ v0.12.4
-└── E5-E6 según demanda real de usuarios
+├── E5 check de updates al arrancar  ✅ v0.12.5
+└── E6 según demanda real de usuarios
 ```
 
 ## Principios para decidir durante la ejecución
