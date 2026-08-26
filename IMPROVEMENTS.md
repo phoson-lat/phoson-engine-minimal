@@ -26,7 +26,7 @@
 | [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | ✅ Sprint 2 |
 | [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | ✅ Sprint 3 |
 | [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
-| [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | Sprint 3 |
+| [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | Sprint 3+ |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | Post-P1 |
@@ -329,13 +329,13 @@ Checklist concreto encontrado en la auditoría:
 ---
 
 ### D3 — Corregir Ctrl+V y soporte macOS clipboard
-**Archivos:** `fullscreen/clipboard.py`, `keys.py` · **Esfuerzo:** S · **Impacto:** 🟠
+**Archivos:** `fullscreen/clipboard.py`, `fullscreen/app.py` · **Esfuerzo:** S · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 **Dos problemas:**
-1. **Sin macOS**: `read_clipboard_image()` solo prueba `wl-paste` (Wayland) y `xclip` (X11). En Mac, Ctrl+V de imagen falla silenciosamente ("No image on the clipboard"). Añadir `osascript`/`pngpaste` (con instrucción de instalar `brew install pngpaste`) o `pbpaste` para detección y mensaje específico por plataforma.
-2. **Conflicto potencial con paste de texto**: Ctrl+V está rebind-eado globalmente a "pegar imagen", pero `TextArea` tiene paste de texto nativo con Ctrl+V. Comportamiento correcto: intentar imagen primero; si el clipboard no contiene imagen, delegar el paste de texto nativo (no tragar el evento). Verificar que el routing real funcione (los tests llaman a `app.paste_image()` directo — no cubren el conflicto).
+1. **Sin macOS**: `read_clipboard_image()` solo probaba `wl-paste` (Wayland) y `xclip` (X11). En Mac, Ctrl+V de imagen fallaba silenciosamente ("No image on the clipboard"). Se añade soporte de `pngpaste` (vía `brew install pngpaste`), `pbpaste` para texto, y un hint explicativo en el mensaje de error cuando se ejecuta en macOS sin la herramienta instalada (`macos_image_tool_hint()`).
+2. **Conflicto con paste de texto**: Ctrl+V estaba rebind-eado globalmente a "pegar imagen", tragándose el paste de texto nativo de `TextArea`. Comportamiento resuelto: se intenta leer la imagen primero; si el clipboard no contiene imagen, se lee el texto plano mediante la herramienta del SO (`wl-paste --no-newline`, `xclip -o`, `pbpaste`) y se inserta en el buffer en la posición del cursor (`_paste_text_fallback()`), sin perder nunca el paste de texto.
 
-**Criterio de listo.** En Linux: Ctrl+V con imagen en clipboard pega placeholder `[image #N]`; con texto en clipboard pega el texto. En macOS: mismo comportamiento o mensaje claro "install pngpaste". Tests del routing con eventos mock.
+**Criterio de listo.** En Linux: Ctrl+V con imagen en clipboard pega placeholder `[image #N]`; con texto en clipboard pega el texto. En macOS: soporte `pngpaste`/`pbpaste` con mensaje claro `brew install pngpaste` si no está instalado. Tests unitarios del backend macOS, hint, fallback a texto y routing en `test_clipboard_unit.py` y `test_fullscreen_shell_unit.py`.
 
 ---
 

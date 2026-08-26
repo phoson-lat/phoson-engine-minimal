@@ -10,6 +10,13 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Feat
 
+- **cli**: cross-platform clipboard and text fallback on Ctrl+V
+  (IMPROVEMENTS.md D3) — added macOS clipboard support (`pngpaste` for
+  images via `brew install pngpaste`, `pbpaste` for text); when the
+  system clipboard does not contain an image, Ctrl+V now reads plain
+  text from the OS clipboard and inserts it at the cursor position
+  instead of swallowing the event; missing `pngpaste` on macOS shows an
+  actionable install hint.
 - **cli**: `--version` flag prints the installed version (from
   `importlib.metadata`) and exits (IMPROVEMENTS.md D5).
 - **cli**: `--classic` / `--no-fullscreen` flags force the classic

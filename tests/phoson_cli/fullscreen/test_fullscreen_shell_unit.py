@@ -644,16 +644,43 @@ async def test_ctrl_v_placeholder_inserts_at_cursor_and_numbers_multiple_pastes(
     assert len(app.repl.attachments) == 2
 
 
-async def test_ctrl_v_notifies_when_clipboard_has_no_image(app: PhosonApp) -> None:
-    with patch(
-        "phoson_cli.fullscreen.app.read_clipboard_image",
-        new=AsyncMock(return_value=None),
+async def test_ctrl_v_notifies_when_clipboard_has_no_image_or_text(
+    app: PhosonApp,
+) -> None:
+    with (
+        patch(
+            "phoson_cli.fullscreen.app.read_clipboard_image",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "phoson_cli.fullscreen.app.read_clipboard_text",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         _trigger(app, "c-v")
         await asyncio.sleep(0)
 
     assert len(app.repl.attachments) == 0
     assert "No image on the clipboard" in app._render_chat().value
+
+
+async def test_ctrl_v_falls_back_to_text_paste_when_no_image(app: PhosonApp) -> None:
+    """D3: Ctrl+V with text (not an image) on the clipboard pastes the text."""
+    with (
+        patch(
+            "phoson_cli.fullscreen.app.read_clipboard_image",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "phoson_cli.fullscreen.app.read_clipboard_text",
+            new=AsyncMock(return_value="pasted text"),
+        ),
+    ):
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+
+    assert app._prompt_input.text == "pasted text"
+    assert len(app.repl.attachments) == 0
 
 
 def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
