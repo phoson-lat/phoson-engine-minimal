@@ -8,6 +8,58 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.11.0 (2026-08-25)
+
+### Feat
+
+- **cli**: cross-platform clipboard and text fallback on Ctrl+V
+  (IMPROVEMENTS.md D3) — added macOS clipboard support (`pngpaste` for
+  images via `brew install pngpaste`, `pbpaste` for text); when the
+  system clipboard does not contain an image, Ctrl+V now reads plain
+  text from the OS clipboard and inserts it at the cursor position
+  instead of swallowing the event; missing `pngpaste` on macOS shows an
+  actionable install hint.
+- **cli**: `--version` flag prints the installed version (from
+  `importlib.metadata`) and exits (IMPROVEMENTS.md D5).
+- **cli**: `--classic` / `--no-fullscreen` flags force the classic
+  line-by-line REPL for a single run instead of the default full-screen
+  TUI (IMPROVEMENTS.md D2); when the interactive terminal reports
+  `TERM=dumb` (or no `TERM` at all), the classic REPL is now selected
+  automatically with a notice on stderr, since the full-screen
+  `Application` needs real cursor/alternate-screen capabilities.
+- **cli**: `--model`, `--provider`, `--theme` and `--max-turns` flags
+  override the config for a single run without touching
+  `~/.phoson/config.toml` (IMPROVEMENTS.md D5); argument parsing is
+  centralized in the pure, unit-testable
+  `phoson_cli.__main__.parse_args(argv) -> CliOptions` (manual parsing
+  kept, no new dependency).
+
+### Test
+
+- **cli**: end-to-end and visual regression test suite for the full-screen
+  TUI (IMPROVEMENTS.md D4) — added real key-event routing tests via
+  prompt_toolkit's `create_pipe_input` (`Ctrl+J` multiline insert,
+  `Ctrl+L` clear, `Ctrl+C` interrupt vs exit, `Escape` cancel); headless
+  full agent turn lifecycle test against mock streaming events; and golden
+  ANSI rendering snapshots (empty transcript, active streaming turn, error
+  panel with hint, completed tool card).
+
+
+- **cli**: architectural debt cleanup (IMPROVEMENTS.md D1) — removed the
+  leftover empty `phoson_cli/textual/` directory; unified the duplicated
+  provider-label tables into `phoson_cli/labels.py` (the picker's table,
+  with its `grok`/`google`/`aws` aliases, is now the single source and the
+  setup wizard reads from it); unified the braille spinner frames into
+  `phoson_cli/animations.py` (renderer, subagent panel and the full-screen
+  sink now share one sequence); moved the token-usage indicator into
+  `formatting.format_token_indicator(used, window)` shared by both front
+  ends; moved the slash-command completer into `commands.SlashCompleter`
+  (sourced from `COMMAND_SPECS`, imported by both front ends, re-exported
+  from `fullscreen.completer` for compatibility); removed the deprecated
+  no-op `branch_session` from both the REPL and the controller (breaking
+  minor — see migration note); `TODO.md` header/status sections updated
+  and its stale `repl.py` LOC figure corrected.
+
 ## v0.10.0 (2026-08-25)
 
 ### Fix

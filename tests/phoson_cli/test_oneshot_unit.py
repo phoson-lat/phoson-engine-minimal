@@ -8,7 +8,7 @@ import pytest
 
 import phoson_cli.__main__ as main_module
 from phoson_cli.config import PhosonConfig
-from phoson_cli.__main__ import _run_oneshot, _parse_oneshot_task
+from phoson_cli.__main__ import parse_args, _run_oneshot
 
 
 class _FakeStdin:
@@ -23,52 +23,52 @@ class _FakeStdin:
         return self._text
 
 
-# ── _parse_oneshot_task ───────────────────────────────────────────────────────
+# ── one-shot task parsing (now part of parse_args) ───────────────────────────
 
 
 def test_parse_oneshot_positional(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
-    assert _parse_oneshot_task(["fix", "the tests"]) == "fix the tests"
+    assert parse_args(["fix", "the tests"]).task == "fix the tests"
 
 
 def test_parse_oneshot_print_flag(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
-    assert _parse_oneshot_task(["-p", "a task"]) == "a task"
-    assert _parse_oneshot_task(["--print", "a task"]) == "a task"
+    assert parse_args(["-p", "a task"]).task == "a task"
+    assert parse_args(["--print", "a task"]).task == "a task"
 
 
 def test_parse_oneshot_piped_stdin(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="piped task"))
-    assert _parse_oneshot_task([]) == "piped task"
+    assert parse_args([]).task == "piped task"
 
 
 def test_parse_oneshot_piped_empty_returns_none(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="   "))
-    assert _parse_oneshot_task([]) is None
+    assert parse_args([]).task is None
 
 
 def test_parse_oneshot_print_flag_with_piped_stdin(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="via pipe"))
-    assert _parse_oneshot_task(["-p"]) == "via pipe"
+    assert parse_args(["-p"]).task == "via pipe"
 
 
 def test_parse_oneshot_print_flag_empty_stdin_exits(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text=""))
     with pytest.raises(SystemExit) as exc_info:
-        _parse_oneshot_task(["-p"])
+        parse_args(["-p"])
     assert exc_info.value.code == 1
 
 
 def test_parse_oneshot_print_flag_interactive_tty_exits(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
     with pytest.raises(SystemExit) as exc_info:
-        _parse_oneshot_task(["-p"])
+        parse_args(["-p"])
     assert exc_info.value.code == 1
 
 
 def test_parse_oneshot_interactive_default(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
-    assert _parse_oneshot_task([]) is None
+    assert parse_args([]).task is None
 
 
 def test_parse_oneshot_stdin_read_error_is_not_fatal(monkeypatch) -> None:
@@ -82,7 +82,7 @@ def test_parse_oneshot_stdin_read_error_is_not_fatal(monkeypatch) -> None:
             raise OSError("no stdin here")
 
     monkeypatch.setattr(sys, "stdin", _RaisingStdin())
-    assert _parse_oneshot_task([]) is None
+    assert parse_args([]).task is None
 
 
 # ── _run_oneshot ──────────────────────────────────────────────────────────────

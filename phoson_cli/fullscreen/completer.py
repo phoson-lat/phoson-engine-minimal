@@ -1,9 +1,9 @@
 """Completers for the full-screen input line.
 
-Slash-command completion mirrors the classic REPL's completer
-(``phoson_cli.repl``), sourced directly from ``COMMAND_SPECS``/
-``COMMANDS`` so both stay in sync with ``/help`` and the dispatch table
-without depending on ``repl.py``'s prompt-loop code.
+Slash-command completion is the shared :class:`~phoson_cli.commands.SlashCompleter`
+(re-exported here for import compatibility) — both front ends complete
+from the same ``COMMAND_SPECS``/``COMMANDS`` so the list can never drift
+from ``/help`` or the dispatch table.
 
 Model-id completion for ``/model``/``/subagent-model`` follows the
 reference prototype's approach (cli_abel.py's ``ChatCommandCompleter``):
@@ -23,40 +23,13 @@ from prompt_toolkit.completion import (
     FuzzyCompleter,
 )
 
-from ..commands import COMMANDS, COMMAND_SPECS
+from ..commands import (
+    SlashCompleter,  # noqa: F401 - re-exported for import compatibility
+)
 from .model_cache import ModelCache
 from .session_cache import SessionListCache
 
-_CMD_META: dict[str, str] = {
-    name: spec.help for spec in COMMAND_SPECS for name in spec.names
-}
-
 _MODEL_ARG_PREFIXES = ("/model ", "/subagent-model ")
-
-
-class SlashCompleter(Completer):
-    """Completes slash commands only when the buffer starts with '/'."""
-
-    def get_completions(
-        self, document: Document, complete_event: CompleteEvent
-    ) -> Iterable[Completion]:
-        text = document.text_before_cursor
-        if not text.startswith("/"):
-            return
-
-        # Only complete the command word itself (no args)
-        if " " in text:
-            return
-
-        word = text.lower()
-        for cmd in sorted(COMMANDS):
-            if cmd.startswith(word):
-                yield Completion(
-                    cmd,
-                    start_position=-len(text),
-                    display=cmd,
-                    display_meta=_CMD_META.get(cmd, ""),
-                )
 
 
 class ModelArgCompleter(Completer):

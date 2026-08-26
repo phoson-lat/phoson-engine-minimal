@@ -656,10 +656,6 @@ class SessionController:
             self.sink.notify("error", message)
             return LoadOutcome(ok=False, message=message)
 
-    def branch_session(self) -> None:  # pragma: no cover - kept for API compat
-        """Deprecated no-op kept for backward compatibility."""
-        pass
-
     async def _refresh_context_window(self) -> None:
         """Resolve and cache the context window for ``current_model``.
 

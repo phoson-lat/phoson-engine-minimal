@@ -8,21 +8,25 @@ completer, prompt fragments and banner, and adapts its Rich
 ``Renderer`` to the controller's
 :class:`~phoson_cli.ui_protocols.AgentEventSink` via ``ClassicSink``.
 
-A future full-screen front end will be a second front end over the
-same controller — a sink, not a fork.
+**Status (IMPROVEMENTS.md D2):** the full-screen front end
+(``phoson_cli.fullscreen.app.PhosonApp``) is the default interactive
+experience. This classic REPL is the *retained degraded mode*: it is
+user-facing via ``phoson-cli --classic`` (or ``--no-fullscreen``) and is
+selected automatically when the interactive terminal cannot do
+full-screen (``TERM`` unset or ``dumb``). It stays fully maintained as
+a second front end over the same controller — a sink, not a fork — and
+is the home of the classic rendering primitives (``Renderer``,
+``ClassicSink``) that both front ends share where possible.
 """
 
 import asyncio
 import logging
 from typing import Any
 from pathlib import Path
-from collections.abc import Iterable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.document import Document
-from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
 
@@ -37,9 +41,14 @@ from .config import (
     build_chat,  # noqa: F401
 )
 from ._session import SessionMetrics  # noqa: F401
-from .commands import COMMANDS, COMMAND_SPECS, CommandHandler, parse_command
+from .commands import (
+    CommandHandler,
+    SlashCompleter,
+    parse_command,
+)
 from .renderer import Renderer, ClassicSink
 from .controller import SessionController
+from .formatting import format_token_indicator
 from .confirmation import PromptToolkitConfirmationService
 from .ui_protocols import AgentEventSink, ConfirmationService
 from .session_utils import (  # noqa: F401
@@ -54,37 +63,6 @@ _LOGGER = logging.getLogger("phoson_cli.repl")
 # prompt_toolkit prompt) from an explicit ``confirmation=None`` (fail
 # closed — e.g. the full-screen front end before it has its own modal).
 _DEFAULT_CONFIRMATION: Any = object()
-
-# Build a flat ``name -> help`` table from the central COMMAND_SPECS so the
-# completer's meta column stays in sync with /help and the dispatch table.
-_CMD_META: dict[str, str] = {
-    name: spec.help for spec in COMMAND_SPECS for name in spec.names
-}
-
-
-class _SlashCompleter(Completer):
-    """Completes slash commands only when the buffer starts with '/'."""
-
-    def get_completions(
-        self, document: Document, complete_event: object
-    ) -> Iterable[Completion]:
-        text = document.text_before_cursor
-        if not text.startswith("/"):
-            return
-
-        # Only complete the command word itself (no args)
-        if " " in text:
-            return
-
-        word = text.lower()
-        for cmd in sorted(COMMANDS):
-            if cmd.startswith(word):
-                yield Completion(
-                    cmd,
-                    start_position=-len(text),
-                    display=cmd,
-                    display_meta=_CMD_META.get(cmd, ""),
-                )
 
 
 class PhosonRepl:
@@ -299,10 +277,6 @@ class PhosonRepl:
         """Manually compact the conversation (delegates to the controller)."""
         return await self._controller.compact_context()
 
-    def branch_session(self) -> None:  # pragma: no cover - kept for API compat
-        """Deprecated no-op kept for backward compatibility."""
-        self._controller.branch_session()
-
     async def set_provider(self, provider: str) -> None:
         """Switch provider (models.json ``default_model`` honored)."""
         await self._controller.set_provider(provider)
@@ -361,7 +335,7 @@ class PhosonRepl:
         session = PromptSession(
             history=FileHistory(str(history_path)),
             style=Style.from_dict(build_prompt_style(self.theme)),
-            completer=_SlashCompleter(),
+            completer=SlashCompleter(),
             complete_while_typing=True,
             reserve_space_for_menu=6,
             key_bindings=key_bindings,
@@ -476,19 +450,7 @@ class PhosonRepl:
 
     def _token_indicator(self) -> str:
         """Return a short token usage string like '12.4k/128k'."""
-        if self._context_window <= 0:
-            return "?"
-        used = self._context_tokens
-        total = self._context_window
-
-        def _fmt(n: int) -> str:
-            if n >= 1_000_000:
-                return f"{n / 1_000_000:.1f}M"
-            if n >= 1_000:
-                return f"{n / 1_000:.1f}k"
-            return str(n)
-
-        return f"{_fmt(used)}/{_fmt(total)}"
+        return format_token_indicator(self._context_tokens, self._context_window)
 
     # ── Banner ────────────────────────────────────────────────────────────
 

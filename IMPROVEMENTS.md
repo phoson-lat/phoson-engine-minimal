@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.10.0 · 960+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81).
+> **Estado de referencia:** v0.11.0 · 980+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0.
 
 ---
 
@@ -24,11 +24,11 @@
 | [C2](#c2-comandos-p1-faltantes) | `/compact`, `/status`, `/resume <id>` | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
 | [C3](#c3-web-tools-web_search--web_fetch) | Web tools (`web_search`, `web_fetch`) | **P1** | M | 🔴 Alto | — | ✅ Sprint 2 |
 | [C4](#c4-status-bar-persistente-y-look-feel-final-pr-3) | Status bar persistente + look & feel (PR-3) | **P1** | S-M | 🟠 Medio | — | ✅ Sprint 2 |
-| [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | Sprint 3+ |
-| [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
-| [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | Sprint 3 |
-| [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | Sprint 3+ |
-| [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | Sprint 3 |
+| [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | ✅ Sprint 3 |
+| [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | ✅ Sprint 3 |
+| [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
+| [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
+| [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | Post-P1 |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
@@ -296,65 +296,73 @@ No bloquean, pero su costo crece si se deja pasar y afectan la mantenibilidad ju
 ---
 
 ### D1 — Limpieza de deuda arquitectónica
-**Esfuerzo:** M · **Impacto:** 🟡
+**Esfuerzo:** M · **Impacto:** 🟡 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 Checklist concreto encontrado en la auditoría:
 
-- [ ] **Eliminar `phoson_cli/textual/`** — directorio vacío con solo `__pycache__` (residuo de v0.7.0). Un `git rm -r`.
-- [ ] **Unificar `_PROVIDER_LABELS`** — duplicado en `provider_picker.py` e `installer.py`. Extraer a `models.py` o un módulo compartido.
-- [ ] **Unificar `_SPINNER_FRAMES`** — duplicado en `renderer.py` y `subagent_panel.py`. Extraer a un módulo `animations.py`.
-- [ ] **Unificar `_token_indicator()`** — implementación idéntica en `repl.py` y `fullscreen/app.py`. Mover a `formatting.py` como función pura `format_token_indicator(used, window)`.
-- [ ] **Unificar slash completers** — `_SlashCompleter` (repl.py) vs `SlashCompleter` (fullscreen/completer.py). El del fullscreen es más capaz; migrar y borrar el otro.
-- [ ] **Eliminar `branch_session`** — deprecated no-op en DOS capas (repl + controller). Rompe API pública menor; hacerlo en la próxima minor con entrada en CHANGELOG.
-- [ ] **Actualizar `TODO.md`** — fecha de cabecera (2026-08-20) desactualizada, LOC de repl.py incorrecto ("579", hoy 487). Este documento (`IMPROVEMENTS.md`) puede absorber/reemplazar parte del TODO.
+- [x] **Eliminar `phoson_cli/textual/`** — directorio vacío con solo `__pycache__` (residuo de v0.7.0). Un `git rm -r`.
+- [x] **Unificar `_PROVIDER_LABELS`** — duplicado en `provider_picker.py` e `installer.py`. Extraer a `models.py` o un módulo compartido. → `phoson_cli/labels.py` (`PROVIDER_LABELS` + `provider_label()`); la tabla del picker (con aliases `grok`/`google`/`aws`) se convierte en la única fuente y el wizard pasa a leerla.
+- [x] **Unificar `_SPINNER_FRAMES`** — duplicado en `renderer.py` y `subagent_panel.py`. Extraer a un módulo `animations.py`. → `phoson_cli/animations.py` (`SPINNER_FRAMES` + `spinner_frame()`); también se unifica la copia `_ACTIVITY_SPINNER_FRAMES` del sink full-screen.
+- [x] **Unificar `_token_indicator()`** — implementación idéntica en `repl.py` y `fullscreen/app.py`. Mover a `formatting.py` como función pura `format_token_indicator(used, window)`.
+- [x] **Unificar slash completers** — `_SlashCompleter` (repl.py) vs `SlashCompleter` (fullscreen/completer.py). El del fullscreen es más capaz; migrar y borrar el otro. → `SlashCompleter` vive ahora en `commands.py` (junto a `COMMAND_SPECS`/`COMMANDS`, de donde toma sus datos); ambos frontends lo importan y `fullscreen/completer.py` lo re-exporta por compatibilidad.
+- [x] **Eliminar `branch_session`** — deprecated no-op en DOS capas (repl + controller). Rompe API pública menor; hacerlo en la próxima minor con entrada en CHANGELOG. → eliminada en v0.11.0 (entrada en CHANGELOG).
+- [x] **Actualizar `TODO.md`** — fecha de cabecera (2026-08-20) desactualizada, LOC de repl.py incorrecto ("579", hoy 487). Este documento (`IMPROVEMENTS.md`) puede absorber/reemplazar parte del TODO. → cabecera 2026-08-25, secciones de estado actualizadas, LOC corregido; IMPROVEMENTS.md queda como tablero activo.
 
 **Criterio de listo.** `grep -rn "_PROVIDER_LABELS\|_SPINNER_FRAMES\|_token_indicator\|branch_session" phoson_cli/` devuelve una sola definición por símbolo (o cero para branch_session).
 
 ---
 
 ### D2 — Consolidar el REPL clásico o darle salida
-**Esfuerzo:** S-M · **Impacto:** 🟠
+**Esfuerzo:** S-M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Opción A, Sprint 3)
 
 **Problema.** `__main__.py` lanza siempre `PhosonApp`; `repl.py` (487 LOC) + `renderer.py` (635 LOC) + `ClassicSink` solo son alcanzables desde tests. Son ~1.100 LOC de frontend duplicado cuya lógica **ya diverge** (el clásico imprime `render_start_line`, el fullscreen no; spinners en threads vs ticker async).
 
-**Dos opciones (elegir una):**
+**Decisión: Opción A — dar salida al clásico como modo degradado.**
 
-- **Opción A (recomendada): dar salida al clásico como modo degradado.** Flag `--classic` (o auto-detección: terminal sin capabilities full-screen, `TERM=dumb`, SSH legacy). Valor real: entornos donde la TUI full-screen no funciona bien, debugging, y mantiene vivos los tests de Renderer. Coste: ~1 línea en main + docs.
-- **Opción B: congelarlo.** Marcarlo como test-only en docs, mover a `tests/helpers/` o documentar explícitamente "no user-facing". Ahorra mantenimiento mental pero desperdicia el trabajo hecho.
+- `phoson-cli --classic` (o `--no-fullscreen`) lanza el REPL clásico end-to-end.
+- Auto-detección: si `TERM` está vacío o es `dumb` en un terminal interactivo, se elige el clásico automáticamente con aviso en stderr (solo aplica a TTYs reales; stdin piped es one-shot y no lo dispara).
+- Estatus documentado en el docstring de `repl.py`: frontend *retained degraded mode*, segundo frontend sobre el mismo controller ("a sink, not a fork"), y hogar de las primitivas de render clásico (`Renderer`, `ClassicSink`) que ambos frontends comparten donde es posible.
+- Las diferencias de comportamiento (p.ej. `render_start_line` en el clásico) quedan como decisiones conscientes y documentadas: el clásico es append-only (scrollback), el fullscreen es un transcript re-renderizable.
 
-En ambos casos: extraer las diferencias de comportamiento (render_start_line) a decisiones conscientes y documentadas.
-
-**Criterio de listo.** Opción A: `phoson-cli --classic` arranca el REPL clásico funcionando end-to-end. Opción B: docstring + docs indicando su estatus.
+**Criterio de listo.** `phoson-cli --classic` arranca el REPL clásico funcionando end-to-end. ✅ (tests de selección de frontend y de `main()` en `test_cli_args_unit.py`).
 
 ---
 
 ### D3 — Corregir Ctrl+V y soporte macOS clipboard
-**Archivos:** `fullscreen/clipboard.py`, `keys.py` · **Esfuerzo:** S · **Impacto:** 🟠
+**Archivos:** `fullscreen/clipboard.py`, `fullscreen/app.py` · **Esfuerzo:** S · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 **Dos problemas:**
-1. **Sin macOS**: `read_clipboard_image()` solo prueba `wl-paste` (Wayland) y `xclip` (X11). En Mac, Ctrl+V de imagen falla silenciosamente ("No image on the clipboard"). Añadir `osascript`/`pngpaste` (con instrucción de instalar `brew install pngpaste`) o `pbpaste` para detección y mensaje específico por plataforma.
-2. **Conflicto potencial con paste de texto**: Ctrl+V está rebind-eado globalmente a "pegar imagen", pero `TextArea` tiene paste de texto nativo con Ctrl+V. Comportamiento correcto: intentar imagen primero; si el clipboard no contiene imagen, delegar el paste de texto nativo (no tragar el evento). Verificar que el routing real funcione (los tests llaman a `app.paste_image()` directo — no cubren el conflicto).
+1. **Sin macOS**: `read_clipboard_image()` solo probaba `wl-paste` (Wayland) y `xclip` (X11). En Mac, Ctrl+V de imagen fallaba silenciosamente ("No image on the clipboard"). Se añade soporte de `pngpaste` (vía `brew install pngpaste`), `pbpaste` para texto, y un hint explicativo en el mensaje de error cuando se ejecuta en macOS sin la herramienta instalada (`macos_image_tool_hint()`).
+2. **Conflicto con paste de texto**: Ctrl+V estaba rebind-eado globalmente a "pegar imagen", tragándose el paste de texto nativo de `TextArea`. Comportamiento resuelto: se intenta leer la imagen primero; si el clipboard no contiene imagen, se lee el texto plano mediante la herramienta del SO (`wl-paste --no-newline`, `xclip -o`, `pbpaste`) y se inserta en el buffer en la posición del cursor (`_paste_text_fallback()`), sin perder nunca el paste de texto.
 
-**Criterio de listo.** En Linux: Ctrl+V con imagen en clipboard pega placeholder `[image #N]`; con texto en clipboard pega el texto. En macOS: mismo comportamiento o mensaje claro "install pngpaste". Tests del routing con eventos mock.
+**Criterio de listo.** En Linux: Ctrl+V con imagen en clipboard pega placeholder `[image #N]`; con texto en clipboard pega el texto. En macOS: soporte `pngpaste`/`pbpaste` con mensaje claro `brew install pngpaste` si no está instalado. Tests unitarios del backend macOS, hint, fallback a texto y routing en `test_clipboard_unit.py` y `test_fullscreen_shell_unit.py`.
 
 ---
 
 ### D4 — Tests e2e/visuales de la TUI
-**Esfuerzo:** M-L · **Impacto:** 🟠
+**Esfuerzo:** M-L · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
-**Qué falta.** La cobertura unitaria de la shell es buena (~62 tests), pero no existe ningún test que ejecute la `Application` real: el routing de teclas, el mouse handler (`_on_chat_mouse`), el ticker de subagentes, el double-KI del clásico (reconocido en TODO P2) y el render visual completo no están cubiertos. Los bugs de este tipo son precisamente los que aparecen en producción (ej.: el bug de Kitty/Alacritty con Shift+dígitos ya sufrido en v0.6.0).
+**Qué faltaba.** Cobertura de la `Application` real: routing de teclas, ciclo de vida headless, y render visual.
 
-**Propuesta escalonada:**
-1. **Barato primero**: tests de routing real de bindings usando `Application` + `pipe_input` de prompt_toolkit (existe infraestructura de testing en prompt_toolkit: `create_pipe_input`). Cubrir: Enter→submit, Esc→cancel, Ctrl+C idle-vs-running, Shift+Enter→newline (tras A2).
-2. **Golden ANSI snapshots**: renderizar `render_chat()` ante estados fijos del sink y comparar contra snapshots versionados (detecta regresiones visuales de tema/layout). Herramienta: simple fixture + archivos `.ansi` esperados.
-3. **Smoke headless CI**: un test que arranque `PhosonApp` contra un chat mock y ejecute un turno completo programáticamente (ya existe el mock de `build_chat` en los tests actuales — extenderlo a ciclo completo con sink assertions).
+**Implementado (`tests/phoson_cli/fullscreen/test_e2e_tui.py`):**
+1. **Routing real de bindings con `create_pipe_input`**:
+   - `Ctrl+J` / `\n`: inserción de nueva línea en el composer multilínea sin enviar.
+   - `Ctrl+L` / `\x0c`: limpieza de transcript completa.
+   - `Ctrl+C` / `\x03`: con un turno activo cancela el turno sin salir de la app; el segundo `Ctrl+C` sale limpiamente.
+   - `Escape` / `\x1b`: cancelación del turno en vuelo.
+2. **Ciclo headless e2e**: arranque de `PhosonApp`, envío de mensaje por `submit()`, streaming de tokens y finalización con `AgentDoneEvent` contra chat mock, verificando el transcript renderizado final.
+3. **Golden ANSI snapshots (4 estados clave)**:
+   - Transcript vacío (`Type a message and press Enter.`).
+   - Turno en streaming activo (badge de usuario, prompt, label "Phoson" y texto parcial).
+   - Panel de error con hint accionable (`hint: run /setup`).
+   - Card de herramienta finalizada (`read_file`, path, duración en ms).
 
-**Criterio de listo.** Los 5 bindings críticos tienen test de routing real; 3+ golden snapshots (transcript vacío, con streaming, con error) en CI.
+**Criterio de listo.** Los 5 bindings críticos tienen test de routing real; 4 golden snapshots en CI. ✅ (`test_e2e_tui.py`).
 
 ---
 
 ### D5 — Flags CLI faltantes
-**Archivo:** `__main__.py` (212 LOC, parsing manual) · **Esfuerzo:** S · **Impacto:** 🟠
+**Archivo:** `__main__.py` · **Esfuerzo:** S · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 Faltan flags básicos que cualquier CLI moderno expone (y que facilitan scripting/CI):
 
@@ -371,7 +379,9 @@ Faltan flags básicos que cualquier CLI moderno expone (y que facilitan scriptin
 
 Mantener el parsing manual (typer/click añadiría dependencia contraria a la filosofía minimal) pero centralizarlo en una función pura `parse_args(argv) -> CliOptions` testeable, hoy parcialmente inline.
 
-**Criterio de listo.** Cada flag con test unitario del parsing y efecto verificado; `--version` imprime y sale 0.
+**Implementado:** parsing manual centralizado en `parse_args(argv) -> CliOptions` (dataclass), testeable sin proceso. Flags: `--version`, `--model`, `--provider`, `--theme`, `--max-turns`, `--classic`, `--no-fullscreen`, `-p/--print`, `--setup`, `--self-update`, `--uninstall`, `-h/--help`. Overrides aplicados sobre el config cargado (flag > config.toml > env > default) y re-aplicados tras el reload del wizard. Errores de parsing salen con código 2 (comportamiento argparse-compatible). `--dry-run` diferido: requiere la fase 2 de A1 (sandbox) para tener semántica útil.
+
+**Criterio de listo.** Cada flag con test unitario del parsing y efecto verificado; `--version` imprime y sale 0. ✅ (`test_cli_args_unit.py`).
 
 ---
 

@@ -52,7 +52,11 @@ from .._views import render_banner
 from ..config import PhosonConfig, save_config, enabled_providers_from_config
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
-from .clipboard import read_clipboard_image
+from .clipboard import (
+    read_clipboard_text,
+    read_clipboard_image,
+    macos_image_tool_hint,
+)
 from .completer import (
     SlashCompleter,
     ModelArgCompleter,
@@ -60,6 +64,7 @@ from .completer import (
     StaticArgCompleter,
     SessionsArgCompleter,
 )
+from ..formatting import format_token_indicator
 from .model_cache import ModelCache
 from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
@@ -406,19 +411,9 @@ class PhosonApp:
 
     def _token_indicator(self) -> str:
         """Short token usage string like '12.4k/128k' for the header."""
-        window = self.repl._context_window
-        if window <= 0:
-            return "?"
-        used = self.repl._context_tokens
-
-        def _fmt(n: int) -> str:
-            if n >= 1_000_000:
-                return f"{n / 1_000_000:.1f}M"
-            if n >= 1_000:
-                return f"{n / 1_000:.1f}k"
-            return str(n)
-
-        return f"{_fmt(used)}/{_fmt(window)}"
+        return format_token_indicator(
+            self.repl._context_tokens, self.repl._context_window
+        )
 
     @staticmethod
     def _short_cwd(cwd: Path) -> str:
@@ -714,24 +709,25 @@ class PhosonApp:
             self.request_exit()
 
     def paste_image(self) -> None:
-        """Ctrl+V: attach an image straight from the system clipboard.
+        """Ctrl+V: paste an image from the clipboard, or fall back to text.
 
         Terminals only ever deliver *text* through their own paste
         mechanism — an image copied to the OS clipboard (e.g. from a
         screenshot tool or a browser) has to be read from the clipboard
         directly (``clipboard.read_clipboard_image``, shelling out to
-        wl-paste/xclip) rather than anything a paste keystroke could
-        hand the ``TextArea``.
+        wl-paste/xclip/pngpaste) rather than anything a paste keystroke
+        could hand the ``TextArea``. Ctrl+V is rebound globally to this
+        handler, which would otherwise swallow the ``TextArea``'s native
+        text paste (IMPROVEMENTS.md D3): when the clipboard holds no
+        image, the clipboard's *text* is read the same way and inserted
+        at the cursor instead, so Ctrl+V still works for plain text.
         """
         self.app.create_background_task(self._paste_image_async())
 
     async def _paste_image_async(self) -> None:
         result = await read_clipboard_image()
         if result is None:
-            self.sink.notify(
-                "warn",
-                "No image on the clipboard (or no clipboard tool available).",
-            )
+            await self._paste_text_fallback()
             return
 
         data, mime = result
@@ -762,6 +758,26 @@ class PhosonApp:
         placeholder = f"[image #{len(self.repl.attachments)}] "
         self._prompt_input.buffer.insert_text(placeholder)
         self.app.invalidate()
+
+    async def _paste_text_fallback(self) -> None:
+        """No image on the clipboard: paste its text instead (D3), if any.
+
+        Reading via the same platform tool as the image path (rather
+        than relying on the terminal's own paste) is what lets this
+        double as the "clipboard has text, not an image" case instead
+        of silently doing nothing.
+        """
+        text = await read_clipboard_text()
+        if text:
+            self._prompt_input.buffer.insert_text(text)
+            self.app.invalidate()
+            return
+
+        message = "No image on the clipboard (or no clipboard tool available)."
+        hint = macos_image_tool_hint()
+        if hint:
+            message = f"{message} {hint}."
+        self.sink.notify("warn", message)
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 

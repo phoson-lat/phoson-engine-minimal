@@ -61,6 +61,32 @@ phoson-cli -p "summarize this repo"     # --print flag
 echo "explain the CI failure" | phoson-cli   # piped stdin
 ```
 
+### Command-line flags
+
+One-off overrides for a single run — they never modify
+`~/.phoson/config.toml`. Precedence: flag > config.toml > env > default.
+
+| Flag | Effect |
+|------|--------|
+| `--version` | Print the version and exit 0 |
+| `--model <id>` | Override the model for this run |
+| `--provider <id>` | Override the provider for this run |
+| `--theme <tier>` | Override the theme: `dark`, `light`, `ansi`, `no-color` |
+| `--max-turns <n>` | Override `max_iterations` for this run |
+| `--classic` | Use the classic line-by-line REPL instead of the full-screen TUI |
+| `--no-fullscreen` | Alias of `--classic` |
+| `-p`, `--print` | One-shot mode: print the final answer and exit |
+| `--setup` | Run the setup wizard |
+| `--self-update` | Check for and install CLI updates |
+| `--uninstall` | Uninstall phoson-cli |
+| `-h`, `--help` | Show usage and exit 0 |
+
+The full-screen TUI is the default interactive front end. `--classic`
+launches the retained classic REPL (Rich scrollback, line-by-line
+streaming) — useful for debugging and on terminals without full-screen
+support. When `TERM` is unset or `dumb` on an interactive terminal, the
+classic REPL is selected automatically with a notice on stderr.
+
 ## Configuration
 
 ### PhosonConfig

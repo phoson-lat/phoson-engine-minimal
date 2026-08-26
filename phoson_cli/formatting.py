@@ -550,6 +550,25 @@ def error_hint(code: str | None) -> str | None:
     return _ERROR_HINTS.get(code)
 
 
+def format_token_indicator(used: int, window: int) -> str:
+    """Short context-usage string like ``12.4k/128k`` (``?`` when unknown).
+
+    Shared by the classic REPL's prompt line and the full-screen header —
+    the two front ends must show the same number for the same state.
+    """
+    if window <= 0:
+        return "?"
+
+    def _fmt(n: int) -> str:
+        if n >= 1_000_000:
+            return f"{n / 1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n / 1_000:.1f}k"
+        return str(n)
+
+    return f"{_fmt(used)}/{_fmt(window)}"
+
+
 __all__ = [
     "render_reasoning_panel",
     "render_assistant_label",
@@ -571,4 +590,5 @@ __all__ = [
     "tool_detail",
     "unified_diff",
     "error_hint",
+    "format_token_indicator",
 ]
