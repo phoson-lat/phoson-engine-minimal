@@ -359,6 +359,8 @@ class _RunSink:
     def notify(self, kind, message) -> None:
         self.notifications.append((kind, message))
 
+    def on_subagent_progress(self, progress) -> None: ...
+
 
 @pytest.mark.asyncio
 async def test_run_turn_registers_and_clears_retained_reasoning(tmp_path) -> None:

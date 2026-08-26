@@ -260,6 +260,9 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
             config.subagent_timeout_seconds
         )
         engine.context.extra["chat"] = chat
+        # Note: no ``on_subagent_progress`` callback here — one-shot mode
+        # has no live panel to feed (E2), and the final per-task metrics
+        # still arrive in the tool output the model receives.
 
         result = await engine.run(
             [Message(role="user", content=task)],

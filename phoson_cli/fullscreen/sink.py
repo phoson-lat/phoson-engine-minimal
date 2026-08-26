@@ -65,6 +65,11 @@ class CurrentTurn:
     running_tool: bool = False
     subagent_tasks: list[str] | None = None
     subagent_frame: int = 0
+    # Live metrics for the sub-agent panel (E2): the per-call tracker the
+    # sub-agent tool created and pushed via ``on_subagent_progress``. The
+    # panel renders from it when present; without it the table falls back
+    # to the static "waiting" cells.
+    subagent_progress: object | None = None
     activity_frame: int = 0
     thinking_phrase_index: int = 0
 
@@ -434,6 +439,19 @@ class FullScreenSink:
         self.blocks.append(render_notice(kind, message, self.theme))
         self._touch()
 
+    def on_subagent_progress(self, progress: object | None) -> None:
+        """Store the live metrics tracker for the active sub-agent call.
+
+        The panel renders from it while that call's sub-agents run;
+        ``None`` clears it when the call ends. By the time a sub-agent
+        tool can notify, ``AgentStartEvent`` has created the in-flight
+        turn, so the tracker is never lost.
+        """
+        turn = self.current_turn
+        if turn is not None:
+            turn.subagent_progress = progress
+            self._touch()
+
     # ── Subagent panel animation tick (driven by the app's spinner task) ──
 
     def tick_subagent_frame(self) -> bool:
@@ -455,7 +473,10 @@ class FullScreenSink:
         if turn is None or not turn.subagent_tasks:
             return None
         return render_subagent_panel_frame(
-            turn.subagent_tasks, turn.subagent_frame, self.theme
+            turn.subagent_tasks,
+            turn.subagent_frame,
+            self.theme,
+            progress=turn.subagent_progress,
         )
 
 

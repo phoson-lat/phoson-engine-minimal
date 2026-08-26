@@ -5,7 +5,7 @@
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
 > **Estado de referencia:** v0.12.1 · 1073+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87).
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) en rama `feat/e2-subagent-live-metrics`.
 
 ---
 
@@ -30,7 +30,7 @@
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ v0.12.1 (PR #87) |
-| [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
+| [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ rama `feat/e2-subagent-live-metrics` |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
 | [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | Backlog |
@@ -423,9 +423,19 @@ El summarizer actual (auto a 80%) era funcional pero primitivo frente al SOTA. I
 ---
 
 ### E2 — Panel de subagentes con métricas en vivo
-**Esfuerzo:** M · **Impacto:** 🟠
+**Esfuerzo:** M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (rama `feat/e2-subagent-live-metrics`)
 
 Hoy el panel en vivo muestra solo spinners ("waiting"); tiempo/tokens/costo aparecen recién en el summary final (el wire format `--- METRICS: ...` llega al terminar). Propuesta: streaming incremental del bloque METRICS (emitir línea partial cada N segundos desde el subagent) para alimentar las columnas Time/Tokens/Cost en vivo. Requiere tocar el protocolo producer-side en `tools/subagent.py` y el parser (que ya es tolerante a parciales — ventaja).
+
+**Implementado.** En vez de streamear líneas parciales de `--- METRICS` (que el parser ya tolera, pero que duplicaría el wire format), el progreso fluye por la misma vía que el resto del estado del run: los tools `agent`/`agents` son *tools de primera clase* del engine y reciben el progreso del inner run a través de los `AgentStepDoneEvent` que el engine ya emite por cada LLM call completado.
+
+- **Producer** (`tools/subagent.py`): `SubagentProgressTracker` por *llamada de tool* (un run puede llamar a `agent`/`agents` varias veces; cada una ve solo sus propias filas, sin drift de índices). `_stream_final` acepta un callback `on_event` que pliega cada `RunStep` LLM del subagent en el tracker *mientras corre* (tokens/cost de la llamada ya terminada, igual que el `AgentStepDoneEvent` del parent). Al terminar, `finalize` hace el snap final con los mismos números del summary (sum de `step.duration_ms`, tokens/cost de `AgentRunResult`), así el panel en vivo y el summary final son consistentes. Timeout/error/cancel → `mark_error` (fila ✗, sin crash).
+- **Transporte**: el tracker se empuja a la UI vía callback `on_subagent_progress` inyectado en el `AgentContext.extra` (el controller lo enlaza a `sink.on_subagent_progress`). Los tools son agnósticos de UI: sin callback (one-shot, scripts, tests) todo funciona igual. La notificación ocurre *dentro* del run, cuando `AgentStartEvent` ya creó el `CurrentTurn` — no hay race con el placeholder pre-provider.
+- **Consumer fullscreen** (`fullscreen/sink.py`): `CurrentTurn.subagent_progress` + `on_subagent_progress`; el ticker existente (`_SUBAGENT_TICK_SECONDS`) ya invalida el paint, y el panel ahora renderiza Time (wall-clock en vivo para tareas corriendo, congelado al finalizar) / Tokens / Cost por tarea. Tareas en cola de la semáfora de paralelismo siguen mostrando "waiting" en Time hasta que arrancan de verdad.
+- **Consumer clásico** (`renderer.py`): `SubagentSpinner.set_progress()` — el hilo de animación relee el tracker cada frame (12 fps), mismo efecto que el fullscreen.
+- **Wire format final intacto**: `format_metrics_line`/`parse_subagent_metrics`/`render_subagent_summary` no cambian; el summary al terminar sigue siendo la fuente de verdad para el transcript.
+
+**Criterio de listo.** Tests en `tests/phoson_cli/test_subagent_live_metrics.py`: tracker (register/start/update/finalize/mark_error, solo LLM steps, snap final, elapsed bounds), tools alimentando el tracker *en vivo* (valores intermedios visibles a mitad de run + snap final + error/timeout + tracker independiente por llamada + callback notificado/limpiado), panel (live values, queued "waiting", done ✓ / error ✗, fallback sin tracker, tracker vs lista equivalente), controller (callback inyectado en `context.extra`) y fullscreen sink (panel renderiza del tracker y vuelve a "waiting" al limpiarse; tracker no se pierde aunque llegue antes que `AgentToolStartEvent`).
 
 ---
 
@@ -482,7 +492,8 @@ Continuo / paralelo
 ├── D3 Ctrl+V cross-platform
 ├── D4 tests e2e (ir acumulando con cada sprint)
 ├── E1 context management avanzado  ✅ v0.12.1 (PR #87)
-└── E2-E6 según demanda real de usuarios
+├── E2 subagent panel métricas en vivo  ✅ feat/e2-subagent-live-metrics
+└── E3-E6 según demanda real de usuarios
 ```
 
 ## Principios para decidir durante la ejecución

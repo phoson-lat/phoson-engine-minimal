@@ -52,6 +52,16 @@ class AgentEventSink(Protocol):
     def notify(self, kind: str, message: str) -> None:
         """Show a status message. ``kind`` is info, warn or error."""
 
+    def on_subagent_progress(self, progress: object | None) -> None:
+        """Live sub-agent metrics for the active sub-agent call (E2).
+
+        ``progress`` is the per-call tracker the sub-agent tool created
+        (a ``SubagentProgressTracker`` whose ``tasks`` are the live
+        per-task metrics) — ``None`` when that call finishes. Front
+        ends with a live sub-agent panel render it in real time; front
+        ends without one may ignore it.
+        """
+
 
 @runtime_checkable
 class ConfirmationService(Protocol):
