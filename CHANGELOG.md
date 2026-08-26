@@ -8,6 +8,27 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+## v0.12.0 (2026-08-25)
+
+### Feat
+
+- **cli/llm**: `xhigh` and `max` reasoning-effort levels, end to end.
+  A single source of truth (`phoson_llm.schemas.REASONING_EFFORTS` +
+  `ReasoningEffort` type alias) now feeds the `/reasoning-effort`
+  command, the session-controller guard and the full-screen
+  autocomplete, so they can no longer drift apart. Previously the new
+  values were accepted by the command but silently dropped by the
+  controller guard before the request; `ModelConfig.reasoning_effort`
+  is widened accordingly and OpenAI-compatible backends forward the
+  value as-is (PR #86).
+- **agent**: vLLM context-window resolution. `ContextWindowResolver`
+  now queries the vLLM `/v1/models` endpoint and reads `max_model_len`
+  (matching the model `id`) instead of falling back to the 128k
+  default — a vLLM server serving a 256k model (e.g. Qwen3.8-27B) is
+  now sized correctly for summarization and context display. Same
+  soft-fail policy as Ollama/OpenRouter: per-model cache, warning on
+  unreachable server or missing model, default fallback (PR #86).
+
 ## v0.11.0 (2026-08-25)
 
 ### Feat
