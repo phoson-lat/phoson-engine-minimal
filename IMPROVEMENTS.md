@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.0 · 1020+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en la rama `feat/e1-context-management`.
+> **Estado de referencia:** v0.12.1 · 1073+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87).
 
 ---
 
@@ -29,7 +29,7 @@
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
-| [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ feat/e1-context-management |
+| [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ v0.12.1 (PR #87) |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
@@ -406,7 +406,7 @@ La fase de contenedores docker/podman sigue siendo una extensión post-P1 de est
 ---
 
 ### E1 — Context management avanzado (retained reasoning + compaction con control)
-**Esfuerzo:** L · **Impacto:** 🔴 (para tareas largas) · **Estado:** ✅ **Hecho** (rama `feat/e1-context-management`)
+**Esfuerzo:** L · **Impacto:** 🔴 (para tareas largas) · **Estado:** ✅ **Hecho en v0.12.1** (PR #87)
 
 El summarizer actual (auto a 80%) era funcional pero primitivo frente al SOTA. Implementado:
 
@@ -481,7 +481,7 @@ Continuo / paralelo
 ├── D2 destino del REPL clásico (decisión, luego 1 día)
 ├── D3 Ctrl+V cross-platform
 ├── D4 tests e2e (ir acumulando con cada sprint)
-├── E1 context management avanzado  ✅ feat/e1-context-management
+├── E1 context management avanzado  ✅ v0.12.1 (PR #87)
 └── E2-E6 según demanda real de usuarios
 ```
 
