@@ -16,6 +16,7 @@ front end is a new sink, not a fork.
 import asyncio
 import logging
 from typing import Any
+from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_agent import (
@@ -43,6 +44,11 @@ from .models import load_models_file, provider_settings, resolve_context_window
 from ._session import SessionState, SessionMetrics
 from .attachments import AttachmentManager
 from .ui_protocols import AgentEventSink, ConfirmationService
+from .file_mentions import (
+    MAX_MENTIONS_PER_MESSAGE,
+    format_file_size,
+    expand_file_mentions,
+)
 from .session_utils import (
     close_plugins,
     build_mcp_plugins,
@@ -387,7 +393,15 @@ class SessionController:
     # ── Run lifecycle ─────────────────────────────────────────────────────
 
     def _build_user_message(self, user_input: str) -> Message:
-        """Flush pending attachments and construct the user Message."""
+        """Flush pending attachments, expand ``@file`` mentions, build the Message.
+
+        The message the model receives is the user's raw text (so the
+        ``@mention`` tokens stay visible in context) followed by the blocks
+        each mention resolved to — inlined text for code/data files, native
+        media blocks for images/audio/video/pdf (same blocks ``/attach``
+        builds). Mentions that do not resolve are left as literal text and
+        reported to the user, never silently dropped.
+        """
         pending_blocks: list[ContentBlock] = []
         if self.attachments:
             media_blocks = list(self.attachments.flush())
@@ -396,11 +410,32 @@ class SessionController:
             )
             pending_blocks = list(media_blocks)
 
+        mention_blocks: list[ContentBlock] = []
         if user_input:
             pending_blocks.insert(0, _text_block(user_input))
+            expanded = expand_file_mentions(user_input, cwd=Path.cwd())
+            mention_blocks = list(expanded.blocks)
+            attached = [
+                f"{m.raw[1:]} ({format_file_size(m.path.stat().st_size)})"
+                for m in expanded.mentions
+                if m.ok
+            ]
+            if attached:
+                self.sink.notify("info", "Attached: " + ", ".join(attached))
+            for m in expanded.mentions:
+                if not m.ok:
+                    self.sink.notify("warn", f"@{m.raw[1:]}: {m.error}")
+            if expanded.truncated:
+                self.sink.notify(
+                    "warn",
+                    f"Only the first {MAX_MENTIONS_PER_MESSAGE} @mentions were "
+                    "attached.",
+                )
 
         content: str | list[ContentBlock] = (
-            pending_blocks if pending_blocks else user_input
+            pending_blocks + mention_blocks
+            if (pending_blocks or mention_blocks)
+            else user_input
         )
         return Message(role="user", content=content)
 

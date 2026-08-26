@@ -27,6 +27,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
 
@@ -42,6 +43,7 @@ from .config import (
 )
 from ._session import SessionMetrics  # noqa: F401
 from .commands import (
+    PathCompleter,
     CommandHandler,
     SlashCompleter,
     parse_command,
@@ -348,7 +350,10 @@ class PhosonRepl:
         session = PromptSession(
             history=FileHistory(str(history_path)),
             style=Style.from_dict(build_prompt_style(self.theme)),
-            completer=SlashCompleter(),
+            # Slash commands plus @file mentions (E3) — the same two
+            # completers the full-screen app uses, so both front ends
+            # behave identically.
+            completer=merge_completers([SlashCompleter(), PathCompleter()]),
             complete_while_typing=True,
             reserve_space_for_menu=6,
             key_bindings=key_bindings,

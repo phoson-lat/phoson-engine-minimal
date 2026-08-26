@@ -24,6 +24,7 @@ from prompt_toolkit.completion import (
 )
 
 from ..commands import (
+    PathCompleter,  # noqa: F401 - re-exported for import compatibility
     SlashCompleter,  # noqa: F401 - re-exported for import compatibility
 )
 from .model_cache import ModelCache

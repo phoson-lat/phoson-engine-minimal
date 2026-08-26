@@ -449,6 +449,15 @@ always produce plain output (scripts, CI).
 run is streaming, or to expand the full reasoning of the last turn after
 it finishes (persisted with the session, so it survives resume).
 
+**`@file` mentions:** type `@` in the message and the composer offers
+repo paths (fuzzy-filtered as you type, with a size hint per file);
+selecting one inserts the path. On send, each `@mention` is expanded into
+the file's content so the model sees the actual file — text files are
+inlined, and images/audio/video/pdf become their native media blocks
+(same as `/attach`). Works in both the full-screen TUI and the classic
+REPL. `user@domain` emails and bare `@user` handles in prose are left
+alone.
+
 **Permissions:** control what each tool may do via `~/.phoson/permissions.json`:
 
 ```json

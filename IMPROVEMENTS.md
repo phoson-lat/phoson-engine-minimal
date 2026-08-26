@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.2 · 1096+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90).
+> **Estado de referencia:** v0.12.3 · 1138 tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3.
 
 ---
 
@@ -31,7 +31,7 @@
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ v0.12.1 (PR #87) |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ v0.12.2 (PR #90) |
-| [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
+| [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | ✅ v0.12.3 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
 | [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | Backlog |
 | [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | Backlog |
@@ -440,9 +440,18 @@ Hoy el panel en vivo muestra solo spinners ("waiting"); tiempo/tokens/costo apar
 ---
 
 ### E3 — Autocompletado de rutas y `@file` mentions
-**Esfuerzo:** M · **Impacto:** 🟠
+**Esfuerzo:** M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho en v0.12.3**
 
 Patrón estándar (Cursor, Amp, Claude Code @-mentions): escribir `@src/` despliega archivos del repo filtrables fuzzy; el mention se expande a contenido adjunto (o referencia contextual). Implementable con un `PathCompleter` custom sobre el merge_completers existente + expansión en `controller._build_user_message`. Complementa A2 (multilinea) para flujos de "arregla el bug en @src/foo.py".
+
+**Implementado.** El work se dividió en un núcleo UI-independent + un completer compartido + expansión en el controller (misma capa que ambos front ends):
+
+- **Núcleo** (`phoson_cli/file_mentions.py`, nuevo): `expand_file_mentions(text, cwd)` parsea tokens `@mention` (regex con lookbehind para ignorar `user@domain` y handles sueltos), los resuelve (relativo → cwd, `~/` → home, absoluto → tal cual) y construye el bloque de contenido: **texto inline** (con cap head/tail a 32 KB, misma idea que el offload de tool outputs) para código/datos, y **bloques media nativos** (image/audio/video/pdf, los mismos que `/attach` construye) para binarios. Guards: máx. 10 mentions por mensaje (el resto queda como texto + aviso) y máx. 20 MB por archivo (igual que `view_image`). Un `@path` que no resuelve se deja como texto y se reporta al usuario; un token suelto sin `/` (p. ej. `@team` o un email) se deja en silencio — es prosa, no un archivo. `iter_candidate_paths` camina el árbol con caps (profundidad 6, 2000 entradas) y salta `.git`/`node_modules`/… para que un repo grande nunca bloquee el input.
+- **Completer** (`commands.py` → `PathCompleter`, compartido, re-exportado en `fullscreen/completer.py`): ofrece rutas del repo cuando el buffer termina en `@` (inicio o tras whitespace), fuzzy-filtrado con el mismo `FuzzyCompleter`/`WordCompleter` que `/model`. Walk lazy (una vez, al primer `@`), con hint de tamaño por archivo (`14 B` / `2.0 KB` / `1.2 MB`). Al estar en `commands.py` (no `fullscreen/`), el REPL clásico puede usarlo sin ciclo de imports `repl → fullscreen → app → repl`.
+- **Expansión** (`controller._build_user_message`): el mensaje que recibe el modelo conserva el texto raw (el `@mention` sigue visible en el contexto) + los bloques resueltos, en orden. Feedback vía sink: una línea `Attached: src/foo.py (14 B)` (info) + un aviso por referencia rota; cero ruido para texto sin mentions. Funciona igual para fullscreen, clásico y tests; one-shot no se toca.
+- **Front ends**: `PhosonApp` añade `PathCompleter(Path.cwd())` al `merge_completers` existente; `PhosonRepl.run` hace `merge_completers([SlashCompleter(), PathCompleter()])`.
+
+**Criterio de listo.** Tests en `tests/phoson_cli/test_e3_file_mentions_unit.py` (42): walk bounded (files+dirs, árboles ignorados, caps de profundidad/entradas), parseo+resolución (inline de texto, bloques media, missing/bare/email, dedupe, tilde/absoluto, caps de tamaño/cantidad, cwd string), `PathCompleter` (ofrecer/filtrar/start-position/mid-sentence/hint de tamaño/walk lazy/negativos), y wiring del controller (inline, attach + mention combinado, notify al adjuntar, warn al faltar, silencio en bare handle, texto plano sin cambios).
 
 ---
 
@@ -493,7 +502,8 @@ Continuo / paralelo
 ├── D4 tests e2e (ir acumulando con cada sprint)
 ├── E1 context management avanzado  ✅ v0.12.1 (PR #87)
 ├── E2 subagent panel métricas en vivo  ✅ v0.12.2 (PR #90)
-└── E3-E6 según demanda real de usuarios
+├── E3 autocomplete de rutas + @file mentions  ✅ v0.12.3
+└── E4-E6 según demanda real de usuarios
 ```
 
 ## Principios para decidir durante la ejecución

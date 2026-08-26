@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.12.3 (2026-08-25)
+
+### Feat
+
+- **cli**: `@file` mentions and path autocomplete (IMPROVEMENTS.md E3).
+  The standard `@`-mention pattern (Cursor / Claude Code): typing `@` in
+  the composer offers repo paths — filtered fuzzy as you type — and
+  sending the message expands each `@mention` into the file's content so
+  the model sees the actual file, not just its name.
+  - *Core.* New UI-independent `phoson_cli.file_mentions`: `@mention`
+    token parsing (ignores `user@domain` emails and bare `@user`
+    handles), resolution (relative → cwd, `~/` → home, absolute as-is),
+    and content-block building — inlined (head/tail-capped) text for
+    code/data files, native media blocks for images/audio/video/pdf
+    (same blocks `/attach` builds). Per-message cap (10) and per-file
+    size cap (20 MB, matching `view_image`) guard against runaway
+    fan-out.
+  - *Completer.* `PathCompleter` (in the shared `commands.py`, so the
+    classic REPL and the full-screen TUI both offer it) walks the
+    working tree once, lazily, on the first `@`, skipping
+    `.git`/`node_modules`/… and capping depth (6) and entries (2000) so
+    a large repo never blocks the input. Files show a size hint
+    (`14 B` / `2.0 KB` / `1.2 MB`).
+  - *Controller.* `SessionController._build_user_message` expands the
+    mentions into the user `Message` (raw text kept, so `@mention`
+    stays visible in context, followed by the resolved blocks) and
+    reports each one through the sink: one "Attached: …" info line plus
+    a warning per broken `@path` reference. Bare unresolved tokens are
+    left as text without noise. Works for every front end (full-screen,
+    classic, tests); one-shot is unchanged (no mentions there).
+  - *Front ends.* Full-screen app wires `PathCompleter` into the
+    `merge_completers` list; the classic REPL merges it with the
+    existing `SlashCompleter`. No wire-format or protocol changes.
+
+### Test
+
+- **cli**: 42 new tests in
+  `tests/phoson_cli/test_e3_file_mentions_unit.py` — the bounded walk
+  (files + dirs, ignored trees, depth/entry caps), mention parsing and
+  resolution (text inlining, media blocks, missing/bare/email tokens,
+  dedupe, tilde/absolute, size + count caps, string cwd), the
+  `PathCompleter` (offer/filter/start-position/mid-sentence/size
+  hint/lazy walk/negative cases), and the controller wiring (inline
+  file, attach image, notify on attach, warn on missing, silent on
+  bare handle, plain text unchanged, `/attach` + mention combined).
+  Suite now 1138 passing, pyright 0 errors, ruff clean.
+
 ## v0.12.2 (2026-08-25)
 
 ### Feat
