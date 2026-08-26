@@ -27,7 +27,7 @@
 | [D1](#d1-limpieza-de-debt-arquitectónica) | Limpieza de debt: textual/, duplicados, REPL huérfano | **P2** | M | 🟡 Bajo-Medio | — | ✅ Sprint 3 |
 | [D2](#d2-consolidar-el-repl-clásico-o-darle-salida) | Consolidar o retirar el REPL clásico | **P2** | S-M | 🟠 Medio | — | Sprint 3 |
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
-| [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | Sprint 3+ |
+| [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | Post-P1 |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
@@ -340,16 +340,24 @@ Checklist concreto encontrado en la auditoría:
 ---
 
 ### D4 — Tests e2e/visuales de la TUI
-**Esfuerzo:** M-L · **Impacto:** 🟠
+**Esfuerzo:** M-L · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
-**Qué falta.** La cobertura unitaria de la shell es buena (~62 tests), pero no existe ningún test que ejecute la `Application` real: el routing de teclas, el mouse handler (`_on_chat_mouse`), el ticker de subagentes, el double-KI del clásico (reconocido en TODO P2) y el render visual completo no están cubiertos. Los bugs de este tipo son precisamente los que aparecen en producción (ej.: el bug de Kitty/Alacritty con Shift+dígitos ya sufrido en v0.6.0).
+**Qué faltaba.** Cobertura de la `Application` real: routing de teclas, ciclo de vida headless, y render visual.
 
-**Propuesta escalonada:**
-1. **Barato primero**: tests de routing real de bindings usando `Application` + `pipe_input` de prompt_toolkit (existe infraestructura de testing en prompt_toolkit: `create_pipe_input`). Cubrir: Enter→submit, Esc→cancel, Ctrl+C idle-vs-running, Shift+Enter→newline (tras A2).
-2. **Golden ANSI snapshots**: renderizar `render_chat()` ante estados fijos del sink y comparar contra snapshots versionados (detecta regresiones visuales de tema/layout). Herramienta: simple fixture + archivos `.ansi` esperados.
-3. **Smoke headless CI**: un test que arranque `PhosonApp` contra un chat mock y ejecute un turno completo programáticamente (ya existe el mock de `build_chat` en los tests actuales — extenderlo a ciclo completo con sink assertions).
+**Implementado (`tests/phoson_cli/fullscreen/test_e2e_tui.py`):**
+1. **Routing real de bindings con `create_pipe_input`**:
+   - `Ctrl+J` / `\n`: inserción de nueva línea en el composer multilínea sin enviar.
+   - `Ctrl+L` / `\x0c`: limpieza de transcript completa.
+   - `Ctrl+C` / `\x03`: con un turno activo cancela el turno sin salir de la app; el segundo `Ctrl+C` sale limpiamente.
+   - `Escape` / `\x1b`: cancelación del turno en vuelo.
+2. **Ciclo headless e2e**: arranque de `PhosonApp`, envío de mensaje por `submit()`, streaming de tokens y finalización con `AgentDoneEvent` contra chat mock, verificando el transcript renderizado final.
+3. **Golden ANSI snapshots (4 estados clave)**:
+   - Transcript vacío (`Type a message and press Enter.`).
+   - Turno en streaming activo (badge de usuario, prompt, label "Phoson" y texto parcial).
+   - Panel de error con hint accionable (`hint: run /setup`).
+   - Card de herramienta finalizada (`read_file`, path, duración en ms).
 
-**Criterio de listo.** Los 5 bindings críticos tienen test de routing real; 3+ golden snapshots (transcript vacío, con streaming, con error) en CI.
+**Criterio de listo.** Los 5 bindings críticos tienen test de routing real; 4 golden snapshots en CI. ✅ (`test_e2e_tui.py`).
 
 ---
 

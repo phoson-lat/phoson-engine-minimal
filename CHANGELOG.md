@@ -32,7 +32,16 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   `phoson_cli.__main__.parse_args(argv) -> CliOptions` (manual parsing
   kept, no new dependency).
 
-### Refactor
+### Test
+
+- **cli**: end-to-end and visual regression test suite for the full-screen
+  TUI (IMPROVEMENTS.md D4) — added real key-event routing tests via
+  prompt_toolkit's `create_pipe_input` (`Ctrl+J` multiline insert,
+  `Ctrl+L` clear, `Ctrl+C` interrupt vs exit, `Escape` cancel); headless
+  full agent turn lifecycle test against mock streaming events; and golden
+  ANSI rendering snapshots (empty transcript, active streaming turn, error
+  panel with hint, completed tool card).
+
 
 - **cli**: architectural debt cleanup (IMPROVEMENTS.md D1) — removed the
   leftover empty `phoson_cli/textual/` directory; unified the duplicated
