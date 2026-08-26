@@ -106,6 +106,14 @@ class PhosonConfig:
     offload_tail_chars: int = 500
     # Where offloaded tool outputs live.
     compacted_dir: Path = Path("~/.phoson/compacted/").expanduser()
+    # ── Customizable key bindings (IMPROVEMENTS.md E6) ───────────────────
+    # User remaps for the full-screen TUI, as ``{action: [sequences]}``
+    # (e.g. ``"toggle_reasoning": ["c-x"]``), loaded from the ``[keys]``
+    # section of config.toml by :func:`load_key_bindings`. ``None`` =
+    # built-in defaults. The file section is user-managed (like
+    # permissions.json): save_config never writes it, so a stale value
+    # can never override a hand-edited [keys] table.
+    key_bindings: dict[str, list[str]] | None = None
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -254,6 +262,135 @@ def has_persisted_theme(config_path: Path | None = None) -> bool:
     return bool(str(fd.get("theme", "")).strip())
 
 
+# ── Key bindings (IMPROVEMENTS.md E6) ────────────────────────────────────────
+
+
+class PhosonKeyBindingsError(PhosonConfigError):
+    """Raised when the ``[keys]`` config section cannot be used.
+
+    The message is user-facing (``main()`` prints it and exits cleanly) —
+    unlike a generic TOML syntax error, an unparseable *sequence* or an
+    unknown *action* is almost always a typo the user should fix, not a
+    signal to start with the built-in defaults and never complain.
+    """
+
+
+#: Actions the full-screen TUI exposes to remapping. The single source of
+#: truth for the built-in key map lives in
+#: :data:`phoson_cli.fullscreen.keys.DEFAULT_KEY_BINDINGS` (the values are
+#: prompt_toolkit key sequences, e.g. ``"c-t"``); this tuple is the *names*
+#: users may address from ``[keys]`` in config.toml.
+KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
+    "submit",
+    "newline",
+    "page_up",
+    "page_down",
+    "line_up",
+    "line_down",
+    "scroll_home",
+    "scroll_end",
+    "clear",
+    "toggle_reasoning",
+    "ctrl_d",
+    "paste_image",
+    "escape",
+    "exit",
+)
+
+
+def _parse_key_sequence(value: Any, *, action: str) -> list[str]:
+    """Parse one ``[keys]`` value into prompt_toolkit key sequences.
+
+    Accepts either a single sequence (``toggle_reasoning = "c-x"``) or a
+    list of them (``line_up = ["s-up", "c-up"]`` — same precedence order
+    as the built-in defaults). A *sequence* may itself be a chord of
+    several keys, space-separated (``"c-x c-e"``). ``""`` means
+    "unbound" (the action is disabled).
+
+    Raises:
+        PhosonKeyBindingsError: On the wrong type, an empty list, or a
+            sequence that prompt_toolkit cannot parse (e.g. ``"ctrl+shift"``).
+    """
+    if isinstance(value, str):
+        raw_values: list[Any] = [value]
+    elif isinstance(value, list):
+        raw_values = list(value)
+    else:
+        raise PhosonKeyBindingsError(
+            f"Invalid key binding for action {action!r}: expected a string"
+            f' (e.g. "c-x") or a list of them, got {type(value).__name__}.'
+        )
+    if not raw_values:
+        raise PhosonKeyBindingsError(
+            f"Invalid key binding for action {action!r}:"
+            ' an empty list unbinds nothing — use "" instead.'
+        )
+
+    from prompt_toolkit.key_binding.key_bindings import _parse_key
+
+    sequences: list[str] = []
+    for raw in raw_values:
+        if not isinstance(raw, str):
+            raise PhosonKeyBindingsError(
+                f"Invalid key binding for action {action!r}:"
+                f" sequence entries must be strings, got {type(raw).__name__}."
+            )
+        sequence = raw.strip()
+        if not sequence:
+            continue  # "" = deliberately unbound
+        for part in sequence.split():
+            try:
+                _parse_key(part)
+            except (ValueError, TypeError) as exc:
+                raise PhosonKeyBindingsError(
+                    f"Invalid key sequence {sequence!r} for action {action!r}: {exc}"
+                ) from exc
+        sequences.append(" ".join(sequence.split()))
+    return sequences
+
+
+def load_key_bindings(config_path: Path | None = None) -> dict[str, list[str]]:
+    """Load the ``[keys]`` section of config.toml (IMPROVEMENTS.md E6).
+
+    Returns ``{action: [sequences...]}`` — the same shape
+    :func:`~phoson_cli.fullscreen.keys.build_key_bindings` consumes.
+
+    Returns an empty dict when the section is absent (built-in defaults
+    apply). Raises :class:`PhosonKeyBindingsError` when the section is
+    present but unusable: an unknown action, a wrong value type, or a
+    sequence prompt_toolkit cannot parse. (A *malformed TOML file* raises
+    :class:`PhosonConfigError` from :func:`load_config` before this is
+    even called.)
+    """
+    path = config_path or Path("~/.phoson/config.toml").expanduser()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("rb") as f:
+            raw = tomllib.load(f)
+    except tomllib.TOMLDecodeError as exc:
+        raise PhosonConfigError(f"Malformed configuration file {path}: {exc}") from exc
+
+    keys_section = raw.get("keys")
+    if keys_section is None:
+        return {}
+    if not isinstance(keys_section, dict):
+        raise PhosonKeyBindingsError(
+            f"Malformed configuration file {path}:"
+            " [keys] must be a table of action = key-sequence pairs."
+        )
+
+    resolved: dict[str, list[str]] = {}
+    for action, value in keys_section.items():
+        if action not in KNOWN_KEY_ACTIONS:
+            raise PhosonKeyBindingsError(
+                f"Unknown key action {action!r} in [keys]"
+                f" ({path}). Valid actions: {', '.join(KNOWN_KEY_ACTIONS)}."
+            )
+        resolved[action] = _parse_key_sequence(value, action=action)
+    return resolved
+
+
 def load_config() -> PhosonConfig:
     """Load configuration from files and environment variables.
 
@@ -262,6 +399,10 @@ def load_config() -> PhosonConfig:
     """
     d = PhosonConfig()
     fd = _load_file_defaults(Path("~/.phoson/config.toml").expanduser())
+    # [keys] section (IMPROVEMENTS.md E6): user remaps for the full-screen
+    # TUI. An empty table = built-in defaults; a malformed one raises
+    # PhosonKeyBindingsError with a user-facing message (main() prints it).
+    key_bindings = load_key_bindings()
 
     cfg = PhosonConfig(
         model=_resolve_str("PHOSON_MODEL", "model", fd, d.model),
@@ -411,6 +552,7 @@ def load_config() -> PhosonConfig:
                 "PHOSON_COMPACTED_DIR", "compacted_dir", fd, str(d.compacted_dir)
             )
         ).expanduser(),
+        key_bindings=key_bindings or None,
     )
     if cfg.compact_mode not in COMPACT_MODES:
         warnings.warn(

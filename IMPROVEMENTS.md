@@ -5,7 +5,7 @@
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
 > **Estado de referencia:** v0.12.5 · 1254 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5 · E6 (keybindings personalizables) cerrado en v0.12.6.
 
 ---
 
@@ -34,7 +34,7 @@
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | ✅ v0.12.3 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | ✅ v0.12.4 |
 | [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | ✅ v0.12.5 |
-| [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | Backlog |
+| [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | ✅ v0.12.6 |
 | [G1](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Double-Esc para retroceder a un mensaje anterior (rewind) | **P1** | M | 🟠 Medio | [#51](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Sprint 2–3 |
 | [G2](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Prompt caching (OpenRouter/Anthropic) — tokens cacheados + cabeceras | **P1** | M | 🔴 Alto | [#69](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Sprint 2–3 |
 | [G3](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | Seleccionar/copiar texto del chat con el mouse (full-screen) | **P2** | S-M | 🟠 Medio | [#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | Sprint 3 |
@@ -490,9 +490,19 @@ La infraestructura existe (`updater.py`, check PyPI offline-safe). Añadir check
 ---
 
 ### E6 — Keybindings personalizables
-**Esfuerzo:** M · **Impacto:** 🟢
+**Esfuerzo:** M · **Impacto:** 🟢 · **✅ Cerrado en v0.12.6**
 
 Sección `[keys]` en config.toml mapeando acciones → teclas (`toggle_reasoning = "c-t"`). Construir los bindings desde esa tabla en `keys.py`. Baja prioridad: el set actual es razonable y el costo de soportar remapeos (docs, conflictos, validación) supera el beneficio hasta tener base de usuarios pidiéndolo.
+
+**Implementado.** El mapa de teclas de la TUI pasó de hardcodeado a derivado de una tabla (`DEFAULT_KEY_BINDINGS`) con overrides del usuario:
+
+- **Núcleo** (`fullscreen/keys.py`): `DEFAULT_KEY_BINDINGS` — `{acción: [secuencias]}` con la precedencia histórica (`line_up = ["s-up", "c-up"]`, `exit = ["c-q", "c-c"]`). `resolve_key_bindings(overrides)` mezcla defaults + overrides y **detecta conflictos cruzados** (una secuencia ligada a dos acciones → error, no un steal silencioso). `build_key_bindings(app, overrides)` construye el `KeyBindings` desde la tabla (chords tipo `"c-x c-e"`, `escape` mantiene `eager=True`); `listing_for_config` da las filas `(acción, "Ctrl+X")` para `/keys` (acción desligada → `(off)`).
+- **Config** (`config.py`): `PhosonConfig.key_bindings: dict[str, list[str]] | None` + `load_key_bindings()` lee `[keys]` de `~/.phoson/config.toml` con validación dura — acción desconocida, tipo incorrecto, secuencia no parseable (vía `_parse_key` de prompt_toolkit) o lista vacía levantan `PhosonKeyBindingsError` (subclase de `PhosonConfigError`); `load_config` lo propaga y `main()` lo imprime y hace `exit(1)` con mensaje amigable (sin traceback). La sección `[keys]` es **user-managed** (como `permissions.json`): `save_config` nunca la escribe, así un valor stale no puede sombrear la tabla editada a mano. `KNOWN_KEY_ACTIONS` es el canonical de nombres; `""` desliga una acción; `"c-x c-e"` es un chord; listas = orden de precedencia.
+- **Wiring TUI** (`fullscreen/app.py`): `PhosonApp` lee `config.key_bindings` al construir (un conflicto levanta en el constructor, antes del primer paint); `keys_listing()` expone el mapa efectivo.
+- **Comando `/keys`** (`commands.py`): lista el mapa efectivo (defaults o remaps) en ambos front ends + sintaxis de `[keys]` y reglas de validación. Categoría "Config & System" en `/help`.
+- **Docs:** README (sección "Key bindings (customizable)" + `/keys` en la lista de comandos), `docs/api/phoson_cli.md` (sección "Key bindings (customizable, full-screen TUI)" + fila en la tabla de comandos).
+
+**Criterio de listo.** Tests en `tests/phoson_cli/test_e6_keybindings_unit.py` (43): shape del mapa por defecto (cubre `KNOWN_KEY_ACTIONS`, idéntico al set hardcodeado histórico, secuencias parseables), merge (copy sin mutation, override, unbind, unknown-action ignorado, conflictos cross-action, self-remap permitido, dos overrides en una secuencia), wiring TUI (defaults completos, `eager` de `escape`, remap mueve el binding, unbind desaparece, chord, conflicto → `PhosonKeyBindingsError` en el constructor, remap de `escape` conserva `eager`), display (`PgUp`/`Ctrl+T`/chords/`(off)`/orden), capa de config (no-file, sin sección, string/lista, chord, unbind, tabla vacía → defaults, unknown action, bad sequence, wrong type, entry no-string, lista vacía, integración `load_config`, round-trip `save_config` preserva `[keys]` user-managed, no es clave managed), `main()` falla amigable (SystemExit 1, sin traceback), y `/keys` (registro, categoría de help, output con remaps, dispatchable en ambos front ends). Suite ahora 1297 passing, pyright 0 errors, ruff clean.
 
 ---
 
@@ -524,7 +534,7 @@ Continuo / paralelo
 ├── E3 autocomplete de rutas + @file mentions  ✅ v0.12.3
 ├── E4 themes interactivos + auto-detección light/dark  ✅ v0.12.4
 ├── E5 check de updates al arrancar  ✅ v0.12.5
-└── E6 según demanda real de usuarios
+└── E6 según demanda real de usuarios  ✅ v0.12.6
 ```
 
 ## Principios para decidir durante la ejecución
