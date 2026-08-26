@@ -8,6 +8,7 @@ the same module prevents the previous drift where the producer used
 ``key=value`` separated by spaces while the parser expected ``|``.
 """
 
+import time
 from enum import Enum
 from dataclasses import dataclass
 
@@ -112,10 +113,68 @@ class SubagentMetrics:
     fallback_model: str | None = None
 
 
+@dataclass
+class SubagentProgress:
+    """Live metrics for one in-flight sub-agent task (E2).
+
+    Values are best-effort snapshots: tokens/cost only become available
+    once a sub-agent's first LLM call finishes, so rows stay "—" until
+    then. ``status`` mirrors the live phase the panel should show.
+    """
+
+    index: int
+    task: str
+    status: AgentStatus = AgentStatus.RUNNING
+    started_at: float = 0.0
+    last_update: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    done: bool = False
+
+    @property
+    def has_tokens(self) -> bool:
+        """True once at least one LLM call reported usage."""
+        return self.input_tokens > 0 or self.output_tokens > 0
+
+    def elapsed_ms(self, now: float) -> int:
+        """Milliseconds since start (0 when ``started_at`` is unset)."""
+        if not self.started_at:
+            return 0
+        reference = now if now > self.started_at else self.started_at
+        return int((reference - self.started_at) * 1000)
+
+
+def _progress_tasks(progress: object | None) -> list[SubagentProgress] | None:
+    """Normalize a progress source to a list of per-task progress.
+
+    Accepts either the producer-side ``SubagentProgressTracker`` (which
+    exposes a ``tasks`` list) or a plain ``list[SubagentProgress]`` —
+    both are equally valid for rendering.
+    """
+    if progress is None:
+        return None
+    tasks = getattr(progress, "tasks", None)
+    if isinstance(tasks, list):
+        return tasks
+    if isinstance(progress, list):
+        return progress
+    return None
+
+
 def _build_running_table(
-    tasks: list[str], frame_index: int, theme: Theme | None = None
+    tasks: list[str],
+    frame_index: int,
+    theme: Theme | None = None,
+    progress: object | None = None,
 ) -> Table:
-    """Build the live "running parallel agents" table for a spinner frame."""
+    """Build the live "running parallel agents" table for a spinner frame.
+
+    With ``progress`` (E2) the Time/Tokens/Cost columns show live values
+    per task; without it the panel falls back to the static "waiting" /
+    "—" cells so the pre-E2 rendering is unchanged for callers that
+    don't track progress.
+    """
     theme = theme or load_theme()
     table = Table(
         box=box.ROUNDED,
@@ -132,17 +191,58 @@ def _build_running_table(
     table.add_column("Tokens", style=theme.muted, width=14)
     table.add_column("Cost", style=theme.muted, width=10)
 
+    progress_tasks = _progress_tasks(progress)
+    by_index = {p.index: p for p in (progress_tasks or [])}
     for idx, task in enumerate(tasks):
         task_preview = task[:35] + "..." if len(task) > 35 else task
-        table.add_row(
-            str(idx),
-            SPINNER_FRAMES[(frame_index + idx) % len(SPINNER_FRAMES)],
-            task_preview,
-            "waiting",
-            "—",
-            "—",
-        )
+        p = by_index.get(idx)
+        if p is None:
+            row = (
+                str(idx),
+                SPINNER_FRAMES[(frame_index + idx) % len(SPINNER_FRAMES)],
+                task_preview,
+                "waiting",
+                "—",
+                "—",
+            )
+        elif not p.started_at:
+            # Registered but queued (the parallelism semaphore hasn't
+            # released it yet): no clock to show, so keep "waiting".
+            row = (
+                str(idx),
+                SPINNER_FRAMES[(frame_index + idx) % len(SPINNER_FRAMES)],
+                task_preview,
+                "waiting",
+                _format_tokens(p.input_tokens, p.output_tokens),
+                _format_cost(p.cost_usd),
+            )
+        else:
+            # Running tasks tick against the wall clock so Time advances
+            # between LLM steps (genuinely live); terminal tasks freeze
+            # at their reported final duration (last_update).
+            if p.status == AgentStatus.RUNNING:
+                now = time.monotonic()
+            else:
+                now = p.last_update
+            row = (
+                str(idx),
+                _status_cell(p, frame_index, idx),
+                task_preview,
+                _format_duration(p.elapsed_ms(now)),
+                _format_tokens(p.input_tokens, p.output_tokens),
+                _format_cost(p.cost_usd),
+            )
+        table.add_row(*row)
     return table
+
+
+def _status_cell(p: SubagentProgress, frame_index: int, idx: int) -> str:
+    """Status cell for a progress-tracked row: spinner while running."""
+    if p.status == AgentStatus.ERROR:
+        return "✗"
+    if p.status == AgentStatus.DONE:
+        return "✓"
+    return SPINNER_FRAMES[(frame_index + idx) % len(SPINNER_FRAMES)]
 
 
 def _format_duration(ms: int) -> str:
@@ -227,16 +327,23 @@ def parse_subagent_metrics(output: str) -> list[SubagentMetrics]:
     return metrics
 
 
-def render_subagent_panel(tasks: list[str], theme: Theme | None = None) -> Table:
+def render_subagent_panel(
+    tasks: list[str],
+    theme: Theme | None = None,
+    progress: object | None = None,
+) -> Table:
     """Render the initial subagent panel with pending tasks."""
-    return _build_running_table(tasks, frame_index=0, theme=theme)
+    return _build_running_table(tasks, frame_index=0, theme=theme, progress=progress)
 
 
 def render_subagent_panel_frame(
-    tasks: list[str], frame_index: int, theme: Theme | None = None
+    tasks: list[str],
+    frame_index: int,
+    theme: Theme | None = None,
+    progress: object | None = None,
 ) -> Table:
     """Render the live subagent panel for a given spinner frame."""
-    return _build_running_table(tasks, frame_index, theme=theme)
+    return _build_running_table(tasks, frame_index, theme=theme, progress=progress)
 
 
 def render_subagent_summary(

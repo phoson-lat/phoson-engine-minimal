@@ -357,6 +357,12 @@ class SessionController:
             self.config.subagent_timeout_seconds
         )
         self.engine.context.extra["chat"] = self.chat
+        # Live sub-agent metrics (E2): the tools create a fresh tracker
+        # per call and push it to the front end through this callback
+        # (bound to ``sink.on_subagent_progress``).
+        self.engine.context.extra["on_subagent_progress"] = (
+            self.sink.on_subagent_progress
+        )
         # Interactive confirmations (safe_mode bash). None → the tool
         # fails closed (one-shot / non-interactive front ends).
         self.engine.context.extra["bash_confirmation"] = self.confirmation

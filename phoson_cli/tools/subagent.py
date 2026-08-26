@@ -9,9 +9,11 @@ plain strings so the parent agent can consume them as tool results.
 
 import os
 import copy
+import time
 import asyncio
 import logging
 from typing import Any
+from collections.abc import Callable
 
 from phoson_agent.tool import tool
 from phoson_agent.agent import AgentEngine
@@ -21,12 +23,18 @@ from phoson_agent.models import (
     AgentDoneEvent,
     AgentRunResult,
     AgentErrorEvent,
+    AgentStepDoneEvent,
 )
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.exceptions import PhosonProviderError
 from phoson_agent.exceptions import PhosonAgentError, PhosonMaxIterationsError
 
-from .subagent_panel import format_agent_block, format_metrics_line
+from .subagent_panel import (
+    AgentStatus,
+    SubagentProgress,
+    format_agent_block,
+    format_metrics_line,
+)
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
 
@@ -73,6 +81,167 @@ def _aggregate_tokens(steps: list) -> tuple[int, int]:
             input_tokens += step.usage.input
             output_tokens += step.usage.output
     return input_tokens, output_tokens
+
+
+def _progress_notify(
+    on_progress: Any, tracker: "SubagentProgressTracker | None"
+) -> None:
+    """Tell the UI the tracker for the active sub-agent call (E2).
+
+    ``on_progress`` is the sink callback injected through the engine
+    context (``None`` in front ends without a live panel). Called with
+    the fresh tracker when a call starts and with ``None`` when it ends,
+    so the panel always renders the metrics of the *current* call only.
+    """
+    if on_progress is None:
+        return
+    try:
+        on_progress(tracker)
+    except Exception:  # noqa: BLE001 — UI plumbing never breaks the run
+        _LOGGER.debug("subagent progress notify failed", exc_info=True)
+
+
+class SubagentProgressTracker:
+    """Collects live sub-agent metrics for the running panel (E2).
+
+    One tracker per sub-agent *tool call*: the ``agent``/``agents``
+    tools create a fresh instance, register their tasks, and push it to
+    the front end through the injected ``on_subagent_progress``
+    callback (see :func:`_progress_notify`). It is a plain,
+    engine-agnostic bag of per-task
+    :class:`~phoson_cli.tools.subagent_panel.SubagentProgress` — no
+    Rich, no prompt_toolkit — which the front ends render from however
+    they like (fullscreen sink, classic ``SubagentSpinner``, ...).
+
+    Usage:
+
+    1. ``tracker.register(task)`` / :meth:`register_many` → tasks join
+       the batch as *queued* rows (index = position in the batch);
+    2. ``tracker.start(index)`` when a task actually begins (starts
+       its clock);
+    3. feed the inner run's ``AgentStepDoneEvent`` stream through
+       :meth:`update_from_step`;
+    4. :meth:`finalize` on success, :meth:`mark_error` on
+       timeout/error/cancellation.
+
+    All methods are safe to call from the single asyncio event loop the
+    tools run on; no locks are needed.
+    """
+
+    def __init__(self) -> None:
+        self.tasks: list[SubagentProgress] = []
+        # Index (position in ``tasks``) → per-task running totals.
+        self._input: dict[int, int] = {}
+        self._output: dict[int, int] = {}
+        self._cost: dict[int, float] = {}
+
+    def register(self, task: str) -> int:
+        """Record a task as *queued*; returns its index for this batch.
+
+        Queued tasks (``started_at == 0``) render as "waiting" in the
+        Time column until :meth:`start` fires — the parallel ``agents``
+        tool registers every task up front and starts each one when it
+        actually acquires the parallelism slot, so a queued row never
+        pretends to be running.
+        """
+        index = len(self.tasks)
+        self.tasks.append(
+            SubagentProgress(
+                index=index,
+                task=task,
+                status=AgentStatus.RUNNING,
+            )
+        )
+        return index
+
+    def register_many(self, tasks: list[str]) -> list[int]:
+        """Record several tasks at once; returns their indexes in order.
+
+        Used by the parallel ``agents`` tool so all rows of a batch exist
+        in the panel before any of them starts running (a task waiting on
+        the parallelism semaphore still shows a live row).
+        """
+        return [self.register(task) for task in tasks]
+
+    def start(self, index: int) -> None:
+        """Mark a queued task as actually running (starts its clock)."""
+        if 0 <= index < len(self.tasks) and not self.tasks[index].started_at:
+            now = time.monotonic()
+            self.tasks[index].started_at = now
+            self.tasks[index].last_update = now
+
+    def mark_error(self, index: int, error: str | None = None) -> None:
+        """Mark a task as failed (timeout / error / cancellation)."""
+        if 0 <= index < len(self.tasks):
+            self.tasks[index].status = AgentStatus.ERROR
+            self.tasks[index].last_update = time.monotonic()
+
+    def update_from_step(self, index: int, step: Any) -> None:
+        """Fold one inner-run ``RunStep`` into the task's live totals.
+
+        Only LLM steps carry usage/cost; tool steps are ignored. The
+        live panel shows the same USD cost the summary panel computes,
+        so the two stay consistent by construction.
+        """
+        if step is None or not (0 <= index < len(self.tasks)):
+            return
+        if getattr(step, "kind", None) != "llm":
+            return
+        progress = self.tasks[index]
+        usage = getattr(step, "usage", None)
+        if usage is not None:
+            self._input[index] = self._input.get(index, 0) + int(
+                getattr(usage, "input", 0) or 0
+            )
+            self._output[index] = self._output.get(index, 0) + int(
+                getattr(usage, "output", 0) or 0
+            )
+        cost = float(getattr(step, "cost_usd", 0.0) or 0.0)
+        self._cost[index] = self._cost.get(index, 0.0) + cost
+        progress.input_tokens = self._input.get(index, 0)
+        progress.output_tokens = self._output.get(index, 0)
+        progress.cost_usd = self._cost[index]
+        progress.last_update = time.monotonic()
+
+    def finalize(
+        self,
+        index: int,
+        *,
+        duration_ms: int | None = None,
+        result: AgentRunResult | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
+        """Mark a task done and snap its final metrics.
+
+        Final values come from ``result`` when available (the
+        sequential path), or from the explicit ``*_tokens`` / ``cost_usd``
+        keyword arguments (the parallel path, which aggregates the same
+        values into its own payload). When neither is given, whatever
+        accumulated while running stays.
+        """
+        if not 0 <= index < len(self.tasks):
+            return
+        progress = self.tasks[index]
+        progress.status = AgentStatus.DONE
+        progress.done = True
+        if result is not None:
+            tokens_in, tokens_out = _aggregate_tokens(result.steps)
+            progress.input_tokens = tokens_in
+            progress.output_tokens = tokens_out
+            progress.cost_usd = result.total_cost_usd
+        else:
+            if input_tokens is not None:
+                progress.input_tokens = input_tokens
+            if output_tokens is not None:
+                progress.output_tokens = output_tokens
+            if cost_usd is not None:
+                progress.cost_usd = cost_usd
+        if duration_ms is not None:
+            progress.last_update = progress.started_at + max(0, duration_ms) / 1000.0
+        else:
+            progress.last_update = time.monotonic()
 
 
 def _select_tools(
@@ -168,8 +337,15 @@ async def _stream_final(
     engine: AgentEngine,
     messages: list[Message],
     config: ModelConfig,
+    *,
+    on_event: Callable[[Any], None] | None = None,
 ) -> AgentRunResult:
     """Drive ``engine.stream()`` and return the terminal outcome.
+
+    ``on_event`` (optional) is called synchronously for every event as
+    it is emitted — that is how the live-metrics path (E2) folds the
+    inner run's ``AgentStepDoneEvent`` steps into the running panel
+    *while the sub-agent is still executing*, not just at the end.
 
     Returns the full ``AgentRunResult`` on success. Raises on failure:
     re-raises the underlying provider exception when one propagated
@@ -181,6 +357,8 @@ async def _stream_final(
     terminal_error: AgentErrorEvent | None = None
     try:
         async for event in engine.stream(messages, config):
+            if on_event is not None:
+                on_event(event)
             if isinstance(event, AgentDoneEvent):
                 return event.result
             if isinstance(event, AgentErrorEvent):
@@ -223,13 +401,23 @@ async def _run_one_subagent(
     max_iterations: int,
     timeout_seconds: float | None = None,
     fallback_model: str | None = None,
+    progress: SubagentProgressTracker | None = None,
+    index: int = 0,
 ) -> tuple[str, str | None]:
     """Run a single sub-agent; return ``(final_content, fallback_used)``.
 
     ``fallback_used`` is the fallback model name when the configured
     ``model`` was unavailable and the task completed on ``fallback_model``
     (the main agent's model — known to work); ``None`` otherwise.
+
+    When ``progress`` is given (E2), the inner run's LLM steps are
+    folded into ``progress`` as they complete so the parent's live
+    panel shows tokens/cost in real time, not only at the end.
     """
+
+    def _on_event(event: Any) -> None:
+        if progress is not None and isinstance(event, AgentStepDoneEvent):
+            progress.update_from_step(index, event.step)
 
     async def _run(model_name: str) -> AgentRunResult:
         sub_engine = AgentEngine(
@@ -238,7 +426,9 @@ async def _run_one_subagent(
             max_iterations=max_iterations,
         )
         messages = [Message(role="user", content=task)]
-        return await _stream_final(sub_engine, messages, ModelConfig(model=model_name))
+        return await _stream_final(
+            sub_engine, messages, ModelConfig(model=model_name), on_event=_on_event
+        )
 
     async def _attempt(model_name: str) -> AgentRunResult:
         if timeout_seconds is not None and timeout_seconds > 0:
@@ -247,11 +437,21 @@ async def _run_one_subagent(
 
     try:
         result = await _attempt(model)
+        if progress is not None:
+            progress.finalize(
+                index,
+                duration_ms=int(sum(s.duration_ms for s in result.steps)),
+                result=result,
+            )
         return result.final_content, None
     except TimeoutError:
         _LOGGER.debug("Sub-agent timed out after %.0fs: %s", timeout_seconds, task[:80])
+        if progress is not None:
+            progress.mark_error(index, "timeout")
         return f"Sub-agent timed out after {timeout_seconds:.0f}s.", None
     except asyncio.CancelledError:
+        if progress is not None:
+            progress.mark_error(index, "cancelled")
         raise
     except Exception as exc:
         if (
@@ -260,6 +460,8 @@ async def _run_one_subagent(
             or not _is_model_unavailable_failure(exc)
         ):
             _LOGGER.debug("Sub-agent raised: %s", exc, exc_info=True)
+            if progress is not None:
+                progress.mark_error(index, str(exc))
             return f"Sub-agent error: {exc}", None
 
         # Debug, not warning: the fallback is already surfaced to the user
@@ -274,19 +476,27 @@ async def _run_one_subagent(
         )
         try:
             result = await _attempt(fallback_model)
+            if progress is not None:
+                progress.finalize(index, result=result)
             return result.final_content, fallback_model
         except TimeoutError:
             _LOGGER.debug(
                 "Sub-agent timed out after %.0fs: %s", timeout_seconds, task[:80]
             )
+            if progress is not None:
+                progress.mark_error(index, "timeout")
             return f"Sub-agent timed out after {timeout_seconds:.0f}s.", None
         except Exception as fallback_exc:
             _LOGGER.debug("Sub-agent fallback raised: %s", fallback_exc, exc_info=True)
+            if progress is not None:
+                progress.mark_error(index, str(fallback_exc))
             return f"Sub-agent error: {fallback_exc}", None
 
 
 # Sub-agent tool injection parameters (per tool: `agents` also gets the
 # parallelism limit; the single `agent` tool only needs the timeout).
+# ``on_subagent_progress`` feeds the live metrics panel (E2) —
+# optional on the engine side, so pre-E2 callers keep working.
 _AGENT_INJECT = [
     "chat",
     "available_tools",
@@ -295,6 +505,7 @@ _AGENT_INJECT = [
     "max_iterations",
     "safe_mode",
     "subagent_timeout_seconds",
+    "on_subagent_progress",
 ]
 _AGENTS_INJECT = _AGENT_INJECT + ["subagent_max_parallel"]
 
@@ -312,21 +523,34 @@ async def agent(
     max_iterations: int,
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context
     subagent_timeout_seconds: float = 300.0,
+    on_subagent_progress: Any = None,
 ) -> str:
     """Execute a task using a sub-agent with clean context."""
     selected, err = _select_tools(available_tools, tools)
     if err is not None:
         return err
 
-    content, fallback_used = await _run_one_subagent(
-        task=task,
-        chat=chat,
-        selected_tools=list(selected.values()),
-        model=model or default_model,
-        max_iterations=max_iterations,
-        timeout_seconds=subagent_timeout_seconds,
-        fallback_model=main_model,
-    )
+    # Live-metrics panel (E2): every call owns a fresh tracker — a run
+    # may call this tool several times, and the panel must always show
+    # the metrics of the *current* call only.
+    tracker = SubagentProgressTracker()
+    index = tracker.register(task)
+    tracker.start(index)
+    _progress_notify(on_subagent_progress, tracker)
+    try:
+        content, fallback_used = await _run_one_subagent(
+            task=task,
+            chat=chat,
+            selected_tools=list(selected.values()),
+            model=model or default_model,
+            max_iterations=max_iterations,
+            timeout_seconds=subagent_timeout_seconds,
+            fallback_model=main_model,
+            progress=tracker,
+            index=index,
+        )
+    finally:
+        _progress_notify(on_subagent_progress, None)
     if fallback_used:
         return f"[fallback to {fallback_used}] {content}"
     return content
@@ -346,6 +570,7 @@ async def agents(
     safe_mode: bool = False,  # noqa: ARG001 — propagated via context
     subagent_max_parallel: int = 4,
     subagent_timeout_seconds: float = 300.0,
+    on_subagent_progress: Any = None,
 ) -> str:
     """Execute multiple tasks in parallel using sub-agents."""
     if not tasks:
@@ -361,9 +586,23 @@ async def agents(
     # spawn, not how many LLM sessions may run at once.
     semaphore = asyncio.Semaphore(max(1, subagent_max_parallel))
 
+    # Live-metrics panel (E2): every call owns a fresh tracker. All
+    # tasks are registered up front (queued rows) so the panel shows
+    # every row immediately; each one starts its clock when it actually
+    # acquires the parallelism slot.
+    tracker = SubagentProgressTracker()
+    live_indexes = tracker.register_many(tasks)
+    _progress_notify(on_subagent_progress, tracker)
+
     async def run_one(idx: int, task: str) -> dict[str, Any]:
         preview = task[:40] + "..." if len(task) > 40 else task
+        live_index = live_indexes[idx]
         async with semaphore:
+            tracker.start(live_index)
+
+            def _on_event(event: Any) -> None:
+                if isinstance(event, AgentStepDoneEvent):
+                    tracker.update_from_step(live_index, event.step)
 
             async def _attempt(model_name: str) -> dict[str, Any]:
                 sub_engine = AgentEngine(
@@ -375,11 +614,13 @@ async def agents(
                 config = ModelConfig(model=model_name)
                 if subagent_timeout_seconds > 0:
                     result = await asyncio.wait_for(
-                        _stream_final(sub_engine, messages, config),
+                        _stream_final(sub_engine, messages, config, on_event=_on_event),
                         timeout=subagent_timeout_seconds,
                     )
                 else:
-                    result = await _stream_final(sub_engine, messages, config)
+                    result = await _stream_final(
+                        sub_engine, messages, config, on_event=_on_event
+                    )
                 input_tokens, output_tokens = _aggregate_tokens(result.steps)
                 return {
                     "index": idx,
@@ -395,8 +636,17 @@ async def agents(
                 }
 
             try:
-                return await _attempt(effective_model)
+                payload = await _attempt(effective_model)
+                tracker.finalize(
+                    live_index,
+                    duration_ms=int(payload["duration_ms"]),
+                    input_tokens=int(payload["input_tokens"]),
+                    output_tokens=int(payload["output_tokens"]),
+                    cost_usd=float(payload["cost_usd"]),
+                )
+                return payload
             except TimeoutError:
+                tracker.mark_error(live_index, "timeout")
                 return {
                     "index": idx,
                     "task": task,
@@ -405,6 +655,7 @@ async def agents(
                     "error": f"timeout after {subagent_timeout_seconds:g}s",
                 }
             except asyncio.CancelledError:
+                tracker.mark_error(live_index, "cancelled")
                 raise
             except Exception as exc:
                 if (
@@ -415,6 +666,7 @@ async def agents(
                     _LOGGER.debug(
                         "Parallel sub-agent %d raised: %s", idx, exc, exc_info=True
                     )
+                    tracker.mark_error(live_index, str(exc))
                     return {
                         "index": idx,
                         "task": task,
@@ -437,8 +689,16 @@ async def agents(
                 try:
                     payload = await _attempt(main_model)
                     payload["fallback_model"] = main_model
+                    tracker.finalize(
+                        live_index,
+                        duration_ms=int(payload["duration_ms"]),
+                        input_tokens=int(payload["input_tokens"]),
+                        output_tokens=int(payload["output_tokens"]),
+                        cost_usd=float(payload["cost_usd"]),
+                    )
                     return payload
                 except TimeoutError:
+                    tracker.mark_error(live_index, "timeout")
                     return {
                         "index": idx,
                         "task": task,
@@ -453,6 +713,7 @@ async def agents(
                         fallback_exc,
                         exc_info=True,
                     )
+                    tracker.mark_error(live_index, str(fallback_exc))
                     return {
                         "index": idx,
                         "task": task,
@@ -461,9 +722,14 @@ async def agents(
                         "error": str(fallback_exc),
                     }
 
-    results: list[dict[str, Any]] = list(
-        await asyncio.gather(*(run_one(idx, task) for idx, task in enumerate(tasks)))
-    )
+    try:
+        results: list[dict[str, Any]] = list(
+            await asyncio.gather(
+                *(run_one(idx, task) for idx, task in enumerate(tasks))
+            )
+        )
+    finally:
+        _progress_notify(on_subagent_progress, None)
     results.sort(key=lambda x: x["index"])
 
     output_parts: list[str] = []

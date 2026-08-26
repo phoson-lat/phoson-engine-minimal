@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **cli**: live subagent metrics in the running panel (IMPROVEMENTS.md
+  E2). The parallel-subagent panel now shows Time / Tokens / Cost per
+  task in real time instead of static "waiting" cells that only fill in
+  at the final summary.
+  - *Producer.* The `agent`/`agents` tools now own a
+    `SubagentProgressTracker` per call and feed it live from the inner
+    runs' `AgentStepDoneEvent` steps (new `on_event` callback on the
+    sub-agent stream driver). `finalize` snaps the exact same numbers
+    the summary wire format reports (sum of step durations,
+    `AgentRunResult` tokens/cost), so the live panel and the final
+    summary stay consistent. Timeouts/errors/cancellation mark the row
+    failed (✗) without breaking the run.
+  - *Transport.* The tracker is pushed to the UI through a new
+    `on_subagent_progress` sink callback injected via
+    `AgentContext.extra`; the sub-agent tools stay UI-agnostic (no
+    callback in one-shot/scripts/tests → unchanged behavior). The
+    notification happens mid-run, after `AgentStartEvent` created the
+    in-flight turn, so there is no race with the pre-provider
+    placeholder.
+  - *Consumers.* Full-screen sink: `CurrentTurn.subagent_progress` +
+    `on_subagent_progress` — running rows tick on the wall clock
+    between LLM steps and freeze at their reported final duration, while
+    queued rows (waiting on the parallelism semaphore) keep "waiting".
+    Classic REPL: `SubagentSpinner.set_progress()` — the animation
+    thread re-reads the tracker every frame.
+  - *Wire format untouched.* `format_metrics_line` /
+    `parse_subagent_metrics` / `render_subagent_summary` are unchanged;
+    the final `--- METRICS: ...` summary remains the transcript source
+    of truth.
+
+### Test
+
+- **cli**: 23 new tests in
+  `tests/phoson_cli/test_subagent_live_metrics.py` — tracker state
+  machine (register/start/update/finalize/mark_error, LLM-steps-only
+  accumulation, final snap, elapsed bounds), the tools feeding the
+  tracker *live* (intermediate values visible mid-run, per-call tracker
+  isolation across repeated calls, timeout/error, callback
+  notified/cleared), running-table rendering (live values, queued
+  "waiting", done ✓ / error ✗, fallback without tracker, tracker vs
+  plain list), controller wiring (callback injected into
+  `context.extra`), and the full-screen sink (panel renders from the
+  tracker, falls back to "waiting" when cleared, tracker survives a
+  pre-tool-start notification). Suite now 1096 passing, pyright 0
+  errors, ruff clean.
+
 ## v0.12.1 (2026-08-25)
 
 ### Feat

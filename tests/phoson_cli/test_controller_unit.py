@@ -40,6 +40,7 @@ class FakeSink:
         self.reasoning = ""
         self.partial_captures = 0
         self.flushes = 0
+        self.subagent_progress_events: list = []
 
     def on_user_message(self, text, message) -> None:
         self.user_messages.append((text, message))
@@ -68,6 +69,9 @@ class FakeSink:
 
     def notify(self, kind, message) -> None:
         self.notifications.append((kind, message))
+
+    def on_subagent_progress(self, progress) -> None:
+        self.subagent_progress_events.append(progress)
 
 
 assert isinstance(FakeSink(), AgentEventSink)  # runtime_checkable conformance

@@ -94,6 +94,9 @@ def _make_controller_with_confirmation(tmp_path, service):
         def set_session(self, session_id):
             pass
 
+        def on_subagent_progress(self, progress):
+            pass
+
     config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
     with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
         controller = SessionController(config, _Sink(), confirmation=service)
@@ -112,6 +115,9 @@ def test_controller_without_confirmation_injects_none(tmp_path) -> None:
 
     class _Sink:
         def set_session(self, session_id):
+            pass
+
+        def on_subagent_progress(self, progress):
             pass
 
     config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)

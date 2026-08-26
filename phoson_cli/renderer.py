@@ -148,6 +148,8 @@ class SubagentSpinner:
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
         self._tasks: list[str] = []
+        # Live per-task metrics (E2); None → the table shows "waiting".
+        self._progress: object | None = None
 
     def start(self, tasks: list[str]) -> None:
         """Start the subagent panel animation."""
@@ -156,7 +158,7 @@ class SubagentSpinner:
             self._tasks = tasks
         self._stop = threading.Event()
         self._live = Live(
-            render_subagent_panel(tasks, theme=self._theme),
+            render_subagent_panel(tasks, theme=self._theme, progress=self._progress),
             console=self._console,
             refresh_per_second=12,
             transient=True,
@@ -176,6 +178,17 @@ class SubagentSpinner:
         self._stop = None
         self._thread = None
         self._live = None
+        self._progress = None
+
+    def set_progress(self, progress: object | None) -> None:
+        """Attach/detach the live-metrics source (E2).
+
+        The animation thread re-reads it on every frame, so values keep
+        updating while the panel is on screen; ``None`` falls back to
+        the static "waiting" cells.
+        """
+        with self._lock:
+            self._progress = progress
 
     def _run(self) -> None:
         stop = self._stop
@@ -186,8 +199,11 @@ class SubagentSpinner:
         while not stop.is_set():
             with self._lock:
                 tasks = self._tasks
+                progress = self._progress
             live.update(
-                render_subagent_panel_frame(tasks, frame, theme=self._theme),
+                render_subagent_panel_frame(
+                    tasks, frame, theme=self._theme, progress=progress
+                ),
                 refresh=True,
             )
             frame += 1
@@ -657,6 +673,15 @@ class ClassicSink:
 
     def set_session(self, session_id: str) -> None:
         self._renderer.set_session(session_id)
+
+    def on_subagent_progress(self, progress: object | None) -> None:
+        """Feed the live panel with per-task metrics (E2).
+
+        The classic front end renders the panel in a transient Rich
+        ``Live`` display owned by :class:`SubagentSpinner`, so this just
+        attaches/detaches the tracker the animation reads each frame.
+        """
+        self._renderer._subagent_spinner.set_progress(progress)
 
     def print_history(self, path: list["Message"], tail: int | None = None) -> None:
         self._renderer.print_history(path, tail=tail)
