@@ -14,8 +14,10 @@ from typing import Any, Protocol, runtime_checkable
 
 from phoson_agent.sessions.models import SessionMeta
 
+from .theme import Theme
 from .models import ModelOption
 from .model_picker import ModelPickerResult
+from .theme_picker import ThemePickerResult
 from .session_picker import SessionPickerResult
 from .provider_picker import ProviderPickerResult
 
@@ -55,6 +57,19 @@ class CommandHost(Protocol):
     async def pick_provider(
         self, providers: list[str], current_provider: str
     ) -> ProviderPickerResult: ...
+
+    async def pick_theme(
+        self, current_theme: str, *, detected_theme: str | None = None
+    ) -> ThemePickerResult: ...
+
+    def apply_theme(self, theme: Theme) -> None:
+        """Re-color the active front end after a /theme switch (E4).
+
+        Host-specific because each front end owns a different set of
+        theme consumers (classic: Rich renderer + prompt style;
+        full-screen: plus the chat-pane style dict, sink and banner).
+        """
+        ...
 
     async def pick_session(
         self, sessions: list[SessionMeta], current_id: str
@@ -129,6 +144,21 @@ class RendererCommandHost:
             current_provider=current_provider,
             theme=getattr(self.repl, "theme", None),
         )
+
+    async def pick_theme(
+        self, current_theme: str, *, detected_theme: str | None = None
+    ) -> ThemePickerResult:
+        from phoson_cli import commands as commands_mod
+
+        return await commands_mod.pick_theme(
+            current_theme,
+            theme=getattr(self.repl, "theme", None),
+            detected_name=detected_theme,
+        )
+
+    def apply_theme(self, theme: Theme) -> None:
+        """Classic front end: re-point the shared renderer's theme."""
+        self.repl.apply_theme(theme)
 
     async def pick_session(
         self, sessions: list[SessionMeta], current_id: str

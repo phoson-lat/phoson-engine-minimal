@@ -368,7 +368,36 @@ class SetupWizard:
             "Enable safe mode?",
             config.safe_mode,
         )
+        config.theme = await self._pick_theme()
+        self.theme = load_theme(config.theme)
         return config
+
+    async def _pick_theme(self) -> str:
+        """Ask which color theme to save (E4).
+
+        The terminal's detected light/dark (if any) is offered as the
+        default; the four tiers are all accepted. The full ``/theme``
+        picker with live preview is available at runtime, so this stays
+        a simple text prompt here.
+        """
+        from phoson_cli.theme import VALID_NAMES, get_theme
+        from phoson_cli.terminal_theme import detect_terminal_theme
+
+        detected = detect_terminal_theme()
+        default = "light" if detected else "dark"
+        raw = (await self._prompt_text("Theme", default)).strip().lower()
+        theme = get_theme(raw)
+        if theme is None:
+            self.console.print(
+                Text(
+                    f"Unknown theme {raw!r} — using {default!r} "
+                    f"(valid: {', '.join(VALID_NAMES)})",
+                    style=f"{self.theme.err}",
+                )
+            )
+            theme = get_theme(default)
+        assert theme is not None  # default is always a valid tier
+        return theme.name
 
     def _print_summary(self, config: PhosonConfig) -> None:
         """Render a Rich table summarizing all collected configuration values.
@@ -383,6 +412,7 @@ class SetupWizard:
         table.add_row("Default provider", config.provider)
         table.add_row("Model", config.model)
         table.add_row("Sub-agent model", config.subagent_model or "—")
+        table.add_row("Theme", config.theme)
         table.add_row("OpenRouter", self._mask_secret(config.openrouter_api_key))
         table.add_row("OpenAI", self._mask_secret(config.openai_api_key))
         table.add_row("Anthropic", self._mask_secret(config.anthropic_api_key))

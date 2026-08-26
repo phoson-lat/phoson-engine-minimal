@@ -434,6 +434,7 @@ classic REPL is selected automatically with a notice on stderr.
 - `/tree` — Show conversation tree
 - `/sessions` — List saved sessions
 - `/label <text>` — Label current node
+- `/theme` — Pick or set the color theme (live preview; `list` to list)
 - `/undo` — Undo the last turn (branch from before your last message)
 - `/update` — Check for and install CLI updates
 - `/help` — Show all commands
@@ -441,9 +442,28 @@ classic REPL is selected automatically with a notice on stderr.
 **Self-update:** `phoson-cli --self-update` performs the same check/upgrade
 flow from outside the REPL (e.g. from a script).
 
+**Startup update check:** at launch the CLI checks PyPI in the
+background — at most once every 24 h (cache in
+`~/.phoson/last_update_check`; a failed check is retried on the next
+start). When a newer release exists it shows a dim one-line hint:
+`⬆ v0.8.1 available — /update` — in the TUI header (full-screen) or the
+prompt line (classic). It never blocks first paint, input, or a run,
+and one-shot mode is untouched. `/update` or `--self-update` install it.
+
 **Appearance:** `PHOSON_THEME=light|ansi|no-color` (or `theme = "..."` in
 `~/.phoson/config.toml`) switches the color tier; `NO_COLOR` / `CLICOLOR=0`
 always produce plain output (scripts, CI).
+
+**Themes (light/dark aware):** the first time you run `phoson-cli` without
+a saved theme, it asks your terminal for its default background color
+(`COLORFGBG` env when present, otherwise a ~150 ms OSC 11 probe that
+iTerm2, kitty, WezTerm, Alacritty, ghostty, VS Code and friends answer)
+and offers to save the matching tier — `light` or `dark` — as your
+default. If the terminal can't be classified it just doesn't ask.
+`/theme` opens a live-preview picker (the banner and every token
+rendered in the tier's own colors) in both front ends;
+`/theme <tier>` sets it directly and `/theme list` lists the four tiers.
+Switching applies immediately — no restart needed.
 
 **Reasoning:** press `Ctrl+T` to toggle the live "thinking" view while a
 run is streaming, or to expand the full reasoning of the last turn after

@@ -15,8 +15,11 @@ event loop. After a successful upgrade the *running* process still has
 the old code loaded — the user must restart the CLI.
 """
 
+import os
 import re
 import sys
+import json
+import time
 import asyncio
 from pathlib import Path
 from collections.abc import Callable, Awaitable
@@ -26,6 +29,20 @@ import httpx
 PACKAGE = "phoson-engine-minimal"
 PYPI_JSON_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 CHECK_TIMEOUT = 10.0
+
+# How often the startup check re-queries PyPI (IMPROVEMENTS.md E5). A
+# successful check rewrites the cache, so with this interval the CLI does
+# at most one PyPI round trip per day.
+UPDATE_CHECK_INTERVAL = 86_400.0
+# The startup check shares the explicit /update timeout (10 s). It runs as
+# a background task that never blocks input or first paint; the deadline
+# only bounds how long the check may hold a network connection.
+STARTUP_CHECK_TIMEOUT = 10.0
+# Cache file holding the last check timestamp, its outcome, and — when an
+# update is available — the latest version. Written atomically (tmp +
+# rename) and best-effort: a failure to persist just means the next start
+# re-checks.
+LAST_UPDATE_CHECK = "last_update_check"
 
 
 # ── Versions ──────────────────────────────────────────────────────────────────
@@ -76,6 +93,95 @@ async def get_latest_version(timeout: float = CHECK_TIMEOUT) -> str | None:
             return str(response.json()["info"]["version"])
     except (httpx.HTTPError, KeyError, ValueError):
         return None
+
+
+# ── Startup update check (IMPROVEMENTS.md E5) ───────────────────────────────
+
+
+def _update_check_path() -> Path:
+    """Cache file for the startup check: ``~/.phoson/last_update_check``."""
+    home = os.environ.get("PHOSON_HOME", "~/.phoson")
+    return Path(home).expanduser() / LAST_UPDATE_CHECK
+
+
+def _read_update_check_cache(path: Path) -> dict | None:
+    """Parse the check cache, or ``None`` when missing/unreadable/corrupt."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_update_check_cache(path: Path, payload: dict) -> None:
+    """Persist the check cache atomically; best-effort (never raises)."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:  # pragma: no cover - read-only HOME etc.
+        pass
+
+
+def startup_check_due(path: Path, now: float | None = None) -> bool:
+    """Whether a PyPI check is due (E5).
+
+    Due when the cache is missing/corrupt, older than
+    :data:`UPDATE_CHECK_INTERVAL`, or the last attempt did not succeed
+    (no ``ok`` marker) — the interval is deliberately reset by failures
+    so an offline user is retried on the next start without hammering
+    PyPI. A successful "no update available" is *not* a failure: it
+    sleeps for the full interval.
+    """
+    cache = _read_update_check_cache(path)
+    if cache is None:
+        return True
+    last = cache.get("checked_at")
+    if not isinstance(last, (int, float)):
+        return True
+    if (now if now is not None else time.time()) - last >= UPDATE_CHECK_INTERVAL:
+        return True
+    return not cache.get("ok")
+
+
+def update_hint(latest_version: str) -> str:
+    """The one-line, dim, non-blocking banner text for a newer release."""
+    return f"⬆ v{latest_version} available — /update"
+
+
+async def check_for_startup_update(
+    path: Path | None = None,
+    timeout: float = STARTUP_CHECK_TIMEOUT,
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Non-blocking PyPI check for the startup banner (E5).
+
+    Returns the latest version only when it is strictly newer than the
+    running one — the front end renders :func:`update_hint` for it in a
+    dim header/prompt slot (never blocks paint). Any failure (offline,
+    bad payload) degrades to ``None``: no banner, no message, no retry
+    loop. The cache records whether the attempt *succeeded* (``ok``):
+    a failed check is retried on the next start, while a successful one
+    — including "no update available" — waits out the full interval.
+    """
+    if path is None:
+        path = _update_check_path()
+    if not startup_check_due(path, now):
+        return None
+    latest = await get_latest_version(timeout=timeout)
+    current = get_current_version()
+    newer = latest is not None and is_update_available(current, latest)
+    _write_update_check_cache(
+        path,
+        {
+            "checked_at": time.time(),
+            "ok": latest is not None,  # PyPI answered → full 24 h sleep
+            "latest_version": latest if newer else None,
+        },
+    )
+    return latest if newer else None
 
 
 # ── Install-mode detection ────────────────────────────────────────────────────

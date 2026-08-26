@@ -48,7 +48,13 @@ from phoson_llm.schemas import REASONING_EFFORTS
 from .keys import build_key_bindings
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
-from ..theme import load_theme, build_prompt_style, build_picker_style_dict
+from ..theme import (
+    VALID_NAMES,
+    Theme,
+    load_theme,
+    build_prompt_style,
+    build_picker_style_dict,
+)
 from .render import BlockAnsiCache, render_chat
 from .._views import render_banner
 from ..config import PhosonConfig, save_config, enabled_providers_from_config
@@ -151,15 +157,14 @@ class PhosonApp:
         )
         self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
 
-        self.sink.blocks.append(
-            render_banner(
-                provider=self.repl.config.provider,
-                model=self.repl.current_model,
-                session_id=self.repl.tree.session_id,
-                theme=self.theme,
-                show_meta=False,  # shown in the header instead — not twice
-            )
+        self._banner_block = render_banner(
+            provider=self.repl.config.provider,
+            model=self.repl.current_model,
+            session_id=self.repl.tree.session_id,
+            theme=self.theme,
+            show_meta=False,  # shown in the header instead — not twice
         )
+        self.sink.blocks.append(self._banner_block)
 
     # ── Layout ───────────────────────────────────────────────────────────
 
@@ -214,6 +219,8 @@ class PhosonApp:
                         ("/provider ",),
                         lambda: enabled_providers_from_config(self.repl.config),
                     ),
+                    # /theme <tier> — the four tiers are a fixed set (E4).
+                    StaticArgCompleter(("/theme ",), list(VALID_NAMES)),
                     SessionsArgCompleter(self.session_cache),
                     ResumeArgCompleter(self.session_cache),
                     # @file mentions in free text (E3) — completes repo
@@ -289,6 +296,35 @@ class PhosonApp:
                 "frame.label": f"bold {self.theme.pt_accent}",
             }
         )
+
+    def apply_theme(self, theme: Theme) -> None:
+        """Switch the active theme at runtime (IMPROVEMENTS.md E4).
+
+        Extends the classic :meth:`PhosonRepl.apply_theme` with the
+        full-screen shell's own theme consumers: the prompt_toolkit
+        style dict (chat pane, header, composer, float frames) and the
+        sink (all transcript renderables read ``sink.theme`` at build
+        time — existing blocks stay as they were rendered, new ones use
+        the new palette). The banner block is re-rendered in place and
+        the ANSI cache is dropped so the chat pane repaints cleanly.
+        """
+        self.theme = theme
+        self.repl.apply_theme(theme)
+        self.sink.theme = theme
+        if self._banner_block is not None:
+            index = self.sink.blocks.index(self._banner_block)
+            self._banner_block = render_banner(
+                provider=self.repl.config.provider,
+                model=self.repl.current_model,
+                session_id=self.repl.tree.session_id,
+                theme=self.theme,
+                show_meta=False,
+            )
+            self.sink.blocks[index] = self._banner_block
+        self._apply_style()
+        self._block_ansi_cache.clear(0)
+        self.sink.dirty = True
+        self.app.invalidate()
 
     # ── Scroll (ported from the reference prototype) ────────────────────
 
@@ -386,6 +422,12 @@ class PhosonApp:
         attachments = len(repl.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
         memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
+        # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
+        # very end of the header, shown as soon as the background PyPI
+        # check lands and never blocking the paint. The shared REPL is
+        # the single source of truth for the check result in both
+        # front ends (the TUI starts it in ``run_async``).
+        update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
 
         return HTML(
@@ -399,6 +441,7 @@ class PhosonApp:
             f'<style class="header_dim">{attach_part}{memory_part}</style>'
             '<style class="header_dim"> | </style>'
             f'<style class="header_dim">{status}</style>'
+            f'<style class="header_dim">{update_part}</style>'
         )
 
     def _has_agents_md(self) -> bool:
@@ -796,6 +839,11 @@ class PhosonApp:
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
         asyncio.create_task(self.session_cache.refresh(self.repl.storage))
+        # Startup PyPI update check (IMPROVEMENTS.md E5): background, at
+        # most one round trip per day, never blocks first paint. The hint
+        # lands in the header as soon as the check settles; on_settle
+        # invalidates so even a fully idle screen repaints it.
+        self.repl.start_update_check(on_settle=self.app.invalidate)
         # While the full-screen TUI is up, any library/app logger without
         # configured handlers would hit logging's "last resort" handler
         # and print raw warnings over the rendered UI (seen with sub-agent

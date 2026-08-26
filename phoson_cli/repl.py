@@ -23,6 +23,7 @@ import asyncio
 import logging
 from typing import Any
 from pathlib import Path
+from collections.abc import Callable, Coroutine
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -102,6 +103,11 @@ class PhosonRepl:
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
         self._expanded_reasoning: set[str] = set()
+        # Startup update-check result (IMPROVEMENTS.md E5): the dim
+        # "⬆ v0.8.1 available — /update" hint rendered in the prompt line,
+        # or None when up to date / offline / not due yet.
+        self.update_hint: str | None = None
+        self._update_check_task: asyncio.Task | None = None
 
         # The session runtime — engine, tree, metrics, run lifecycle —
         # lives in the UI-independent controller; this REPL is its
@@ -296,6 +302,23 @@ class PhosonRepl:
         """Switch provider (models.json ``default_model`` honored)."""
         await self._controller.set_provider(provider)
 
+    def apply_theme(self, theme: Theme) -> None:
+        """Switch the active theme at runtime (IMPROVEMENTS.md E4).
+
+        Re-points every theme consumer owned by this front end: this
+        front end's ``theme`` attribute, the shared renderer, and its
+        subagent spinner (the only component that captured its own
+        copy). Rich renderables are built with the theme's tokens, so the
+        next render picks the new palette up automatically — and the
+        no-color tier's empty tokens yield plain output without any
+        console-level fiddling. The full-screen shell wraps this with
+        its own repaint path (``PhosonApp.apply_theme``) because it owns
+        additional style consumers (prompt_toolkit styles, header, sink).
+        """
+        self.theme = theme
+        self.renderer.theme = theme
+        self.renderer._subagent_spinner._theme = theme
+
     async def set_model(self, model: str) -> None:
         """Switch model and rebuild the engine."""
         await self._controller.set_model(model)
@@ -314,7 +337,53 @@ class PhosonRepl:
 
     async def shutdown(self) -> None:
         """Release chat client and plugins (called on exit)."""
+        task = self._update_check_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         await self._controller.shutdown()
+
+    # ── Startup update check (IMPROVEMENTS.md E5) ─────────────────────────
+
+    def start_update_check(self, on_settle: Callable[[], None] | None = None) -> None:
+        """Kick off the non-blocking startup PyPI check (E5).
+
+        The check runs as a plain background task on the running loop: it
+        must not delay the first paint, input, or a run, and it may still
+        be in flight when the session exits (``shutdown`` cancels it).
+        The check itself enforces the once-per-day cadence (and retries
+        after a failed attempt) — the front end only renders the hint.
+        ``on_settle`` (optional) is invoked once the hint is known, so a
+        front end that repaints on demand (full-screen) can refresh the
+        header the moment the check lands.
+        """
+        from .updater import check_for_startup_update
+
+        self._update_check_task = asyncio.get_running_loop().create_task(
+            self._store_update_check(check_for_startup_update(), on_settle)
+        )
+
+    async def _store_update_check(
+        self,
+        check: Coroutine[Any, Any, str | None],
+        on_settle: Callable[[], None] | None = None,
+    ) -> None:
+        """Await the check and store its result; failure means no hint."""
+        from .updater import update_hint
+
+        try:
+            latest = await check
+        except Exception:  # noqa: BLE001
+            latest = None
+        self.update_hint = update_hint(latest) if latest else None
+        if on_settle is not None:
+            try:
+                on_settle()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
@@ -341,6 +410,14 @@ class PhosonRepl:
         history_path = self._history_path()
         history_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Startup PyPI update check (IMPROVEMENTS.md E5): a background
+        # task that never blocks the first prompt or any key press. It
+        # re-queries at most once per day (cache in
+        # ``~/.phoson/last_update_check``) and, when a newer release
+        # exists, sets ``self.update_hint`` which the prompt line renders
+        # dimly ("⬆ v0.8.1 available — /update").
+        self.start_update_check()
+
         key_bindings = KeyBindings()
 
         @key_bindings.add("c-t")
@@ -363,7 +440,13 @@ class PhosonRepl:
         while True:
             try:
                 prompt_fragments = self._prompt_fragments()
-                user_input = await session.prompt_async(FormattedText(prompt_fragments))
+                # Per-pass style (E4): a /theme switch mid-session must
+                # re-color the prompt on the next pass without rebuilding
+                # the session — prompt_async accepts a style override.
+                user_input = await session.prompt_async(
+                    FormattedText(prompt_fragments),
+                    style=Style.from_dict(build_prompt_style(self.theme)),
+                )
             except KeyboardInterrupt:
                 if self._controller.is_running:
                     self._controller.cancel_current()
@@ -452,6 +535,12 @@ class PhosonRepl:
         # Token context indicator
         token_part = self._token_indicator()
 
+        # Update-available hint (IMPROVEMENTS.md E5) — a dim, single-line
+        # "⬆ v0.8.1 available — /update" slot appended to the prompt. It
+        # appears as soon as the background PyPI check lands and never
+        # blocks the prompt or the paint.
+        update_part = f"·{self.update_hint}" if self.update_hint else ""
+
         return [
             ("class:prompt.prefix", "phoson"),
             ("class:prompt.bracket", " ["),
@@ -463,6 +552,7 @@ class PhosonRepl:
             ("class:prompt.tokens", token_part),
             ("class:prompt.bracket", "]"),
             ("class:prompt.arrow", " › "),
+            ("class:prompt.update", update_part),
             ("", ""),
         ]
 

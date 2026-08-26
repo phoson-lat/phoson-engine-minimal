@@ -20,6 +20,7 @@ from phoson_cli.config import (
     PhosonConfig,
     build_chat,
     load_config,
+    save_config,
     has_configured_provider,
 )
 from phoson_cli.updater import get_current_version, perform_self_update
@@ -189,6 +190,51 @@ def _should_use_classic(options: CliOptions) -> bool:
     return sys.stdin.isatty() and os.environ.get("TERM", "") in {"", "dumb"}
 
 
+def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> None:
+    """First-run light/dark theme suggestion (IMPROVEMENTS.md E4).
+
+    Only when the user has never set a theme (no ``PHOSON_THEME`` env, no
+    ``theme`` in config.toml) and no ``--theme`` flag was passed for this
+    run. Detection is a bounded ~150 ms OSC 11 probe after the
+    COLORFGBG check; any terminal that cannot be classified simply skips
+    the question. The answer is persisted, so this fires at most once.
+    Runs before the front end is built, so the new theme applies
+    immediately (banner included).
+    """
+    if options.theme is not None:
+        return
+    from phoson_cli.theme import suggest_theme
+    from phoson_cli.config import has_persisted_theme
+    from phoson_cli.terminal_theme import detect_terminal_theme
+
+    if has_persisted_theme():
+        return
+    suggested = suggest_theme(
+        detected_light=detect_terminal_theme(),
+        has_persisted=False,
+    )
+    if suggested is None:
+        return
+    print(
+        f"\nYour terminal looks like a {suggested} background.",
+        file=sys.stderr,
+    )
+    try:
+        answer = (
+            input("Save the " + suggested + " theme as your default? [Y/n] ")
+            .strip()
+            .lower()
+        )
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return
+    if answer in {"n", "no"}:
+        return
+    config.theme = suggested
+    save_config(config, only_fields={"theme"})
+    print(f"Theme saved → {suggested}", file=sys.stderr)
+
+
 def self_update() -> None:
     """Upgrade phoson-cli to the latest version (with confirmation)."""
     summary = asyncio.run(perform_self_update(assume_yes=False))
@@ -348,6 +394,10 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # First-run theme suggestion (E4) — before either front end is built,
+    # so a confirmed theme colors the banner on this very startup.
+    _maybe_offer_theme_suggestion(config, options)
 
     if _should_use_classic(options):
         if not options.classic:

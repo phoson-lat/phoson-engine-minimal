@@ -16,6 +16,7 @@ To add a new command:
 That's it; the dispatch table picks it up automatically.
 """
 
+import os
 import re
 import inspect
 from typing import TYPE_CHECKING, Any, Final
@@ -34,12 +35,17 @@ from prompt_toolkit.completion import (
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
+from .theme import VALID_NAMES, get_theme
 from .config import save_config, enabled_providers_from_config
 from .updater import perform_self_update
 from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
 from .attachments import provider_compat_warning
 from .command_host import CommandHost, HelpEntries, RendererCommandHost
 from .model_picker import pick_model  # noqa: F401 - patched by tests / host
+from .theme_picker import (  # noqa: F401 - patched by tests / host
+    ThemePickerResult,
+    pick_theme,
+)
 from ._mcp_commands import _MCPSubcommands
 from .file_mentions import format_file_size, iter_candidate_paths
 from .model_selector import list_available_models
@@ -91,6 +97,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         (
             "/label",
             "/title",
+            "/theme",
             "/attach",
             "/permissions",
             "/mcp",
@@ -182,6 +189,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
     CommandSpec(
         ("/title",), "Set a human-readable title for this session", "_cmd_title"
+    ),
+    CommandSpec(
+        ("/theme",),
+        "Show, pick or set the color theme: dark, light, ansi, no-color",
+        "_cmd_theme",
     ),
     CommandSpec(
         ("/undo",),
@@ -610,6 +622,47 @@ class CommandHandler:
             if str(m.id) == str(self.repl.tree.session_id):
                 return m.title
         return None
+
+    async def _cmd_theme(self, cmd: Command) -> bool:
+        """Show, pick, or set the color theme (IMPROVEMENTS.md E4)."""
+        r = self._r
+        current = self.repl.theme.name
+
+        arg = cmd.args.strip().lower()
+        if not arg:
+            # Zero-cost hint for the picker's "detected" marker: only the
+            # COLORFGBG env (no tty IO — an OSC 11 probe here would race
+            # the app's own input reader for keystrokes).
+            from .terminal_theme import parse_colorfgbg
+
+            detected = parse_colorfgbg(os.environ.get("COLORFGBG"))
+            result: ThemePickerResult = await self.host.pick_theme(
+                current,
+                detected_theme=(
+                    "light" if detected else ("dark" if detected is False else None)
+                ),
+            )
+            if result.cancelled or not result.theme_name:
+                r.print_info("Cancelled.")
+                return True
+            arg = result.theme_name
+        elif arg == "list":
+            r.print_info("Available themes:")
+            for name in VALID_NAMES:
+                marker = "*" if name == current else " "
+                r.print_info(f" {marker} {name}")
+            return True
+
+        theme = get_theme(arg)
+        if theme is None:
+            r.print_error(f"Unknown theme: {arg!r}  ·  use {', '.join(VALID_NAMES)}")
+            return True
+
+        self.repl.config.theme = theme.name
+        save_config(self.repl.config, only_fields={"theme"})
+        self.host.apply_theme(theme)
+        r.print_info(f"Theme → {theme.name}  ·  saved")
+        return True
 
     async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002
         ok, info = self.repl.undo_last_turn()

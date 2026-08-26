@@ -6,6 +6,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.12.5 (2026-08-26)
+
+### Feat
+
+- **cli**: non-blocking startup update check (IMPROVEMENTS.md E5).
+  The CLI now checks PyPI in the background at startup — at most one
+  round trip per day — and, when a newer release exists, shows a dim
+  one-line hint in the UI: `⬆ v0.8.1 available — /update`. It never
+  blocks first paint, input, or a run.
+  - *Core.* `phoson_cli.updater` gains `check_for_startup_update()` +
+    `startup_check_due()` + `update_hint()`: a JSON cache at
+    `~/.phoson/last_update_check` (`PHOSON_HOME` overridable) holding
+    `{checked_at, ok, latest_version}`. The check is due when the cache
+    is missing/corrupt, older than 24 h, **or the last attempt did not
+    succeed** (`ok` false) — failures reset the interval so an offline
+    user is retried on the next start instead of waiting a full day,
+    while a successful check — including "no update available" —
+    sleeps for the whole interval. The fetch reuses `get_latest_version`
+    (10 s timeout) and `is_update_available` (so a `dev` source checkout
+    still gets the accurate hint); the cache write is atomic (tmp +
+    `os.replace`) and best-effort (a read-only home just means no cache).
+    Any failure degrades to "no hint": no banner, no message, no retry
+    loop.
+  - *Classic REPL.* `PhosonRepl.start_update_check()` launches the
+    check as a background task from `run()`; the result lands in
+    `self.update_hint` and the prompt line renders it as its own dim
+    `class:prompt.update` fragment after the arrow:
+    `phoson [model·node·12.4k/128.0k] › ⬆ v0.8.1 available — /update`.
+    `shutdown()` cancels the task if it is still in flight on exit.
+  - *Full-screen TUI.* `PhosonApp.run_async()` starts the same check on
+    the shared REPL (single source of truth for both front ends) with
+    `on_settle=self.app.invalidate`, so the compact header repaints the
+    moment the check lands — even on a fully idle screen. The hint
+    renders as a dim `header_dim` segment at the very end of the header
+    line; the lower line stays keyboard hints only.
+  - *Themes.* `prompt.update` reuses the dim `prompt_tokens` style — no
+    new color token, visible but unobtrusive in all four tiers
+    (blanked under `no-color` like every other prompt style).
+  - Docs: README "Startup update check" note; IMPROVEMENTS.md E5 marked
+    done (v0.12.5); version bumped.
+
+  Tests: `tests/phoson_cli/test_e5_update_check_unit.py` (30 new) —
+  cache path (default + `PHOSON_HOME`), cadence gating (missing,
+  corrupt, wrong shape, no `checked_at`, stale, exact boundary, recent
+  failure → retry, recent success → 24 h), hint text, full check flow
+  (cache written with the version, no-newer → null, dev install,
+  offline → retry next start, not due → zero fetch, 10 s timeout,
+  non-raising write on a read-only home), classic wiring (prompt
+  fragment with/without hint and fragment order, `start_update_check` →
+  hint, failure → None, `on_settle` callback, cancel on shutdown), TUI
+  wiring (header with/without hint, `run_async` starts the check,
+  offline → no hint), and `prompt.update` in `build_prompt_style`.
+  Suite now 1254 passing, pyright 0 errors, ruff clean.
+
+## v0.12.4 (2026-08-25)
+
+### Feat
+
+- **cli**: interactive themes and light/dark auto-detection
+  (IMPROVEMENTS.md E4). Two independent pieces: a UI-independent
+  terminal-detection layer and a shared live-preview theme picker.
+  - *Detection.* New UI-independent `phoson_cli.terminal_theme`:
+    `detect_terminal_theme()` → `True` (light) / `False` (dark) /
+    `None` (unclassifiable). Order: `COLORFGBG` env (16-color
+    `fg;bg` indexes or tmux-style `light`/`dark` words), then an
+    **OSC 11** query (`\x1b]11;?\x07`) answered with an sRGB color by
+    most modern terminals (iTerm2, kitty, WezTerm, Alacritty,
+    ghostty, VS Code, …). The probe is best-effort and never raises:
+    raw mode only for its duration (canonical mode would line-buffer
+    the newline-less reply), a ~150 ms timeout, and optional
+    `termios`/`tty` (non-POSIX → `None`). Classification by WCAG
+    relative luminance with a 0.5 threshold. IO is injectable
+    (`tty_fd`/`write`/`read`) for TTY-free tests.
+  - *First-run suggestion.* `theme.suggest_theme` +
+    `__main__._maybe_offer_theme_suggestion`: only when the user has
+    never set a theme (no `PHOSON_THEME`, no `theme` in config.toml —
+    `config.has_persisted_theme`) and no `--theme` flag was passed for
+    this run. When detection resolves it asks one line `[Y/n]` and
+    persists via `save_config(only_fields={"theme"})`; when the
+    terminal can't be classified (or no-color is forced) it simply
+    doesn't ask. Runs **before** the front end is built, so a
+    confirmed theme colors the banner on this very startup. Fires at
+    most once (the answer is persisted).
+  - *Picker.* `phoson_cli/theme_picker.py`: a
+    `BasePicker[ThemePickerResult]` structurally identical to the
+    model/provider/session pickers. One row per tier
+    (`dark`/`light`/`ansi`/`no-color`) plus a **live preview** of the
+    selected tier — the banner (art + wordmark) and a swatch strip of
+    the named tokens, both rendered in the *previewed* tier's own
+    colors (Rich → ANSI → `to_formatted_text`) so it is WYSIWYG even
+    though the frame chrome keeps the active theme's palette. Marks
+    `(current)` and `(detected)` rows. `build_theme_picker` +
+    `pick_theme`.
+  - *Wiring.* `CommandHandler._cmd_theme` (new `/theme` spec in
+    `COMMAND_SPECS` + `HELP_CATEGORIES`) opens the picker via
+    `host.pick_theme` (or `list` / an explicit tier), resolves with
+    `theme.get_theme` (direct lookup — env overrides deliberately
+    ignored so `/theme ansi` works even under `NO_COLOR`), persists
+    and calls `host.apply_theme`. The `CommandHost` protocol gains
+    `pick_theme` + `apply_theme`; both hosts implement them
+    (`RendererCommandHost` and `FullScreenCommandHost`, the latter
+    hosting the picker as a Float).
+  - *Apply at runtime* (no restart): `PhosonRepl.apply_theme`
+    re-points `self.theme`, `renderer.theme` and the subagent
+    spinner; the classic prompt re-applies `build_prompt_style` on
+    every `prompt_async` pass. `PhosonApp.apply_theme` extends that
+    with the TUI's own consumers: `sink.theme`, the banner
+    re-rendered in place, `_apply_style` (the prompt_toolkit style
+    dict — chat pane, header, composer, float frames) and a
+    `BlockAnsiCache` reset so the chat pane repaints cleanly.
+    `StaticArgCompleter("/theme ", …)` autocompletes the four tiers.
+
+### Test
+
+- **cli**: 86 new tests in
+  `tests/phoson_cli/test_e4_themes_unit.py` — `COLORFGBG` parsing
+  (16-color indexes, tmux words, garbage), OSC 11 response parsing
+  (rgb/#hex/decimal, BEL/ST terminators, interleaved escape noise,
+  negatives), `query_terminal_bg_light` (injected IO, non-TTY,
+  OSError, no response, nonexistent-fd regression),
+  `detect_terminal_theme` layering,
+  `suggest_theme`, `get_theme`, `has_persisted_theme`, the picker
+  (initial row, detected marker, navigation, Enter/Esc, wrap at the
+  ends, preview of the right tier, escapes parsed — no raw SGR in
+  fragments, no-color plain, Float plumbing), the `/theme` command
+  (picker, cancel, explicit arg, unknown name, list),
+  `PhosonRepl.apply_theme`, `PhosonApp.apply_theme`,
+  `FullScreenCommandHost.pick_theme`, the first-run suggestion
+  (flag given, already persisted, unknown terminal, accept/decline,
+  EOF), the setup wizard's theme question (detection-driven default,
+  empty → default, unknown → fallback), and E2E through `PhosonApp`
+  (explicit arg re-colors app + persists + re-renders banner,
+  picker confirm re-colors, picker cancel changes nothing). Suite
+  now 1224 passing, pyright 0 errors, ruff clean.
+
 ## v0.12.3 (2026-08-25)
 
 ### Feat
