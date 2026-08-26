@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.3 · 1138 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3.
+> **Estado de referencia:** v0.12.4 · 1223 tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4.
 
 ---
 
@@ -32,7 +32,7 @@
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ v0.12.1 (PR #87) |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ v0.12.2 (PR #90) |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | ✅ v0.12.3 |
-| [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
+| [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | ✅ v0.12.4 |
 | [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | Backlog |
 | [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | Backlog |
 | [G1](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Double-Esc para retroceder a un mensaje anterior (rewind) | **P1** | M | 🟠 Medio | [#51](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Sprint 2–3 |
@@ -456,10 +456,20 @@ Patrón estándar (Cursor, Amp, Claude Code @-mentions): escribir `@src/` despli
 ---
 
 ### E4 — Themes interactivos y auto-detección light/dark
-**Esfuerzo:** S · **Impacto:** 🟢
+**Esfuerzo:** S · **Impacto:** 🟢 · **Estado:** ✅ **Hecho en v0.12.4**
 
 - Auto-detección: consultar `COLORFGBG` / query OSC 11 al terminal para sugerir light vs dark la primera vez (confirmar y persistir). Muchos terminales modernos lo reportan.
 - `/theme` picker con preview en vivo del banner y una muestra de cada token (aprovechar BasePicker).
+
+**Implementado.** Dos piezas independientes: una capa de detección UI-independent y un picker compartido reutilizable por los dos front ends.
+
+- **Detección** (`phoson_cli/terminal_theme.py`, nuevo): `detect_terminal_theme()` → `True` (light) / `False` (dark) / `None` (no clasificable). Orden: env `COLORFGBG` (forma `fg;bg` con índices 16-color o palabras `light`/`dark` de tmux) y, si no hay, una query **OSC 11** al terminal (`\x1b]11;?\x07`, respuesta con color sRGB). El probe es best-effort y nunca lanza: pone el TTY en raw mode solo durante el probe (canonical mode se tragaría la respuesta, que no lleva newline), timeout ~150 ms, y `termios`/`tty` opcionales (no POSIX → `None`). Clasificación por luminancia relativa WCAG con umbral 0.5. IO inyectable (`tty_fd`/`write`/`read`) para tests sin TTY.
+- **Sugerencia** (`theme.suggest_theme` + `__main__._maybe_offer_theme_suggestion`): solo si el usuario nunca fijó theme (ni `PHOSON_THEME` ni `theme` en config.toml, vía `config.has_persisted_theme`) y no pasó `--theme` este run. Si la detección resuelve, pregunta una línea `[Y/n]` y persiste con `save_config(only_fields={"theme"})`; si no resuelve (`None`) o no-color está activo, no pregunta. Corre **antes** de construir el front end, así el theme confirmado ya tiñe el banner del arranque. Dispara a lo sumo una vez (queda persistido).
+- **Picker** (`phoson_cli/theme_picker.py`, nuevo): `BasePicker[ThemePickerResult]` idéntico en estructura a model/provider/session. Una fila por tier (`dark`/`light`/`ansi`/`no-color`) + **preview en vivo** del tier seleccionado: el banner (art + wordmark) y una tira de swatches de cada token, ambos renderizados con *los colores del tier en preview* (Rich → ANSI → `to_formatted_text`) para que sea WYSIWYG aunque el chrome del frame conserve la paleta del theme activo. Marca `(current)` y `(detected)`. `build_theme_picker` + `pick_theme`.
+- **Wiring**: `CommandHandler._cmd_theme` (spec `/theme` en `COMMAND_SPECS` + `HELP_CATEGORIES`) abre el picker vía `host.pick_theme` (o `list` / arg directo), resuelve con `theme.get_theme` (lookup directo, ignora overrides de env), persiste y llama `host.apply_theme`. Protocolo `CommandHost` gana `pick_theme` + `apply_theme`.
+- **Aplicar en vivo** (sin reiniciar): `PhosonRepl.apply_theme` re- apunta `self.theme`, `renderer.theme` y el subagent spinner; el prompt clásico re-aplica `build_prompt_style` cada pase. `PhosonApp.apply_theme` extiende eso con los consumidores propios del TUI: `sink.theme`, re-render del banner in-place, `_apply_style` (style dict prompt_toolkit: chat pane, header, composer, float frames) y limpia el `BlockAnsiCache` para repintar el pane. `StaticArgCompleter("/theme ", …)` da autocomplete de los 4 tiers.
+
+**Criterio de listo.** Tests en `tests/phoson_cli/test_e4_themes_unit.py` (85): parseo `COLORFGBG` (índices 16-color, tmux light/dark, garbage), parseo respuesta OSC 11 (rgb/#hex/decimal, terminador BEL/ST, ruido alrededor, negativas), `query_terminal_bg_light` (IO inyectado, no-TTY, OSError, sin respuesta), `detect_terminal_theme` (capas), `suggest_theme`, `get_theme`, `has_persisted_theme`, el picker (fila initial, `detected`, navegación, Enter/Esc, wrap, preview del tier correcto, escapes parseados, no-color, float plumbing), `/theme` (picker, cancel, arg explícito, unknown, list), `PhosonRepl.apply_theme`, `PhosonApp.apply_theme`, `FullScreenCommandHost.pick_theme`, first-run suggestion (flag, persistido, unknown terminal, accept/decline/EOF), wizard theme prompt (detección, default, fallback) y E2E a través de `PhosonApp` (arg explícito, picker confirm, picker cancel). Suite ahora 1223 passing, pyright 0 errors, ruff clean.
 
 ---
 
@@ -503,7 +513,8 @@ Continuo / paralelo
 ├── E1 context management avanzado  ✅ v0.12.1 (PR #87)
 ├── E2 subagent panel métricas en vivo  ✅ v0.12.2 (PR #90)
 ├── E3 autocomplete de rutas + @file mentions  ✅ v0.12.3
-└── E4-E6 según demanda real de usuarios
+├── E4 themes interactivos + auto-detección light/dark  ✅ v0.12.4
+└── E5-E6 según demanda real de usuarios
 ```
 
 ## Principios para decidir durante la ejecución

@@ -296,6 +296,23 @@ class PhosonRepl:
         """Switch provider (models.json ``default_model`` honored)."""
         await self._controller.set_provider(provider)
 
+    def apply_theme(self, theme: Theme) -> None:
+        """Switch the active theme at runtime (IMPROVEMENTS.md E4).
+
+        Re-points every theme consumer owned by this front end: this
+        front end's ``theme`` attribute, the shared renderer, and its
+        subagent spinner (the only component that captured its own
+        copy). Rich renderables are built with the theme's tokens, so the
+        next render picks the new palette up automatically — and the
+        no-color tier's empty tokens yield plain output without any
+        console-level fiddling. The full-screen shell wraps this with
+        its own repaint path (``PhosonApp.apply_theme``) because it owns
+        additional style consumers (prompt_toolkit styles, header, sink).
+        """
+        self.theme = theme
+        self.renderer.theme = theme
+        self.renderer._subagent_spinner._theme = theme
+
     async def set_model(self, model: str) -> None:
         """Switch model and rebuild the engine."""
         await self._controller.set_model(model)
@@ -363,7 +380,13 @@ class PhosonRepl:
         while True:
             try:
                 prompt_fragments = self._prompt_fragments()
-                user_input = await session.prompt_async(FormattedText(prompt_fragments))
+                # Per-pass style (E4): a /theme switch mid-session must
+                # re-color the prompt on the next pass without rebuilding
+                # the session — prompt_async accepts a style override.
+                user_input = await session.prompt_async(
+                    FormattedText(prompt_fragments),
+                    style=Style.from_dict(build_prompt_style(self.theme)),
+                )
             except KeyboardInterrupt:
                 if self._controller.is_running:
                     self._controller.cancel_current()

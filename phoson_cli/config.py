@@ -236,6 +236,24 @@ def _resolve_float(
         return default
 
 
+def has_persisted_theme(config_path: Path | None = None) -> bool:
+    """True when the user explicitly set a theme (IMPROVEMENTS.md E4).
+
+    Checks the ``PHOSON_THEME`` env var and the ``theme`` key in the
+    config file's ``[defaults]`` section. The built-in default (``dark``)
+    does not count — first-run users get no config.toml at all, which is
+    exactly when the light/dark suggestion should fire.
+    """
+    if os.environ.get("PHOSON_THEME", "").strip():
+        return True
+    path = config_path or Path("~/.phoson/config.toml").expanduser()
+    try:
+        fd = _load_file_defaults(path)
+    except PhosonConfigError:
+        return False
+    return bool(str(fd.get("theme", "")).strip())
+
+
 def load_config() -> PhosonConfig:
     """Load configuration from files and environment variables.
 

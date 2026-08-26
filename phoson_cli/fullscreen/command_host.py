@@ -21,9 +21,11 @@ from typing import TYPE_CHECKING, cast
 
 from phoson_agent.sessions.models import SessionMeta
 
+from ..theme import Theme
 from ..models import ModelOption
 from ..command_host import HelpEntry, HelpEntries, is_grouped_help
 from ..model_picker import ModelPickerResult
+from ..theme_picker import ThemePickerResult, build_theme_picker
 from ..session_picker import SessionPickerResult, build_session_picker
 from ..provider_picker import ProviderPickerResult, build_provider_picker
 
@@ -91,6 +93,20 @@ class FullScreenCommandHost:
         )
         return await self.app.run_float_picker(picker)
 
+    async def pick_theme(
+        self,
+        current_theme: str,
+        *,
+        detected_theme: str | None = None,
+    ) -> ThemePickerResult:
+        """Host the theme picker as a modal Float (E4)."""
+        picker = build_theme_picker(
+            current_theme,
+            theme=self.app.theme,
+            detected_name=detected_theme,
+        )
+        return await self.app.run_float_picker(picker)
+
     async def pick_session(
         self, sessions: list[SessionMeta], current_id: str
     ) -> SessionPickerResult:
@@ -124,6 +140,10 @@ class FullScreenCommandHost:
 
     async def confirm(self, prompt: str) -> bool:
         return await self.app.run_float_confirm(prompt)
+
+    def apply_theme(self, theme: Theme) -> None:
+        """Full-screen front end: re-color the whole application (E4)."""
+        self.app.apply_theme(theme)
 
     async def run_setup(self) -> None:
         self.print_info(

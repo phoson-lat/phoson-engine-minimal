@@ -306,6 +306,44 @@ def load_theme(config_value: str | None = None) -> Theme:
     return theme
 
 
+def get_theme(name: str) -> Theme | None:
+    """Look up a tier by name (case-insensitive, no env overrides).
+
+    Unlike :func:`load_theme`, this is a *direct* lookup: the
+    NO_COLOR/PHOSON_THEME environment is deliberately ignored, so
+    ``/theme ansi`` yields the ANSI tier even when the environment would
+    otherwise force plain output. Returns ``None`` for unknown names.
+    """
+    return _BY_NAME.get(str(name).strip().lower())
+
+
+def suggest_theme(
+    *,
+    detected_light: bool | None,
+    has_persisted: bool,
+    env_requests_no_color: bool | None = None,
+) -> str | None:
+    """Decide whether to suggest a theme at startup (IMPROVEMENTS.md E4).
+
+    Returns the suggested tier name (``"light"``/``"dark"``) when the CLI
+    should ask the user, or ``None`` to start silently.
+
+    Args:
+        detected_light: Terminal light/dark detection result; ``None``
+            means the terminal could not be classified.
+        has_persisted: Whether a theme is already persisted (config.toml
+            or the ``PHOSON_THEME`` env var) — nothing to suggest then.
+        env_requests_no_color: The NO_COLOR/CLICOLOR condition. When
+            omitted it is re-evaluated; when the environment demands
+            plain output there is nothing to suggest.
+    """
+    if env_requests_no_color is None:
+        env_requests_no_color = _env_requests_no_color()
+    if env_requests_no_color or has_persisted or detected_light is None:
+        return None
+    return "light" if detected_light else "dark"
+
+
 # ── prompt_toolkit style ──────────────────────────────────────────────────────
 
 
