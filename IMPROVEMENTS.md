@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.1 · 1073+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) en rama `feat/e2-subagent-live-metrics`.
+> **Estado de referencia:** v0.12.2 · 1096+ tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90).
 
 ---
 
@@ -30,7 +30,7 @@
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ v0.12.1 (PR #87) |
-| [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ rama `feat/e2-subagent-live-metrics` |
+| [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | ✅ v0.12.2 (PR #90) |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
 | [E5](#e5-check-de-updates-al-arrancar) | Check de updates al arrancar | **P3** | S | 🟢 Bajo | — | Backlog |
@@ -423,7 +423,7 @@ El summarizer actual (auto a 80%) era funcional pero primitivo frente al SOTA. I
 ---
 
 ### E2 — Panel de subagentes con métricas en vivo
-**Esfuerzo:** M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (rama `feat/e2-subagent-live-metrics`)
+**Esfuerzo:** M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho en v0.12.2** (PR #90)
 
 Hoy el panel en vivo muestra solo spinners ("waiting"); tiempo/tokens/costo aparecen recién en el summary final (el wire format `--- METRICS: ...` llega al terminar). Propuesta: streaming incremental del bloque METRICS (emitir línea partial cada N segundos desde el subagent) para alimentar las columnas Time/Tokens/Cost en vivo. Requiere tocar el protocolo producer-side en `tools/subagent.py` y el parser (que ya es tolerante a parciales — ventaja).
 
@@ -492,7 +492,7 @@ Continuo / paralelo
 ├── D3 Ctrl+V cross-platform
 ├── D4 tests e2e (ir acumulando con cada sprint)
 ├── E1 context management avanzado  ✅ v0.12.1 (PR #87)
-├── E2 subagent panel métricas en vivo  ✅ feat/e2-subagent-live-metrics
+├── E2 subagent panel métricas en vivo  ✅ v0.12.2 (PR #90)
 └── E3-E6 según demanda real de usuarios
 ```
 

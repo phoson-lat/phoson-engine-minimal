@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## Unreleased
+## v0.12.2 (2026-08-25)
 
 ### Feat
 
@@ -21,7 +21,7 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     the summary wire format reports (sum of step durations,
     `AgentRunResult` tokens/cost), so the live panel and the final
     summary stay consistent. Timeouts/errors/cancellation mark the row
-    failed (✗) without breaking the run.
+    failed (✗) without breaking the run (PR #90).
   - *Transport.* The tracker is pushed to the UI through a new
     `on_subagent_progress` sink callback injected via
     `AgentContext.extra`; the sub-agent tools stay UI-agnostic (no
