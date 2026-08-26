@@ -156,20 +156,38 @@ def query_terminal_bg_light(
     (no usable response — non-TTY, terminal without support, timeout).
 
     The IO is injectable (``tty_fd``/``write``/``read``) so tests can
-    drive it with in-memory bytes; by default it writes to fd 1 and
-    reads fd 0. On the default path the tty is switched to raw mode for
-    the duration of the probe (canonical mode would line-buffer the
-    reply away) and restored afterwards.
+    drive it with in-memory bytes. With an injected ``read`` the probe
+    takes a fast path (no ``select``, no termios) and just sends the
+    query and reads the answer — there is no real fd to select on. On
+    the real-TTY path (no injected IO) it writes to fd 1, reads fd 0,
+    and switches the tty to raw mode for the duration of the probe
+    (canonical mode would line-buffer the reply away), restored after.
     """
-    injected_write = write
-    injected_read = read
+    # ── Fast path: injected read (unit tests) ─────────────────────────────
+    # Tests supply a non-blocking, in-memory ``read``. There is no real
+    # fd to select on (a bare ``select.select([7])`` raises ``OSError`` on
+    # CI runners where fd 7 is closed), and no termios to fiddle with —
+    # just validate the fd is "a TTY" (mockable), send the query, read.
+    if read is not None:
+        try:
+            if tty_fd is None or not os.isatty(tty_fd):
+                return None
+        except OSError:
+            return None
+        try:
+            if write is not None:
+                write(b"\x1b]11;?\x07")
+            return parse_osc11_response(read())
+        except OSError:
+            return None
+
+    # ── Real-TTY path (production) ────────────────────────────────────────
     if tty_fd is None:
+        # Default probe reads from fd 0 (the terminal we are running on);
+        # it is only meaningful if stdout is that same terminal.
         if not os.isatty(1) or not os.isatty(0):
             return None
         tty_fd = 0
-
-    # A valid tty_fd that is not actually a TTY (closed, -1, …) just
-    # yields no response — the probe is best-effort.
     try:
         if not os.isatty(tty_fd):
             return None
@@ -190,18 +208,12 @@ def query_terminal_bg_light(
 
         read = _read_fd
 
-    # Default-IO path only: a tty in canonical (line-buffered) mode would
-    # swallow the single-line OSC 11 reply — the response contains no
-    # newline, so the read would block until something else arrives.
-    # Raw mode for the duration of the probe; injected IO (tests) skips
-    # this because it owns the fd's discipline itself.
+    # A tty in canonical (line-buffered) mode would swallow the single-line
+    # OSC 11 reply — the response contains no newline, so the read would
+    # block until something else arrives. Raw mode for the duration of the
+    # probe, restored in ``finally``.
     saved_attrs = None
-    if (
-        termios is not None
-        and _tty is not None
-        and injected_write is None
-        and injected_read is None
-    ):
+    if termios is not None and _tty is not None:
         try:
             saved_attrs = termios.tcgetattr(tty_fd)
             _tty.setraw(tty_fd)

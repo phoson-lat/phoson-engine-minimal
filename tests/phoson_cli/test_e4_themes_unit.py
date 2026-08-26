@@ -151,6 +151,19 @@ def test_query_no_real_tty_by_default(monkeypatch) -> None:
     assert query_terminal_bg_light() is None
 
 
+def test_query_injected_read_never_touches_real_fd(monkeypatch) -> None:
+    """Regression (CI): a fake fd that does NOT exist as a real fd must
+    not break the injected fast path — no select(), no termios, no
+    ``OSError: Bad file descriptor`` leaking through."""
+    monkeypatch.setattr("phoson_cli.terminal_theme.os.isatty", lambda fd: fd == 987654)
+    assert (
+        query_terminal_bg_light(
+            tty_fd=987654, write=lambda d: None, read=lambda: b"\x1b]11;#000000\x07"
+        )
+        is False
+    )
+
+
 def test_query_oserror_is_none(_fake_tty) -> None:
     def _boom() -> bytes:
         raise OSError("hang up")

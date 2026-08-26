@@ -66,12 +66,13 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Test
 
-- **cli**: 85 new tests in
+- **cli**: 86 new tests in
   `tests/phoson_cli/test_e4_themes_unit.py` — `COLORFGBG` parsing
   (16-color indexes, tmux words, garbage), OSC 11 response parsing
   (rgb/#hex/decimal, BEL/ST terminators, interleaved escape noise,
   negatives), `query_terminal_bg_light` (injected IO, non-TTY,
-  OSError, no response), `detect_terminal_theme` layering,
+  OSError, no response, nonexistent-fd regression),
+  `detect_terminal_theme` layering,
   `suggest_theme`, `get_theme`, `has_persisted_theme`, the picker
   (initial row, detected marker, navigation, Enter/Esc, wrap at the
   ends, preview of the right tier, escapes parsed — no raw SGR in
@@ -84,7 +85,7 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   empty → default, unknown → fallback), and E2E through `PhosonApp`
   (explicit arg re-colors app + persists + re-renders banner,
   picker confirm re-colors, picker cancel changes nothing). Suite
-  now 1223 passing, pyright 0 errors, ruff clean.
+  now 1224 passing, pyright 0 errors, ruff clean.
 
 ## v0.12.3 (2026-08-25)
 
