@@ -98,6 +98,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/label",
             "/title",
             "/theme",
+            "/keys",
             "/attach",
             "/permissions",
             "/mcp",
@@ -194,6 +195,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/theme",),
         "Show, pick or set the color theme: dark, light, ansi, no-color",
         "_cmd_theme",
+    ),
+    CommandSpec(
+        ("/keys",),
+        "List the key bindings (full-screen TUI; [keys] remaps in config.toml)",
+        "_cmd_keys",
     ),
     CommandSpec(
         ("/undo",),
@@ -662,6 +668,33 @@ class CommandHandler:
         save_config(self.repl.config, only_fields={"theme"})
         self.host.apply_theme(theme)
         r.print_info(f"Theme → {theme.name}  ·  saved")
+        return True
+
+    async def _cmd_keys(self, cmd: Command) -> bool:  # noqa: ARG002
+        """List the effective key bindings (IMPROVEMENTS.md E6).
+
+        The map is TUI-specific (the classic front end has no global
+        key map beyond the prompt's own), so in the classic REPL the
+        command still shows the *TUI* map plus how to remap keys —
+        both front ends share one source of truth.
+        """
+        r = self._r
+        from .fullscreen.keys import listing_for_config
+
+        rows = listing_for_config(self.repl.config)
+        width = max(len(action) for action, _ in rows)
+        r.print_info("Key bindings (full-screen TUI):")
+        for action, keys in rows:
+            r.print_info(f"  {action:<{width}}  {keys}")
+        r.print_info("Remap from the [keys] section of ~/.phoson/config.toml:")
+        r.print_info("  [keys]")
+        r.print_info('  toggle_reasoning = "c-x"      # one sequence')
+        r.print_info('  line_up = ["s-up", "c-up"]    # list = precedence')
+        r.print_info('  submit = ""                   # unbind an action')
+        r.print_info(
+            "Restart phoson-cli (or start the TUI) to apply; an unparseable "
+            "sequence or a key bound to two actions is an error at startup."
+        )
         return True
 
     async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002

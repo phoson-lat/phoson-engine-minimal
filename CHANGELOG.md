@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.12.6 (2026-08-26)
+
+### Feat
+
+- **cli**: customizable key bindings for the full-screen TUI
+  (IMPROVEMENTS.md E6). The TUI's global key map is now built from a
+  table (`fullscreen/keys.DEFAULT_KEY_BINDINGS`) with user overrides from
+  a new `[keys]` section in `~/.phoson/config.toml`:
+
+  ```toml
+  [keys]
+  toggle_reasoning = "c-x"          # single sequence
+  line_up = ["s-up", "c-up"]        # list = precedence order
+  submit = ""                       # unbind an action
+  ```
+
+  - *Core.* `fullscreen/keys.py`: `DEFAULT_KEY_BINDINGS`
+    (`{action: [sequences]}` preserving the historical precedence),
+    `resolve_key_bindings()` (defaults + overrides merge with
+    **cross-action conflict detection** — a sequence bound to two
+    actions is an error, never a silent steal),
+    `build_key_bindings(app, overrides)` (chords like `"c-x c-e"`,
+    `escape` stays `eager`), and `listing_for_config()` (display rows
+    for `/keys`; unbound actions show `(off)`).
+  - *Config.* `PhosonConfig.key_bindings` +
+    `config.load_key_bindings()`: hard validation — unknown action,
+    wrong type, unparseable sequence (checked via prompt_toolkit's own
+    parser), or an empty list raise `PhosonKeyBindingsError` (a
+    `PhosonConfigError`); `main()` prints it and exits 1 with a friendly
+    one-line message (no traceback) in every mode. The `[keys]` section
+    is user-managed (like `permissions.json`): `save_config` never
+    writes it, so a stale managed value can never shadow a hand-edited
+    table. `KNOWN_KEY_ACTIONS` is the canonical action list; the classic
+    REPL's single Ctrl+T binding is unchanged.
+  - *Command.* `/keys` lists the effective map (defaults or remaps) in
+    both front ends plus the config syntax and validation rules
+    (category "Config & System" in `/help`).
+  - *Docs:* README "Key bindings (customizable)" + `/keys` in the
+    command list; `docs/api/phoson_cli.md` key-bindings section;
+    IMPROVEMENTS.md E6 marked done (v0.12.6); version bumped.
+
+  Tests: `tests/phoson_cli/test_e6_keybindings_unit.py` (43 new) —
+  default map shape (covers `KNOWN_KEY_ACTIONS`, identical to the
+  historical hardcoded set, all sequences parseable), merge (copy
+  without mutation, override, unbind, unknown action ignored,
+  cross-action conflicts rejected, self-remap allowed, two overrides on
+  one sequence), TUI wiring (full default map, `escape` stays eager,
+  remap moves the binding, unbind disappears, chord, conflict →
+  `PhosonKeyBindingsError` at construction, escape remap keeps eager),
+  display (PgUp/Ctrl+T/chords/`(off)`, default order), config layer
+  (no file, no section, string/list/chord, unbind, empty table →
+  defaults, unknown action, bad sequence, wrong type, non-string entry,
+  empty list, `load_config` integration, `save_config` preserves the
+  user `[keys]` section, not a managed key), `main()` friendly failure
+  (exit 1, no traceback), and `/keys` (registration, help category,
+  effective-map output, dispatchable in both front ends).
+  Suite now 1297 passing, pyright 0 errors, ruff clean.
+
 ## v0.12.5 (2026-08-26)
 
 ### Feat

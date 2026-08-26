@@ -45,7 +45,7 @@ from prompt_toolkit.key_binding.key_bindings import (
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
-from .keys import build_key_bindings
+from .keys import build_key_bindings, listing_for_config
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
 from ..theme import (
@@ -57,7 +57,11 @@ from ..theme import (
 )
 from .render import BlockAnsiCache, render_chat
 from .._views import render_banner
-from ..config import PhosonConfig, save_config, enabled_providers_from_config
+from ..config import (
+    PhosonConfig,
+    save_config,
+    enabled_providers_from_config,
+)
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import (
@@ -109,6 +113,10 @@ class PhosonApp:
 
     def __init__(self, config: PhosonConfig) -> None:
         self.theme = load_theme(getattr(config, "theme", None))
+        # Kept for _build_application (runs before self.repl exists): the
+        # [keys] remap overrides (IMPROVEMENTS.md E6) come from the same
+        # config object the shared REPL later wraps.
+        self._config = config
 
         self._chat_scroll_top = 0
         self._auto_scroll = True
@@ -271,7 +279,11 @@ class PhosonApp:
         # `DynamicKeyBindings` then layers in whichever Float is currently
         # active (`None` when idle, meaning "no extra bindings").
         base_kb = ConditionalKeyBindings(
-            build_key_bindings(self), Condition(lambda: self._active_float is None)
+            build_key_bindings(
+                self,
+                overrides=getattr(self._config, "key_bindings", None),
+            ),
+            Condition(lambda: self._active_float is None),
         )
         float_kb = DynamicKeyBindings(lambda: self._float_kb)
         return Application(
@@ -707,6 +719,15 @@ class PhosonApp:
             self.repl._expanded_reasoning.add(node_id)
             self.sink.expand_reasoning(str(reasoning))
             return
+
+    def keys_listing(self) -> list[tuple[str, str]]:
+        """The effective key map for ``/keys`` (IMPROVEMENTS.md E6).
+
+        Built from the same config object that :meth:`_build_application`
+        bound from, so what the command lists is exactly what the TUI
+        binds (remaps apply at startup — see ``/keys`` output).
+        """
+        return listing_for_config(self._config)
 
     def handle_escape(self) -> None:
         """Escape: cancel the in-flight run; do nothing when idle.

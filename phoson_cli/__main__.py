@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import (
     PhosonConfig,
+    PhosonConfigError,
+    PhosonKeyBindingsError,
     build_chat,
     load_config,
     save_config,
@@ -350,11 +352,19 @@ def main() -> None:
         return
 
     if options.setup:
-        config = load_config()
+        try:
+            config = load_config()
+        except PhosonConfigError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         asyncio.run(run_install_wizard(config))
         return
 
-    config = load_config()
+    try:
+        config = load_config()
+    except PhosonConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     _apply_overrides(config, options)
 
     # One-shot mode: phoson-cli "task" | -p "task" | piped stdin.
@@ -409,7 +419,14 @@ def main() -> None:
         asyncio.run(repl.run())
         return
 
-    app = PhosonApp(config)
+    try:
+        app = PhosonApp(config)
+    except PhosonKeyBindingsError as exc:
+        # A [keys] section that survived load-time validation but still
+        # collides (e.g. two actions remapped onto one sequence): fail
+        # with the same friendly message as every other config error.
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     asyncio.run(app.run_async())
 
 

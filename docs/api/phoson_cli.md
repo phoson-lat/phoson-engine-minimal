@@ -124,6 +124,37 @@ Four tiers, selected by `PHOSON_THEME` (env var) or `theme = "..."` in
 selection — scripts and CI get plain output. Unknown theme names warn and
 fall back to `dark`.
 
+### Key bindings (customizable, full-screen TUI)
+
+The TUI's global key map is built from
+`phoson_cli.fullscreen.keys.DEFAULT_KEY_BINDINGS` and can be remapped via
+the `[keys]` section of `~/.phoson/config.toml`:
+
+```toml
+[keys]
+toggle_reasoning = "c-x"          # single sequence
+line_up = ["s-up", "c-up"]        # list = precedence order
+submit = ""                       # unbind the action
+```
+
+Rules:
+
+- One line per **action** (the 14 defaults: `submit`, `newline`,
+  `page_up`, `page_down`, `line_up`, `line_down`, `scroll_home`,
+  `scroll_end`, `clear`, `toggle_reasoning`, `ctrl_d`, `paste_image`,
+  `escape`, `exit`).
+- Each value is a prompt_toolkit key sequence (`"c-x"`, `"f13"`,
+  `"s-up"`, …); a chord is a space-separated string (`"c-x c-e"`).
+- `""` unbinds the action; `[]` is rejected (use `""`).
+- Sequences are validated at startup by
+  `phoson_cli.config.load_key_bindings`: an unknown action, an
+  unparseable sequence, or a key bound to two actions raises
+  `PhosonKeyBindingsError` (a `PhosonConfigError`) and `main()` exits
+  with a one-line message — never a silent fallback to the defaults.
+- The section is user-managed: `save_config` never writes or removes it.
+- `/keys` prints the effective map (defaults or your remaps) and the
+  config syntax. Remaps apply on the next start.
+
 ### Model registry (`~/.phoson/models.json`)
 
 Optional user-managed file (0600, created lazily) with three sections:
@@ -189,6 +220,7 @@ Start the REPL and type natural language or commands.
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
 | `/label`          | Label current node                      |
+| `/keys`           | List key bindings and how to remap them |
 | `/undo`           | Undo the last turn (branch before your last message) |
 | `/attach`         | Attach image/audio/video/pdf           |
 | `/attachments`    | List or clear attachments              |

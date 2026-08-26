@@ -435,6 +435,7 @@ classic REPL is selected automatically with a notice on stderr.
 - `/sessions` — List saved sessions
 - `/label <text>` — Label current node
 - `/theme` — Pick or set the color theme (live preview; `list` to list)
+- `/keys` — List key bindings and how to remap them
 - `/undo` — Undo the last turn (branch from before your last message)
 - `/update` — Check for and install CLI updates
 - `/help` — Show all commands
@@ -468,6 +469,24 @@ Switching applies immediately — no restart needed.
 **Reasoning:** press `Ctrl+T` to toggle the live "thinking" view while a
 run is streaming, or to expand the full reasoning of the last turn after
 it finishes (persisted with the session, so it survives resume).
+
+**Key bindings (customizable):** the full-screen TUI's keys are
+remappable from the `[keys]` section of `~/.phoson/config.toml`
+(IMPROVEMENTS.md E6) — one line per action, each a prompt_toolkit key
+sequence (a list means "try in order", and `""` unbinds the action):
+
+```toml
+[keys]
+toggle_reasoning = "c-x"          # Ctrl+X instead of Ctrl+T
+line_up = ["s-up", "c-up"]        # list = precedence order
+submit = ""                       # unbind (use mouse / another key)
+```
+
+`/keys` lists the effective map (defaults or your remaps) plus the
+config syntax. Sequences are validated at startup: an unparseable key,
+an unknown action, or a sequence bound to two actions is a clear error
+before the UI opens — never a silent fallback. Remaps apply on the next
+start. The classic REPL's single global key (Ctrl+T) is fixed.
 
 **`@file` mentions:** type `@` in the message and the composer offers
 repo paths (fuzzy-filtered as you type, with a size hint per file);

@@ -165,6 +165,53 @@ async def test_pipe_input_escape_cancels_inflight_run(tmp_path) -> None:
             fake_task.cancel()
 
 
+@pytest.mark.asyncio
+async def test_pipe_input_remapped_keys_dispatch(tmp_path) -> None:
+    """E6: remapped keys route through the real Application event loop.
+
+    ``submit = "c-x"`` and ``clear = "c-k"`` from the config are driven
+    as raw bytes through prompt_toolkit's PipeInput — if the table-driven
+    binding wiring were wrong (e.g. a stale default still bound), the
+    remapped bytes would do nothing.
+    """
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            history_file=tmp_path / "history.txt",
+            key_bindings={"submit": ["c-x"], "clear": ["c-k"]},
+        )
+        with create_pipe_input() as pipe:
+            app = PhosonApp(config)
+            app.app.input = pipe
+            app.app.output = DummyOutput()
+
+            submitted: list[str] = []
+
+            async def mock_run_agent(prompt: str) -> None:
+                submitted.append(prompt)
+
+            with patch.object(app.repl, "_run_agent", side_effect=mock_run_agent):
+
+                async def drive_app():
+                    await asyncio.sleep(0.02)
+                    pipe.send_text("remapped turn")
+                    await asyncio.sleep(0.02)
+                    pipe.send_text("\x18")  # Ctrl+X — remapped submit
+                    await asyncio.sleep(0.10)
+                    pipe.send_text("\x0b")  # Ctrl+K — remapped clear
+                    await asyncio.sleep(0.02)
+                    pipe.send_text("\x03")  # Ctrl+C to exit
+
+                asyncio.create_task(drive_app())
+                await app.app.run_async()
+
+            assert submitted == ["remapped turn"]
+            assert app._prompt_input.text == ""
+            assert len(app.sink.blocks) == 0  # cleared by Ctrl+K
+
+
 # ── 2. Headless end-to-end agent turn ─────────────────────────────────────────
 
 
