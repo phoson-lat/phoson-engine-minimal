@@ -8,8 +8,15 @@ completer, prompt fragments and banner, and adapts its Rich
 ``Renderer`` to the controller's
 :class:`~phoson_cli.ui_protocols.AgentEventSink` via ``ClassicSink``.
 
-A future full-screen front end will be a second front end over the
-same controller — a sink, not a fork.
+**Status (IMPROVEMENTS.md D2):** the full-screen front end
+(``phoson_cli.fullscreen.app.PhosonApp``) is the default interactive
+experience. This classic REPL is the *retained degraded mode*: it is
+user-facing via ``phoson-cli --classic`` (or ``--no-fullscreen``) and is
+selected automatically when the interactive terminal cannot do
+full-screen (``TERM`` unset or ``dumb``). It stays fully maintained as
+a second front end over the same controller — a sink, not a fork — and
+is the home of the classic rendering primitives (``Renderer``,
+``ClassicSink``) that both front ends share where possible.
 """
 
 import asyncio

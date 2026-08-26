@@ -409,6 +409,25 @@ echo "explain the CI failure" | phoson-cli   # piped stdin
 The final answer is printed to stdout; the exit code is 0 on success and
 1 on agent error.
 
+**Command-line flags** (one-off overrides for this run; they never touch
+`~/.phoson/config.toml`):
+
+```bash
+phoson-cli --version                 # print the version and exit
+phoson-cli --model openai/gpt-4o     # override the model
+phoson-cli --provider openai         # override the provider
+phoson-cli --theme light             # override the theme (dark|light|ansi|no-color)
+phoson-cli --max-turns 25            # override max_iterations for this run
+phoson-cli --classic                 # use the classic line-by-line REPL
+phoson-cli --no-fullscreen           # alias of --classic
+```
+
+The full-screen TUI is the default interactive front end. `--classic`
+launches the retained classic REPL (Rich scrollback, line-by-line
+streaming) — useful for debugging and on terminals without full-screen
+support. When `TERM` is unset or `dumb` on an interactive terminal, the
+classic REPL is selected automatically with a notice on stderr.
+
 **Available commands:**
 - `/new` — Start a new session
 - `/model <name>` — Switch model

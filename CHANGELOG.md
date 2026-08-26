@@ -8,6 +8,23 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Feat
+
+- **cli**: `--version` flag prints the installed version (from
+  `importlib.metadata`) and exits (IMPROVEMENTS.md D5).
+- **cli**: `--classic` / `--no-fullscreen` flags force the classic
+  line-by-line REPL for a single run instead of the default full-screen
+  TUI (IMPROVEMENTS.md D2); when the interactive terminal reports
+  `TERM=dumb` (or no `TERM` at all), the classic REPL is now selected
+  automatically with a notice on stderr, since the full-screen
+  `Application` needs real cursor/alternate-screen capabilities.
+- **cli**: `--model`, `--provider`, `--theme` and `--max-turns` flags
+  override the config for a single run without touching
+  `~/.phoson/config.toml` (IMPROVEMENTS.md D5); argument parsing is
+  centralized in the pure, unit-testable
+  `phoson_cli.__main__.parse_args(argv) -> CliOptions` (manual parsing
+  kept, no new dependency).
+
 ### Refactor
 
 - **cli**: architectural debt cleanup (IMPROVEMENTS.md D1) — removed the

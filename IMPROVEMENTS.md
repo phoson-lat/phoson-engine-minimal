@@ -313,18 +313,18 @@ Checklist concreto encontrado en la auditoría:
 ---
 
 ### D2 — Consolidar el REPL clásico o darle salida
-**Esfuerzo:** S-M · **Impacto:** 🟠
+**Esfuerzo:** S-M · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Opción A, Sprint 3)
 
 **Problema.** `__main__.py` lanza siempre `PhosonApp`; `repl.py` (487 LOC) + `renderer.py` (635 LOC) + `ClassicSink` solo son alcanzables desde tests. Son ~1.100 LOC de frontend duplicado cuya lógica **ya diverge** (el clásico imprime `render_start_line`, el fullscreen no; spinners en threads vs ticker async).
 
-**Dos opciones (elegir una):**
+**Decisión: Opción A — dar salida al clásico como modo degradado.**
 
-- **Opción A (recomendada): dar salida al clásico como modo degradado.** Flag `--classic` (o auto-detección: terminal sin capabilities full-screen, `TERM=dumb`, SSH legacy). Valor real: entornos donde la TUI full-screen no funciona bien, debugging, y mantiene vivos los tests de Renderer. Coste: ~1 línea en main + docs.
-- **Opción B: congelarlo.** Marcarlo como test-only en docs, mover a `tests/helpers/` o documentar explícitamente "no user-facing". Ahorra mantenimiento mental pero desperdicia el trabajo hecho.
+- `phoson-cli --classic` (o `--no-fullscreen`) lanza el REPL clásico end-to-end.
+- Auto-detección: si `TERM` está vacío o es `dumb` en un terminal interactivo, se elige el clásico automáticamente con aviso en stderr (solo aplica a TTYs reales; stdin piped es one-shot y no lo dispara).
+- Estatus documentado en el docstring de `repl.py`: frontend *retained degraded mode*, segundo frontend sobre el mismo controller ("a sink, not a fork"), y hogar de las primitivas de render clásico (`Renderer`, `ClassicSink`) que ambos frontends comparten donde es posible.
+- Las diferencias de comportamiento (p.ej. `render_start_line` en el clásico) quedan como decisiones conscientes y documentadas: el clásico es append-only (scrollback), el fullscreen es un transcript re-renderizable.
 
-En ambos casos: extraer las diferencias de comportamiento (render_start_line) a decisiones conscientes y documentadas.
-
-**Criterio de listo.** Opción A: `phoson-cli --classic` arranca el REPL clásico funcionando end-to-end. Opción B: docstring + docs indicando su estatus.
+**Criterio de listo.** `phoson-cli --classic` arranca el REPL clásico funcionando end-to-end. ✅ (tests de selección de frontend y de `main()` en `test_cli_args_unit.py`).
 
 ---
 
@@ -354,7 +354,7 @@ En ambos casos: extraer las diferencias de comportamiento (render_start_line) a 
 ---
 
 ### D5 — Flags CLI faltantes
-**Archivo:** `__main__.py` (212 LOC, parsing manual) · **Esfuerzo:** S · **Impacto:** 🟠
+**Archivo:** `__main__.py` · **Esfuerzo:** S · **Impacto:** 🟠 · **Estado:** ✅ **Hecho** (Sprint 3)
 
 Faltan flags básicos que cualquier CLI moderno expone (y que facilitan scripting/CI):
 
@@ -371,7 +371,9 @@ Faltan flags básicos que cualquier CLI moderno expone (y que facilitan scriptin
 
 Mantener el parsing manual (typer/click añadiría dependencia contraria a la filosofía minimal) pero centralizarlo en una función pura `parse_args(argv) -> CliOptions` testeable, hoy parcialmente inline.
 
-**Criterio de listo.** Cada flag con test unitario del parsing y efecto verificado; `--version` imprime y sale 0.
+**Implementado:** parsing manual centralizado en `parse_args(argv) -> CliOptions` (dataclass), testeable sin proceso. Flags: `--version`, `--model`, `--provider`, `--theme`, `--max-turns`, `--classic`, `--no-fullscreen`, `-p/--print`, `--setup`, `--self-update`, `--uninstall`, `-h/--help`. Overrides aplicados sobre el config cargado (flag > config.toml > env > default) y re-aplicados tras el reload del wizard. Errores de parsing salen con código 2 (comportamiento argparse-compatible). `--dry-run` diferido: requiere la fase 2 de A1 (sandbox) para tener semántica útil.
+
+**Criterio de listo.** Cada flag con test unitario del parsing y efecto verificado; `--version` imprime y sale 0. ✅ (`test_cli_args_unit.py`).
 
 ---
 
