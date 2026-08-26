@@ -54,23 +54,29 @@ class ContextWindowResolver:
     2. Prefix matching for Anthropic/OpenAI
     3. For Ollama: query /api/show (with cache)
     4. For OpenRouter: query /api/v1/models (with cache)
-    5. Fallback: DEFAULT_CONTEXT_WINDOW
+    5. For vLLM: query /v1/models ``max_model_len`` (with cache)
+    6. Fallback: DEFAULT_CONTEXT_WINDOW
 
     Args:
         ollama_base_url: Base URL for Ollama API (default: http://localhost:11434).
         openrouter_api_key: Optional OpenRouter API key for model queries.
+        vllm_base_url: Base URL for a vLLM server (default:
+            http://localhost:8000/v1).
     """
 
     def __init__(
         self,
         ollama_base_url: str = "http://localhost:11434",
         openrouter_api_key: str | None = None,
+        vllm_base_url: str | None = None,
     ) -> None:
         """Initialize the resolver with optional API endpoints."""
         self._ollama_base_url = ollama_base_url.rstrip("/")
         self._openrouter_api_key = openrouter_api_key
+        self._vllm_base_url = (vllm_base_url or "http://localhost:8000/v1").rstrip("/")
         self._ollama_cache: dict[str, int] = {}
         self._openrouter_cache: dict[str, int] = {}
+        self._vllm_cache: dict[str, int] = {}
 
     # ── Public ────────────────────────────────────────────────────────
 
@@ -103,7 +109,11 @@ class ContextWindowResolver:
         if provider == "openrouter":
             return await self._resolve_openrouter(model)
 
-        # 5. Fallback
+        # 5. vLLM — dynamic query
+        if provider == "vllm":
+            return await self._resolve_vllm(model)
+
+        # 6. Fallback
         return DEFAULT_CONTEXT_WINDOW
 
     # ── Ollama ────────────────────────────────────────────────────────
@@ -235,9 +245,66 @@ class ContextWindowResolver:
         self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
 
+    # ── vLLM ──────────────────────────────────────────────────────────
+
+    async def _resolve_vllm(self, model: str) -> int:
+        """Resolve the context window from a vLLM server's ``/v1/models``.
+
+        vLLM exposes each served model's ``max_model_len`` in the
+        ``/v1/models`` list response. We match on the model ``id`` and
+        read ``max_model_len``. Same soft-fail policy as Ollama/OpenRouter:
+        best-effort lookup with default fallback.
+        """
+        if model in self._vllm_cache:
+            return self._vllm_cache[model]
+
+        found = False
+        ok = False
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(f"{self._vllm_base_url}/models")
+                ok = resp.status_code == 200
+                if ok:
+                    data = resp.json()
+                    models_list = data.get("data", [])
+                    for m in models_list:
+                        if m.get("id") == model:
+                            found = True
+                            ctx = m.get("max_model_len")
+                            if ctx is not None:
+                                val = int(ctx)
+                                self._vllm_cache[model] = val
+                                return val
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.warn(
+                f"Failed to fetch vLLM context window for {model!r}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            logger.warning(
+                "vLLM context window lookup failed for %r; "
+                "falling back to default (%d tokens): %s",
+                model,
+                DEFAULT_CONTEXT_WINDOW,
+                exc,
+            )
+        else:
+            if ok and not found:
+                warnings.warn(
+                    f"vLLM /v1/models response did not include {model!r} "
+                    f"with a max_model_len; using default "
+                    f"({DEFAULT_CONTEXT_WINDOW} tokens)",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        self._vllm_cache[model] = DEFAULT_CONTEXT_WINDOW
+        return DEFAULT_CONTEXT_WINDOW
+
     # ── Cache management ──────────────────────────────────────────────
 
     def clear_cache(self) -> None:
         """Clears the internal caches."""
         self._ollama_cache.clear()
         self._openrouter_cache.clear()
+        self._vllm_cache.clear()

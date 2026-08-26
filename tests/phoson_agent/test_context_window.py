@@ -78,6 +78,126 @@ class TestOllamaNumCtxExtraction:
         assert ContextWindowResolver._extract_ollama_num_ctx(data) is None
 
 
+# ── Resolver: vLLM ──────────────────────────────────────────────────
+
+
+class _FakeVLLMResponse:
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeVLLMClient:
+    """Mimics ``httpx.AsyncClient`` for ``GET /v1/models``."""
+
+    def __init__(self, payload: dict | None, status_code: int = 200) -> None:
+        self._payload = payload
+        self._status_code = status_code
+        self.get_calls: list[str] = []
+
+    async def get(self, url: str, **kwargs: object) -> _FakeVLLMResponse:
+        self.get_calls.append(url)
+        if self._payload is None:
+            import httpx
+
+            raise httpx.ConnectError("connection refused")
+        return _FakeVLLMResponse(self._payload, self._status_code)
+
+    async def __aenter__(self) -> "_FakeVLLMClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+def _patch_vllm_httpx(monkeypatch: pytest.MonkeyPatch, client: _FakeVLLMClient) -> None:
+    import phoson_agent.plugins.context_window as mod
+
+    def _factory(*args: object, **kwargs: object) -> _FakeVLLMClient:
+        return client
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _factory)
+
+
+def _vllm_payload(model_id: str, max_model_len: int) -> dict:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "owned_by": "vllm",
+                "max_model_len": max_model_len,
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+class TestResolverVLLM:
+    async def test_resolves_max_model_len(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _FakeVLLMClient(_vllm_payload("Qwen3.8-27B-FP8", 262_144))
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver(vllm_base_url="http://localhost:8383/v1")
+
+        assert await r.resolve("vllm", "Qwen3.8-27B-FP8") == 262_144
+        # Queried the /models endpoint under the configured base URL.
+        assert client.get_calls == ["http://localhost:8383/v1/models"]
+
+    async def test_result_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _FakeVLLMClient(_vllm_payload("m1", 4096))
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver()
+
+        assert await r.resolve("vllm", "m1") == 4096
+        assert await r.resolve("vllm", "m1") == 4096
+        # Second resolve served from cache — no extra HTTP call.
+        assert len(client.get_calls) == 1
+
+    async def test_unknown_model_id_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _FakeVLLMClient(_vllm_payload("m1", 4096))
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver()
+
+        with pytest.warns(UserWarning):
+            assert await r.resolve("vllm", "other-model") == DEFAULT_CONTEXT_WINDOW
+
+    async def test_unreachable_server_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        import logging
+
+        client = _FakeVLLMClient(None)  # raises on get()
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver(vllm_base_url="http://127.0.0.1:9/v1")
+
+        with caplog.at_level(
+            logging.WARNING, logger="phoson_agent.plugins.context_window"
+        ):
+            assert await r.resolve("vllm", "m1") == DEFAULT_CONTEXT_WINDOW
+        assert any(
+            "vLLM context window lookup failed" in record.message
+            for record in caplog.records
+        )
+
+    async def test_default_base_url_used_when_not_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _FakeVLLMClient(_vllm_payload("m1", 8192))
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver()
+
+        assert await r.resolve("vllm", "m1") == 8192
+        assert client.get_calls == ["http://localhost:8000/v1/models"]
+
+
 # ── Resolver: cache ─────────────────────────────────────────────────
 
 
@@ -85,9 +205,11 @@ def test_clear_cache():
     r = ContextWindowResolver()
     r._ollama_cache["llama3"] = 8192
     r._openrouter_cache["anthropic/claude"] = 200_000
+    r._vllm_cache["Qwen3.8-27B-FP8"] = 262_144
     r.clear_cache()
     assert r._ollama_cache == {}
     assert r._openrouter_cache == {}
+    assert r._vllm_cache == {}
 
 
 # ── Resolver: logging policy (issue #23) ─────────────────────────────
