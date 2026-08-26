@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.4 · 1224 tests passing · pyright 0 errors · ruff clean.
+> **Estado de referencia:** v0.12.5 · 1254 tests passing · pyright 0 errors · ruff clean.
 > **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5.
 
 ---
@@ -531,7 +531,7 @@ Continuo / paralelo
 
 1. **Todo formato nuevo va a `formatting.py` como renderable puro** — los dos frontends deben seguir compartiendo el 100%.
 2. **Toda capability de seguridad es middleware/plugin**, no lógica en las tools — protege la filosofía framework-free y beneficia a Phoson-Core.
-3. **Cada ítem termina con test + entrada en CHANGELOG** — la disciplina actual (616 tests) es la mayor fortaleza del repo; no erosionarla por velocidad.
+3. **Cada ítem termina con test + entrada en CHANGELOG** — la disciplina actual (1254 tests) es la mayor fortaleza del repo; no erosionarla por velocidad.
 4. **Medir antes de optimizar** — los números de perf existentes (~18× cache, 16fps throttle) vinieron de medir; los nuevos features con componente de render deben incluir su medición.
 5. **Cuando dude entre añadir feature o pulir existente**: el comparativo de harnesses mostró que *menos tools pero mejores* gana (caso Vercel: −80% tools → 100% éxito). Preferir profundidad sobre amplitud.
 
