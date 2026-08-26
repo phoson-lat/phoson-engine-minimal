@@ -106,7 +106,12 @@ def test_controller_installs_permission_middleware(tmp_path, policy_file) -> Non
 
     names = [type(m).__name__ for m in controller.engine.middlewares]
     assert "PermissionMiddleware" in names
-    assert controller.engine.middlewares[1] is controller.permission_middleware
+    # Offload (E1, on by default) sits first so oversized tool outputs are
+    # rewritten before the summarizer accounts for context; permissions
+    # stay the innermost (last) LLM-call middleware.
+    assert names[0] == "OffloadMiddleware"
+    assert names[1] == "SummarizationMiddleware"
+    assert controller.engine.middlewares[-1] is controller.permission_middleware
 
 
 def test_denied_tool_never_reaches_the_handler(tmp_path, policy_file) -> None:

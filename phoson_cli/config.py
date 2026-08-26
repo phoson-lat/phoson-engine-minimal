@@ -9,7 +9,7 @@ import os
 import shutil
 import tomllib
 import warnings
-from typing import Any
+from typing import Any, Final
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -89,6 +89,23 @@ class PhosonConfig:
     # loaded from / saved to config.toml) — overridable per run, mainly so
     # tests can point it at a temp file instead of the user's real history.
     history_file: Path = Path("~/.phoson/history.txt").expanduser()
+    # ── Context management (IMPROVEMENTS.md E1) ─────────────────────────
+    # Automatic compaction mode: "balanced" (default), "aggressive"
+    # (compacts earlier and keeps a shorter tail) or "off" (never
+    # auto-compact; manual /compact still works).
+    compact_mode: str = "balanced"
+    # Fraction of the context window that triggers automatic compaction.
+    # "aggressive" mode tightens this to 0.65; an explicit value wins.
+    compact_threshold: float = 0.80
+    # How many recent messages survive a compaction untouched.
+    compact_min_keep_messages: int = 4
+    # Offload large tool outputs to disk (head/tail + path in context).
+    offload_tool_outputs: bool = True
+    offload_max_chars: int = 24_000
+    offload_head_chars: int = 1_500
+    offload_tail_chars: int = 500
+    # Where offloaded tool outputs live.
+    compacted_dir: Path = Path("~/.phoson/compacted/").expanduser()
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -96,6 +113,21 @@ def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+#: Valid values for ``compact_mode`` (IMPROVEMENTS.md E1). "aggressive"
+#: tightens the auto-compact threshold (0.65) and the kept tail (2) so
+#: long sessions stay cheap; "off" disables automatic compaction.
+COMPACT_MODES: Final[tuple[str, ...]] = ("balanced", "aggressive", "off")
+
+#: (threshold, min_keep_messages) applied when the user picks a mode and
+#: has not set the knobs explicitly. An explicit file/env value always
+#: wins over the mode preset.
+COMPACT_MODE_PRESETS: Final[dict[str, tuple[float, int]]] = {
+    "balanced": (0.80, 4),
+    "aggressive": (0.65, 2),
+    "off": (0.80, 4),
+}
 
 
 def _parse_int(value: str | None, default: int, *, env_var: str = "") -> int:
@@ -323,7 +355,65 @@ def load_config() -> PhosonConfig:
                 "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
             )
         ).expanduser(),
+        compact_mode=_resolve_str(
+            "PHOSON_COMPACT_MODE", "compact_mode", fd, d.compact_mode
+        ).lower(),
+        compact_threshold=_resolve_float(
+            "PHOSON_COMPACT_THRESHOLD", "compact_threshold", fd, d.compact_threshold
+        ),
+        compact_min_keep_messages=_resolve_int(
+            "PHOSON_COMPACT_MIN_KEEP",
+            "compact_min_keep_messages",
+            fd,
+            d.compact_min_keep_messages,
+        ),
+        offload_tool_outputs=_resolve_bool(
+            "PHOSON_OFFLOAD_TOOL_OUTPUTS",
+            "offload_tool_outputs",
+            fd,
+            d.offload_tool_outputs,
+        ),
+        offload_max_chars=_resolve_int(
+            "PHOSON_OFFLOAD_MAX_CHARS", "offload_max_chars", fd, d.offload_max_chars
+        ),
+        offload_head_chars=_resolve_int(
+            "PHOSON_OFFLOAD_HEAD_CHARS",
+            "offload_head_chars",
+            fd,
+            d.offload_head_chars,
+        ),
+        offload_tail_chars=_resolve_int(
+            "PHOSON_OFFLOAD_TAIL_CHARS",
+            "offload_tail_chars",
+            fd,
+            d.offload_tail_chars,
+        ),
+        compacted_dir=Path(
+            _resolve_str(
+                "PHOSON_COMPACTED_DIR", "compacted_dir", fd, str(d.compacted_dir)
+            )
+        ).expanduser(),
     )
+    if cfg.compact_mode not in COMPACT_MODES:
+        warnings.warn(
+            f"Ignoring invalid compact_mode {cfg.compact_mode!r}; "
+            "using default 'balanced'.",
+            UserWarning,
+            stacklevel=2,
+        )
+        cfg.compact_mode = "balanced"
+
+    # Mode presets fill in the knobs the user has NOT set explicitly, so
+    # an explicit threshold/min-keep always wins over the mode (E1).
+    preset_threshold, preset_keep = COMPACT_MODE_PRESETS[cfg.compact_mode]
+    if "PHOSON_COMPACT_THRESHOLD" not in os.environ and "compact_threshold" not in fd:
+        cfg.compact_threshold = preset_threshold
+    if (
+        "PHOSON_COMPACT_MIN_KEEP" not in os.environ
+        and "compact_min_keep_messages" not in fd
+    ):
+        cfg.compact_min_keep_messages = preset_keep
+
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
 
@@ -420,6 +510,17 @@ def save_config(
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
+        ("compact_mode", getattr(config, "compact_mode", None)),
+        ("compact_threshold", getattr(config, "compact_threshold", None)),
+        (
+            "compact_min_keep_messages",
+            getattr(config, "compact_min_keep_messages", None),
+        ),
+        ("offload_tool_outputs", getattr(config, "offload_tool_outputs", None)),
+        ("offload_max_chars", getattr(config, "offload_max_chars", None)),
+        ("offload_head_chars", getattr(config, "offload_head_chars", None)),
+        ("offload_tail_chars", getattr(config, "offload_tail_chars", None)),
+        ("compacted_dir", str(getattr(config, "compacted_dir", ""))),
     ]:
         if only_fields is not None and key not in only_fields:
             continue  # not part of this narrow save — leave the file's line alone

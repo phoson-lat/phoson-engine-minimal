@@ -8,6 +8,57 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Feat
+
+- **agent/cli**: advanced context management (IMPROVEMENTS.md E1) —
+  retained reasoning, structured compaction, large tool-output offload,
+  and fine-grained compaction control.
+  - *Retained reasoning.* When a compaction (automatic or `/compact`)
+    summarizes a segment, the model's captured reasoning from that segment
+    (previously persisted to `node.metadata["reasoning"]`) is now folded
+    into the summary prompt, so the handoff document keeps the *why* behind
+    key decisions, not just the conclusions. The controller registers the
+    active run's reasoning before the run and clears it when the run ends,
+    regardless of terminal state. This is the technique OpenAI reports
+    lifting long-task continuity (13.3%→38.3% on ARC-AGI-3).
+  - *Structured compaction.* The summary is now a fixed-section handoff
+    document (Goal / Completed / Key decisions / Reasoning highlights /
+    Open questions / Next steps / Constraints and context) instead of a
+    free-form paragraph (Anthropic long-running-agents pattern), so the
+    next context segment consumes it reliably. Auto and manual paths share
+    one prompt builder, so they always produce the same artifact.
+  - *Large tool-output offload.* A new `OffloadMiddleware`
+    (`phoson_agent.plugins.offload`) writes any tool result over a
+    configurable size (default 24 KB) to `~/.phoson/compacted/` and leaves
+    only a head/tail preview plus the file path in context; the model can
+    `read_file` the path to retrieve the full content. Implemented as a
+    middleware (not tool logic) per repo principle #2, best-effort (a write
+    failure never breaks the run), and toggleable.
+  - *Fine-grained control.* New `compact_mode` setting
+    (`balanced` | `aggressive` | `off`) with presets (aggressive compacts at
+    65% of the window and keeps a shorter tail), plus explicit
+    `compact_threshold`, `compact_min_keep_messages`, `offload_*` knobs —
+    all env/file-configurable. `/compact on|off` toggles automatic
+    compaction at runtime and persists to `config.toml`.
+  - *`/compact` preview + confirm.* `/compact` now shows what it *would*
+    do ("summarize N of M turns, keeping K, ~T tokens") and asks before
+    paying for the summary call; `/compact aggressive` does the same with a
+    deeper cut; `/compact yes` applies the last preview without asking.
+
+### Test
+
+- **agent**: unit tests for the offload middleware
+  (`tests/phoson_agent/test_offload.py`) and for E1 summarizer behavior —
+  structured prompt, retained-reasoning formatting/alignment, `auto_enabled`
+  pass-through, and `build_compaction` layout
+  (`tests/phoson_agent/test_summarizer_e1.py`).
+- **cli**: config-preset tests (mode presets, explicit-value-wins, invalid
+  mode fallback, persistence), controller tests for `plan_compaction` /
+  profiles / `set_compact_mode` / retained-reasoning registration, and
+  `/compact` command tests (preview→confirm, cancel, profile pass-through,
+  noop, mode switch, run-in-flight) in
+  `tests/phoson_cli/test_e1_context_unit.py`.
+
 ## v0.12.0 (2026-08-25)
 
 ### Feat

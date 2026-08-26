@@ -302,7 +302,7 @@ async def test_wrap_llm_call_generates_real_summary_via_llm() -> None:
     async def call_next(
         messages: list[Message], config: ModelConfig
     ) -> AsyncIterator[LLMEvent]:
-        if "You are summarizing a conversation" in str(messages[0].content):
+        if "structured handoff document" in str(messages[0].content):
             # Internal summary call — mock LLM produces the summary text.
             captured["summary_call"] = list(messages)
             yield TokenEvent(content="USER WANTS X. DECIDED Y.")
@@ -358,7 +358,7 @@ async def test_wrap_llm_call_summary_does_not_leak_prompt() -> None:
         messages: list[Message], config: ModelConfig
     ) -> AsyncIterator[LLMEvent]:
         calls.append(list(messages))
-        if "You are summarizing a conversation" in str(messages[0].content):
+        if "structured handoff document" in str(messages[0].content):
             yield TokenEvent(content="tiny summary")
             yield LLMDoneEvent(content="tiny summary", has_tool_calls=False)
         else:

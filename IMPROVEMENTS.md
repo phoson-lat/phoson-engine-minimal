@@ -5,7 +5,7 @@
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
 > **Estado de referencia:** v0.12.0 · 1020+ tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86).
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en la rama `feat/e1-context-management`.
 
 ---
 
@@ -29,7 +29,7 @@
 | [D3](#d3-corregir-ctrlv-y-soporte-macos-clipboard) | Ctrl+V en macOS + conflicto con paste de texto | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
 | [D4](#d4-tests-e2e-visuales-de-la-tui) | Tests e2e/visuales de la TUI | **P2** | M-L | 🟠 Medio | — | ✅ Sprint 3 |
 | [D5](#d5-flags-cli-faltantes) | Flags CLI: `--version`, `--model`, `--provider`, `--classic` | **P2** | S | 🟠 Medio | — | ✅ Sprint 3 |
-| [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | Post-P1 |
+| [E1](#e1-context-management-avanzado-retained-reasoning--compaction-con-control) | Context management avanzado (retained reasoning) | **P3** | L | 🔴 Alto | — | ✅ feat/e1-context-management |
 | [E2](#e2-panel-de-subagentes-con-métricas-en-vivo) | Subagent panel con métricas en vivo | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E3](#e3-autocompletado-de-rutas-y-file-mentions) | Autocomplete de rutas y `@file` mentions | **P3** | M | 🟠 Medio | — | Post-P1 |
 | [E4](#e4-themes-interactivos-y-auto-detección-lightdark) | `/theme` interactivo + auto-detección light/dark | **P3** | S | 🟢 Bajo | — | Backlog |
@@ -406,15 +406,19 @@ La fase de contenedores docker/podman sigue siendo una extensión post-P1 de est
 ---
 
 ### E1 — Context management avanzado (retained reasoning + compaction con control)
-**Esfuerzo:** L · **Impacto:** 🔴 (para tareas largas)
+**Esfuerzo:** L · **Impacto:** 🔴 (para tareas largas) · **Estado:** ✅ **Hecho** (rama `feat/e1-context-management`)
 
-El summarizer actual (auto a 80%) es funcional pero primitivo frente al SOTA:
-- **Retained reasoning** (Codex): al compactar, conservar un resumen de la cadena de razonamiento, no solo del contenido — mejora mucho la continuidad en tareas largas (OpenAI reporta 13.3%→38.3% en ARC-AGI-3 con esta técnica sola).
-- **Compaction estructurada**: en vez de resumen libre, generar artefactos tipo feature-list JSON + progress notes (patrón Anthropic long-running agents) que el siguiente segmento de contexto pueda consumir de forma fiable.
-- **Offload de tool outputs grandes**: outputs >N KB van a disco con head/tail en contexto + path de referencia (patrón Claude Code).
-- **Control fino**: `/compact aggressive|balanced|off`, umbrales configurables, preview del resumen antes de aplicar.
+El summarizer actual (auto a 80%) era funcional pero primitivo frente al SOTA. Implementado:
 
-Depende de: C2 (`/compact`) como base de UI.
+- **Retained reasoning** (Codex): al compactar, el razonamiento capturado de los turnos del segmento (persistido en `node.metadata["reasoning"]`) se pliega en el prompt del resumen, de modo que el documento de handoff conserva el *por qué* de las decisiones clave, no solo sus conclusiones. OpenAI reporta que esta sola técnica mejora la continuidad en tareas largas (13.3%→38.3% en ARC-AGI-3). El controller registra el reasoning del run activo antes de lanzarlo y lo limpia al terminar (cualquier estado terminal).
+- **Compaction estructurada**: el resumen es un documento con secciones fijas (Goal / Completed / Key decisions / Reasoning highlights / Open questions / Next steps / Constraints and context — patrón Anthropic long-running agents), consumible de forma fiable por el siguiente segmento. Auto y manual comparten un único prompt builder (`SummarizationMiddleware.build_summary_prompt`), así que producen siempre el mismo artefacto.
+- **Offload de tool outputs grandes**: `OffloadMiddleware` nuevo (`phoson_agent/plugins/offload.py`, middleware por principio #2, no lógica en tools). Resultados >`offload_max_chars` (default 24 KB) van a `~/.phoson/compacted/` y el contexto solo ve head/tail + path; el modelo recupera el contenido con `read_file`. Best-effort (un fallo de escritura nunca rompe el run) y conmutable con `offload_tool_outputs`.
+- **Control fino**: `compact_mode = "balanced" | "aggressive" | "off"` con presets (aggressive compaction al 65% de la ventana y cola más corta; off desactiva el auto-compact — el manual sigue funcionando), más knobs explícitos `compact_threshold` / `compact_min_keep_messages` (env `PHOSON_*` o `[defaults]` de config.toml; el valor explícito gana sobre el preset).
+- **`/compact` con preview + confirmación**: `/compact` muestra qué haría ("summarize N of M turns, keeping K, ~T tokens") y pregunta antes de pagar la llamada de resumen; `/compact aggressive` idem con corte más profundo; `/compact yes` aplica el último preview sin preguntar; `/compact on|off` conmuta el auto-compact en caliente (persiste en config.toml).
+
+**Criterio de listo.** Todo cubierto con tests: `tests/phoson_agent/test_offload.py`, `tests/phoson_agent/test_summarizer_e1.py`, `tests/phoson_cli/test_e1_context_unit.py`.
+
+**Dependía de:** C2 (`/compact`) como base de UI — ya cerrado en v0.10.0.
 
 ---
 
@@ -477,7 +481,8 @@ Continuo / paralelo
 ├── D2 destino del REPL clásico (decisión, luego 1 día)
 ├── D3 Ctrl+V cross-platform
 ├── D4 tests e2e (ir acumulando con cada sprint)
-└── E1-E6 según demanda real de usuarios
+├── E1 context management avanzado  ✅ feat/e1-context-management
+└── E2-E6 según demanda real de usuarios
 ```
 
 ## Principios para decidir durante la ejecución
