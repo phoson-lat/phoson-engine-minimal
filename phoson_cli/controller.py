@@ -966,16 +966,7 @@ class SessionController:
         if self.current_node_id is None:
             return False, "No active node — nothing to undo."
 
-        # Walk the node path root → cursor (the message-level get_path is
-        # not enough: we need node ids to move the cursor).
-        node_path: list = []
-        cursor: str | None = self.current_node_id
-        while cursor is not None:
-            node = self.tree.nodes[cursor]
-            node_path.append(node)
-            cursor = node.parent_id
-        node_path.reverse()
-
+        node_path = self._node_path()
         last_user_idx = next(
             (
                 i
@@ -991,6 +982,90 @@ class SessionController:
 
         self.current_node_id = node_path[last_user_idx - 1].id
         return True, self.current_node_id
+
+    def _node_path(self) -> list:
+        """The active path root → cursor as node objects (empty when idle tree)."""
+        node_path: list = []
+        cursor: str | None = self.current_node_id
+        while cursor is not None:
+            node = self.tree.nodes[cursor]
+            node_path.append(node)
+            cursor = node.parent_id
+        node_path.reverse()
+        return node_path
+
+    def jump_candidates(self) -> list[tuple[str, str]]:
+        """Rewind targets: ``(user_node_id, preview)`` pairs, oldest first (G1).
+
+        One entry per *user* node on the active path (root → cursor)
+        whose parent exists — picking one lands the cursor on that node's
+        *parent*, i.e. right before the selected turn, so the next user
+        message replaces it and everything after (Claude Code's
+        double-Esc UX). The first root node is skipped: there is no
+        earlier node to land on. The preview is the message's plain text
+        truncated to one line.
+        """
+        from phoson_llm.schemas import TextBlock
+
+        targets: list[tuple[str, str]] = []
+        for node in self._node_path():
+            message = node.message
+            if message.role != "user" or node.parent_id is None:
+                continue
+            content = message.content
+            if isinstance(content, str):
+                text = content
+            elif content:
+                text = " ".join(b.text for b in content if isinstance(b, TextBlock))
+            else:
+                text = ""
+            preview = " ".join(text.split()) or "(empty message)"
+            if len(preview) > 48:
+                preview = preview[:47] + "…"
+            targets.append((node.id, preview))
+        return targets
+
+    def jump_to_node(self, node_id: str) -> tuple[bool, str]:
+        """Move the conversation cursor to ``node_id`` (G1 rewind primitive).
+
+        The generalization of ``undo_last_turn``: set ``current_node_id``
+        to any node in the tree and let the next user message branch from
+        there. The "undone" messages are *not* deleted — they remain in
+        the tree as an abandoned branch (visible via ``/tree``), and
+        session cost/token metrics stay cumulative (intentionally NOT
+        rolled back, same contract as ``/undo``).
+
+        Returns:
+            Tuple of (success, message or new node id).
+        """
+        if node_id not in self.tree.nodes:
+            return False, f"Unknown node {node_id[:8]} — not in this session."
+        self.current_node_id = node_id
+        return True, node_id
+
+    def jump_to_user_turn(self, user_node_id: str) -> tuple[bool, str]:
+        """Rewind to just before a user turn (G1: the rewind picker lands here).
+
+        Validates that the selected node is a user node on the *active*
+        path (the picker only offers those — this is a defensive guard
+        against a stale selection) and lands the cursor on its parent,
+        so the next user message replaces the selected turn and
+        everything after it.
+        """
+        node = self.tree.nodes.get(user_node_id)
+        if node is None:
+            return False, f"Unknown node {user_node_id[:8]} — not in this session."
+        if node.parent_id is None:
+            return False, "Nothing to rewind to — the session starts with this turn."
+        if node.message.role != "user":
+            return False, "Only user turns can be rewound."
+        path_ids = {n.id for n in self._node_path()}
+        if node.id not in path_ids:
+            return False, (
+                "That node is not on the active path — "
+                "it belongs to an abandoned branch."
+            )
+        return self.jump_to_node(node.parent_id)
 
     def find_latest_node_id(self) -> str | None:
         """Find the most recent leaf node — the continuation point.

@@ -331,6 +331,37 @@ class PhosonRepl:
         """Move the cursor back to just before the last user turn."""
         return self._controller.undo_last_turn()
 
+    def jump_candidates(self) -> list[tuple[str, str]]:
+        """Rewind targets for the double-Esc picker (G1): user turns on
+        the active path, oldest first, as ``(node_id, preview)``."""
+        return self._controller.jump_candidates()
+
+    def jump_to_user_turn(self, user_node_id: str) -> tuple[bool, str]:
+        """Rewind to just before the selected user turn (G1)."""
+        return self._controller.jump_to_user_turn(user_node_id)
+
+    def jump_to_node(self, node_id: str) -> tuple[bool, str]:
+        """Move the cursor to any tree node (G1: undo a rewind jump)."""
+        return self._controller.jump_to_node(node_id)
+
+    def message_text(self, node_id: str) -> str:
+        """Plain text of a node's message (empty string when missing).
+
+        The full-screen rewind flow uses this to re-populate the
+        composer with the text of the turn being rewound.
+        """
+        from phoson_llm.schemas import TextBlock
+
+        node = self._controller.tree.nodes.get(node_id)
+        if node is None:
+            return ""
+        content = node.message.content
+        if isinstance(content, str):
+            return content
+        if content:
+            return " ".join(b.text for b in content if isinstance(b, TextBlock))
+        return ""
+
     def find_latest_node_id(self) -> str | None:
         """Most recent leaf node — the continuation point."""
         return self._controller.find_latest_node_id()

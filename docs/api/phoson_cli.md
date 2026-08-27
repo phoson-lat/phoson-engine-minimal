@@ -139,13 +139,23 @@ submit = ""                       # unbind the action
 
 Rules:
 
-- One line per **action** (the 14 defaults: `submit`, `newline`,
+- One line per **action** (the 15 defaults: `submit`, `newline`,
   `page_up`, `page_down`, `line_up`, `line_down`, `scroll_home`,
   `scroll_end`, `clear`, `toggle_reasoning`, `ctrl_d`, `paste_image`,
-  `escape`, `exit`).
+  `escape`, `undo_jump`, `exit`).
 - Each value is a prompt_toolkit key sequence (`"c-x"`, `"f13"`,
   `"s-up"`, …); a chord is a space-separated string (`"c-x c-e"`).
 - `""` unbinds the action; `[]` is rejected (use `""`).
+- `undo_jump` (default `Ctrl+Z`) undoes the most recent rewind jump
+  (G1 double-Esc). The composer buffer ignores `Ctrl+Z`, so the key is
+  free.
+- The double-Esc rewind (G1) is *not* an action of its own: it rides on
+  the `escape` key. `escape` is bound eager so a lone Esc mid-run always
+  cancels immediately (#68), and the app detects a second `escape`
+  within 0.5 s (a native `"escape escape"` chord could never fire while
+  the single eager `escape` binding consumes each press). Remapping
+  `escape` moves the single-Esc cancel and the double-Esc rewind
+  together; `escape = ""` disables both.
 - Sequences are validated at startup by
   `phoson_cli.config.load_key_bindings`: an unknown action, an
   unparseable sequence, or a key bound to two actions raises
@@ -154,6 +164,20 @@ Rules:
 - The section is user-managed: `save_config` never writes or removes it.
 - `/keys` prints the effective map (defaults or your remaps) and the
   config syntax. Remaps apply on the next start.
+
+### Rewind (double-Esc, full-screen TUI)
+
+Double-Esc while idle opens a picker of the session's user turns
+(`PhosonApp.handle_rewind`). Selecting one calls
+`SessionController.jump_to_user_turn`, which moves `current_node_id` to
+the node *before* the chosen turn — a generalization of `undo_last_turn`
+(the "undone" messages stay in the tree as an abandoned branch; cost and
+token metrics are cumulative and not rolled back, same contract as
+`/undo`). The TUI then redraws the chat pane from the tree up to the new
+cursor, pre-fills the composer with the selected turn's text, and pushes
+the previous cursor onto `PhosonApp._rewind_stack` (consecutive rewinds
+stack). `undo_jump` (`Ctrl+Z`) pops that stack in reverse order and
+redraws forward.
 
 ### Model registry (`~/.phoson/models.json`)
 

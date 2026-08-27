@@ -77,6 +77,7 @@ from .completer import (
     StaticArgCompleter,
     SessionsArgCompleter,
 )
+from ..controller import MAX_RESUME_REPLAY_MESSAGES
 from ..formatting import format_token_indicator
 from .model_cache import ModelCache
 from ..attachments import provider_compat_warning
@@ -87,11 +88,18 @@ from .session_cache import SessionListCache
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
     "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [Ctrl+C / Ctrl+Q] Exit</style>"
+    "  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
 # How often the subagent panel animation frame advances while active.
 _SUBAGENT_TICK_SECONDS = 0.12
+
+# Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
+# (measured in monotonic seconds) opens the rewind picker. Wide enough to
+# cover a human double-tap, narrow enough that a lone idle Esc never
+# triggers it. The *single* Esc cancel (#68) is unaffected — that binding
+# stays eager and fires immediately while a run is in flight.
+_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 0.5
 
 # How often the header re-checks for AGENTS.md/CLAUDE.md memory files
 # (IMPROVEMENTS.md A3) — the prompt itself re-reads them every turn; this
@@ -106,6 +114,11 @@ _INPUT_MAX_LINES = 5
 # writes (see ``PhosonRepl.run``), so the two front ends share one history.
 # Overridable per-run via ``PhosonConfig.history_file`` (used by tests).
 _DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
+
+
+def _one_line(text: str) -> str:
+    """Collapse whitespace to a single line (rewind notices/previews)."""
+    return " ".join(text.split())
 
 
 class PhosonApp:
@@ -127,6 +140,14 @@ class PhosonApp:
         # Immutable transcript blocks render to ANSI once per width (#perf).
         self._block_ansi_cache = BlockAnsiCache()
         self._run_task: asyncio.Task | None = None
+        # Double-Esc rewind (IMPROVEMENTS.md G1): monotonic timestamp of the
+        # last idle Esc press, and the stack of pre-rewind cursors that
+        # ``undo_jump`` (Ctrl+Z) pops to restore the previous point. The
+        # double-tap rides on whatever key the ``escape`` action is bound
+        # to — remapping ``escape`` moves the single-Esc run cancel and
+        # the double-tap together (unbinding it disables both).
+        self._last_escape_at = 0.0
+        self._rewind_stack: list[str] = []
         # Header AGENTS.md indicator cache (see `_has_agents_md`).
         self._agents_md_cached: bool | None = None
         self._agents_md_checked_at: float = 0.0
@@ -730,19 +751,175 @@ class PhosonApp:
         return listing_for_config(self._config)
 
     def handle_escape(self) -> None:
-        """Escape: cancel the in-flight run; do nothing when idle.
+        """Escape: cancel the in-flight run; double-tap opens the rewind.
 
-        Only fires while a run is actually streaming (``_is_run_in_flight``
-        covers the whole dispatch, including the invisible trailing save —
-        but cancelling during that window is a harmless no-op because the
-        controller's cancel path is idempotent once the stream task is
-        done). When idle, Esc keeps its overlay-cancel role inside Float
-        pickers (which bind it separately and take precedence) and does
-        nothing here, so dismissing an autocomplete never kills a turn.
+        Precedence (G1, coordinated with #68):
+        - While a run is in flight, Esc keeps its *immediate* cancel role
+          (the binding is registered ``eager`` in ``keys.py`` so a double
+          tap mid-run can never be swallowed as a chord) and no
+          double-tap state is recorded.
+        - While idle, a lone Esc still does nothing here (inside Float
+          pickers they bind Esc themselves and take precedence). A second
+          Esc within ``_REWIND_DOUBLE_ESC_WINDOW_SECONDS`` opens the
+          rewind picker (``handle_rewind``).
         """
         if self._is_run_in_flight():
             self.repl.cancel_current()
             self.sink.notify("info", "Cancelling current run (Esc)...")
+            return
+        now = time.monotonic()
+        if now - self._last_escape_at <= _REWIND_DOUBLE_ESC_WINDOW_SECONDS:
+            self._last_escape_at = 0.0
+            self.app.create_background_task(self.handle_rewind())
+            return
+        self._last_escape_at = now
+
+    async def handle_rewind(self) -> None:
+        """Double-Esc (idle): pick an earlier user message and rewind (G1).
+
+        The picker lists the user turns of the active path; selecting one
+        lands the cursor on the node *before* it (Claude Code's UX), the
+        previous cursor is pushed on the undo stack (``undo_jump``,
+        default Ctrl+Z, restores it), and the chat pane is redrawn from
+        the tree up to the new cursor. The discarded messages are not
+        deleted — they remain as an abandoned branch (visible via
+        ``/tree``), and the composer is pre-filled with the selected
+        turn's text so editing and resending is one Enter away.
+        """
+        if self._active_float is not None or self._is_run_in_flight():
+            return
+        candidates = self.repl.jump_candidates()
+        if not candidates:
+            self.sink.notify("info", "Nothing to rewind to in this session.")
+            return
+
+        from ..rewind_picker import build_rewind_picker
+
+        picker = build_rewind_picker(
+            candidates, theme=self.theme, invalidate=self.app.invalidate
+        )
+        result = await self.run_float_picker(picker)
+        if result.cancelled or result.node_id is None:
+            return
+        await self._apply_rewind(result.node_id)
+
+    async def _apply_rewind(self, user_node_id: str) -> None:
+        """Rewind to just before ``user_node_id`` and redraw the pane.
+
+        Each rewind pushes the previous cursor onto ``_rewind_stack``
+        (``undo_jump`` pops them back in reverse order), so consecutive
+        rewinds are individually restorable with repeated Ctrl+Z.
+        """
+        previous_cursor = self.repl.current_node_id
+        ok, info = self.repl.jump_to_user_turn(user_node_id)
+        if not ok:
+            self.sink.notify("error", str(info))
+            return
+
+        # The pre-rewind cursor is restorable (undo_jump) as long as the
+        # session doesn't change underneath (a new/load/compact replaces
+        # the tree, after which a stale node id is rejected by
+        # ``jump_to_node`` and the stack entry is dropped).
+        if previous_cursor is not None:
+            self._rewind_stack.append(previous_cursor)
+        try:
+            path = self.repl.tree.get_path(self.repl.current_node_id)
+        except (ValueError, AttributeError, TypeError):
+            self.sink.notify("error", "Could not redraw after rewind — cursor lost.")
+            return
+
+        self._reset_transcript()
+        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
+            self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+        else:
+            self.sink.print_history(path)
+        self.repl._context_tokens = self.repl.summarizer.estimate_tokens(path)
+        self._auto_scroll = True
+        self._chat_scroll_top = 0
+        self.app.invalidate()
+
+        # Re-populate the composer with the turn being rewound — editing
+        # it and resending replaces the abandoned branch in one Enter.
+        turn_text = self.repl.message_text(user_node_id).strip()
+        if turn_text:
+            self._prompt_input.text = turn_text
+
+        self.sink.notify(
+            "info",
+            f"Rewound to just before “{_one_line(turn_text)[:40]}” "
+            f"(cursor → {info[:8]}) — Ctrl+Z to restore, "
+            "edit and Enter to re-send.",
+        )
+
+    def undo_jump(self) -> None:
+        """Ctrl+Z: undo the last rewind jump (G1) and redraw to that point.
+
+        Pops the pre-rewind cursor pushed by ``_apply_rewind`` (the
+        session's continuation point) and redraws the transcript up to
+        it. A plain Esc is *not* used: it would race the single-Esc run
+        cancel (#68) and the picker overlays' own Esc. The binding is
+        remappable (``undo_jump`` in ``[keys]``); the composer's buffer
+        ignores Ctrl+Z, so the key is free.
+        """
+        if self._active_float is not None or self._is_run_in_flight():
+            return
+        if not self._rewind_stack:
+            self.sink.notify("info", "No rewind to undo.")
+            return
+        cursor = self._rewind_stack.pop()
+        ok, info = self.repl.jump_to_node(cursor)
+        if not ok:
+            # The tree changed underneath (new/resume/compact replaced
+            # the session): every remaining stack entry is stale too, so
+            # drop the whole stack instead of warning per entry.
+            self._rewind_stack = []
+            self.sink.notify("warn", str(info))
+            return
+        try:
+            path = self.repl.tree.get_path(cursor)
+        except (ValueError, AttributeError, TypeError):
+            self.sink.notify("error", "Could not redraw — the node no longer exists.")
+            self._rewind_stack = []
+            return
+        self._reset_transcript()
+        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
+            self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+        else:
+            self.sink.print_history(path)
+        self.repl._context_tokens = self.repl.summarizer.estimate_tokens(path)
+        self._auto_scroll = True
+        self._chat_scroll_top = 0
+        self.app.invalidate()
+        self.sink.notify(
+            "info",
+            f"Back to the previous point (cursor → {info[:8]})."
+            + (
+                f" Ctrl+Z again — {len(self._rewind_stack)} more rewind(s) "
+                "on the stack."
+                if self._rewind_stack
+                else ""
+            ),
+        )
+
+    def _reset_transcript(self) -> None:
+        """Drop the transcript and its ANSI cache, re-seeding the banner.
+
+        Rewind/undo-redraws (G1) rebuild the pane from the tree; the
+        immutable-block cache must be dropped too, otherwise old
+        (discarded) block ids could shadow freshly rendered ones.
+        """
+        self.sink.blocks.clear()
+        self._block_ansi_cache.clear(0)
+        self._banner_block = render_banner(
+            provider=self.repl.config.provider,
+            model=self.repl.current_model,
+            session_id=self.repl.tree.session_id,
+            theme=self.theme,
+            show_meta=False,
+        )
+        self.sink.blocks.append(self._banner_block)
+        self.sink.dirty = True
+        self.app.invalidate()
 
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
