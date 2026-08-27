@@ -530,6 +530,18 @@ remapping `escape` in `[keys]` moves both the single-Esc cancel and the
 double-Esc rewind together (unbinding `escape` disables both); the jump
 undo `undo_jump` (default `Ctrl+Z`) is remappable on its own.
 
+**Copy mode (full-screen TUI):** the full-screen chat uses the terminal's
+mouse for the scroll-wheel, which removes native click-drag text
+selection. `F2` (or `/copy`) opens a **copy mode**: the visible page is
+pre-selected, the arrows extend the range (left/right wrap across line
+ends, `Home`/`End` jump to the row's edge, `PgUp`/`PgDn` jump a page), the
+selection is drawn in reverse video, and `Enter` (or `Ctrl+Y`) yanks it to
+the system clipboard — Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — with
+a character-count confirmation. `Esc` cancels. `copy_mode` is remappable /
+unbindable from `[keys]` like any other key. Where your terminal supports
+it, holding `Shift` while dragging still selects natively as before; copy
+mode is the guaranteed fallback in every emulator.
+
 **`@file` mentions:** type `@` in the message and the composer offers
 repo paths (fuzzy-filtered as you type, with a size hint per file);
 selecting one inserts the path. On send, each `@mention` is expanded into

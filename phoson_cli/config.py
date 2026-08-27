@@ -293,6 +293,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "toggle_reasoning",
     "ctrl_d",
     "paste_image",
+    "copy_mode",
     "escape",
     "undo_jump",
     "exit",

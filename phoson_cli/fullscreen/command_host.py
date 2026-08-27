@@ -145,6 +145,10 @@ class FullScreenCommandHost:
         """Full-screen front end: re-color the whole application (E4)."""
         self.app.apply_theme(theme)
 
+    def start_copy_mode(self) -> None:
+        """Full-screen front end: open the copy-mode overlay (G3)."""
+        self.app.enter_copy_mode()
+
     async def run_setup(self) -> None:
         self.print_info(
             "The setup wizard isn't available inside this UI yet — "

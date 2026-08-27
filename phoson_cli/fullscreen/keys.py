@@ -50,6 +50,7 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     "toggle_reasoning": ["c-t"],
     "ctrl_d": ["c-d"],
     "paste_image": ["c-v"],
+    "copy_mode": ["f2"],
     "escape": ["escape"],
     "undo_jump": ["c-z"],
     # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
@@ -73,6 +74,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "toggle_reasoning": "toggle_reasoning",
     "ctrl_d": "handle_ctrl_d",
     "paste_image": "paste_image",
+    "copy_mode": "enter_copy_mode",
     "escape": "handle_escape",
     "undo_jump": "undo_jump",
     "exit": "request_exit",

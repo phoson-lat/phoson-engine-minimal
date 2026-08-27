@@ -99,6 +99,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/title",
             "/theme",
             "/keys",
+            "/copy",
             "/attach",
             "/permissions",
             "/mcp",
@@ -200,6 +201,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/keys",),
         "List the key bindings (full-screen TUI; [keys] remaps in config.toml)",
         "_cmd_keys",
+    ),
+    CommandSpec(
+        ("/copy",),
+        "Select and copy a range of the chat (full-screen TUI; F2)",
+        "_cmd_copy",
     ),
     CommandSpec(
         ("/undo",),
@@ -695,6 +701,17 @@ class CommandHandler:
             "Restart phoson-cli (or start the TUI) to apply; an unparseable "
             "sequence or a key bound to two actions is an error at startup."
         )
+        return True
+
+    async def _cmd_copy(self, cmd: Command) -> bool:  # noqa: ARG002
+        """Enter the full-screen copy mode (IMPROVEMENTS.md G3, #57).
+
+        The TUI-only equivalent of F2: anchor the top of the visible pane,
+        extend a range with the arrows, and yank it to the system clipboard.
+        In the classic REPL the host degrades to a notice (no selectable
+        chat pane there).
+        """
+        self.host.start_copy_mode()
         return True
 
     async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002

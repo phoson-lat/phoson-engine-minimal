@@ -79,6 +79,15 @@ class CommandHost(Protocol):
 
     async def run_setup(self) -> None: ...
 
+    def start_copy_mode(self) -> None:
+        """Enter the full-screen copy mode (IMPROVEMENTS.md G3).
+
+        Host-specific: only the full-screen front end has a selectable chat
+        pane, so the classic host degrades to a notice (the feature is
+        TUI-only).
+        """
+        ...
+
 
 class RendererCommandHost:
     """Classic host: Rich renderer + prompt_toolkit pickers.
@@ -183,6 +192,13 @@ class RendererCommandHost:
         self.repl.config = await commands_mod.run_install_wizard(self.repl.config)
         await self.repl.set_model(self.repl.config.model)
         self.print_info("Setup completed.")
+
+    def start_copy_mode(self) -> None:
+        """Classic front end has no selectable chat pane (G3 is TUI-only)."""
+        self.print_info(
+            "Copy mode (arrow-select a range → Enter to copy) is only "
+            "available in the full-screen TUI (the default front end)."
+        )
 
 
 __all__ = [

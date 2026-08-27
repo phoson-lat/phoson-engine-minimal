@@ -139,13 +139,14 @@ submit = ""                       # unbind the action
 
 Rules:
 
-- One line per **action** (the 15 defaults: `submit`, `newline`,
+- One line per **action** (the 16 defaults: `submit`, `newline`,
   `page_up`, `page_down`, `line_up`, `line_down`, `scroll_home`,
   `scroll_end`, `clear`, `toggle_reasoning`, `ctrl_d`, `paste_image`,
-  `escape`, `undo_jump`, `exit`).
+  `copy_mode`, `escape`, `undo_jump`, `exit`).
 - Each value is a prompt_toolkit key sequence (`"c-x"`, `"f13"`,
   `"s-up"`, …); a chord is a space-separated string (`"c-x c-e"`).
 - `""` unbinds the action; `[]` is rejected (use `""`).
+- `copy_mode` (default `F2`) opens the keyboard copy mode (G3).
 - `undo_jump` (default `Ctrl+Z`) undoes the most recent rewind jump
   (G1 double-Esc). The composer buffer ignores `Ctrl+Z`, so the key is
   free.
@@ -182,6 +183,36 @@ cursor, pre-fills the composer with the selected turn's text, and pushes
 the previous cursor onto `PhosonApp._rewind_stack` (consecutive rewinds
 stack). `undo_jump` (`Ctrl+Z`) pops that stack in reverse order and
 redraws forward.
+
+### Copy mode (full-screen TUI)
+
+The full-screen app captures the terminal's mouse to support smooth
+chat scroll-wheel (`mouse_support=True`), which prevents the terminal
+from offering native click-drag text selection. Copy mode
+(IMPROVEMENTS.md G3, issue #57) is the universal, keyboard-driven
+solution:
+
+- **Entry:** Press `F2` (the `copy_mode` action, remappable via `[keys]`)
+  or type `/copy`. The anchor is placed at the top-left cell of the
+  visible chat pane and the cursor at the bottom-right cell — so the
+  entire visible page is selected immediately.
+- **Navigation:**
+  - `↑` / `↓` / `←` / `→`: Extend the cursor one character or line.
+    `←` and `→` wrap across row boundaries naturally.
+  - `Home` / `End`: Jump cursor to the start/end of the current row.
+  - `PgUp` / `PgDn`: Jump cursor a full visible page.
+  - The selected rows are highlighted in reverse video (`\x1b[7m`).
+  - The bottom footer displays copy-mode key hints:
+    `[↑/↓/←/→] Move  [PgUp/PgDn] Jump page  [Enter] Copy  [Esc] Cancel`.
+- **Yank to clipboard:** Press `Enter` (or `Ctrl+Y`) to copy the
+  selected text to the system clipboard via the appropriate platform
+  tool (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS) — the
+  exact write counterpart of the Ctrl+V paste mechanism. A toast reports
+  how many characters were copied.
+- **Cancel:** Press `Esc` to exit copy mode without copying.
+- **Mouse fallback:** On terminals that support mouse bypass (e.g.,
+  holding `Shift` while dragging in GNOME Terminal, iTerm2, or Alacritty),
+  native click-drag selection continues to work directly.
 
 ### Model registry (`~/.phoson/models.json`)
 

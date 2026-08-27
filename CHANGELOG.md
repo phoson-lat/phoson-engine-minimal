@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.2 (2026-08-27)
+
+### Feat
+
+- **cli**: keyboard copy mode — select and copy chat text (IMPROVEMENTS.md
+  G3, issue #57). In the full-screen app the chat scroll-wheel needs
+  `mouse_support=True`, which makes the terminal send raw mouse events to
+  the app and removes its native click-drag text selection. This release
+  adds a terminal-independent answer that works in every emulator: a
+  transient *copy mode* where you anchor a start point, extend a range
+  with the arrows, and yank it to the system clipboard.
+
+  - *Entry.* `F2` (new `copy_mode` action, remappable/unbindable like every
+    other key via the `[keys]` section) or the new `/copy` command. Entering
+    anchors the top-left cell of the *visible* pane and starts the cursor at
+    the bottom-right cell, so the whole visible page is pre-selected — the
+    common "copy what I'm looking at" case is one `Enter` away.
+  - *Navigation.* Arrows move the extending endpoint (left/right wrap across
+    line ends; up/down keep the column), `Home`/`End` jump to the row's
+    start/end, `PgUp`/`PgDn` jump a full page. The selection is a row-level
+    band drawn in reverse video over the cached chat ANSI, and the footer
+    swaps to the copy-mode hints (`[Enter] Copy · [Esc] Cancel`).
+  - *Yank.* `Enter` (or `Ctrl+Y`) copies the range to the system clipboard —
+    Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — the inverse of the
+    existing Ctrl+V read path. A success line reports the character count;
+    with no clipboard tool (e.g. a bare SSH session) a notice explains why
+    the selection was not copied. `Esc` cancels.
+  - *Key routing.* While copy mode is active the base key map is gated off,
+    focus moves onto the chat window, and an app-level copy key set
+    (installed via `DynamicKeyBindings`, active only while the mode is on)
+    owns arrows/Enter/Esc/Ctrl+Y — so the composer's buffer bindings can no
+    longer intercept them, and typing is unaffected outside the mode.
+  - *Mouse.* `mouse_support` stays on for the scroll-wheel; where a terminal
+    supports it (GNOME Terminal, iTerm2, Alacritty, …) holding `Shift`
+    while dragging still bypasses the app's mouse capture and selects
+    natively — copy mode is the guaranteed fallback everywhere.
+  - *Docs:* README UI + key-bindings sections, a "Copy mode" section in
+    `docs/api/phoson_cli.md`, IMPROVEMENTS.md G3 marked done (v0.13.2);
+    version bumped 0.13.1 → 0.13.2.
+
+  Tests: `tests/phoson_cli/test_g3_copy_mode_unit.py` (35 new) — the pure
+  range math (same-line/multi-line, order independence, clamping, page
+  stepping, ANSI→lines, the highlight pass), the clipboard write side, the
+  key-map wiring (`F2` default + remap/unbind + config load), the
+  `/copy` command in both front ends, and end-to-end key routing through
+  the real VT100 input layer (`F2` → arrows → `Enter` copies and exits;
+  `F2` → `Esc` cancels; typing is not steered).
+
 ## v0.13.1 (2026-08-26)
 
 ### Feat

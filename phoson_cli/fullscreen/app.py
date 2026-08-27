@@ -20,6 +20,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
+from collections.abc import Callable
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -30,7 +31,7 @@ from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.layout.layout import Layout
-from prompt_toolkit.formatted_text import ANSI, HTML
+from prompt_toolkit.formatted_text import ANSI, HTML, to_formatted_text
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -66,7 +67,9 @@ from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import (
     read_clipboard_text,
+    clipboard_write_hint,
     read_clipboard_image,
+    write_clipboard_text,
     macos_image_tool_hint,
 )
 from .completer import (
@@ -76,6 +79,15 @@ from .completer import (
     ResumeArgCompleter,
     StaticArgCompleter,
     SessionsArgCompleter,
+)
+from .copy_range import (
+    Pos,
+    step_page,
+    range_text,
+    plain_lines,
+    clamp_position,
+    selection_line_span,
+    apply_reverse_highlight,
 )
 from ..controller import MAX_RESUME_REPLAY_MESSAGES
 from ..formatting import format_token_indicator
@@ -88,7 +100,12 @@ from .session_cache import SessionListCache
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
     "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
+    "  [F2] Copy  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
+)
+
+_FOOTER_HINT_COPY = (
+    '<style class="footer"> [↑/↓/←/→] Move  [PgUp/PgDn] Jump page  '
+    "[Enter] Copy  [Esc] Cancel</style>"
 )
 
 # How often the subagent panel animation frame advances while active.
@@ -118,10 +135,25 @@ _AGENTS_MD_CACHE_SECONDS = 5.0
 # internally (IMPROVEMENTS.md A2).
 _INPUT_MAX_LINES = 5
 
+# Copy mode (IMPROVEMENTS.md G3): the pane is already fully rendered to a
+# width-capped ANSI string in ``_cached_ansi``; the selection range math works
+# over the *untrimmed* transcript lines at that width. A page step moves the
+# extending endpoint by one visible page (in lines) of the chat pane.
 # Default persistent input-history file — the *same* file the classic REPL
 # writes (see ``PhosonRepl.run``), so the two front ends share one history.
 # Overridable per-run via ``PhosonConfig.history_file`` (used by tests).
 _DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
+
+
+def _ansi_fragments(ansi: ANSI) -> list[tuple[str, str]]:
+    """Parse *ansi* into the ``(style, text)`` shape ``copy_range`` consumes.
+
+    ``to_formatted_text`` can emit a 3-tuple ``(style, text, mouse_handler)``
+    for clickable fragments; the chat pane never uses those, so the extra
+    element is dropped here at the boundary and the pure range helpers stay
+    free of prompt_toolkit types.
+    """
+    return [(style, text) for style, text, *_ in to_formatted_text(ansi)]
 
 
 def _one_line(text: str) -> str:
@@ -143,6 +175,12 @@ class PhosonApp:
         self._auto_scroll = True
         self._total_chat_lines = 1
         self._cached_ansi = ANSI("")
+        # The un-highlighted transcript at the current width; copy mode
+        # re-derives the highlighted view from this every pass (G3).
+        self._chat_base_ansi = ANSI("")
+        # Plain (no-escape) lines of the current render — the coordinate space
+        # for copy-mode range math and navigation.
+        self._chat_plain_lines: list[str] = []
         self._cache_dirty = True
         self._last_width = 80
         # Immutable transcript blocks render to ANSI once per width (#perf).
@@ -165,6 +203,24 @@ class PhosonApp:
         # active Float's own bindings run — see `_build_application`.
         self._active_float: Float | None = None
         self._float_kb: KeyBindings | None = None
+
+        # Copy mode (IMPROVEMENTS.md G3, #57): the full-screen app captures
+        # the mouse for the chat scroll-wheel, which removes the terminal's
+        # native click-drag selection. Copy mode is the terminal-independent
+        # answer: a transient overlay where the user anchors a start point,
+        # extends a range with the arrows, and yanks it to the system
+        # clipboard. ``_copy_anchor`` is fixed at entry; ``_copy_cursor`` is
+        # the live endpoint (either order selects the span between them).
+        # ``_copy_active`` gates the base bindings off and the copy bindings
+        # on (see ``_build_application``).
+        self._copy_active = False
+        self._copy_anchor: Pos = Pos(0, 0)
+        self._copy_cursor: Pos = Pos(0, 0)
+        # Built once: the copy-mode key set is static (it binds to bound
+        # methods that read live state), so it is created here and exposed to
+        # the Application via a DynamicKeyBindings that is only active while
+        # ``_copy_active`` is True (see ``_build_application``).
+        self._copy_kb = self._build_copy_key_bindings()
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -275,8 +331,10 @@ class PhosonApp:
         bottom_margin = Window(height=1, char="—", style="class:separator")
         # The footer is intentionally keyboard hints only. Stable runtime
         # facts live in the compact header, avoiding duplicated UI chrome.
+        # Its text is dynamic (``_get_footer_text``): the normal hint row
+        # swaps for the copy-mode hints while copy mode is active (G3).
         footer_window = Window(
-            content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
+            content=FormattedTextControl(self._get_footer_text), height=1
         )
 
         main_container = HSplit(
@@ -307,17 +365,28 @@ class PhosonApp:
         # would also trigger the chat's submit handler underneath it.
         # `DynamicKeyBindings` then layers in whichever Float is currently
         # active (`None` when idle, meaning "no extra bindings").
+        #
+        # Copy mode (G3) needs the *same* gating: while it is active the
+        # base bindings are off (so a lone arrow / Enter / Esc can't scroll
+        # the chat or submit the composer underneath) and a dedicated
+        # :class:`ConditionalKeyBindings` set for copy mode is on. Focus
+        # moves onto the (non-focusable) chat window, so the composer's own
+        # buffer bindings no longer have priority — the app-level copy
+        # bindings win for Enter/arrows/Esc/Ctrl+Y (see ``enter_copy_mode``).
         base_kb = ConditionalKeyBindings(
             build_key_bindings(
                 self,
                 overrides=getattr(self._config, "key_bindings", None),
             ),
-            Condition(lambda: self._active_float is None),
+            Condition(lambda: self._active_float is None and not self._copy_active),
+        )
+        copy_kb = DynamicKeyBindings(
+            lambda: self._copy_kb if self._copy_active else None
         )
         float_kb = DynamicKeyBindings(lambda: self._float_kb)
         return Application(
             layout=self._layout,
-            key_bindings=merge_key_bindings([base_kb, float_kb]),
+            key_bindings=merge_key_bindings([base_kb, copy_kb, float_kb]),
             full_screen=True,
             mouse_support=True,
         )
@@ -485,6 +554,15 @@ class PhosonApp:
             f'<style class="header_dim">{update_part}</style>'
         )
 
+    def _get_footer_text(self) -> HTML:
+        """Keyboard-hint footer line.
+
+        Normally :data:`_FOOTER_HINT`; while copy mode is active it swaps for
+        :data:`_FOOTER_HINT_COPY` so the on-screen hints always describe the
+        keys that currently do something (G3).
+        """
+        return HTML(_FOOTER_HINT_COPY if self._copy_active else _FOOTER_HINT)
+
     def _has_agents_md(self) -> bool:
         """Whether any AGENTS.md/CLAUDE.md memory file applies here.
 
@@ -515,16 +593,35 @@ class PhosonApp:
         return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
 
     def _render_chat(self) -> ANSI:
+        """Render the chat pane, highlighting the selection in copy mode (G3).
+
+        The *base* transcript (blocks + in-flight turn) is rendered to ANSI at
+        the pane width only when the sink is dirty or the width changed, and
+        cached in ``_chat_base_ansi``. While copy mode is active, the selected
+        rows are additionally wrapped in a reverse-video marker before the
+        string is wrapped — the highlight is derived from the cached base on
+        every pass (the sink is stable during copy mode), so exiting copy
+        mode restores the plain view with no cache invalidation.
+        """
         term_width = shutil.get_terminal_size((80, 24)).columns
         width = max(40, term_width - 4)
 
         if self.sink.dirty or width != self._last_width:
             text = render_chat(self.sink, width, self._block_ansi_cache)
-            self._cached_ansi = ANSI(text)
+            self._chat_base_ansi = ANSI(text)
             self._total_chat_lines = max(1, len(text.splitlines()))
+            self._chat_plain_lines = plain_lines(_ansi_fragments(ANSI(text)))
             self.sink.dirty = False
             self._last_width = width
 
+        if not self._copy_active:
+            self._cached_ansi = self._chat_base_ansi
+            return self._cached_ansi
+
+        fragments = _ansi_fragments(self._chat_base_ansi)
+        lines = self._chat_plain_lines
+        lo, hi = selection_line_span(lines, self._copy_anchor, self._copy_cursor)
+        self._cached_ansi = ANSI(apply_reverse_highlight(fragments, lo, hi))
         return self._cached_ansi
 
     # ── Input handling ───────────────────────────────────────────────────
@@ -928,6 +1025,214 @@ class PhosonApp:
         self.sink.blocks.append(self._banner_block)
         self.sink.dirty = True
         self.app.invalidate()
+
+    # ── Copy mode (IMPROVEMENTS.md G3, #57) ────────────────────────────────
+
+    def _copy_lines(self) -> list[str]:
+        """The plain transcript lines copy mode navigates (cached per render)."""
+        if self._chat_plain_lines:
+            return self._chat_plain_lines
+        return plain_lines(_ansi_fragments(self._chat_base_ansi))
+
+    def _visible_anchor(self) -> tuple[int, int]:
+        """The ``(line, col)`` of the top-left cell of the visible chat pane.
+
+        The chat text is rendered already wrapped to the pane width, so each
+        plain line is exactly one visible row and the visible window is the
+        contiguous row range ``scroll .. scroll + height - 1``. The anchor
+        therefore lands on the first visible line, column 0.
+        """
+        lines = self._copy_lines()
+        if not lines:
+            return (0, 0)
+        scroll = self._get_effective_scroll()
+        return (min(scroll, len(lines) - 1), 0)
+
+    def _visible_cursor(self) -> Pos:
+        """The ``(line, col)`` of the bottom-right cell of the visible pane.
+
+        The starting cursor when copy mode opens — one full visible page of
+        text is selected by default, so the common "copy what I'm looking at"
+        case is a single Enter away.
+        """
+        lines = self._copy_lines()
+        if not lines:
+            return Pos(0, 0)
+        scroll = self._get_effective_scroll()
+        height = self._get_visible_window_height()
+        bottom = min(scroll + height - 1, len(lines) - 1)
+        return Pos(bottom, len(lines[bottom]))
+
+    def enter_copy_mode(self) -> None:
+        """F2: open copy mode — anchor at the top of the visible pane.
+
+        The full-screen app captures the mouse for the chat scroll-wheel
+        (``mouse_support=True``), which removes the terminal's native
+        click-drag selection. Copy mode is the terminal-independent answer:
+        the anchor is fixed here, the cursor starts at the bottom of the
+        visible pane (a full page selected), and the user extends with the
+        arrows before pressing Enter to yank the range.
+        """
+        if self._active_float is not None or self._is_run_in_flight():
+            self.sink.notify(
+                "info", "Not while a run is in flight or a picker is open."
+            )
+            return
+        # Even an empty transcript renders a placeholder row, so there is
+        # always something to anchor on; the recompute path is exercised by
+        # the test that empties the cache.
+        self._copy_anchor = Pos(*self._visible_anchor())
+        self._copy_cursor = self._visible_cursor()
+        self._copy_active = True
+        # Move focus onto the chat window so the composer's buffer bindings
+        # (which would otherwise intercept arrows/Enter/Ctrl+Y) no longer
+        # have priority; the app-level copy bindings then handle everything.
+        # (The base bindings are already gated off by ``_copy_active``.)
+        self.app.layout.focus(self._chat_window)
+        self.app.invalidate()
+
+    def _copy_set_cursor(self, pos: Pos) -> None:
+        lines = self._copy_lines()
+        self._copy_cursor = clamp_position(lines, pos)
+        self.app.invalidate()
+
+    def _copy_move(self, dline: int, dcol: int) -> None:
+        """Arrow: move the extending endpoint by ``dline`` rows / ``dcol`` chars.
+
+        Left/right wrap to the end/start of the neighbouring row so a full
+        line can be traversed without bouncing; up/down keep the column
+        (clamped to the destination row's length).
+        """
+        lines = self._copy_lines()
+        if not lines:
+            return
+        c = self._copy_cursor
+        if dcol == -1:
+            if c.col > 0:
+                self._copy_set_cursor(Pos(c.line, c.col - 1))
+            elif c.line > 0:
+                self._copy_set_cursor(Pos(c.line - 1, len(lines[c.line - 1])))
+            return
+        if dcol == 1:
+            if c.col < len(lines[c.line]):
+                self._copy_set_cursor(Pos(c.line, c.col + 1))
+            elif c.line < len(lines) - 1:
+                self._copy_set_cursor(Pos(c.line + 1, 0))
+            return
+        if dline < 0:
+            if c.line > 0:
+                self._copy_set_cursor(Pos(c.line - 1, c.col))
+            return
+        if c.line < len(lines) - 1:
+            self._copy_set_cursor(Pos(c.line + 1, c.col))
+
+    def copy_move_up(self) -> None:
+        self._copy_move(-1, 0)
+
+    def copy_move_down(self) -> None:
+        self._copy_move(1, 0)
+
+    def copy_move_left(self) -> None:
+        self._copy_move(0, -1)
+
+    def copy_move_right(self) -> None:
+        self._copy_move(0, 1)
+
+    def _copy_page(self, direction: int) -> None:
+        """PgUp/PgDn: jump the extending endpoint a full page (in lines)."""
+        step = direction * max(1, self._get_visible_window_height())
+        self._copy_set_cursor(step_page(self._copy_lines(), self._copy_cursor, step))
+
+    def copy_page_up(self) -> None:
+        self._copy_page(-1)
+
+    def copy_page_down(self) -> None:
+        self._copy_page(1)
+
+    def _copy_to_clipboard(self) -> None:
+        """Yank the current range to the system clipboard (Ctrl+Y in copy mode)."""
+        lines = self._copy_lines()
+        text = range_text(lines, self._copy_anchor, self._copy_cursor)
+        if not text.strip():
+            self.sink.notify(
+                "warn", "Nothing selected (extend the range with the arrows)."
+            )
+            return
+        self.app.create_background_task(self._copy_to_clipboard_async(text))
+
+    async def _copy_to_clipboard_async(self, text: str) -> None:
+        ok = await write_clipboard_text(text)
+        if ok:
+            count = len(text)
+            self.sink.notify("info", f"Copied {count} characters to the clipboard.")
+        else:
+            hint = clipboard_write_hint()
+            self.sink.notify(
+                "warn",
+                "Could not copy: no clipboard tool available"
+                + (f" — {hint}." if hint else "."),
+            )
+
+    def exit_copy_mode(self, *, copied: bool = False) -> None:
+        """Leave copy mode and restore the composer focus + base bindings.
+
+        ``copied`` is informational (the notice was already raised by the copy
+        action); the exit itself always restores focus and re-enables the base
+        key bindings.
+        """
+        self._copy_active = False
+        self.app.layout.focus(self._prompt_input)
+        self.app.invalidate()
+
+    def copy_cancel(self) -> None:
+        """Esc in copy mode: leave without copying."""
+        self.exit_copy_mode()
+
+    def copy_copy(self) -> None:
+        """Enter in copy mode: yank the range, then exit."""
+        self._copy_to_clipboard()
+        self.exit_copy_mode(copied=True)
+
+    def _build_copy_key_bindings(self) -> KeyBindings:
+        """The app-level key set active while ``_copy_active`` is True (G3).
+
+        Merged into the Application alongside the base bindings (which are
+        gated off during copy mode) and any Float. Focus is on the chat
+        window, so the composer's buffer bindings are not in the active set —
+        these handlers own arrows, Enter, Esc and Ctrl+Y for the duration.
+        """
+        kb = KeyBindings()
+
+        def _bind(sequence: str, method: Callable[[], None]) -> None:
+            # Bound handlers receive a KeyPressEvent; the copy-mode methods
+            # are no-arg, so ignore the event (same pattern as keys.py).
+            def _handler(_event: object, _m: Callable[[], None] = method) -> None:  # noqa: ARG001
+                _m()
+
+            kb.add(sequence)(_handler)  # type: ignore[call-overload]
+
+        _bind("up", self.copy_move_up)
+        _bind("down", self.copy_move_down)
+        _bind("left", self.copy_move_left)
+        _bind("right", self.copy_move_right)
+        _bind("home", self._copy_move_to_line_start)
+        _bind("end", self._copy_move_to_line_end)
+        _bind("pageup", self.copy_page_up)
+        _bind("pagedown", self.copy_page_down)
+        _bind("enter", self.copy_copy)
+        _bind("c-m", self.copy_copy)
+        _bind("c-y", self._copy_to_clipboard)
+        _bind("escape", self.copy_cancel)
+        return kb
+
+    def _copy_move_to_line_start(self) -> None:
+        c = self._copy_cursor
+        self._copy_set_cursor(Pos(c.line, 0))
+
+    def _copy_move_to_line_end(self) -> None:
+        lines = self._copy_lines()
+        c = self._copy_cursor
+        self._copy_set_cursor(Pos(c.line, len(lines[c.line]) if lines else 0))
 
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
