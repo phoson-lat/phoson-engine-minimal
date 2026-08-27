@@ -1,10 +1,12 @@
 """Unit tests for ``phoson_cli.session_utils.build_system_prompt``.
 
-Covers the two P0 prompt-accuracy fixes (IMPROVEMENTS.md B1 & B2):
+Covers the prompt-accuracy and prompt-caching fixes:
 
 - B1: the clock must use the *system* timezone, not a hardcoded zone.
 - B2: the tool list must be derived from the actual registry, not a
   hardcoded string.
+- G2: the prompt is the stable prefix of every request (prompt caching),
+  so a live clock (hours/minutes/seconds) must not appear in it.
 """
 
 import time
@@ -83,3 +85,31 @@ def test_system_prompt_mcp_note_still_works() -> None:
     prompt = build_system_prompt([_tool("bash"), _tool("mcp_github_get_user")])
     assert "MCP tools (names prefixed 'mcp_') are also available" in prompt
     assert "mcp_github_get_user" in prompt
+
+
+# ── G2: stable prefix for prompt caching ─────────────────────────────────────
+
+
+def test_system_prompt_uses_date_not_live_clock() -> None:
+    """G2: the prefix carries the date, never hours/minutes/seconds.
+
+    A live clock would change the system prompt on every request and
+    bust the provider's prompt cache for the entire prefix.
+    """
+    now = datetime.now().astimezone()
+    prompt = build_system_prompt([_tool("bash")])
+    assert f"Current date is {now.strftime('%Y-%m-%d')}" in prompt
+    assert now.strftime("%H:%M:%S") not in prompt
+    # The old wording must be gone entirely.
+    assert "Current time is" not in prompt
+
+
+def test_system_prompt_is_stable_across_builds() -> None:
+    """G2: two builds in the same session produce byte-identical prefixes.
+
+    This is the property the prompt cache actually needs: anything that
+    changes between turns (time of day, run state) must not appear.
+    """
+    first = build_system_prompt([_tool("bash"), _tool("agent")])
+    second = build_system_prompt([_tool("bash"), _tool("agent")])
+    assert first == second
