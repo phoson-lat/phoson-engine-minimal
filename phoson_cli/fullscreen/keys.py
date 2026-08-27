@@ -51,6 +51,7 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     "ctrl_d": ["c-d"],
     "paste_image": ["c-v"],
     "escape": ["escape"],
+    "undo_jump": ["c-z"],
     # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
     # classic roles (Ctrl+C also keeps its SIGINT handling elsewhere).
     "exit": ["c-q", "c-c"],
@@ -73,6 +74,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "ctrl_d": "handle_ctrl_d",
     "paste_image": "paste_image",
     "escape": "handle_escape",
+    "undo_jump": "undo_jump",
     "exit": "request_exit",
 }
 
@@ -148,7 +150,8 @@ def build_key_bindings(
             if action == "escape":
                 # escape must stay eager (see app.py) so a double-tap
                 # during a run is never swallowed as a prefix of a
-                # longer sequence.
+                # longer sequence, and so the single-Esc run cancel
+                # (#68) always fires immediately.
                 kb.add(*sequence.split(), eager=True)(_handler)  # type: ignore[call-overload]
             else:
                 kb.add(*sequence.split())(_handler)  # type: ignore[call-overload]

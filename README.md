@@ -488,6 +488,23 @@ an unknown action, or a sequence bound to two actions is a clear error
 before the UI opens — never a silent fallback. Remaps apply on the next
 start. The classic REPL's single global key (Ctrl+T) is fixed.
 
+**Rewind (double-Esc, full-screen TUI):** press `Esc` twice in quick
+succession while idle and a picker lists your earlier messages —
+select one to jump the conversation back to just before it, the same
+UX as Claude Code's double-Esc. The chat pane redraws up to that point,
+your composer is pre-filled with the selected message (edit it and
+press Enter to re-send), and `Ctrl+Z` undoes the jump, restoring the
+previous point (repeat it to undo several consecutive rewinds). The
+"undone" messages are not deleted — they remain as an abandoned branch
+in the conversation tree (still visible via `/tree`), and session
+cost/token totals stay cumulative (same contract as `/undo`). Precedence
+with the single-Esc run cancel is fixed: a lone `Esc` while a turn is
+running still cancels it immediately, and double-Esc is only interpreted
+when idle. The double-tap rides on whatever key `escape` is bound to —
+remapping `escape` in `[keys]` moves both the single-Esc cancel and the
+double-Esc rewind together (unbinding `escape` disables both); the jump
+undo `undo_jump` (default `Ctrl+Z`) is remappable on its own.
+
 **`@file` mentions:** type `@` in the message and the composer offers
 repo paths (fuzzy-filtered as you type, with a size hint per file);
 selecting one inserts the path. On send, each `@mention` is expanded into
@@ -561,11 +578,15 @@ experience; it offers a persistent scrollable chat pane, multiline input
 floats. The multiline composer wraps long pasted lines, takes only the
 height it needs (up to five lines), and scrolls internally after that cap. If
 a turn is already running, `Enter` keeps the draft and shows a warning; press
-`Esc` to cancel the active turn before sending it. The chat also shows a
-transient animated activity line immediately after sending (`Thinking…` with
-rotating phrases, then `Streaming…` / `Running tool…` as applicable), which
-vanishes when the turn settles. One-shot mode (`phoson-cli "task"`) is always
-stdout-only.
+`Esc` to cancel the active turn before sending it. While idle, press `Esc`
+twice to **rewind** the conversation to an earlier message (a picker lists
+your previous messages; the pane redraws to the chosen point and your
+composer is pre-filled with that message — `Ctrl+Z` undoes the jump); see
+[Key bindings (customizable)](#key-bindings-customizable) below. The chat
+also shows a transient animated activity line immediately after sending
+(`Thinking…` with rotating phrases, then `Streaming…` / `Running tool…` as
+applicable), which vanishes when the turn settles. One-shot mode
+(`phoson-cli "task"`) is always stdout-only.
 ---
 
 ## 🔒 CI and security workflows

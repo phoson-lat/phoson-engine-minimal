@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.0 (2026-08-26)
+
+### Feat
+
+- **cli**: double-Esc rewind to an earlier message (IMPROVEMENTS.md G1,
+  issue #51). Press `Esc` twice in quick succession while idle and a
+  picker lists the user turns of the active conversation path; selecting
+  one jumps the conversation back to *just before* that message — the
+  same UX as Claude Code's double-Esc. The full-screen chat pane
+  redraws up to the chosen point, the composer is pre-filled with the
+  selected message (edit and Enter to re-send), and `Ctrl+Z` undoes the
+  jump, restoring the previous point.
+
+  - *Controller.* `SessionController` gains the rewind primitive set —
+    `jump_candidates()` (user turns on the active path, oldest first, as
+    `(node_id, preview)` pairs), `jump_to_user_turn()` (land the cursor
+    on the node *before* a selected user turn) and `jump_to_node()`
+    (move to any tree node — what `undo_jump` uses to move forward
+    again). All three are generalizations of `undo_last_turn`, which now
+    shares the new `_node_path()` helper. The "undone" messages are not
+    deleted — they remain in the tree as an abandoned branch (visible
+    via `/tree`), and session cost/token metrics stay cumulative
+    (intentionally not rolled back, the same contract as `/undo`).
+  - *Picker.* New `phoson_cli/rewind_picker.py` — a paged
+    `BasePicker` (same scaffolding as the session picker) hosted as a
+    modal Float in the TUI; the classic front end reuses it via
+    `run()`.
+  - *TUI.* `PhosonApp`: double-tap detection inside `handle_escape`
+    (1.0 s window over the monotonic clock) — a native `"escape
+    escape"` chord can never work here because the single `escape`
+    binding is registered `eager` (that eagerness is what keeps the
+    single-Esc run cancel of #68 immediate, and it consumes each press).
+    The window is deliberately larger than prompt_toolkit's
+    `ttimeoutlen` (0.5 s): the VT100 input layer delays delivery of a
+    lone Esc by `ttimeoutlen` to disambiguate it from the start of an
+    escape sequence, so the *delivered* gap between two idle Escs
+    clamps to ~0.5 s and a 0.5 s window would miss real double-taps.
+    Precedence is therefore explicit: in flight, `Esc` cancels the run
+    and records no double-tap state; idle, a second `Esc` within the
+    window opens the picker. On rewind the app rebuilds the transcript
+    from the tree (`_reset_transcript()` drops the blocks and the ANSI
+    block cache, re-seeds the banner, then `print_history()` replays the
+    new path — the same mechanism `/resume` uses), refreshes the header
+    token estimate, pre-fills the composer with the selected turn's
+    text, and pushes the previous cursor onto a rewind stack.
+    `undo_jump()` (`Ctrl+Z`) pops that stack in reverse order and
+    redraws forward; consecutive rewinds stack, so repeated `Ctrl+Z`
+    walks back through each of them.
+  - *Key bindings (E6 table).* New `undo_jump` action (default `Ctrl+Z`,
+    remappable; the composer buffer ignores `Ctrl+Z`, so the key is
+    free). The double-tap is deliberately **not** its own action: it
+    rides on the `escape` action, so remapping `escape` moves the
+    single-Esc cancel and the double-Esc rewind together, and
+    `escape = ""` disables both. Footer hint adds `[Esc Esc] Rewind`.
+  - *Docs:* README "Rewind (double-Esc)" + the UI paragraph;
+    `docs/api/phoson_cli.md` key-bindings and rewind sections;
+    IMPROVEMENTS.md G1 marked done (v0.13.0); version bumped.
+
+  Tests: `tests/phoson_cli/test_g1_rewind_unit.py` (26 new) —
+  controller primitives (candidate list/preview, landing before the
+  selected turn, off-path/non-user/root rejections, forward restore via
+  `jump_to_node`, unknown id, re-sending branches from the landing
+  point), key-map wiring (default `undo_jump`, no phantom `rewind`
+  action or chord, remap like any action, `rewind` rejected as an
+  unknown `[keys]` action), double-tap state (lone Esc arms without
+  side effects, second Esc within the window opens the picker, stale
+  press just re-arms, in-flight Esc still cancels and never rewinds,
+  rewind ignored while a float is open), apply/undo (redraw drops the
+  abandoned branch, composer pre-fill, token estimate, bad node →
+  notice only, `undo_jump` restore, stacked rewinds unwind in reverse,
+  `undo_jump` without a rewind is one notice, `_reset_transcript`
+  re-seeds the banner and drops the block cache), and real-keystroke
+  PipeInput e2e (Esc Esc idle opens the picker exactly once, a lone
+  idle Esc does nothing, `Ctrl+Z` without a rewind notifies).
+  Suite now 1324 passing, pyright 0 errors, ruff clean.
+
 ## v0.12.6 (2026-08-26)
 
 ### Feat
