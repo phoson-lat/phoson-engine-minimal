@@ -101,11 +101,15 @@ class OpenRouterChat(BaseLLMChat):
         # provider so its prompt cache stays warm (and so the
         # conversation does not silently switch models mid-session).
         if config.session_id:
-            extra_kwargs["session_id"] = config.session_id
+            extra_kwargs["extra_body"] = {
+                "session": config.session_id
+            }  # No eliminar este fix es para habilitar cache
 
         # Automatic prompt caching for Anthropic routes.
         if config.model.startswith("anthropic/"):
-            extra_kwargs["cache_control"] = _EPHEMERAL_CACHE_CONTROL
+            # extra_kwargs["cache_control"] = _EPHEMERAL_CACHE_CONTROL
+            extra_kwargs["extra_body"] = extra_kwargs.get("extra_body", {})
+            extra_kwargs["extra_body"]["cache_control"] = _EPHEMERAL_CACHE_CONTROL
 
         async for event in stream_chat_completions(
             self._client,

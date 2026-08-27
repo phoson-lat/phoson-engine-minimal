@@ -176,9 +176,10 @@ async def test_openrouter_forwards_session_id_for_sticky_routing() -> None:
     ):
         pass
 
-    assert captured["session_id"] == "sess-123"
+    extra_body = captured.get("extra_body", {})
+    assert extra_body.get("session") == "sess-123"
     # Anthropic route → automatic caching enabled.
-    assert captured["cache_control"] == {"type": "ephemeral"}
+    assert extra_body.get("cache_control") == {"type": "ephemeral"}
 
 
 @pytest.mark.asyncio
@@ -194,10 +195,11 @@ async def test_openrouter_omits_cache_fields_when_not_applicable() -> None:
     ):
         pass
 
+    extra_body = captured.get("extra_body", {})
     # Non-anthropic model: no cache_control.
-    assert "cache_control" not in captured
+    assert "cache_control" not in extra_body
     # No session id → no sticky routing key.
-    assert "session_id" not in captured
+    assert "session" not in extra_body
 
 
 @pytest.mark.asyncio
@@ -213,5 +215,6 @@ async def test_openrouter_sends_cache_control_for_anthropic_without_session() ->
     ):
         pass
 
-    assert captured["cache_control"] == {"type": "ephemeral"}
-    assert "session_id" not in captured
+    extra_body = captured.get("extra_body", {})
+    assert extra_body.get("cache_control") == {"type": "ephemeral"}
+    assert "session" not in extra_body
