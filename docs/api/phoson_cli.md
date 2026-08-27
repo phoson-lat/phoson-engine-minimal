@@ -151,9 +151,13 @@ Rules:
   free.
 - The double-Esc rewind (G1) is *not* an action of its own: it rides on
   the `escape` key. `escape` is bound eager so a lone Esc mid-run always
-  cancels immediately (#68), and the app detects a second `escape`
-  within 0.5 s (a native `"escape escape"` chord could never fire while
-  the single eager `escape` binding consumes each press). Remapping
+  cancels immediately (#68), and the app detects a second `escape` within
+  a 1.0 s window (a native `"escape escape"` chord could never fire while
+  the single eager `escape` binding consumes each press). The window is
+  deliberately larger than prompt_toolkit's `ttimeoutlen` (0.5 s) — that
+  value delays delivery of a *lone* Esc to disambiguate it from the start
+  of an escape sequence, so the delivered gap between two idle Escs clamps
+  to ~0.5 s and a 0.5 s window would miss real double-taps. Remapping
   `escape` moves the single-Esc cancel and the double-Esc rewind
   together; `escape = ""` disables both.
 - Sequences are validated at startup by

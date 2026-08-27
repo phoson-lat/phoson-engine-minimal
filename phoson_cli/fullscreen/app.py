@@ -95,11 +95,19 @@ _FOOTER_HINT = (
 _SUBAGENT_TICK_SECONDS = 0.12
 
 # Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
-# (measured in monotonic seconds) opens the rewind picker. Wide enough to
-# cover a human double-tap, narrow enough that a lone idle Esc never
-# triggers it. The *single* Esc cancel (#68) is unaffected — that binding
-# stays eager and fires immediately while a run is in flight.
-_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 0.5
+# (measured in monotonic seconds between *delivered* key presses) opens the
+# rewind picker. The window must be comfortably LARGER than prompt_toolkit's
+# ``ttimeoutlen`` (0.5 s): the VT100 input layer delays delivery of a lone
+# Esc by ``ttimeoutlen`` to disambiguate it from the start of an escape
+# sequence (arrow keys, ``\x1b[A``, ...). As a result the *delivered*
+# interval between two idle Esc presses is clamped to ~``ttimeoutlen`` from
+# below regardless of how quickly the user tapped — a 0.5 s window would
+# therefore miss real double-taps. 1.0 s sits well above that floor while
+# staying below the gap of two deliberately separate Esc presses, so a slow
+# single Esc never opens the picker. The *single* Esc cancel (#68) is
+# unaffected: that binding stays eager and fires immediately while a run is
+# in flight, and no double-tap state is recorded then.
+_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0
 
 # How often the header re-checks for AGENTS.md/CLAUDE.md memory files
 # (IMPROVEMENTS.md A3) — the prompt itself re-reads them every turn; this

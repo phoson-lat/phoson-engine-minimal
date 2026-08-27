@@ -265,7 +265,7 @@ async def test_double_idle_esc_opens_the_rewind_picker(tmp_path) -> None:
     app = _app_for(tmp_path)
     app.repl = _make_repl(tmp_path, "first", "second", "third")
 
-    app._last_escape_at = time.monotonic()  # a press <0.5 s ago
+    app._last_escape_at = time.monotonic()  # a press just now (<1.0 s)
     opened: dict[str, object] = {}
 
     async def fake_picker(picker):
@@ -459,6 +459,16 @@ def test_reset_transcript_reseeds_banner_and_drops_cache(tmp_path) -> None:
 
 
 # ── Real keystroke routing (PipeInput) ───────────────────────────────────────
+# These tests send raw bytes through the real VT100 input layer, which holds
+# each *lone* Esc for ``ttimeoutlen`` (0.5 s) to disambiguate it from the
+# start of an escape sequence. Two consequences make the asserts robust
+# without needing to wait ~0.5 s per key:
+#   * The pipe is FIFO, so the later-sent Ctrl+C is always read (and its
+#     ``exit()`` flag set) only after both Escs have been read and handled.
+#   * ``exit()``'s flag is honored at the top of the input loop, so the run
+#     ends only once the pending Esc deliveries are done — a second Esc that
+#     still had disambiguation pending is always processed before the exit
+#     takes effect.
 
 
 @pytest.mark.asyncio
@@ -494,7 +504,6 @@ async def test_pipe_input_esc_esc_idle_opens_rewind_picker(tmp_path) -> None:
 
             asyncio.create_task(drive())
             await app.app.run_async()
-
     assert len(seen) == 1  # the picker opened exactly once
 
 
