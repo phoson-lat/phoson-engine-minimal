@@ -552,6 +552,16 @@ selection. There are two ways to select and copy chat text:
   This is the guaranteed fallback where the terminal doesn't relay mouse
   events.
 
+The yank first uses the platform clipboard tool (`wl-copy` / `xclip` /
+`pbcopy`). On a bare **SSH / remote session** those tools don't exist, so
+it falls back to **OSC 52** — the escape sequence the local terminal
+understands (kitty, WezTerm, iTerm2, Alacritty, Ghostty, Windows
+Terminal, …) that places the text on the *local* system clipboard without
+any extra tool. OSC 52 is used automatically when the terminal is
+recognized as supporting it; force it on or off from
+`~/.phoson/config.toml` with `clipboard_osc52 = "on"` / `"off"`
+(default `"auto"`).
+
 `copy_mode` is remappable / unbindable from `[keys]` like any other key.
 Where your terminal supports it, holding `Shift` while dragging still
 selects natively as before.

@@ -89,6 +89,13 @@ class PhosonConfig:
     # loaded from / saved to config.toml) — overridable per run, mainly so
     # tests can point it at a temp file instead of the user's real history.
     history_file: Path = Path("~/.phoson/history.txt").expanduser()
+    # ── Clipboard (IMPROVEMENTS.md G3 follow-up) ──────────────────────────
+    # OSC 52 clipboard-write fallback for when no platform tool
+    # (xclip/wl-copy/pbcopy) is available — the common case is a bare
+    # SSH/remote session. "auto" (default) enables it only when the local
+    # terminal is recognized as OSC 52-capable; "on" forces it; "off"
+    # disables it.
+    clipboard_osc52: str = "auto"
     # ── Context management (IMPROVEMENTS.md E1) ─────────────────────────
     # Automatic compaction mode: "balanced" (default), "aggressive"
     # (compacts earlier and keeps a shorter tail) or "off" (never
@@ -498,6 +505,9 @@ def load_config() -> PhosonConfig:
         ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
         theme=_resolve_str("PHOSON_THEME", "theme", fd, d.theme),
+        clipboard_osc52=_resolve_str(
+            "PHOSON_CLIPBOARD_OSC52", "clipboard_osc52", fd, d.clipboard_osc52
+        ),
         subagent_max_parallel=_resolve_int(
             "PHOSON_SUBAGENT_MAX_PARALLEL",
             "subagent_max_parallel",
@@ -668,6 +678,7 @@ def save_config(
         ("max_iterations", getattr(config, "max_iterations", None)),
         ("safe_mode", getattr(config, "safe_mode", None)),
         ("theme", getattr(config, "theme", None)),
+        ("clipboard_osc52", getattr(config, "clipboard_osc52", None)),
         ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),

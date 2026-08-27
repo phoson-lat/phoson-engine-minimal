@@ -47,8 +47,15 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   - *Yank.* `Enter` (or `Ctrl+Y`) copies the range to the system
     clipboard — Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — the
     inverse of the existing Ctrl+V read path. A success line reports the
-    character count; with no clipboard tool (e.g. a bare SSH session) a
-    notice explains why the selection was not copied. `Esc` cancels.
+    character count. With no clipboard tool (e.g. a bare SSH/remote
+    session) it now falls back to **OSC 52**: the standard escape
+    sequence (used by Neovim, Emacs, tmux, nano) that asks the *local*
+    terminal to put the text on the system clipboard, so copying works
+    through SSH with no extra tools. OSC 52 is enabled automatically when
+    the terminal is recognized as supporting it (kitty, WezTerm, iTerm2,
+    Alacritty, Ghostty, Windows Terminal) and can be forced with the new
+    `clipboard_osc52` config option (`"auto"`/`"on"`/`"off"`,
+    `PHOSON_CLIPBOARD_OSC52`). `Esc` cancels.
   - *Key routing.* While copy mode is active the base key map is gated
     off, focus moves onto the chat window, and an app-level copy key set
     (installed via `DynamicKeyBindings`, active only while the mode is on)

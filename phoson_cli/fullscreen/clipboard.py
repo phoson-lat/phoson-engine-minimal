@@ -20,15 +20,43 @@ than silently doing nothing (``PhosonApp.paste_image`` tries
 Copy mode (IMPROVEMENTS.md G3) writes the other way:
 :func:`write_clipboard_text` yanks a selected chat range to the system
 clipboard using the same platform tools (``wl-copy`` / ``xclip`` /
-``pbcopy``).
+``pbcopy``). Those tools need a local display, so a bare SSH/remote
+session has none — for that case :func:`write_clipboard_osc52` writes the
+same text via the OSC 52 escape sequence, letting the *local* terminal
+(which the user's eyes see) perform the copy; it is used as a fallback
+when no platform tool is available (see :func:`osc52_enabled`).
 """
 
 import os
 import sys
+import base64
 import shutil
 import asyncio
 
 _IMAGE_MIME_CANDIDATES = ("image/png", "image/jpeg")
+
+# Terminals known to honor an OSC 52 *write* (copy to system clipboard).
+# Detection is best-effort from environment markers; it is deliberately
+# conservative so we don't claim success on a terminal that will silently
+# drop the sequence (e.g. VTE-based GNOME/Xfce terminals, rxvt-unicode,
+# macOS Terminal.app, PuTTY). Users can force it with
+# ``clipboard_osc52 = "on"`` (the common case it unblocks is SSH, where the
+# local terminal's env markers aren't forwarded to the remote process).
+#
+#   TERM_PROGRAM values (lower-cased, also accepts the space-free form):
+#   WezTerm, kitty, Ghostty, iTerm.app, WindowsTerminal
+#   Distinctive $TERM values: kitty, alacritty, foot, ghostty, st, contour
+#   Per-terminal env vars: KITTY_WINDOW_ID, ALACRITTY_INSTANCE_ID
+_OSC52_TERM_PROGRAMS = {
+    "wezterm",
+    "kitty",
+    "ghostty",
+    "iterm.app",
+    "iterm2",
+    "windows terminal",
+    "windowsterminal",
+}
+_OSC52_TERMS = {"kitty", "alacritty", "foot", "ghostty", "st", "contour"}
 
 
 def _is_macos() -> bool:
@@ -144,6 +172,107 @@ def macos_image_tool_hint() -> str | None:
     return None
 
 
+# ── OSC 52 (terminal-mediated clipboard, IMPROVEMENTS.md G3 follow-up) ────────
+#
+# OSC 52 is the de-facto standard (Neovim, Emacs, tmux, nano, kitty, …) for a
+# terminal *application* to write to the system clipboard *through* the
+# terminal — no ``xclip``/``wl-copy``/`pbcopy` required. That is exactly the
+# gap the platform tools leave: a bare SSH/remote session has no local
+# display, so no clipboard tool, and only the local terminal can actually put
+# bytes on the clipboard. The application emits the sequence; the *local*
+# terminal (which the user's eyes see) performs the copy.
+#
+# Write form:  ESC ] 52 ; c ; <base64(text)> ST
+#   ST (string terminator) is ESC \ — the modern, unambiguous terminator
+#   (a literal BEL 0x07 also works but is easier to confuse with a real bell).
+# ``c`` = system clipboard (the target that Ctrl+V pastes from everywhere).
+
+
+def osc52_sequence(text: str) -> str:
+    """Build the OSC 52 escape sequence that copies *text* to the clipboard.
+
+    Pure function (no I/O) so the exact byte sequence is unit-testable and
+    can be reused by anything that has a terminal output to write to.
+    """
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    return f"\x1b]52;c;{encoded}\x1b\\"
+
+
+def osc52_supported() -> bool:
+    """Best-effort detection of OSC 52 *write* support from the environment.
+
+    Only the terminals whose env markers we positively recognize are
+    accepted, so a terminal that silently drops the sequence (VTE-based
+    GNOME/Xfce terminals, macOS Terminal.app, rxvt-unicode, PuTTY) is not
+    falsely reported as supported. The per-terminal variables
+    (``KITTY_WINDOW_ID``, ``ALACRITTY_INSTANCE_ID``) are the strongest
+    signal; ``TERM_PROGRAM`` and a distinctive ``$TERM`` follow.
+    """
+    if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("ALACRITTY_INSTANCE_ID"):
+        return True
+    program = (os.environ.get("TERM_PROGRAM") or "").lower()
+    if program:
+        program_nospace = program.replace(" ", "")
+        if program in _OSC52_TERM_PROGRAMS or any(
+            program == name or program_nospace == name.replace(" ", "")
+            for name in _OSC52_TERM_PROGRAMS
+        ):
+            return True
+    term = (os.environ.get("TERM") or "").lower()
+    if term:
+        # Terminals use different $TERM conventions for the same name —
+        # kitty/ghostty are "xterm-<name>", st is "<name>-256color",
+        # alacritty/foot/contour are the bare name. Match any "-" component
+        # so all three forms are recognized without false positives on
+        # unrelated terms like "xterm-256color".
+        components = term.split("-")
+        if any(comp in _OSC52_TERMS for comp in components):
+            return True
+    return False
+
+
+def osc52_enabled(config_value: str | None = None) -> bool:
+    """Resolve the ``clipboard_osc52`` setting into a boolean.
+
+    ``"on"`` forces the OSC 52 fallback on regardless of detection;
+    ``"off"`` forces it off; ``"auto"``/``None`` falls back to
+    :func:`osc52_supported`. Unknown values are treated as ``"auto"``.
+    """
+    value = (config_value or "auto").strip().lower()
+    if value == "on":
+        return True
+    if value == "off":
+        return False
+    return osc52_supported()
+
+
+def write_clipboard_osc52(text: str) -> bool:
+    """Write *text* to the clipboard via an OSC 52 sequence on ``/dev/tty``.
+
+    Sends the sequence to the controlling terminal, which — if it supports
+    OSC 52 — places the decoded text on the system clipboard. Returns
+    ``True`` when the bytes were handed to the tty (the terminal then
+    decides whether it honors them), ``False`` when there is no controlling
+    tty (e.g. the app was started piped) so the caller can fall through to
+    the platform tools. The write is a single small ``os.write`` — the same
+    mechanism tmux/Emacs use — so it is safe to call while the TUI owns the
+    terminal.
+    """
+    if not text:
+        return False
+    try:
+        fd = os.open("/dev/tty", os.O_WRONLY)
+    except OSError:
+        return False
+    try:
+        os.write(fd, osc52_sequence(text).encode("utf-8"))
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return True
+
+
 async def _run_command(command: list[str]) -> bytes | None:
     """Run *command*, returning its stdout bytes, or ``None`` on any failure."""
     try:
@@ -203,4 +332,8 @@ __all__ = [
     "clipboard_write_available",
     "clipboard_write_hint",
     "macos_image_tool_hint",
+    "osc52_sequence",
+    "osc52_supported",
+    "osc52_enabled",
+    "write_clipboard_osc52",
 ]

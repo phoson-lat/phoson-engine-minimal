@@ -66,11 +66,13 @@ from ..config import (
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
 from .clipboard import (
+    osc52_enabled,
     read_clipboard_text,
     clipboard_write_hint,
     read_clipboard_image,
     write_clipboard_text,
     macos_image_tool_hint,
+    write_clipboard_osc52,
 )
 from .completer import (
     PathCompleter,
@@ -1324,17 +1326,35 @@ class PhosonApp:
         self.app.create_background_task(self._copy_to_clipboard_async(text))
 
     async def _copy_to_clipboard_async(self, text: str) -> None:
-        ok = await write_clipboard_text(text)
-        if ok:
-            count = len(text)
+        count = len(text)
+        if await write_clipboard_text(text):
             self.sink.notify("info", f"Copied {count} characters to the clipboard.")
-        else:
-            hint = clipboard_write_hint()
+            return
+        # Fallback (IMPROVEMENTS.md G3 follow-up): no local clipboard tool —
+        # the common case is a bare SSH/remote session. If the user's
+        # terminal is recognized as OSC 52-capable (or the setting forces it),
+        # send the text through the terminal instead; the *local* terminal
+        # performs the actual clipboard write.
+        osc52_on = osc52_enabled(getattr(self.repl.config, "clipboard_osc52", None))
+        if osc52_on and write_clipboard_osc52(text):
             self.sink.notify(
-                "warn",
-                "Could not copy: no clipboard tool available"
-                + (f" — {hint}." if hint else "."),
+                "info",
+                f"Sent {count} characters to the terminal clipboard (OSC 52); "
+                "the local terminal writes it to the system clipboard.",
             )
+            return
+        hint = clipboard_write_hint()
+        message = "Could not copy: no clipboard tool available" + (
+            f" — {hint}." if hint else "."
+        )
+        if not osc52_on:
+            message += (
+                " Tip: with an OSC 52-capable terminal (kitty, WezTerm, iTerm2,"
+                " Alacritty, Ghostty, Windows Terminal) you can copy through the"
+                ' terminal instead — set `clipboard_osc52 = "on"` in'
+                " ~/.phoson/config.toml."
+            )
+        self.sink.notify("warn", message)
 
     def exit_copy_mode(self, *, copied: bool = False) -> None:
         """Leave copy mode and restore the composer focus + base bindings.

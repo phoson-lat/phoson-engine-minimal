@@ -13,6 +13,7 @@ Covers, in dependency order:
    footer swap while the mode is active.
 """
 
+import io
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -266,6 +267,194 @@ def test_clipboard_write_available_and_hint(monkeypatch) -> None:
     hint = clipboard.clipboard_write_hint()
     assert hint is not None
     assert "xclip" in hint or "wl-clipboard" in hint or "pbcopy" in hint
+
+
+# ── clipboard write side: OSC 52 fallback (G3 follow-up) ──────────────────────
+
+
+def test_osc52_sequence_is_well_formed() -> None:
+    import base64
+
+    from phoson_cli.fullscreen import clipboard
+
+    seq = clipboard.osc52_sequence("Hello, world!")
+    encoded = base64.b64encode(b"Hello, world!").decode("ascii")
+    # ESC ] 52 ; c ; <base64> ST (ST = ESC \)
+    assert seq == f"\x1b]52;c;{encoded}\x1b\\"
+    # Multi-line / unicode round-trips through base64 intact.
+    seq2 = clipboard.osc52_sequence("línea uno\nlínea dos")
+    payload = seq2.split(";")[2].rstrip("\x1b\\")
+    assert base64.b64decode(payload) == "línea uno\nlínea dos".encode()
+
+
+def test_osc52_enabled_resolution() -> None:
+    from phoson_cli.fullscreen import clipboard
+
+    assert clipboard.osc52_enabled("on") is True
+    assert clipboard.osc52_enabled("OFF") is False
+    # "auto" / None / unknown delegate to the environment detection.
+    for value in ("auto", None, "bogus"):
+        assert clipboard.osc52_enabled(value) is clipboard.osc52_supported()
+
+
+def _clean_osc52_env(monkeypatch) -> None:
+    for var in (
+        "TERM",
+        "TERM_PROGRAM",
+        "KITTY_WINDOW_ID",
+        "ALACRITTY_INSTANCE_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_osc52_detection_by_term_program(monkeypatch) -> None:
+    from phoson_cli.fullscreen import clipboard
+
+    _clean_osc52_env(monkeypatch)
+    supported = {
+        "kitty": True,
+        "WezTerm": True,
+        "iTerm.app": True,
+        "WindowsTerminal": True,
+        "ghostty": True,
+        "vscode": False,  # xterm.js w/o the clipboard addon
+        "Apple_Terminal": False,  # macOS Terminal.app: no OSC 52
+        "": False,
+    }
+    for program, expected in supported.items():
+        monkeypatch.setenv("TERM_PROGRAM", program)
+        assert clipboard.osc52_supported() is expected, program
+
+
+def test_osc52_detection_by_term(monkeypatch) -> None:
+    from phoson_cli.fullscreen import clipboard
+
+    _clean_osc52_env(monkeypatch)
+    supported = {
+        "xterm-kitty": True,  # kitty's $TERM
+        "xterm-ghostty": True,
+        "alacritty": True,
+        "foot": True,
+        "contour": True,
+        "st-256color": True,  # st's $TERM
+        "xterm-256color": False,  # plain xterm: opt-in, not recognized
+        "screen-256color": False,
+        "linux": False,
+    }
+    for term, expected in supported.items():
+        monkeypatch.setenv("TERM", term)
+        assert clipboard.osc52_supported() is expected, term
+
+
+def test_osc52_detection_by_terminal_env_var(monkeypatch) -> None:
+    from phoson_cli.fullscreen import clipboard
+
+    _clean_osc52_env(monkeypatch)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
+    assert clipboard.osc52_supported() is True
+    monkeypatch.delenv("KITTY_WINDOW_ID")
+    monkeypatch.setenv("ALACRITTY_INSTANCE_ID", "123")
+    assert clipboard.osc52_supported() is True
+
+
+def test_write_clipboard_osc52_no_tty_returns_false() -> None:
+    import os
+
+    from phoson_cli.fullscreen import clipboard
+
+    # No controlling tty (piped/daemonized run) -> False, no crash.
+    with patch.object(os, "open", side_effect=OSError("no tty")):
+        assert clipboard.write_clipboard_osc52("hi") is False
+    # Empty text is a no-op.
+    assert clipboard.write_clipboard_osc52("") is False
+    # A failing write() also reports False.
+    with (
+        patch.object(os, "open", return_value=3),
+        patch.object(os, "write", side_effect=OSError("broken pipe")),
+        patch.object(os, "close"),
+    ):
+        assert clipboard.write_clipboard_osc52("hi") is False
+
+
+def test_write_clipboard_osc52_sends_the_sequence(monkeypatch) -> None:
+    import os
+    import base64
+
+    from phoson_cli.fullscreen import clipboard
+
+    written = {}
+
+    def _fake_write(fd, data):
+        written["data"] = data
+        return len(data)
+
+    monkeypatch.setattr(os, "open", lambda *a, **k: 3)
+    monkeypatch.setattr(os, "write", _fake_write)
+    monkeypatch.setattr(os, "close", lambda fd: None)
+    assert clipboard.write_clipboard_osc52("hello") is True
+    expected = base64.b64encode(b"hello").decode("ascii")
+    assert written["data"] == f"\x1b]52;c;{expected}\x1b\\".encode()
+
+
+def test_yank_falls_back_to_osc52_when_no_tool(tmp_path) -> None:
+    """No platform tool + OSC 52 enabled -> the sequence is used, not a warn."""
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world")
+    app.enter_copy_mode()
+    app._copy_anchor = copy_range.Pos(0, 0)
+    app._copy_cursor = copy_range.Pos(0, 5)
+
+    sent = {}
+
+    def _fake_osc52(text):
+        sent["text"] = text
+        return True
+
+    async def _no_tool(text):
+        return False
+
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_no_tool),
+        patch("phoson_cli.fullscreen.app.osc52_enabled", return_value=True),
+        patch("phoson_cli.fullscreen.app.write_clipboard_osc52", new=_fake_osc52),
+        _run_bg_inline(app),
+    ):
+        app.copy_copy()
+
+    assert sent.get("text") == "hello"  # exactly the selected range
+    # The success notice mentions the OSC 52 path, not a failure.
+    assert any("OSC 52" in n for n in _block_texts(app))
+    assert app._copy_active is False
+
+
+def test_yank_warn_mentions_osc52_when_disabled(tmp_path) -> None:
+    """No tool + OSC 52 off -> the old warn, plus the OSC 52 tip."""
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world")
+    app.enter_copy_mode()
+    app._copy_anchor = copy_range.Pos(0, 0)
+    app._copy_cursor = copy_range.Pos(0, 5)
+
+    async def _no_tool(text):
+        return False
+
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_no_tool),
+        patch("phoson_cli.fullscreen.app.osc52_enabled", return_value=False),
+        patch(
+            "phoson_cli.fullscreen.app.clipboard_write_hint",
+            return_value="install xclip for X11 clipboard writes",
+        ),
+        patch("phoson_cli.fullscreen.app.write_clipboard_osc52") as mock_osc52,
+        _run_bg_inline(app),
+    ):
+        app.copy_copy()
+
+    mock_osc52.assert_not_called()
+    notices = " ".join(_block_texts(app))
+    assert "Could not copy" in notices
+    assert 'clipboard_osc52 = "on"' in notices
 
 
 def _fake_proc(returncode: int):
@@ -526,6 +715,10 @@ def test_copy_write_failure_notifies(tmp_path) -> None:
 
     with (
         patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fail),
+        # Force OSC 52 off so this test is deterministic no matter which
+        # terminal (or its env vars) the suite happens to run under — the
+        # "no tool at all" warn is what we're asserting here.
+        patch("phoson_cli.fullscreen.app.osc52_enabled", return_value=False),
         patch(
             "phoson_cli.fullscreen.app.clipboard_write_hint",
             return_value="install xclip for X11 clipboard writes",
@@ -969,6 +1162,27 @@ def _strip_ansi(text: str) -> str:
     import re
 
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _block_texts(app) -> list[str]:
+    """Plain text of every transcript block (Rich renderables → str).
+
+    Notices are Rich :class:`rich.text.Text`; other blocks (banner, turns)
+    are arbitrary renderables — render those into a throwaway console so the
+    helper works for any block type the sink may hold.
+    """
+    from rich.text import Text
+    from rich.console import Console
+
+    out: list[str] = []
+    for block in app.sink.blocks:
+        if isinstance(block, Text):
+            out.append(block.plain)
+        else:
+            buf = io.StringIO()
+            Console(file=buf, width=120, no_color=True).print(block, soft_wrap=True)
+            out.append(buf.getvalue().rstrip("\n"))
+    return out
 
 
 def test_mouse_selection_highlight_renders_in_pane(tmp_path) -> None:

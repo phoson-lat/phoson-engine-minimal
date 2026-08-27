@@ -226,7 +226,20 @@ In either mode:
   selected text to the system clipboard via the appropriate platform
   tool (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS) — the
   exact write counterpart of the Ctrl+V paste mechanism. A toast reports
-  how many characters were copied.
+  how many characters were copied. When no platform tool is available
+  (the common case is a bare SSH/remote session with no local display),
+  the yank falls back to **OSC 52**: it writes the
+  `ESC ] 52 ; c ; <base64> ST` sequence to `/dev/tty`, which an
+  OSC 52-capable *local* terminal (kitty, WezTerm, iTerm2, Alacritty,
+  Ghostty, Windows Terminal, …) interprets as "put this text on the
+  system clipboard" — no clipboard tool needed. OSC 52 auto-detection
+  recognizes those terminals from `TERM_PROGRAM` / `TERM` /
+  `KITTY_WINDOW_ID` / `ALACRITTY_INSTANCE_ID`; override it with the
+  `clipboard_osc52` config option (`"auto"` / `"on"` / `"off"`,
+  `PHOSON_CLIPBOARD_OSC52`). VTE-based terminals (GNOME Terminal, Xfce
+  xfce4-terminal), macOS Terminal.app and PuTTY do not implement OSC 52,
+  so the fallback only claims success when it actually wrote the
+  sequence to a tty.
 - **Cancel:** Press `Esc` to exit copy mode without copying.
 - **Mouse bypass:** On terminals that support mouse bypass (e.g.,
   holding `Shift` while dragging in GNOME Terminal, iTerm2, or
