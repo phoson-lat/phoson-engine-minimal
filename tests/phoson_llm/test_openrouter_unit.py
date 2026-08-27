@@ -1,5 +1,12 @@
+import pytest
+
 from phoson_cli.config import PhosonConfig, build_chat
-from phoson_llm.schemas import TokenUsage, UsageEvent
+from phoson_llm.schemas import (
+    Message,
+    TokenUsage,
+    UsageEvent,
+    ModelConfig,
+)
 from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats._openai_compatible import (
     _parse_tool_args,
@@ -87,3 +94,124 @@ def test_openrouter_tool_chunks_can_arrive_before_id_and_name() -> None:
         emitted.append((tool_ids[current_idx], tool_names[current_idx], raw))
 
     assert emitted == [("call_123", "get_weather", '{"city":"Qro"}')]
+
+
+# ─── G2: prompt caching (session_id, cache_control, attribution) ────────────
+
+
+def test_openrouter_sends_default_attribution_headers() -> None:
+    """phoson-cli attributes its OpenRouter usage by default, like other
+    agent CLIs (HTTP-Referer + X-OpenRouter-Title)."""
+    chat = OpenRouterChat(api_key="test-key")
+    headers = chat._client.default_headers or {}
+    assert headers["HTTP-Referer"] == "https://phoson.lat"
+    assert headers["X-OpenRouter-Title"] == "phoson-cli"
+    assert "cli-agent" in headers.get("X-OpenRouter-Categories", "")
+
+
+def test_openrouter_attribution_headers_can_be_overridden() -> None:
+    chat = OpenRouterChat(
+        api_key="test-key",
+        http_referer="https://example.com",
+        app_title="my-agent",
+    )
+    headers = chat._client.default_headers or {}
+    assert headers["HTTP-Referer"] == "https://example.com"
+    assert headers["X-OpenRouter-Title"] == "my-agent"
+
+
+class _ORDelta:
+    content: str | None = None
+    tool_calls = None
+
+
+class _ORChoice:
+    def __init__(self, finish_reason: str | None = None) -> None:
+        self.delta = _ORDelta()
+        self.finish_reason = finish_reason
+
+
+class _ORChunk:
+    def __init__(self, choices: list | None = None, usage=None) -> None:
+        self.choices = choices or []
+        self.usage = usage
+
+
+class _ORCompletions:
+    """Captures the request kwargs of ``chat.completions.create``."""
+
+    def __init__(self, captured: dict) -> None:
+        self.captured = captured
+
+    async def create(self, **kwargs):
+        self.captured.clear()
+        self.captured.update(kwargs)
+
+        async def _gen():
+            yield _ORChunk(choices=[_ORChoice("stop")])
+
+        return _gen()
+
+
+class _ORChatNamespace:
+    def __init__(self, captured: dict) -> None:
+        self.completions = _ORCompletions(captured)
+
+
+class _ORClient:
+    def __init__(self, captured: dict) -> None:
+        self.chat = _ORChatNamespace(captured)
+
+
+@pytest.mark.asyncio
+async def test_openrouter_forwards_session_id_for_sticky_routing() -> None:
+
+    captured: dict = {}
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClient(captured)
+
+    async for _ in chat.stream(
+        [Message(role="user", content="hi")],
+        ModelConfig(model="anthropic/claude-sonnet-4-6", session_id="sess-123"),
+    ):
+        pass
+
+    assert captured["session_id"] == "sess-123"
+    # Anthropic route → automatic caching enabled.
+    assert captured["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_omits_cache_fields_when_not_applicable() -> None:
+
+    captured: dict = {}
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClient(captured)
+
+    async for _ in chat.stream(
+        [Message(role="user", content="hi")],
+        ModelConfig(model="openai/gpt-4o"),
+    ):
+        pass
+
+    # Non-anthropic model: no cache_control.
+    assert "cache_control" not in captured
+    # No session id → no sticky routing key.
+    assert "session_id" not in captured
+
+
+@pytest.mark.asyncio
+async def test_openrouter_sends_cache_control_for_anthropic_without_session() -> None:
+
+    captured: dict = {}
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClient(captured)
+
+    async for _ in chat.stream(
+        [Message(role="user", content="hi")],
+        ModelConfig(model="anthropic/claude-haiku-4-5"),
+    ):
+        pass
+
+    assert captured["cache_control"] == {"type": "ephemeral"}
+    assert "session_id" not in captured

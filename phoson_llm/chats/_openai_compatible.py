@@ -56,6 +56,7 @@ class CostCalculator(Protocol):
         input_tokens: int,
         output_tokens: int,
         cache_read_tokens: int,
+        cache_write_tokens: int,
     ) -> tuple[float, bool]: ...
 
 
@@ -65,6 +66,7 @@ def _no_cost(
     input_tokens: int,  # noqa: ARG001
     output_tokens: int,  # noqa: ARG001
     cache_read_tokens: int,  # noqa: ARG001
+    cache_write_tokens: int,  # noqa: ARG001
 ) -> tuple[float, bool]:
     """Cost callback that always reports unknown cost. Default for aggregators."""
     return (0.0, False)
@@ -509,21 +511,23 @@ async def stream_chat_completions(
         yield ReasoningDoneEvent(content=reasoning_acc)
 
     if final_usage is not None:
+        prompt_details = getattr(final_usage, "prompt_tokens_details", None)
         usage = TokenUsage(
             input=getattr(final_usage, "prompt_tokens", 0) or 0,
             output=getattr(final_usage, "completion_tokens", 0) or 0,
-            cache_read=getattr(
-                getattr(final_usage, "prompt_tokens_details", None),
-                "cached_tokens",
-                0,
-            )
-            or 0,
+            # OpenAI reports the cached part of the prompt in
+            # prompt_tokens_details.cached_tokens; OpenRouter (and some
+            # upstreams) additionally report cache_write_tokens for the
+            # first request that establishes a cache entry.
+            cache_read=getattr(prompt_details, "cached_tokens", 0) or 0,
+            cache_write=getattr(prompt_details, "cache_write_tokens", 0) or 0,
         )
         cost_usd, cost_known = cost_calculator(
             model=config.model,
             input_tokens=usage.input,
             output_tokens=usage.output,
             cache_read_tokens=usage.cache_read,
+            cache_write_tokens=usage.cache_write,
         )
         yield UsageEvent(
             model=config.model,

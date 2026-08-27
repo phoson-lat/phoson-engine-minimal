@@ -184,6 +184,12 @@ class ModelConfig:
         thinking_budget: Token budget for extended thinking (Anthropic).
         reasoning_effort: Reasoning effort level (OpenAI o1/o3, plus
             Phoson's extended ``xhigh``/``max`` levels).
+        session_id: Optional stable identifier for the conversation.
+            Adapters that support it (OpenRouter) send it as the
+            sticky-routing key so repeated requests land on the same
+            upstream provider, keeping its prompt cache warm
+            (IMPROVEMENTS.md G2 / #69). Ignored by adapters without
+            such a mechanism.
     """
 
     model: str
@@ -192,3 +198,4 @@ class ModelConfig:
     system: str | None = None
     thinking_budget: int | None = None
     reasoning_effort: ReasoningEffort | None = None
+    session_id: str | None = None

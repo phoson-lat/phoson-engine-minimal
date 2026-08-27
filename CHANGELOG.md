@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.1 (2026-08-26)
+
+### Feat
+
+- **llm/cli**: prompt caching for Anthropic and OpenRouter
+  (IMPROVEMENTS.md G2, issue #69). Long agent sessions re-send the whole
+  history every turn; this release keeps that prefix cacheable and shows
+  the saved tokens:
+
+  - *Stable prefix.* The CLI system prompt is the cacheable prefix of
+    every request, but it carried `Current time is YYYY-MM-DD HH:MM:SS` —
+    a value that changed on every request and would have busted any
+    provider cache for the entire prefix. It now carries
+    `Current date is YYYY-MM-DD` (system timezone, B1 behaviour intact):
+    constant for a working day, enough for "today" reasoning; the model
+    can run `date` via bash for the exact wall clock.
+  - *Anthropic.* Explicit prompt caching with three ephemeral
+    `cache_control` breakpoints (5-minute TTL; the 1-hour TTL doubles the
+    cache-write price and buys nothing for turn-by-turn agentic traffic):
+    the system prompt (now sent as a cached block list), the last tool
+    definition, and the last block of the last message — which advances
+    as the conversation grows, so each turn re-reads the entire prior
+    history from cache instead of re-billing it. `tool_use` blocks are
+    skipped (the API rejects the marker there); `tool_result` is a valid
+    anchor, which matters because in a ReAct loop the last message is
+    usually a user turn of tool results. Cache usage
+    (`cache_creation`/`cache_read` tokens) was already parsed; the
+    adapter just never enabled caching, so every request paid full input
+    prices.
+  - *OpenRouter.* `ModelConfig` gains `session_id`; the adapter forwards
+    it as the top-level `session_id` body field — OpenRouter's
+    sticky-routing key, so a conversation stays pinned to one upstream
+    provider and its cache is warm from the first turn. `anthropic/*`
+    models additionally send the top-level
+    `cache_control: {"type": "ephemeral"}` field (automatic caching;
+    OpenRouter translates it for Bedrock/Vertex routes); implicit-cache
+    models (OpenAI, DeepSeek, Gemini 2.5+) need no flag. The shared
+    OpenAI-compatible loop now also parses
+    `prompt_tokens_details.cache_write_tokens`, and the OpenAI cost
+    callback passes it to `calculate_cost` (GPT-5.6+ explicit
+    cache-write pricing). The adapter now attributes its usage as
+    *phoson-cli* by default (`HTTP-Referer: https://phoson.lat`,
+    `X-OpenRouter-Title: phoson-cli`, `X-OpenRouter-Categories:
+    cli-agent`; referer/title overridable as before).
+  - *CLI wiring.* `SessionController.run_turn` passes the conversation's
+    session id through `ModelConfig`. `/status` gains a
+    `cache  R read / W write` line and `/tokens` appends
+    `cache=Rr/Ww` (the totals were already accumulated in
+    `SessionMetrics`; they are now visible).
+
+  Expected effect: 50–90% lower cost on the repeated prefix plus lower
+  TTFT in long sessions.
+
+  - *Docs:* README Features row + "Prompt caching" CLI section;
+    `docs/api/phoson_llm.md` (new Prompt Caching section,
+    `ModelConfig.session_id`, `TokenUsage` cache fields, adapter notes);
+    IMPROVEMENTS.md G2 marked done (v0.13.1); version bumped.
+
+  Tests: 27 new — `test_anthropic_caching_unit.py` (16: breakpoint
+  placement on system/tools/last message, `tool_use` fallback,
+  `tool_result` anchor, no-anchor edge cases, three-breakpoint budget on
+  a full request, cache tokens on the `UsageEvent`),
+  `test_openrouter_unit.py` (5: default + overridden attribution headers,
+  `session_id` forwarding, `cache_control` on for anthropic / off
+  otherwise), `test_openai_compatible_stream.py` (1: `cache_write_tokens`
+  parsing; cost-callback test updated to the new contract),
+  `test_controller_unit.py` (1: session id → `ModelConfig`),
+  `test_p1_commands_unit.py` (2: `/tokens` suffix on/off; `/status` now
+  asserts the cache line), `test_session_utils_unit.py` (2: date not
+  live clock, byte-identical rebuild).
+  Suite now 1351 passing, pyright 0 errors, ruff clean.
+
+### Refactor
+
+- **cli**: the system prompt now carries the date instead of a live
+  clock — required for prompt caching (see Feat above); the B1 timezone
+  behaviour is unchanged.
+
 ## v0.13.0 (2026-08-26)
 
 ### Feat

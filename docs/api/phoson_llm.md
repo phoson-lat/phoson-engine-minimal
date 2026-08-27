@@ -64,7 +64,7 @@ from phoson_llm.chats import AnthropicChat
 chat = AnthropicChat(api_key="sk-ant-...")
 ```
 
-Supports: streaming, extended thinking, tool use, prompt caching, multimodal inputs.
+Supports: streaming, extended thinking, tool use, prompt caching (automatic, see below), multimodal inputs.
 
 ### OpenRouterChat
 
@@ -74,7 +74,7 @@ from phoson_llm.chats import OpenRouterChat
 chat = OpenRouterChat(api_key="sk-or-...")
 ```
 
-Multi-provider aggregation with unified interface.
+Multi-provider aggregation with unified interface. Forwards `ModelConfig.session_id` as the sticky-routing key and enables automatic caching on `anthropic/*` models (see Prompt Caching below). Identifies itself as *phoson-cli* in OpenRouter app rankings by default (`http_referer` / `app_title` override).
 
 ### OllamaChat
 
@@ -161,6 +161,51 @@ chat = BedrockChat(
 )
 ```
 
+## Prompt Caching
+
+Prompt caching lets a provider bill the stable prefix of a request (system
+prompt, tools, prior conversation) at a discounted cache-read rate instead
+of the full input price. Phoson builds requests so the prefix stays
+cacheable and surfaces the cached-token usage on every `UsageEvent`.
+
+### Stable prefix
+
+The CLI system prompt is a stable prefix by design: it carries the **date**
+(not a live clock), the working directory, the platform and the tool list —
+all constant for the session. Anything that changed per request would bust
+the provider's cache for the whole prefix, so time-of-day is deliberately
+omitted (the model can run `date` when it needs the exact wall clock).
+
+### Per provider
+
+- **Anthropic** (`AnthropicChat`): explicit ephemeral `cache_control`
+  breakpoints on the three stable parts — system prompt, the last tool
+  definition, and the last block of the last message (which advances as the
+  history grows). Three of the four allowed breakpoints are used, default
+  5-minute TTL. Usage reports `cache_creation_input_tokens` and
+  `cache_read_input_tokens`, priced via `phoson_llm.pricing`.
+- **OpenRouter** (`OpenRouterChat`): `ModelConfig.session_id` is sent as the
+  top-level `session_id` body field, the sticky-routing key that pins the
+  conversation to one upstream provider so its cache stays warm from the
+  first turn. `anthropic/*` models additionally send the top-level
+  `cache_control: {"type": "ephemeral"}` field to turn on automatic caching.
+  Models with implicit caching (OpenAI, DeepSeek, Gemini 2.5+) need no
+  client-side flag. The adapter identifies itself as *phoson-cli* in
+  OpenRouter app rankings by default. Usage reports `prompt_tokens_details`
+  (`cached_tokens`, `cache_write_tokens`).
+- **OpenAI** (`OpenAIChat`): automatic caching is provider-side; the shared
+  loop parses `prompt_tokens_details` into `cache_read` / `cache_write` and
+  `calculate_cost` prices them when the model entry has cache rates.
+
+### Metrics
+
+`TokenUsage.cache_read` / `cache_write` are set on every `UsageEvent`
+(`0` when the provider reports nothing). The CLI accumulates both across the
+session (`SessionMetrics`) and shows them in `/status`
+(`cache  R read / W write`) and `/tokens` (`cache=Rr/Ww`). Cached reads
+typically cost 10–50% of base input price, so a warm cache cuts long-session
+prompt cost by roughly 50–90%.
+
 ## Schemas
 
 ### Message
@@ -197,6 +242,7 @@ config = ModelConfig(
 | `temperature`      | `float \| None` | None   | Sampling temperature                 |
 | `system`           | `str \| None` | None    | System prompt                        |
 | `thinking_budget`   | `int \| None` | None    | For extended thinking (Anthropic/OpenAI o1) |
+| `session_id`       | `str \| None` | None    | Stable conversation key; OpenRouter uses it for sticky routing (prompt caching) |
 
 ### Content Blocks
 
@@ -263,8 +309,8 @@ class LLMEvent:
 class TokenUsage:
     input: int       # Input tokens
     output: int       # Output tokens
-    cache_write: int   # Cache write tokens (Anthropic)
-    cache_read: int   # Cache read tokens (Anthropic)
+    cache_write: int   # Cache write tokens (Anthropic / OpenAI prompt_tokens_details)
+    cache_read: int   # Cache read tokens (Anthropic / OpenAI prompt_tokens_details)
 
 @dataclass
 class UsageEvent(LLMEvent):

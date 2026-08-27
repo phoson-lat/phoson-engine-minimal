@@ -43,6 +43,14 @@ from phoson_llm.chats.base import BaseLLMChat
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
+# Prompt-caching breakpoint marker (Anthropic explicit caching). At most
+# four blocks may carry it per request; the adapter reserves them as
+# follows (see ``stream``): the stable system prompt, the tool list
+# (when present) and the last cacheable block of the last message —
+# which advances the cached prefix as the conversation grows.
+_EPHEMERAL: JsonObject = {"type": "ephemeral"}
+
+
 def _convert_content_block(block: ContentBlock) -> JsonObject:
     """
     Converts a multimodal ContentBlock to the format expected by Anthropic.
@@ -120,26 +128,48 @@ def _convert_content_block(block: ContentBlock) -> JsonObject:
     return {"type": "text", "text": f"[Unsupported block: {type(block).__name__}]"}
 
 
-def _convert_messages(messages: list[Message]) -> list[JsonObject]:
+def _convert_messages(
+    messages: list[Message], cache_last: bool = False
+) -> list[JsonObject]:
     """
     Converts Phoson's internal format to the format expected by Anthropic.
 
     Args:
         messages (list[Message]): List of Phoson messages.
+        cache_last: When True, the last cacheable block of the last
+            message is tagged with an ephemeral prompt-caching
+            breakpoint, so the cached prefix extends across turns as the
+            conversation grows. ``tool_use`` blocks are skipped — the API
+            does not accept a ``cache_control`` marker on them.
 
     Returns:
         list[dict]: List of formatted messages for the Anthropic API.
     """
     result = []
 
-    for msg in messages:
+    for msg_index, msg in enumerate(messages):
         if msg.role == "system":
             continue
 
         if isinstance(msg.content, str):
-            result.append({"role": msg.role, "content": msg.content})
+            if cache_last and msg_index == len(messages) - 1:
+                result.append(
+                    {
+                        "role": msg.role,
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": msg.content,
+                                "cache_control": _EPHEMERAL,
+                            },
+                        ],
+                    }
+                )
+            else:
+                result.append({"role": msg.role, "content": msg.content})
             continue
 
+        is_last = msg_index == len(messages) - 1
         blocks = []
         tool_uses = []
         tool_results = []
@@ -178,15 +208,37 @@ def _convert_messages(messages: list[Message]) -> list[JsonObject]:
         for b in multimodal_blocks:
             blocks.append(_convert_content_block(b))
 
+        if cache_last and is_last:
+            # Anchor the cache on the last block of the last message,
+            # except ``tool_use``: the API rejects a ``cache_control``
+            # marker on assistant tool-use blocks (it is accepted on
+            # text, image, document and tool_result blocks). In a ReAct
+            # loop the last message is usually a user turn carrying
+            # tool results, so anchoring there keeps the entire history
+            # — tool calls and results included — inside the cached
+            # prefix for the next turn.
+            for b in reversed(blocks):
+                if b.get("type") != "tool_use" and "cache_control" not in b:
+                    b["cache_control"] = _EPHEMERAL
+                    break
+
         if blocks:
             result.append({"role": msg.role, "content": blocks})
 
     return result
 
 
-def _convert_tools(tools: list[ToolDefinition]) -> list[JsonObject]:
-    """Converts ToolDefinition to Anthropic's tools format."""
-    return [
+def _convert_tools(
+    tools: list[ToolDefinition], cache_last: bool = False
+) -> list[JsonObject]:
+    """Converts ToolDefinition to Anthropic's tools format.
+
+    When ``cache_last`` is set, the final tool definition is tagged with
+    an ephemeral prompt-caching breakpoint: the tool list is part of the
+    stable prefix, so caching through it saves the whole list on every
+    subsequent request of the session.
+    """
+    converted = [
         {
             "name": t.name,
             "description": t.description,
@@ -194,6 +246,9 @@ def _convert_tools(tools: list[ToolDefinition]) -> list[JsonObject]:
         }
         for t in tools
     ]
+    if cache_last and converted:
+        converted[-1]["cache_control"] = _EPHEMERAL
+    return converted
 
 
 def _extract_system(messages: list[Message]) -> str | None:
@@ -250,21 +305,32 @@ class AnthropicChat(BaseLLMChat):
             LLMEvent objects representing the model's response stream.
         """
 
+        # Prompt caching (IMPROVEMENTS.md G2 / #69): the request is built
+        # so the entire stable prefix — system prompt, tool list, and
+        # everything up to the end of the conversation history — is
+        # covered by ephemeral cache breakpoints. Three of the four
+        # allowed breakpoints are used; the last-message one advances as
+        # the conversation grows, so each turn re-reads the whole prior
+        # history from cache instead of re-billing it as fresh input.
+        # The system prompt must stay a stable prefix (date, not live
+        # clock — see phoson_cli.session_utils).
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,
-            "messages": _convert_messages(messages),
+            "messages": _convert_messages(messages, cache_last=True),
         }
 
         system = config.system or _extract_system(messages)
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = [
+                {"type": "text", "text": system, "cache_control": _EPHEMERAL},
+            ]
 
         if config.temperature is not None:
             kwargs["temperature"] = config.temperature
 
         if tools:
-            kwargs["tools"] = _convert_tools(tools)
+            kwargs["tools"] = _convert_tools(tools, cache_last=True)
 
         if config.thinking_budget:
             kwargs["thinking"] = {
