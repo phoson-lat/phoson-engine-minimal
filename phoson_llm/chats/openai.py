@@ -28,12 +28,14 @@ def _openai_cost(
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int,
+    cache_write_tokens: int = 0,
 ) -> tuple[float, bool]:
     return calculate_cost(
         model=model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
         provider="openai",
     )
 

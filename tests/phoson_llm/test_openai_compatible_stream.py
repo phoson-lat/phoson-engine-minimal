@@ -57,6 +57,7 @@ class _Choice:
 @dataclass
 class _PromptDetails:
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 @dataclass
@@ -330,12 +331,14 @@ async def test_cost_calculator_is_invoked_with_token_counts() -> None:
         input_tokens: int,
         output_tokens: int,
         cache_read_tokens: int,
+        cache_write_tokens: int,
     ) -> tuple[float, bool]:
         seen.update(
             model=model,
             input=input_tokens,
             output=output_tokens,
             cache_read=cache_read_tokens,
+            cache_write=cache_write_tokens,
         )
         return (0.123, True)
 
@@ -353,10 +356,13 @@ async def test_cost_calculator_is_invoked_with_token_counts() -> None:
         "input": 11,
         "output": 22,
         "cache_read": 3,
+        "cache_write": 0,
     }
     usage = next(e for e in events if isinstance(e, UsageEvent))
     assert usage.cost_usd == 0.123
     assert usage.cost_known is True
+    assert usage.usage.cache_read == 3
+    assert usage.usage.cache_write == 0
 
 
 @pytest.mark.asyncio
@@ -380,6 +386,42 @@ async def test_default_cost_callback_marks_cost_unknown() -> None:
     usage = next(e for e in events if isinstance(e, UsageEvent))
     assert usage.cost_known is False
     assert usage.cost_usd == 0.0
+
+
+@pytest.mark.asyncio
+async def test_cache_write_tokens_are_parsed_into_usage() -> None:
+    """G2: OpenRouter reports cache_write_tokens in prompt_tokens_details
+    on the first request that establishes a cache entry; the shared loop
+    must surface it on the UsageEvent."""
+    chunks = [
+        _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
+        _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),
+        _Chunk(
+            usage=_Usage(
+                prompt_tokens=500,
+                completion_tokens=10,
+                prompt_tokens_details=_PromptDetails(
+                    cached_tokens=400, cache_write_tokens=90
+                ),
+            )
+        ),
+    ]
+    client = _FakeClient(chunks)
+    config = ModelConfig(model="any", max_tokens=8)
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=config,
+        )
+    )
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.usage.input == 500
+    assert usage.usage.output == 10
+    assert usage.usage.cache_read == 400
+    assert usage.usage.cache_write == 90
 
 
 # ─── Error mapping ───────────────────────────────────────────────────────────
