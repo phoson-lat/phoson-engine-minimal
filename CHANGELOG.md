@@ -34,10 +34,15 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     modal Float in the TUI; the classic front end reuses it via
     `run()`.
   - *TUI.* `PhosonApp`: double-tap detection inside `handle_escape`
-    (0.5 s window over the monotonic clock) — a native `"escape
+    (1.0 s window over the monotonic clock) — a native `"escape
     escape"` chord can never work here because the single `escape`
     binding is registered `eager` (that eagerness is what keeps the
     single-Esc run cancel of #68 immediate, and it consumes each press).
+    The window is deliberately larger than prompt_toolkit's
+    `ttimeoutlen` (0.5 s): the VT100 input layer delays delivery of a
+    lone Esc by `ttimeoutlen` to disambiguate it from the start of an
+    escape sequence, so the *delivered* gap between two idle Escs
+    clamps to ~0.5 s and a 0.5 s window would miss real double-taps.
     Precedence is therefore explicit: in flight, `Esc` cancels the run
     and records no double-tap state; idle, a second `Esc` within the
     window opens the picker. On rewind the app rebuilds the transcript
