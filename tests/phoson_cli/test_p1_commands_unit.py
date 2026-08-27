@@ -149,6 +149,8 @@ async def test_status_prints_all_dimensions() -> None:
         total_credits=0.0,
         total_input_tokens=100,
         total_output_tokens=50,
+        total_cache_read_tokens=1200,
+        total_cache_write_tokens=300,
         step_count=3,
     )
     repl.engine = SimpleNamespace(_loaded_plugins=[])
@@ -166,16 +168,56 @@ async def test_status_prints_all_dimensions() -> None:
         "session",
         "steps",
         "tokens",
+        "cache",
         "cost",
         "permissions",
         "cwd",
     ):
         assert expected in output, f"/status is missing {expected!r}"
+    # G2: the cache line carries the accumulated read/write totals.
+    assert "1,200 read / 300 write" in output
 
 
 @pytest.mark.asyncio
 async def test_status_command_is_registered() -> None:
     assert "/status" in COMMANDS
+
+
+@pytest.mark.asyncio
+async def test_tokens_command_shows_cache_totals_when_present() -> None:
+    """G2: /tokens surfaces the accumulated cache read/write totals."""
+    from unittest.mock import MagicMock
+
+    repl = _make_repl()
+    repl.session_metrics = MagicMock(
+        total_input_tokens=100,
+        total_output_tokens=50,
+        total_cache_read_tokens=1200,
+        total_cache_write_tokens=300,
+    )
+    host = _FakeHost()
+    handler = CommandHandler(repl, host=host)
+
+    await handler.handle(Command(name="/tokens", args=""))
+
+    assert host.infos == ["tokens=100in/50out cache=1200r/300w"]
+
+
+@pytest.mark.asyncio
+async def test_tokens_command_hides_cache_suffix_when_zero() -> None:
+    repl = _make_repl()
+    repl.session_metrics = MagicMock(
+        total_input_tokens=10,
+        total_output_tokens=5,
+        total_cache_read_tokens=0,
+        total_cache_write_tokens=0,
+    )
+    host = _FakeHost()
+    handler = CommandHandler(repl, host=host)
+
+    await handler.handle(Command(name="/tokens", args=""))
+
+    assert host.infos == ["tokens=10in/5out"]
 
 
 # ─── /compact (controller level) ────────────────────────────────────────────

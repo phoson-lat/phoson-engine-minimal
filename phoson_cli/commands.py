@@ -851,6 +851,8 @@ class CommandHandler:
             f"cwd         {Path.cwd()}",
             f"steps       {m.step_count}",
             f"tokens      {m.total_input_tokens:,} in / {m.total_output_tokens:,} out",
+            f"cache       {m.total_cache_read_tokens:,} read"
+            f" / {m.total_cache_write_tokens:,} write",
             f"context     {used:,}/{window:,}{pct}",
             f"cost        ${m.total_cost_usd:.5f}  ·  credits {m.total_credits:.5f}",
             f"mcp         {mcp_count} server(s)",
@@ -1102,8 +1104,11 @@ class CommandHandler:
 
     async def _cmd_tokens(self, cmd: Command) -> bool:  # noqa: ARG002
         m = self.repl.session_metrics
+        cache = ""
+        if m.total_cache_read_tokens or m.total_cache_write_tokens:
+            cache = f" cache={m.total_cache_read_tokens}r/{m.total_cache_write_tokens}w"
         self._r.print_info(
-            f"tokens={m.total_input_tokens}in/{m.total_output_tokens}out"
+            f"tokens={m.total_input_tokens}in/{m.total_output_tokens}out{cache}"
         )
         return True
 

@@ -605,6 +605,9 @@ class SessionController:
             model=self.current_model,
             system=build_system_prompt(self.engine.tools),
             reasoning_effort=reasoning_effort,
+            # Stable per-conversation key: OpenRouter uses it for sticky
+            # routing so the upstream prompt cache stays warm (G2 / #69).
+            session_id=self._session.tree.session_id,
         )
 
         await self._refresh_context_window()

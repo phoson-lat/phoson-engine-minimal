@@ -153,6 +153,27 @@ async def test_run_turn_forwards_reasoning_effort_to_model_config(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_run_turn_forwards_session_id_to_model_config(tmp_path) -> None:
+    """G2: the conversation's session id must travel to ModelConfig so
+    OpenRouter can pin the session to one upstream provider (sticky
+    routing → warm prompt cache)."""
+    controller, _sink = _make_controller(tmp_path)
+    session_id = controller.tree.session_id
+    seen_configs = []
+
+    async def stream(path, config):
+        seen_configs.append(config)
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield _done_event("hello")
+
+    controller.engine.stream = stream
+
+    await controller.run_turn("q")
+
+    assert seen_configs[0].session_id == session_id
+
+
+@pytest.mark.asyncio
 async def test_run_turn_reasoning_effort_defaults_to_none(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     seen_configs = []
