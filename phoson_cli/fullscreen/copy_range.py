@@ -14,6 +14,7 @@ lower position to the higher one (in ``(line, col)`` order), matching how
 the user extends it in either direction.
 """
 
+import re
 from typing import NamedTuple
 from collections.abc import Sequence
 
@@ -103,6 +104,44 @@ def selection_line_span(lines: list[str], start: Pos, end: Pos) -> tuple[int, in
     return (lo.line, hi.line)
 
 
+#: A "word" for double-click selection: a run of non-whitespace characters.
+# Deliberately coarser than prompt_toolkit's word finder (which splits on
+# ``[a-zA-Z0-9_]`` vs. everything else) — for copy purposes the whole
+# token under the cursor is what the user expects a double-click to grab,
+# including dashes, dots and slashes in paths/URLs/identifiers.
+_WORD_RUN_RE = re.compile(r"\S+")
+
+
+def word_bounds(line_text: str, col: int) -> tuple[int, int]:
+    """``(start, end)`` of the word run under ``col`` in *line_text*.
+
+    Used by the mouse double-click ("select the word I clicked") action.
+    ``end`` is exclusive, matching :func:`range_text` selection semantics.
+
+    A position *inside* a word selects the whole word; a position on
+    whitespace selects the *next* word to the right when there is one, else
+    the previous — so a double-click never yields an empty range unless the
+    line is blank. A position at the end of the line (or beyond) snaps to
+    the last word in the line.
+    """
+    col = max(0, min(col, len(line_text)))
+    for match in _WORD_RUN_RE.finditer(line_text):
+        start, end = match.span()
+        if start <= col <= end:
+            # Inside the run (or just past its last char — treated as part
+            # of the word, so a click right at a word edge grabs it).
+            return (start, end)
+    # On whitespace: prefer the next word to the right...
+    for match in _WORD_RUN_RE.finditer(line_text):
+        if match.start() >= col:
+            return match.span()
+    # ...else the previous word (last in the line).
+    matches = list(_WORD_RUN_RE.finditer(line_text))
+    if matches:
+        return matches[-1].span()
+    return (0, 0)
+
+
 def step_page(lines: list[str], pos: Pos, step: int) -> Pos:
     """Move *pos* ``step`` whole pages (in lines) and land at a page edge.
 
@@ -184,5 +223,6 @@ __all__ = [
     "selection_line_span",
     "step_page",
     "plain_lines",
+    "word_bounds",
     "apply_reverse_highlight",
 ]

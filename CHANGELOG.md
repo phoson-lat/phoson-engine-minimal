@@ -10,49 +10,68 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Feat
 
-- **cli**: keyboard copy mode — select and copy chat text (IMPROVEMENTS.md
-  G3, issue #57). In the full-screen app the chat scroll-wheel needs
-  `mouse_support=True`, which makes the terminal send raw mouse events to
-  the app and removes its native click-drag text selection. This release
-  adds a terminal-independent answer that works in every emulator: a
-  transient *copy mode* where you anchor a start point, extend a range
-  with the arrows, and yank it to the system clipboard.
+- **cli**: chat text selection and copy — click-drag with the mouse or
+  keyboard copy mode (IMPROVEMENTS.md G3, issue #57). In the full-screen
+  app the chat scroll-wheel needs `mouse_support=True`, which makes the
+  terminal send raw mouse events to the app and removes its native
+  click-drag text selection. This release restores selection inside the
+  app with two entry points that share the same anchor/cursor state and
+  highlight: a native *mouse* gesture and a terminal-independent
+  *copy mode* (keyboard) that works in every emulator.
 
-  - *Entry.* `F2` (new `copy_mode` action, remappable/unbindable like every
-    other key via the `[keys]` section) or the new `/copy` command. Entering
-    anchors the top-left cell of the *visible* pane and starts the cursor at
-    the bottom-right cell, so the whole visible page is pre-selected — the
-    common "copy what I'm looking at" case is one `Enter` away.
-  - *Navigation.* Arrows move the extending endpoint (left/right wrap across
-    line ends; up/down keep the column), `Home`/`End` jump to the row's
-    start/end, `PgUp`/`PgDn` jump a full page. The selection is a row-level
-    band drawn in reverse video over the cached chat ANSI, and the footer
-    swaps to the copy-mode hints (`[Enter] Copy · [Esc] Cancel`).
-  - *Yank.* `Enter` (or `Ctrl+Y`) copies the range to the system clipboard —
-    Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — the inverse of the
-    existing Ctrl+V read path. A success line reports the character count;
-    with no clipboard tool (e.g. a bare SSH session) a notice explains why
-    the selection was not copied. `Esc` cancels.
-  - *Key routing.* While copy mode is active the base key map is gated off,
-    focus moves onto the chat window, and an app-level copy key set
+  - *Mouse selection (the default).* Click and drag over the chat. A left
+    press enters a transient copy mode anchored at the pressed cell, the
+    drag extends the range under the pointer, and the release over a real
+    drag yanks it straight to the system clipboard. The selection stays
+    visible so it can be refined with the arrows and re-copied with
+    `Enter`; `Esc` discards it. A bare click simply leaves copy mode and
+    refocuses the composer, and a **double-click selects the whole word**
+    under the cursor. The mouse handler runs at the *control* level, where
+    prompt_toolkit has already translated the screen position into a
+    scroll-adjusted transcript `(row, col)` — the exact space the range
+    math works in. The wheel is unaffected: scroll arrives as its own
+    event type and still scrolls the chat while a selection is active.
+  - *Keyboard copy mode (the fallback).* `F2` (new `copy_mode` action,
+    remappable/unbindable like every other key via the `[keys]` section)
+    or the new `/copy` command. Entering anchors the top-left cell of the
+    *visible* pane and starts the cursor at the bottom-right cell, so the
+    whole visible page is pre-selected — the common "copy what I'm looking
+    at" case is one `Enter` away.
+  - *Navigation.* Arrows move the extending endpoint (left/right wrap
+    across line ends; up/down keep the column), `Home`/`End` jump to the
+    row's start/end, `PgUp`/`PgDn` jump a full page. The selection is
+    drawn in reverse video over the cached chat ANSI, and the footer swaps
+    to the copy-mode hints (`[Enter] Copy · [Esc] Cancel`, plus
+    `[🖱 Drag] Select · [🖱 2x] Word` when the selection came from the
+    mouse).
+  - *Yank.* `Enter` (or `Ctrl+Y`) copies the range to the system
+    clipboard — Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — the
+    inverse of the existing Ctrl+V read path. A success line reports the
+    character count; with no clipboard tool (e.g. a bare SSH session) a
+    notice explains why the selection was not copied. `Esc` cancels.
+  - *Key routing.* While copy mode is active the base key map is gated
+    off, focus moves onto the chat window, and an app-level copy key set
     (installed via `DynamicKeyBindings`, active only while the mode is on)
-    owns arrows/Enter/Esc/Ctrl+Y — so the composer's buffer bindings can no
-    longer intercept them, and typing is unaffected outside the mode.
-  - *Mouse.* `mouse_support` stays on for the scroll-wheel; where a terminal
-    supports it (GNOME Terminal, iTerm2, Alacritty, …) holding `Shift`
-    while dragging still bypasses the app's mouse capture and selects
-    natively — copy mode is the guaranteed fallback everywhere.
-  - *Docs:* README UI + key-bindings sections, a "Copy mode" section in
+    owns arrows/Enter/Esc/Ctrl+Y — so the composer's buffer bindings can
+    no longer intercept them, and typing is unaffected outside the mode.
+  - *Native bypass.* Where a terminal supports it (GNOME Terminal,
+    iTerm2, Alacritty, …) holding `Shift` while dragging still bypasses
+    the app's mouse capture and selects natively.
+  - *Docs:* README UI section, a "Copy mode" section in
     `docs/api/phoson_cli.md`, IMPROVEMENTS.md G3 marked done (v0.13.2);
     version bumped 0.13.1 → 0.13.2.
 
-  Tests: `tests/phoson_cli/test_g3_copy_mode_unit.py` (35 new) — the pure
+  Tests: `tests/phoson_cli/test_g3_copy_mode_unit.py` (51) — the pure
   range math (same-line/multi-line, order independence, clamping, page
-  stepping, ANSI→lines, the highlight pass), the clipboard write side, the
-  key-map wiring (`F2` default + remap/unbind + config load), the
-  `/copy` command in both front ends, and end-to-end key routing through
-  the real VT100 input layer (`F2` → arrows → `Enter` copies and exits;
-  `F2` → `Esc` cancels; typing is not steered).
+  stepping, ANSI→lines, the highlight pass, `word_bounds` for
+  double-click), the clipboard write side, the key-map wiring (`F2`
+  default + remap/unbind + config load), the `/copy` command in both front
+  ends, the mouse press/drag/release chain (drag yanks + keeps the
+  selection, bare click closes, double-click word, guards, scroll
+  passthrough, highlight), and end-to-end routing through the real VT100
+  input layer (`F2` → arrows → `Enter` copies and exits; `F2` → `Esc`
+  cancels; typing is not steered; SGR mouse packets — drag selects and
+  copies, wheel still scrolls).
 
 ## v0.13.1 (2026-08-26)
 

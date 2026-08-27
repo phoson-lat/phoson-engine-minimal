@@ -532,15 +532,29 @@ undo `undo_jump` (default `Ctrl+Z`) is remappable on its own.
 
 **Copy mode (full-screen TUI):** the full-screen chat uses the terminal's
 mouse for the scroll-wheel, which removes native click-drag text
-selection. `F2` (or `/copy`) opens a **copy mode**: the visible page is
-pre-selected, the arrows extend the range (left/right wrap across line
-ends, `Home`/`End` jump to the row's edge, `PgUp`/`PgDn` jump a page), the
-selection is drawn in reverse video, and `Enter` (or `Ctrl+Y`) yanks it to
-the system clipboard — Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — with
-a character-count confirmation. `Esc` cancels. `copy_mode` is remappable /
-unbindable from `[keys]` like any other key. Where your terminal supports
-it, holding `Shift` while dragging still selects natively as before; copy
-mode is the guaranteed fallback in every emulator.
+selection. There are two ways to select and copy chat text:
+
+- **Mouse selection (default):** just click and drag over any part of the
+  chat. A left press enters a transient *copy mode* anchored at the cell
+  you clicked, the drag extends the selection under the pointer (drawn in
+  reverse video), and releasing over a range yanks it straight to the
+  system clipboard — Wayland `wl-copy`, X11 `xclip`, macOS `pbcopy` — with
+  a character-count confirmation. The selection stays visible after the
+  release so you can refine it with the arrows and re-copy with `Enter`;
+  `Esc` discards it. A bare click (no drag) simply leaves copy mode and
+  refocuses the composer, and a **double-click selects the whole word**
+  under the cursor. Wheel scrolling works exactly as before while
+  selecting.
+- **Keyboard selection:** `F2` (or `/copy`) opens the same overlay from
+  the keyboard — the visible page is pre-selected, the arrows extend the
+  range (left/right wrap across line ends, `Home`/`End` jump to the row's
+  edge, `PgUp`/`PgDn` jump a page), and `Enter` (or `Ctrl+Y`) yanks it.
+  This is the guaranteed fallback where the terminal doesn't relay mouse
+  events.
+
+`copy_mode` is remappable / unbindable from `[keys]` like any other key.
+Where your terminal supports it, holding `Shift` while dragging still
+selects natively as before.
 
 **`@file` mentions:** type `@` in the message and the composer offers
 repo paths (fuzzy-filtered as you type, with a size hint per file);

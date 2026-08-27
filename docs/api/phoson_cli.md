@@ -189,13 +189,29 @@ redraws forward.
 The full-screen app captures the terminal's mouse to support smooth
 chat scroll-wheel (`mouse_support=True`), which prevents the terminal
 from offering native click-drag text selection. Copy mode
-(IMPROVEMENTS.md G3, issue #57) is the universal, keyboard-driven
-solution:
+(IMPROVEMENTS.md G3, issue #57) restores selection natively inside the
+app via two entry points that share the same anchor/cursor state and
+reverse-video highlight:
 
-- **Entry:** Press `F2` (the `copy_mode` action, remappable via `[keys]`)
-  or type `/copy`. The anchor is placed at the top-left cell of the
-  visible chat pane and the cursor at the bottom-right cell — so the
-  entire visible page is selected immediately.
+- **Mouse selection (default):** Click and drag over the chat to select
+  text directly. A left press enters copy mode anchored at the pressed
+  cell, the drag extends the range under the pointer, and the release
+  over a real drag yanks it to the system clipboard. A bare click (no
+  drag) leaves copy mode and refocuses the composer; a **double-click
+  selects the whole word** under the cursor (window of 0.3 s, matching
+  prompt_toolkit's own `BufferControl` threshold). After a drag the
+  selection stays visible so you can refine it with the keyboard before
+  re-copying. Wheel scrolling keeps working while selecting (the wheel
+  arrives as its own event type and is not affected by the selection).
+- **Keyboard selection:** Press `F2` (the `copy_mode` action,
+  remappable via `[keys]`) or type `/copy`. The anchor is placed at the
+  top-left cell of the visible chat pane and the cursor at the
+  bottom-right cell — so the entire visible page is selected immediately.
+  This is the guaranteed fallback where the terminal doesn't relay mouse
+  events.
+
+In either mode:
+
 - **Navigation:**
   - `↑` / `↓` / `←` / `→`: Extend the cursor one character or line.
     `←` and `→` wrap across row boundaries naturally.
@@ -203,16 +219,18 @@ solution:
   - `PgUp` / `PgDn`: Jump cursor a full visible page.
   - The selected rows are highlighted in reverse video (`\x1b[7m`).
   - The bottom footer displays copy-mode key hints:
-    `[↑/↓/←/→] Move  [PgUp/PgDn] Jump page  [Enter] Copy  [Esc] Cancel`.
+    `[↑/↓/←/→] Move  [PgUp/PgDn] Jump page  [Enter] Copy  [Esc] Cancel`
+    (plus `[🖱 Drag] Select  [🖱 2x] Word` when the selection was
+    started from the mouse).
 - **Yank to clipboard:** Press `Enter` (or `Ctrl+Y`) to copy the
   selected text to the system clipboard via the appropriate platform
   tool (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS) — the
   exact write counterpart of the Ctrl+V paste mechanism. A toast reports
   how many characters were copied.
 - **Cancel:** Press `Esc` to exit copy mode without copying.
-- **Mouse fallback:** On terminals that support mouse bypass (e.g.,
-  holding `Shift` while dragging in GNOME Terminal, iTerm2, or Alacritty),
-  native click-drag selection continues to work directly.
+- **Mouse bypass:** On terminals that support mouse bypass (e.g.,
+  holding `Shift` while dragging in GNOME Terminal, iTerm2, or
+  Alacritty), native click-drag selection also still works directly.
 
 ### Model registry (`~/.phoson/models.json`)
 

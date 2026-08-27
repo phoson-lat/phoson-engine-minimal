@@ -29,7 +29,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
+from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.formatted_text import ANSI, HTML, to_formatted_text
 from prompt_toolkit.layout.margins import ScrollbarMargin
@@ -85,6 +85,7 @@ from .copy_range import (
     step_page,
     range_text,
     plain_lines,
+    word_bounds,
     clamp_position,
     selection_line_span,
     apply_reverse_highlight,
@@ -100,7 +101,7 @@ from .session_cache import SessionListCache
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
     "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [F2] Copy  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
+    "  [Drag/F2] Copy  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
 _FOOTER_HINT_COPY = (
@@ -108,8 +109,19 @@ _FOOTER_HINT_COPY = (
     "[Enter] Copy  [Esc] Cancel</style>"
 )
 
+_FOOTER_HINT_COPY_MOUSE = (
+    '<style class="footer"> [↑/↓/←/→] Move  [PgUp/PgDn] Jump page  '
+    "[Enter] Copy  [Esc] Cancel  [🖱 Drag] Select  [🖱 2x] Word</style>"
+)
+
 # How often the subagent panel animation frame advances while active.
 _SUBAGENT_TICK_SECONDS = 0.12
+
+# Mouse double-click window (IMPROVEMENTS.md G3 follow-up): two left
+# ``MOUSE_UP`` presses closer than this (monotonic seconds) select the word
+# under the cursor. Matches prompt_toolkit's own 0.3 s threshold in
+# ``BufferControl.mouse_handler`` so the behavior feels consistent.
+_COPY_MOUSE_DOUBLE_CLICK_SECONDS = 0.3
 
 # Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
 # (measured in monotonic seconds between *delivered* key presses) opens the
@@ -216,6 +228,19 @@ class PhosonApp:
         self._copy_active = False
         self._copy_anchor: Pos = Pos(0, 0)
         self._copy_cursor: Pos = Pos(0, 0)
+        # Mouse selection (G3 follow-up): click-drag in the chat pane enters
+        # copy mode at the pressed cell and drags ``_copy_cursor`` under the
+        # pointer; the release either yanks (a real drag) or just closes the
+        # mode (a bare click). ``_copy_via_mouse`` only tunes the footer hint
+        # (the keyboard hints stay valid — arrows/PgUp/Enter/Esc all still
+        # work while a mouse selection is active). ``_mouse_down`` tracks the
+        # in-flight press so a press-drag-release cycle never crosses a mode
+        # exit, and ``_last_mouse_up_at`` feeds the double-click word select.
+        self._copy_via_mouse = False
+        self._mouse_down = False
+        self._last_mouse_up_at = 0.0
+        self._last_mouse_up_pos: Pos | None = None
+        self._last_mouse_up_was_drag = False
         # Built once: the copy-mode key set is static (it binds to bound
         # methods that read live state), so it is created here and exposed to
         # the Application via a DynamicKeyBindings that is only active while
@@ -274,7 +299,18 @@ class PhosonApp:
             get_vertical_scroll=self._get_effective_scroll,
             right_margins=[ScrollbarMargin(display_arrows=True)],
         )
-        self._chat_window._mouse_handler = self._on_chat_mouse
+        # Control-level mouse handler: prompt_toolkit's Window wrapper
+        # translates the screen (x, y) through the last render's
+        # ``rowcol_to_yx`` mapping before calling this, so ``position``
+        # arrives as (row, col) in the *content* line space — the same
+        # space ``copy_range`` works in, and already adjusted for the
+        # current vertical scroll (a click on the first visible row at
+        # scroll S reports row S). The handler returns ``None`` for events
+        # it handles and ``NotImplemented`` for scroll-wheel events, which
+        # then fall through to the Window's own handler
+        # (``_on_chat_scroll``).
+        chat_control.mouse_handler = self._on_chat_mouse  # type: ignore[method-assign]
+        self._chat_window._mouse_handler = self._on_chat_scroll
 
         header_window = Window(
             content=FormattedTextControl(self._get_header_text), height=1
@@ -499,6 +535,64 @@ class PhosonApp:
         self.app.invalidate()
 
     def _on_chat_mouse(self, mouse_event: MouseEvent) -> object:
+        """Chat-pane mouse events, in *content* coordinates (see
+        ``_build_layout``) — i.e. ``position`` is already the transcript
+        ``(row, col)`` the copy-mode range math uses.
+
+        Left-button presses drive the native click-drag selection
+        (IMPROVEMENTS.md G3 follow-up): a press enters copy mode anchored at
+        the pressed cell, a drag extends the selection under the pointer,
+        and the release either yanks the range to the clipboard (a real
+        drag) or simply closes the mode (a bare click). A double-click
+        (release, release within ``_COPY_MOUSE_DOUBLE_CLICK_SECONDS``)
+        selects the whole word under the cursor instead.
+
+        Scroll-wheel events return ``NotImplemented`` so they fall through
+        to the Window-level :meth:`_on_chat_scroll` (keeping the existing
+        wheel-scroll behavior) — the wheel arrives as its own event type
+        (``SCROLL_UP``/``SCROLL_DOWN``) and never as a button press.
+        """
+        if (
+            mouse_event.event_type == MouseEventType.SCROLL_UP
+            or mouse_event.event_type == MouseEventType.SCROLL_DOWN
+        ):
+            return NotImplemented
+        if mouse_event.button != MouseButton.LEFT:
+            return NotImplemented
+
+        pos = clamp_position(
+            self._copy_lines(),
+            Pos(line=mouse_event.position.y, col=mouse_event.position.x),
+        )
+
+        if mouse_event.event_type == MouseEventType.MOUSE_DOWN:
+            self._mouse_select_start(pos)
+            return None
+
+        if mouse_event.event_type == MouseEventType.MOUSE_MOVE:
+            if self._mouse_down:
+                self._copy_cursor = pos
+                self.app.invalidate()
+            return None
+
+        if mouse_event.event_type == MouseEventType.MOUSE_UP:
+            self._mouse_down = False
+            if not self._copy_active:
+                return None
+            # The release cell is the final endpoint of the selection.
+            self._copy_cursor = pos
+            self._mouse_select_finish(pos)
+            return None
+
+        return NotImplemented
+
+    def _on_chat_scroll(self, mouse_event: MouseEvent) -> object:
+        """Window-level fallback: chat-pane wheel scrolling (unchanged).
+
+        Called only for events the control-level
+        :meth:`_on_chat_mouse` passed through with ``NotImplemented`` —
+        i.e. the scroll wheel.
+        """
         current = self._get_effective_scroll()
         max_scroll = max(0, self._total_chat_lines - self._get_visible_window_height())
         if mouse_event.event_type == MouseEventType.SCROLL_UP:
@@ -513,6 +607,68 @@ class PhosonApp:
                 self._chat_scroll_top = current + 3
             return None
         return NotImplemented
+
+    def _mouse_select_start(self, pos: Pos) -> None:
+        """Left press: enter copy mode anchored at ``pos`` (no pre-selection).
+
+        The anchor is where the user clicked and the cursor starts on the
+        same cell, so nothing is selected yet — the drag (or the double
+        click on release) defines the range. Focus moves to the chat window
+        exactly like keyboard copy mode, so the composer can't swallow the
+        drag. A press while a Float is open or a run is in flight is
+        ignored (same guard as :meth:`enter_copy_mode`).
+        """
+        if self._active_float is not None or self._is_run_in_flight():
+            return
+        self._copy_anchor = pos
+        self._copy_cursor = pos
+        self._copy_active = True
+        self._copy_via_mouse = True
+        self._mouse_down = True
+        self.app.layout.focus(self._chat_window)
+        self.app.invalidate()
+
+    def _mouse_select_finish(self, pos: Pos) -> None:
+        """Left release: decide what the completed gesture meant.
+
+        - *Double-click* (two same-cell releases within the window, no drag
+          in between) → select the whole word under the cursor, stay in copy
+          mode.
+        - *Drag* (anchor ≠ release cell) → yank the range to the clipboard,
+          stay in copy mode so the selection is still visible and can be
+          refined by keyboard before re-copying.
+        - *Bare click* → leave copy mode and restore composer focus (a
+          simple click is the natural "just point" action).
+        """
+        now = time.monotonic()
+        dragged = pos != self._copy_anchor
+        is_double_click = (
+            not dragged
+            and not self._last_mouse_up_was_drag
+            and self._last_mouse_up_pos == pos
+            and now - self._last_mouse_up_at <= _COPY_MOUSE_DOUBLE_CLICK_SECONDS
+        )
+        self._last_mouse_up_at = now
+        self._last_mouse_up_pos = pos
+        self._last_mouse_up_was_drag = dragged
+
+        lines = self._copy_lines()
+        if is_double_click:
+            start, end = word_bounds(lines[pos.line], pos.col)
+            if end > start:
+                self._copy_anchor = Pos(pos.line, start)
+                self._copy_cursor = Pos(pos.line, end)
+                self._copy_via_mouse = True
+                self.app.invalidate()
+                return
+            # No word under the cursor (blank line): fall through to exit.
+        if dragged:
+            # A real drag: yank and keep the selection visible.
+            self._copy_to_clipboard()
+            self._copy_via_mouse = True
+            self.app.invalidate()
+            return
+        self.exit_copy_mode()
 
     # ── Rendering ────────────────────────────────────────────────────────
 
@@ -558,10 +714,16 @@ class PhosonApp:
         """Keyboard-hint footer line.
 
         Normally :data:`_FOOTER_HINT`; while copy mode is active it swaps for
-        :data:`_FOOTER_HINT_COPY` so the on-screen hints always describe the
-        keys that currently do something (G3).
+        the copy-mode hints so the on-screen hints always describe the keys
+        that currently do something (G3). A selection that came in from the
+        mouse additionally advertises the double-click word shortcut (G3
+        follow-up: mouse selection).
         """
-        return HTML(_FOOTER_HINT_COPY if self._copy_active else _FOOTER_HINT)
+        if not self._copy_active:
+            return HTML(_FOOTER_HINT)
+        if self._copy_via_mouse:
+            return HTML(_FOOTER_HINT_COPY_MOUSE)
+        return HTML(_FOOTER_HINT_COPY)
 
     def _has_agents_md(self) -> bool:
         """Whether any AGENTS.md/CLAUDE.md memory file applies here.
@@ -1066,12 +1228,12 @@ class PhosonApp:
     def enter_copy_mode(self) -> None:
         """F2: open copy mode — anchor at the top of the visible pane.
 
-        The full-screen app captures the mouse for the chat scroll-wheel
-        (``mouse_support=True``), which removes the terminal's native
-        click-drag selection. Copy mode is the terminal-independent answer:
-        the anchor is fixed here, the cursor starts at the bottom of the
-        visible pane (a full page selected), and the user extends with the
-        arrows before pressing Enter to yank the range.
+        Keyboard entry to the selection overlay: the anchor is fixed here,
+        the cursor starts at the bottom of the visible pane (a full page
+        selected), and the user extends with the arrows before pressing
+        Enter to yank the range. (Mouse entry — click-drag in the pane —
+        goes through :meth:`_mouse_select_start` instead; the two share the
+        same anchor/cursor state and highlight.)
         """
         if self._active_float is not None or self._is_run_in_flight():
             self.sink.notify(
@@ -1084,6 +1246,7 @@ class PhosonApp:
         self._copy_anchor = Pos(*self._visible_anchor())
         self._copy_cursor = self._visible_cursor()
         self._copy_active = True
+        self._copy_via_mouse = False
         # Move focus onto the chat window so the composer's buffer bindings
         # (which would otherwise intercept arrows/Enter/Ctrl+Y) no longer
         # have priority; the app-level copy bindings then handle everything.
@@ -1178,9 +1341,12 @@ class PhosonApp:
 
         ``copied`` is informational (the notice was already raised by the copy
         action); the exit itself always restores focus and re-enables the base
-        key bindings.
+        key bindings. Any in-flight mouse press is also dropped so a stale
+        ``MOUSE_UP`` can't act on an already-closed selection.
         """
         self._copy_active = False
+        self._copy_via_mouse = False
+        self._mouse_down = False
         self.app.layout.focus(self._prompt_input)
         self.app.invalidate()
 

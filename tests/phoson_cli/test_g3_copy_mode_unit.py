@@ -712,6 +712,447 @@ async def test_pipe_input_typing_not_steered_by_copy_entry(tmp_path) -> None:
     assert app._prompt_input.buffer.text == "hi"
 
 
+# ── copy_range: word_bounds (mouse double-click) ──────────────────────────────
+
+
+def test_word_bounds_selects_whole_word_under_cursor() -> None:
+    assert copy_range.word_bounds("hello world", 2) == (0, 5)
+    assert copy_range.word_bounds("hello world", 7) == (6, 11)
+    # A click right at the word edge grabs the word.
+    assert copy_range.word_bounds("hello world", 5) == (0, 5)
+    assert copy_range.word_bounds("hello world", 6) == (6, 11)
+
+
+def test_word_bounds_on_whitespace_prefers_next_word() -> None:
+    # A cell on a word's trailing edge belongs to that word...
+    assert copy_range.word_bounds("hello world", 5) == (0, 5)
+    # ...but a leading space selects the next word to the right...
+    assert copy_range.word_bounds(" hello", 0) == (1, 6)
+    # ...and the middle of a double gap goes to the next word too.
+    assert copy_range.word_bounds("hello  world", 6) == (7, 12)
+    # Trailing space past the last word: snaps back to it.
+    assert copy_range.word_bounds("hello ", 6) == (0, 5)
+    assert copy_range.word_bounds("", 0) == (0, 0)
+    assert copy_range.word_bounds("   ", 1) == (0, 0)
+
+
+def test_word_bounds_paths_and_urls() -> None:
+    line = "see /tmp/a-b.c.txt now"
+    start, end = copy_range.word_bounds(line, 6)
+    assert line[start:end] == "/tmp/a-b.c.txt"
+
+
+def test_word_bounds_clamps_out_of_range_col() -> None:
+    assert copy_range.word_bounds("hello world", 999) == (6, 11)
+    assert copy_range.word_bounds("hello world", -1) == (0, 5)
+
+
+# ── PhosonApp: mouse selection (G3 follow-up) ─────────────────────────────────
+
+
+def _mouse_event(
+    event_type,
+    row: int,
+    col: int,
+    button=None,
+    modifiers=frozenset(),
+):
+    """A MouseEvent in the *content* coordinate space the Window wrapper
+    produces (position = Point(x=col, y=row))."""
+    from prompt_toolkit.mouse_events import MouseEvent, MouseButton
+    from prompt_toolkit.data_structures import Point
+
+    if button is None:
+        button = MouseButton.LEFT
+    return MouseEvent(
+        position=Point(x=col, y=row),
+        event_type=event_type,
+        button=button,
+        modifiers=modifiers,
+    )
+
+
+def test_mouse_click_drag_yanks_and_keeps_selection(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world", "second line")
+    copied = {}
+
+    async def _fake_write(text):
+        copied["text"] = text
+        return True
+
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write),
+        _run_bg_inline(app),
+    ):
+        # Press at line 0 col 0, drag to line 1 col 6, release there.
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 0))
+        assert app._copy_active is True
+        assert app._copy_via_mouse is True
+        assert app._copy_anchor == copy_range.Pos(0, 0)
+        assert app.app.layout.current_window is app._chat_window
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_MOVE, 1, 3))
+        assert app._copy_cursor == copy_range.Pos(1, 3)
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 1, 6))
+
+    # A drag yanks the range on release and stays in copy mode (the
+    # selection is still visible, refinable by keyboard).
+    assert copied.get("text") == "hello world\nsecond"
+    assert app._copy_active is True
+    assert app._copy_anchor == copy_range.Pos(0, 0)
+    assert app._copy_cursor == copy_range.Pos(1, 6)
+    # Esc still exits the (mouse-opened) mode.
+    app.copy_cancel()
+    assert app._copy_active is False
+    assert app._copy_via_mouse is False
+    assert app.app.layout.current_window is app._prompt_input.window
+
+
+def test_mouse_bare_click_enters_and_closes_without_copy(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world")
+    with patch("phoson_cli.fullscreen.app.write_clipboard_text") as mock_w:
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 2))
+        assert app._copy_active is True
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 0, 2))
+    mock_w.assert_not_called()
+    assert app._copy_active is False
+    assert app.app.layout.current_window is app._prompt_input.window
+
+
+def test_mouse_double_click_selects_word_and_stays(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world")
+    copied = {}
+
+    async def _fake_write(text):
+        copied["text"] = text
+        return True
+
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write),
+        _run_bg_inline(app),
+    ):
+        # First click: press + release on the same cell → mode closed.
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 7))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 0, 7))
+        assert app._copy_active is False
+        # Second click within the double-click window, same cell:
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 7))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 0, 7))
+
+    # The whole word "world" is selected and the mode stays open.
+    assert copied == {}  # a word select does not yank by itself
+    assert app._copy_active is True
+    assert app._copy_anchor == copy_range.Pos(0, 6)
+    assert app._copy_cursor == copy_range.Pos(0, 11)
+    # Enter yanks the selected word.
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write),
+        _run_bg_inline(app),
+    ):
+        app.copy_copy()
+    assert copied.get("text") == "world"
+    assert app._copy_active is False
+
+
+def test_mouse_double_click_not_fooled_by_drag_then_click(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello world", "second line")
+
+    async def _fake_write(text):
+        return True
+
+    with (
+        patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write),
+        _run_bg_inline(app),
+    ):
+        # Drag from (0,0) to (1,3) — a release on a *different* cell.
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 0))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_MOVE, 1, 3))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 1, 3))
+        # Immediately click on (1, 3): not a double-click (the previous
+        # release was a drag), and the bare click closes the mode.
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 1, 3))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 1, 3))
+
+    assert app._copy_active is False
+    assert app.app.layout.current_window is app._prompt_input.window
+
+
+def test_mouse_press_ignored_while_run_in_flight(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello")
+    with patch.object(app, "_is_run_in_flight", return_value=True):
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 0))
+    assert app._copy_active is False
+    assert app._mouse_down is False
+    # A subsequent release must be a no-op (no selection to finish).
+    app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 0, 0))
+    assert app._copy_active is False
+
+
+def test_mouse_press_ignored_while_float_open(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello")
+    app._active_float = MagicMock()  # any open Float blocks mouse selection
+    try:
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 0))
+    finally:
+        app._active_float = None
+    assert app._copy_active is False
+
+
+def test_mouse_non_left_button_is_noop(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseButton, MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "hello")
+    result = app._on_chat_mouse(
+        _mouse_event(MouseEventType.MOUSE_DOWN, 0, 0, button=MouseButton.RIGHT)
+    )
+    assert result is NotImplemented
+    assert app._copy_active is False
+
+
+def test_mouse_scroll_passthrough_and_wheel_keeps_working(tmp_path) -> None:
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, *([f"row {i}" for i in range(60)]))
+    # Make the transcript longer than the pane so the wheel has room.
+    app._auto_scroll = False
+    app._chat_scroll_top = 0
+    app._render_chat()
+    max_scroll = app._total_chat_lines - app._get_visible_window_height()
+    assert max_scroll > 3
+
+    # The control-level handler passes scroll events through...
+    assert (
+        app._on_chat_mouse(_mouse_event(MouseEventType.SCROLL_UP, 0, 0))
+        is NotImplemented
+    )
+    # ...and the Window-level fallback performs the actual scroll.
+    # From the top, scrolling down moves 3 rows and disables auto-scroll.
+    result = app._on_chat_scroll(_mouse_event(MouseEventType.SCROLL_DOWN, 0, 0))
+    assert result is None
+    assert app._chat_scroll_top == 3
+    assert app._auto_scroll is False
+    # Scrolling up from a mid position moves 3 rows back.
+    app._on_chat_scroll(_mouse_event(MouseEventType.SCROLL_UP, 0, 0))
+    assert app._chat_scroll_top == 0
+    # Scroll-down all the way to the bottom re-enables auto-scroll.
+    app._chat_scroll_top = max_scroll - 2
+    app._on_chat_scroll(_mouse_event(MouseEventType.SCROLL_DOWN, 0, 0))
+    assert app._chat_scroll_top == max_scroll
+    assert app._auto_scroll is True
+    # Unknown event types pass through untouched.
+    assert (
+        app._on_chat_scroll(_mouse_event(MouseEventType.MOUSE_UP, 0, 0))
+        is NotImplemented
+    )
+
+
+def _strip_ansi(text: str) -> str:
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def test_mouse_selection_highlight_renders_in_pane(tmp_path) -> None:
+    """The reverse-video highlight follows a mouse drag like a keyboard one."""
+    app = _app_for(tmp_path)
+    _seed_chat(app, "alpha", "beta", "gamma")
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    async def _fake_write(text):
+        return True
+
+    with patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write):
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_DOWN, 0, 0))
+        app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_MOVE, 2, 1))
+        rendered = app._render_chat().value
+        assert "\x1b[7m" in rendered
+        # Every visible row of the drag span ("alpha".."gamma") is
+        # reverse-wrapped; the base ANSI is per-character fragments, so each
+        # char is wrapped on its own — check per row instead of one
+        # contiguous block.
+        rows = rendered.split("\n")
+        for row in rows[:3]:
+            if _strip_ansi(row).strip():
+                assert "\x1b[7m" in row, row
+        # The drag release yanks (background task) — run it inline in tests.
+        with _run_bg_inline(app):
+            app._on_chat_mouse(_mouse_event(MouseEventType.MOUSE_UP, 2, 1))
+        # Release keeps the selection (drag), so the highlight persists...
+        assert "\x1b[7m" in app._render_chat().value
+        app.copy_cancel()
+        assert "\x1b[7m" not in app._render_chat().value
+
+
+def test_footer_advertises_word_shortcut_after_mouse_selection(tmp_path) -> None:
+    from prompt_toolkit.formatted_text import to_plain_text
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "a", "b")
+    assert "2x" not in to_plain_text(app._get_footer_text())
+    app._copy_active = True
+    app._copy_via_mouse = True
+    assert "2x" in to_plain_text(app._get_footer_text())
+    # Keyboard entry keeps the plain hint.
+    app._copy_via_mouse = False
+    assert "2x" not in to_plain_text(app._get_footer_text())
+
+
+# ── mouse e2e through the real VT100 input layer (PipeInput) ─────────────────
+# Xterm SGR packets (enabled by mouse_support=True): "<CBT;X;Y(M|m)" with
+# 1-based coordinates. These verify the full chain — parser →
+# load_mouse_bindings → Window coordinate conversion → control handler — with
+# a real running Application and no mocks in the mouse path. The exact screen
+# rows the chat pane occupies depend on the render geometry, so the drive
+# routine reads ``chat window.render_info.rowcol_to_yx`` at runtime and
+# calibrates the SGR coordinates from it rather than hardcoding a guess.
+
+SGR_DOWN = "\x1b[<0;{x};{y}M"  # left press at screen (col, row), 1-based
+SGR_MOVE = "\x1b[<32;{x};{y}M"  # left drag
+SGR_UP = "\x1b[<0;{x};{y}m"  # left release
+SCROLL_UP = "\x1b[<64;{x};{y}M"  # wheel up (CBT=64)
+
+
+def _chat_screen_rows(app) -> tuple[int, int]:
+    """``(top_screen_row, row_step)`` of the chat pane from the last render.
+
+    ``top_screen_row`` is the 0-based screen row of chat content row 0
+    (what the SGR packets must target, since full-screen runs in the
+    alternate screen with no rows above the layout); ``row_step`` is the
+    screen distance between consecutive content rows.
+    """
+    ri = app._chat_window.render_info
+    assert ri is not None, "chat window not rendered yet"
+    mapping = ri._rowcol_to_yx  # noqa: SLF001 - test-only access
+    assert (0, 0) in mapping and (1, 0) in mapping, "mapping missing rows"
+    y0 = mapping[(0, 0)][0]
+    y1 = mapping[(1, 0)][0]
+    return (y0, y1 - y0)
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_mouse_drag_selects_and_copies(tmp_path) -> None:
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, "one line of chat", "second line")
+    copied = {}
+
+    async def _fake_write(text):
+        copied["text"] = text
+        return True
+
+    with patch("phoson_cli.fullscreen.app.write_clipboard_text", new=_fake_write):
+        with create_pipe_input() as pipe:
+            app.app.input = pipe
+            app.app.output = DummyOutput()
+            observed: dict[str, object] = {}
+
+            async def drive():
+                # No asserts in here: an exception would kill the driver.
+                # The quit key is in a `finally` so it always goes out —
+                # otherwise run_async hangs forever. Observations are
+                # recorded for assertions after the app exits.
+                try:
+                    await asyncio.sleep(0.4)  # wait for the first real render
+                    top, row_step = _chat_screen_rows(app)
+                    # Press on chat row 0 (col 1), drag to chat row 1 (col 4).
+                    # SGR coordinates are 1-based screen (col, row).
+                    pipe.send_text(SGR_DOWN.format(x=2, y=top + 1))
+                    await asyncio.sleep(0.15)
+                    observed["active_after_down"] = app._copy_active
+                    pipe.send_text(SGR_MOVE.format(x=5, y=top + row_step + 1))
+                    await asyncio.sleep(0.15)
+                    pipe.send_text(SGR_UP.format(x=5, y=top + row_step + 1))
+                    await asyncio.sleep(0.1)
+                    observed["active_after_up"] = app._copy_active  # drag keeps it
+                    pipe.send_text("\x1b")  # Esc: leave copy mode
+                    await asyncio.sleep(0.1)
+                except BaseException as exc:  # noqa: BLE001 - recorded below
+                    observed["drive_error"] = exc
+                finally:
+                    pipe.send_text("\x03")  # quit (always)
+                    await asyncio.sleep(0.1)
+
+            asyncio.create_task(drive())
+            await asyncio.wait_for(app.app.run_async(), timeout=20)
+
+    assert "drive_error" not in observed, observed.get("drive_error")
+    assert observed["active_after_down"] is True
+    assert observed["active_after_up"] is True
+    # The drag spanned chat row 0 (col 1..end) into row 1 (col 0..4) —
+    # "ne line of chat\nseco".
+    assert copied.get("text") == "ne line of chat\nseco"
+    assert app._copy_active is False
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_mouse_wheel_scroll_still_works(tmp_path) -> None:
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    _seed_chat(app, *([f"row {i}" for i in range(60)]))
+    app._auto_scroll = False
+    app._chat_scroll_top = 0
+
+    with create_pipe_input() as pipe:
+        app.app.input = pipe
+        app.app.output = DummyOutput()
+        max_scroll = app._total_chat_lines - app._get_visible_window_height()
+        assert max_scroll > 3
+        observed: dict[str, object] = {}
+
+        async def drive():
+            # Same driver pattern as the drag test: record observations,
+            # always send the quit key (finally).
+            try:
+                await asyncio.sleep(0.4)
+                top, _ = _chat_screen_rows(app)
+                # Wheel up from the very top: must not scroll (clamped) and
+                # must not enter copy mode.
+                pipe.send_text(SCROLL_UP.format(x=5, y=top + 1))
+                await asyncio.sleep(0.15)
+                observed["top_after_up"] = app._chat_scroll_top
+                observed["active_after_up"] = app._copy_active
+                # Wheel down: moves 3 rows and disables auto-scroll.
+                pipe.send_text(f"\x1b[<65;5;{top + 1}M")  # CBT=65
+                await asyncio.sleep(0.15)
+            except BaseException as exc:  # noqa: BLE001 - recorded below
+                observed["drive_error"] = exc
+            finally:
+                pipe.send_text("\x03")  # quit (always)
+                await asyncio.sleep(0.1)
+
+        asyncio.create_task(drive())
+        await asyncio.wait_for(app.app.run_async(), timeout=20)
+
+    assert "drive_error" not in observed, observed.get("drive_error")
+    assert observed["top_after_up"] == 0
+    assert observed["active_after_up"] is False
+    assert app._chat_scroll_top == 3
+    assert app._auto_scroll is False
+
+
 class _run_bg_inline:
     """Patch ``PhosonApp.app.create_background_task`` to run a coroutine
     inline on a fresh event loop.
