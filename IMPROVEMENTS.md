@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.12.5 · 1254 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5 · E6 (keybindings personalizables) cerrado en v0.12.6 · G1 (double-Esc rewind) cerrado en v0.13.0 · G2 (prompt caching) cerrado en v0.13.1 · G3 (selección de texto del chat: resuelto documentando el bypass nativo de terminal, `Shift+Drag`, en el footer y el README — se descartó un modo de copia propio tras comparar con Claude Code/Pi/OpenCode, ver detalle en G3).
+> **Estado de referencia:** v0.13.2 · 1351 tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5 · E6 (keybindings personalizables) cerrado en v0.12.6 · G1 (double-Esc rewind) cerrado en v0.13.0 · G2 (prompt caching) cerrado en v0.13.1 · G3 (selección de texto del chat: resuelto documentando el bypass nativo de terminal, `Shift+Drag`, en el footer y el README — se descartó un modo de copia propio tras comparar con Claude Code/Pi/OpenCode, ver detalle en G3) y fix de OpenRouter `extra_body` (follow-up de G2) cerrados en v0.13.2 (PR #102).
 
 ---
 
@@ -37,7 +37,7 @@
 | [E6](#e6-keybindings-personalizables) | Keybindings configurables | **P3** | M | 🟢 Bajo | — | ✅ v0.12.6 |
 | [G1](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | Double-Esc para retroceder a un mensaje anterior (rewind) | **P1** | M | 🟠 Medio | [#51](https://github.com/phoson-lat/phoson-engine-minimal/issues/51) | ✅ v0.13.0 |
 | [G2](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Prompt caching (OpenRouter/Anthropic) — tokens cacheados + cabeceras | **P1** | M | 🔴 Alto | [#69](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | ✅ v0.13.1 |
-| [G3](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | Seleccionar/copiar texto del chat con el mouse (full-screen) | **P2** | S | 🟡 Bajo | [#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | ✅ resuelto (footer hint) |
+| [G3](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | Seleccionar/copiar texto del chat con el mouse (full-screen) | **P2** | S | 🟡 Bajo | [#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | ✅ v0.13.2 (footer hint) |
 | [G4](https://github.com/phoson-lat/phoson-engine-minimal/issues/58) | Hyperlinks clicables en respuestas (OSC 8 vía prompt_toolkit) | **P2** | M | 🟠 Medio | [#58](https://github.com/phoson-lat/phoson-engine-minimal/issues/58) | Sprint 3+ |
 | [G5](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | Sistema de Skills (instrucciones on-demand, tipo Claude Code) | **P3** | L | 🟠 Medio | [#52](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | Backlog (diseño) |
 
@@ -56,7 +56,7 @@ El engine reenvía el prompt completo en cada request. Se añade soporte de prom
 
 Beneficio: −50–90% en el costo del prefijo repetitivo y menos latencia (TTFT) en sesiones largas. Tests: 27 nuevos (breakpoints Anthropic 16, OpenRouter 5 + parsing de `cache_write` 1, wiring CLI 3, prefijo estable 2).
 
-### G3 — Seleccionar/copiar texto con el mouse ([#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57)) ✅ resuelto (fix documental)
+### G3 — Seleccionar/copiar texto con el mouse ([#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57)) ✅ resuelto en v0.13.2 (PR #102, fix documental)
 En full-screen, `mouse_support=True` (para la rueda del chat) activa el mouse-tracking del *terminal* (xterm DECSET 1000/1002/1006) — un interruptor a nivel de protocolo, no de la app: una vez activo, el terminal deja de tratar el drag como selección nativa y en su lugar reporta cada evento de mouse por el mismo canal que usa la rueda. No existe una combinación donde la rueda llegue a la app pero el drag siga siendo selección nativa del sistema — es binario.
 
 **Investigación del SOTA (Claude Code, Pi, OpenCode):** los tres reimplementan el mismo patrón (drag-select propio + copy-on-release) para resolver este mismo trade-off, no lo evitan. Y OpenCode en particular acumula issues sobre ese propio mecanismo: clipboard sobreescrito por selección incidental ([#4751](https://github.com/anomalyco/opencode/issues/4751), [#10490](https://github.com/anomalyco/opencode/issues/10490)), mouse capture "pegado" tras iniciar en VS Code/SSH/tmux anidado ([#15212](https://github.com/anomalyco/opencode/issues/15212), [#5046](https://github.com/anomalyco/opencode/issues/5046)). Se prototipó una implementación equivalente (modo de copia por teclado F2/`/copy` + drag-select propio + fallback OSC 52 para SSH) y se descartó tras esta comparación: agrega ~1450 líneas y una superficie de bugs de mouse-capture que el propio ecosistema demuestra no resolverse bien, para lograr paridad con algo que el usuario ya puede hacer sin ayuda de la app.
@@ -552,7 +552,7 @@ Continuo / paralelo
 
 1. **Todo formato nuevo va a `formatting.py` como renderable puro** — los dos frontends deben seguir compartiendo el 100%.
 2. **Toda capability de seguridad es middleware/plugin**, no lógica en las tools — protege la filosofía framework-free y beneficia a Phoson-Core.
-3. **Cada ítem termina con test + entrada en CHANGELOG** — la disciplina actual (1254 tests) es la mayor fortaleza del repo; no erosionarla por velocidad.
+3. **Cada ítem termina con test + entrada en CHANGELOG** — la disciplina actual (1351 tests) es la mayor fortaleza del repo; no erosionarla por velocidad.
 4. **Medir antes de optimizar** — los números de perf existentes (~18× cache, 16fps throttle) vinieron de medir; los nuevos features con componente de render deben incluir su medición.
 5. **Cuando dude entre añadir feature o pulir existente**: el comparativo de harnesses mostró que *menos tools pero mejores* gana (caso Vercel: −80% tools → 100% éxito). Preferir profundidad sobre amplitud.
 
