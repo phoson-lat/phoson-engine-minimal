@@ -50,6 +50,92 @@ def models_file_path(home: str | Path | None = None) -> Path:
     return base / MODELS_FILE_NAME
 
 
+# ── model id → provider inference (I-89) ─────────────────────────────────────
+
+#: Providers that serve *other* vendors' models under the vendor's own
+#: ``vendor/model`` id (e.g. OpenRouter serves ``openai/gpt-4o``). For a
+#: router, a vendor prefix in the model id does NOT identify the serving
+#: provider.
+ROUTER_PROVIDERS: frozenset[str] = frozenset({"openrouter", "github"})
+
+#: Provider aliases normalized to their canonical name.
+PROVIDER_ALIASES: dict[str, str] = {
+    "google": "gemini",
+    "aws": "bedrock",
+    "grok": "xai",
+}
+
+#: Canonical provider names the CLI can serve (mirrors ``build_chat``).
+KNOWN_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "openrouter",
+        "openai",
+        "anthropic",
+        "ollama",
+        "github",
+        "nvidia",
+        "xai",
+        "grok",
+        "groq",
+        "deepseek",
+        "together",
+        "perplexity",
+        "azure",
+        "gemini",
+        "google",
+        "mistral",
+        "fireworks",
+        "cohere",
+        "bedrock",
+        "aws",
+        "vllm",
+        "lmstudio",
+    }
+)
+
+
+def normalize_provider(provider: str) -> str:
+    """Lowercase a provider name and fold aliases (``google`` → ``gemini``)."""
+    p = provider.lower()
+    return PROVIDER_ALIASES.get(p, p)
+
+
+def model_provider_for(
+    model_id: str,
+    active_provider: str,
+    option_provider: str | None = None,
+) -> str | None:
+    """Best-effort provider for a model id (I-89).
+
+    Resolution order:
+
+    1. ``option_provider`` — the picker option's ``provider`` field, the
+       authoritative source when it names a real provider (anything but
+       the ``"custom"`` fallback tag used for the current-model entry).
+    2. The ``vendor/`` prefix of ``model_id`` — but only when the active
+       provider is **not** a router (see :data:`ROUTER_PROVIDERS`), and
+       only when the prefix is a known provider name. Unknown prefixes
+       (``qwen/...``, local deployment names, …) never trigger a switch.
+    3. ``None`` — nothing identifies a different provider; the active
+       provider is kept.
+    """
+    if option_provider:
+        normalized = normalize_provider(option_provider)
+        if normalized not in ("custom", ""):
+            return normalized
+
+    active = normalize_provider(active_provider)
+    if "/" in model_id:
+        prefix = normalize_provider(model_id.split("/", 1)[0])
+        if (
+            active not in ROUTER_PROVIDERS
+            and prefix in KNOWN_PROVIDERS
+            and prefix != active
+        ):
+            return prefix
+    return None
+
+
 def load_models_file(path: str | Path | None = None) -> dict[str, Any]:
     """Load the models file, returning ``{}`` if missing or invalid.
 

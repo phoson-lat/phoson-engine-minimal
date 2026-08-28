@@ -319,9 +319,9 @@ class PhosonRepl:
         self.renderer.theme = theme
         self.renderer._subagent_spinner._theme = theme
 
-    async def set_model(self, model: str) -> None:
-        """Switch model and rebuild the engine."""
-        await self._controller.set_model(model)
+    async def set_model(self, model: str, provider: str | None = None) -> None:
+        """Switch model (and provider, when given) and rebuild the engine."""
+        await self._controller.set_model(model, provider=provider)
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text."""

@@ -36,7 +36,12 @@ from prompt_toolkit.completion import (
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from .theme import VALID_NAMES, get_theme
-from .config import save_config, enabled_providers_from_config
+from .config import (
+    NO_CREDENTIAL_PROVIDERS,
+    save_config,
+    enabled_providers_from_config,
+)
+from .models import model_provider_for, normalize_provider
 from .updater import perform_self_update
 from .installer import run_install_wizard  # noqa: F401 - patched by tests / host
 from .attachments import provider_compat_warning
@@ -480,6 +485,7 @@ class CommandHandler:
             return
 
         chosen: str | None = explicit
+        option_provider: str | None = None
         if not chosen:
             models = await list_available_models(self.repl.config)
             if not models:
@@ -490,11 +496,44 @@ class CommandHandler:
                 r.print_info("Cancelled.")
                 return
             chosen = result.model_id
+            option_provider = next((m.provider for m in models if m.id == chosen), None)
 
         if target == "main":
-            await self.repl.set_model(chosen)
-            save_config(self.repl.config, only_fields={"model"})
-            r.print_info(f"Model → {self.repl.current_model}  ·  saved")
+            # I-89: a model that belongs to another provider must switch the
+            # provider too, so the persisted (provider, model) pair stays
+            # consistent and the session keeps working after a restart.
+            target_provider = model_provider_for(
+                chosen, self.repl.config.provider, option_provider
+            )
+            if target_provider and target_provider != normalize_provider(
+                self.repl.config.provider
+            ):
+                if (
+                    target_provider not in self._available_providers()
+                    and target_provider not in NO_CREDENTIAL_PROVIDERS
+                ):
+                    r.print_error(
+                        f"Model {chosen} belongs to provider {target_provider}, "
+                        "which has no credentials configured. Configure it "
+                        "(API key / base URL) and retry — nothing was saved."
+                    )
+                    return
+                await self.repl.set_model(chosen, provider=target_provider)
+                save_config(
+                    self.repl.config,
+                    only_fields={"model", "provider", "enabled_providers"},
+                )
+                r.print_info(
+                    f"Provider → {self.repl.config.provider}  ·  "
+                    f"Model → {self.repl.current_model}  ·  saved"
+                )
+            else:
+                await self.repl.set_model(chosen)
+                save_config(
+                    self.repl.config,
+                    only_fields={"model", "enabled_providers"},
+                )
+                r.print_info(f"Model → {self.repl.current_model}  ·  saved")
         else:
             self.repl.subagent_model = chosen
             self.repl.config.subagent_model = chosen
@@ -586,7 +625,10 @@ class CommandHandler:
             r.print_error(str(exc))
             return True
 
-        save_config(self.repl.config, only_fields={"provider", "model"})
+        save_config(
+            self.repl.config,
+            only_fields={"provider", "model", "enabled_providers"},
+        )
         r.print_info(
             "Provider → "
             f"{self.repl.config.provider}  ·  "

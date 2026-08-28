@@ -14,7 +14,7 @@
 |----|-------|--------|-----------|----------|---------|--------|
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
-| **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ⬜ Abierto |
+| **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | **P1** | S-M | 🟠 Medio (soporte local vLLM/Qwen) | ⬜ Abierto |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ⬜ Abierto |
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ⬜ Abierto |
@@ -58,6 +58,7 @@
 ---
 
 ### I-89 — [Enhancement #89] `/model` debe persistir el `provider` correspondiente en `config.toml`
+* **Estado:** ✅ **Resuelto (v0.13.7)** — `/model` infiere el provider del modelo elegido (picker o prefijo `vendor/`, con excepción para routers) y persiste la dupla `(provider, model)`; rechaza guardar duplas sin credenciales (ver CHANGELOG v0.13.7).
 * **Área:** `phoson_cli/commands.py`, `phoson_cli/config.py`, `phoson_cli/model_picker.py`
 * **Prioridad:** **P1** · **Esfuerzo:** S · **Impacto:** 🟠 Medio
 * **Problema:** Al ejecutar `/model` (o seleccionarlo en el picker), solo se actualiza la clave `model` en `config.toml`, dejando la clave `provider` desalineada si el nuevo modelo pertenecía a otro proveedor.
@@ -137,7 +138,7 @@
 Sprint Próximo (Estabilidad de Contexto & Métricas)
 ├── I-91 (Auto-compact gate + fallback 400) ✅ v0.13.5
 ├── I-88 (Header live metrics + OpenRouter USD cost) ✅ v0.13.6
-└── I-89 (/model persiste provider en config.toml)
+└── I-89 (/model persiste provider en config.toml) ✅ v0.13.7
 
 Sprint Siguiente (UX & Performance)
 ├── I-83 (Compactar paneles de error a 1 línea en reintentos)

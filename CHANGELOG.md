@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.7 (2026-08-28)
+
+### Feat
+
+- **cli**: `/model` now persists the provider alongside the model so
+  `config.toml` stays a self-contained, consistent configuration
+  (IMPROVEMENTS.md I-89, issue #89).
+
+  - *The pair could rot.* `/model` wrote only the `model` key while
+    `/provider` wrote `provider` + `model`, so `/model openai/gpt-4o`
+    under an active `anthropic` provider saved a pair that failed on
+    the next launch (AnthropicChat built with `openai/gpt-4o`). The
+    same mismatch happened when the provider came from an env var:
+    the file never learned which provider the model was chosen under.
+  - *Fix: model → provider inference.* New pure helper
+    `model_provider_for()` (`models.py`): the picker option's
+    `provider` field is authoritative; otherwise the `vendor/` prefix
+    of the id identifies the provider — except for routers
+    (`openrouter`, `github`), which legitimately serve other vendors'
+    ids. Unknown prefixes (`qwen/...`, local deployment names) never
+    trigger a switch, and aliases (`google`/`gemini`, `aws`/`bedrock`,
+    `grok`/`xai`) are normalized.
+  - *Runtime + file stay in sync.* `SessionController.set_model(model,
+    provider=None)` switches the provider when given, and `/model`
+    saves `{model, provider, enabled_providers}` when a switch
+    happens, `{model, enabled_providers}` otherwise. When the target
+    provider has no credentials configured, the command warns and
+    refuses to save the broken pair (runtime untouched).
+  - *Bonus:* `/provider` now also refreshes `enabled_providers` in
+    narrow saves, so the managed `[defaults]` block no longer drifts
+    (issue point 3).
+
+  - *Tests.* 14 new: helper unit cases (option authority, router
+    exception, unknown prefix, aliases), controller provider switch,
+    command persistence where a restart (`load_config`) reproduces the
+    exact `(provider, model)` pair, env-provider file becomes
+    self-contained, router keeps its provider, refusal path saves
+    nothing, `/provider` keeps `enabled_providers` in sync.
+
 ## v0.13.6 (2026-08-28)
 
 ### Feat
