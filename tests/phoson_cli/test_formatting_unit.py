@@ -25,10 +25,12 @@ from phoson_cli.formatting import (
     render_start_line,
     tool_args_preview,
     render_error_panel,
+    render_error_notice,
     render_tool_done_line,
     render_reasoning_panel,
     render_streaming_panel,
     render_tool_start_line,
+    _sanitize_error_message,
     subagent_tasks_from_args,
     render_subagent_start_line,
 )
@@ -201,6 +203,84 @@ def test_render_error_panel_shows_message_and_code() -> None:
     assert "boom" in output
     assert "auth" in output
     assert "retryable" in output
+
+
+# ── I-83: single-line error notice ───────────────────────────────────────────
+
+
+def test_render_error_notice_is_a_single_line_with_hint() -> None:
+    event = AgentErrorEvent(
+        message='{"error": {"message": "upstream exploded"}}',
+        code="server_error",
+        retryable=True,
+    )
+    output = _render(render_error_notice(event, DARK))
+    assert output.count("\n") == 1  # one line + trailing newline
+    assert "⚠" in output
+    assert "server_error" in output
+    assert "retryable" in output
+    # Known code → the actionable hint, not the raw body.
+    assert "retry, or switch model" in output
+    assert "upstream exploded" not in output
+
+
+def test_render_error_notice_falls_back_to_sanitized_message() -> None:
+    event = AgentErrorEvent(
+        message='{"error": {"message": "No user query found in messages"}}',
+        code="bad_request",
+        retryable=False,
+    )
+    output = _render(render_error_notice(event, DARK))
+    assert output.count("\n") == 1
+    assert "bad_request" in output
+    assert "retryable" not in output
+    assert "No user query found in messages" in output
+
+
+def test_render_error_notice_without_code_uses_error_label() -> None:
+    event = AgentErrorEvent(message="boom", code=None, retryable=False)
+    output = _render(render_error_notice(event, DARK))
+    assert "error" in output
+    assert "boom" in output
+    assert "retryable" not in output
+
+
+def test_render_error_notice_truncates_long_messages() -> None:
+    event = AgentErrorEvent(message="x" * 500, code=None, retryable=False)
+    output = _render(render_error_notice(event, DARK))
+    assert output.count("\n") == 1
+    assert "…" in output
+    assert len(output) < 120
+
+
+def test_render_error_notice_keeps_non_json_messages() -> None:
+    event = AgentErrorEvent(
+        message="Connection refused: 127.0.0.1:8000",
+        code="connection_error",
+        retryable=True,
+    )
+    output = _render(render_error_notice(event, DARK))
+    assert "Connection refused: 127.0.0.1:8000" in output
+
+
+def test_sanitize_error_message_extracts_inner_json_message() -> None:
+    raw = '{"error": {"message": "   upstream   exploded  ", "type": "x"}}'
+    assert _sanitize_error_message(raw) == "upstream exploded"
+
+
+def test_sanitize_error_message_handles_string_error_field() -> None:
+    assert _sanitize_error_message('{"error": "plain failure"}') == "plain failure"
+
+
+def test_sanitize_error_message_truncates_with_ellipsis() -> None:
+    out = _sanitize_error_message("y" * 200, limit=80)
+    assert len(out) == 80
+    assert out.endswith("…")
+
+
+def test_sanitize_error_message_empty_and_non_json() -> None:
+    assert _sanitize_error_message("   ") == ""
+    assert _sanitize_error_message("not json at all") == "not json at all"
 
 
 def test_render_user_turn_shows_text() -> None:

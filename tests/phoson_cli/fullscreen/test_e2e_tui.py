@@ -260,6 +260,67 @@ async def test_headless_full_agent_turn_lifecycle(tmp_path) -> None:
         assert app.sink.current_turn is None
 
 
+@pytest.mark.asyncio
+async def test_headless_failed_retries_collapse_to_one_notice_line(tmp_path) -> None:
+    """I-83: three failed attempts + a successful retry → one notice line,
+    which disappears once the retry completes."""
+    with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            history_file=tmp_path / "history.txt",
+        )
+        app = PhosonApp(config)
+
+        async def mock_run_agent(prompt: str) -> None:
+            user_msg = Message(role="user", content=prompt)
+            app.sink.on_user_message(prompt, user_msg)
+            # Attempt 1: 500. Attempt 2: 429. Attempt 3: success.
+            for code, message in [
+                ("server_error", "first 500"),
+                ("rate_limit", "second 429"),
+            ]:
+                app.sink.on_event(AgentStartEvent(model=config.model, message_count=1))
+                app.sink.on_event(
+                    AgentErrorEvent(message=message, code=code, retryable=True)
+                )
+            app.sink.on_event(AgentStartEvent(model=config.model, message_count=1))
+            app.sink.on_event(AgentTokenEvent(content="made it"))
+            app.sink.on_event(
+                AgentDoneEvent(
+                    result=AgentRunResult(
+                        final_content="made it",
+                        history=[user_msg],
+                        input_messages=[user_msg],
+                        steps=[],
+                    )
+                )
+            )
+
+        with patch.object(app.repl, "_run_agent", side_effect=mock_run_agent):
+            app._prompt_input.text = "please work"
+            app.submit()
+            assert app._run_task is not None
+            await app._run_task
+
+        rendered = app._render_chat().value
+        # The failed attempts left no trace: the notice was dropped on
+        # success, and retries never stacked panels.
+        assert "first 500" not in rendered
+        assert "second 429" not in rendered
+        assert "⚠" not in rendered
+        assert "made it" in rendered
+
+        # And while a retry is in flight, exactly ONE notice line exists.
+        app.sink.on_event(AgentStartEvent(model=config.model, message_count=1))
+        app.sink.on_event(
+            AgentErrorEvent(message="boom again", code=None, retryable=True)
+        )
+        rendered = app._render_chat().value
+        assert rendered.count("⚠") == 1
+        assert "boom again" in rendered
+
+
 # ── 3. Golden ANSI rendering snapshots ───────────────────────────────────────
 
 
@@ -287,8 +348,8 @@ def test_golden_snapshot_streaming_turn() -> None:
     assert "Streaming partial response..." in rendered
 
 
-def test_golden_snapshot_error_panel() -> None:
-    """Snapshot: error event rendering with actionable hint."""
+def test_golden_snapshot_error_notice() -> None:
+    """Snapshot: error event renders as a single-line notice (I-83)."""
     cache = BlockAnsiCache()
     sink = FullScreenSink(on_invalidate=lambda: None, theme=DARK)
     sink.on_user_message("do work", Message(role="user", content="do work"))
@@ -303,9 +364,12 @@ def test_golden_snapshot_error_panel() -> None:
     rendered = render_chat(sink, width=60, cache=cache)
     assert "user" in rendered
     assert "do work" in rendered
-    assert "error" in rendered
-    assert "Invalid API Key" in rendered
-    assert "hint: run /setup" in rendered
+    # One-line notice with the actionable hint — no panel, no raw message.
+    assert "⚠" in rendered
+    assert "auth" in rendered
+    assert "run /setup" in rendered
+    assert "Invalid API Key" not in rendered
+    assert "│" not in rendered  # no panel border
 
 
 def test_golden_snapshot_tool_card_done() -> None:

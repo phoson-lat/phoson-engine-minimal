@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.8 (2026-08-28)
+
+### Feat
+
+- **cli**: model errors now render as a single-line notice that is
+  overwritten on each failed retry instead of stacking panels
+  (IMPROVEMENTS.md I-83, issue #83).
+
+  - *Panels piled up.* Every `AgentErrorEvent` printed a ~6-line red
+    `Panel` with the provider's raw JSON body; each user retry
+    ("Continua…") appended another one, so 5 failures consumed 30
+    lines of transcript and pushed the conversation off-screen.
+  - *Fix: one overwritable line.* New pure helper
+    `render_error_notice()` (`formatting.py`):
+    `⚠ {code} · retryable — {hint}` for known codes, or a sanitized
+    fragment of the message otherwise. The raw body (often raw JSON)
+    is never displayed — it is logged at debug level
+    (`phoson.cli.errors`) for troubleshooting.
+    `render_error_panel()` is kept for expandable/debug views.
+  - *Overwrite, don't stack.* `FullScreenSink` tracks the pending
+    notice's block index: repeated failures replace it in place (3
+    failed retries = 1 line), and the notice is dropped when the next
+    run **completes** successfully. `drop_error_notice()` also runs on
+    transcript resets (Ctrl+L / rewind re-draws) and self-heals a
+    stale index.
+  - *Parity.* The classic `Renderer` prints the same notice instead of
+    the panel (a real terminal can't rewrite scrollback, so retries
+    still add one line each — a line, not a panel).
+  - *Tests.* 11 new: notice rendering (hint, fallback, truncation,
+    JSON sanitization), sink overwrite/drop/self-heal semantics, and an
+    e2e where two failed attempts + a successful retry leave zero
+    notice lines in the transcript.
+
 ## v0.13.7 (2026-08-28)
 
 ### Feat

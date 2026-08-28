@@ -11,6 +11,7 @@ Keep this module dependency-free of console I/O: no ``Console``, no
 
 import json
 import difflib
+import logging
 from typing import TYPE_CHECKING, Any, Final
 
 from rich import box
@@ -32,6 +33,12 @@ from .theme import Theme
 
 if TYPE_CHECKING:
     from phoson_llm.schemas import Message
+
+#: Raw provider error bodies (often raw JSON) are logged here at debug
+#: level so they remain available for troubleshooting without dominating
+#: the transcript (I-83). No handler is attached — the process-level
+#: logging config decides where it goes.
+logger = logging.getLogger("phoson.cli.errors")
 
 
 def render_reasoning_panel(reasoning: str, theme: Theme) -> Panel:
@@ -171,11 +178,71 @@ def render_done_line(event: AgentDoneEvent, theme: Theme) -> Text | None:
     return Text(f"  {chr(183)} ".join(["", *parts]), style=theme.muted)
 
 
+def _sanitize_error_message(message: str, limit: int = 80) -> str:
+    """Reduce a raw provider error body to a short, readable fragment.
+
+    Provider bodies are often raw JSON (``{"error": {"message": ...}}``
+    or ``{"error": "..."}``); when parseable, the innermost
+    human-readable message is extracted. Whitespace is collapsed and the
+    result truncated to *limit* characters (I-83).
+    """
+    text = " ".join(message.split())
+    if not text:
+        return ""
+    try:
+        payload = json.loads(message)
+    except (ValueError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        candidates: list[object] = [payload.get("message")]
+        error = payload.get("error")
+        if isinstance(error, str):
+            candidates.append(error)
+        elif isinstance(error, dict):
+            candidates.append(error.get("message"))
+        for value in candidates:
+            if isinstance(value, str) and value.strip():
+                text = " ".join(value.split())
+                break
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
+def render_error_notice(event: AgentErrorEvent, theme: Theme) -> Text:
+    """Build the single-line error warning shown on ``AgentErrorEvent`` (I-83).
+
+    Compact, overwritable replacement for :func:`render_error_panel` in
+    the transcript flow::
+
+        ⚠ server_error · retryable — provider-side failure — retry, or switch model
+        ⚠ rate_limit · retryable — wait a moment, or switch model with /model
+
+    The detail is the actionable hint for known codes, or a sanitized
+    fragment of the raw message otherwise. The raw provider body (often
+    raw JSON) is never displayed — it is logged at debug level for
+    troubleshooting.
+    """
+    logger.debug("raw provider error: %s", event.message)
+    line = Text()
+    line.append("  ⚠ ", style=theme.warn)
+    line.append(event.code or "error", style=f"bold {theme.err}")
+    if event.retryable:
+        line.append(" · retryable", style=theme.muted)
+    detail = error_hint(event.code) or _sanitize_error_message(event.message)
+    if detail:
+        line.append(f" — {detail}", style=theme.warn)
+    return line
+
+
 def render_error_panel(event: AgentErrorEvent, theme: Theme) -> Panel:
     """Build the error panel shown on ``AgentErrorEvent``.
 
     Known error codes get a trailing "hint" line with the actionable next
     step (IMPROVEMENTS.md C4) — e.g. ``auth`` points at /setup.
+
+    Kept for expandable/debug views; the transcript flow uses the
+    single-line :func:`render_error_notice` instead (I-83).
     """
     body = Text()
     body.append(event.message, style="bold")
@@ -587,6 +654,7 @@ __all__ = [
     "render_tool_done_line",
     "render_done_line",
     "render_error_panel",
+    "render_error_notice",
     "render_user_turn",
     "render_notice",
     "render_history",
