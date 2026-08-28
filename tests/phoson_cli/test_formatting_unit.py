@@ -89,15 +89,18 @@ def test_render_streaming_panel_answer_carries_an_explicit_color() -> None:
     assert "\x1b[" in answer_line
 
 
-def test_render_streaming_panel_links_avoid_osc8_hyperlink_escapes() -> None:
-    """Regression: Rich's default OSC 8 hyperlink escapes
+def test_render_streaming_panel_links_emit_real_osc8_hyperlinks() -> None:
+    """IMPROVEMENTS.md G4 (#58): Markdown links must be real, clickable
 
-    (``\\x1b]8;;URL\\x1b\\\\``) aren't understood by prompt_toolkit's
-    ANSI() parser (it only recognizes CSI/SGR ``\\x1b[...m`` codes) — an
-    OSC 8 sequence gets torn apart and its raw bytes
-    ("8;id=...;https://...") show up as literal text around the link,
-    exactly what a user reported seeing. Markdown links must render with
-    plain SGR color codes only, no OSC 8.
+    OSC 8 hyperlinks (``\\x1b]8;...;URL\\x1b\\\\``) — a regression to inert
+    ``text (url)`` links (the previous ``hyperlinks=False`` fix for a worse
+    bug: raw OSC 8 bytes leaking as literal text when printed through
+    prompt_toolkit's ``ANSI()``) is exactly what G4 undoes. The safety net
+    against that older bug now lives in ``phoson_cli.hyperlinks
+    .osc8_passthrough``, applied only on the full-screen render path (see
+    ``fullscreen/render.py`` and ``test_hyperlinks_unit.py``) — printing
+    straight to a real ``Console``, as this test does, is exactly the
+    classic-REPL case and needs no such treatment.
     """
     console = Console(
         force_terminal=True, color_system="truecolor", width=100, highlight=False
@@ -110,12 +113,12 @@ def test_render_streaming_panel_links_avoid_osc8_hyperlink_escapes() -> None:
         )
     ansi = cap.get()
 
-    assert "\x1b]8" not in ansi
+    assert "\x1b]8;" in ansi
     assert "phoson.lat" in ansi
 
 
-def test_render_history_links_avoid_osc8_hyperlink_escapes() -> None:
-    """Same OSC 8 regression as render_streaming_panel, for session replay."""
+def test_render_history_links_emit_real_osc8_hyperlinks() -> None:
+    """Same G4 hyperlink check as render_streaming_panel, for session replay."""
     from phoson_llm.schemas import Message
 
     messages = [
@@ -131,7 +134,8 @@ def test_render_history_links_avoid_osc8_hyperlink_escapes() -> None:
         console.print(render_history(messages, DARK))
     ansi = cap.get()
 
-    assert "\x1b]8" not in ansi
+    assert "\x1b]8;" in ansi
+    assert "phoson.lat" in ansi
     assert "phoson.lat" in ansi
 
 
