@@ -20,8 +20,8 @@
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ✅ Resuelto (v0.13.9) |
 | **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
 | **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
-| **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ✅ Resuelto (v0.13.10) |
-| **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ⬜ Abierto |
+| **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ✅ Resuelto (v0.13.10, hotfix v0.13.11) |
+| **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ✅ Resuelto (v0.13.12) |
 | **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ⬜ Abierto |
 
 ---
@@ -151,7 +151,7 @@
 ---
 
 ### I-113 — [Enhancement #113] OpenRouter: orden por `agentic_index` + unificar `/model`/`/provider` en un solo picker con marcado `unavailable`
-* **Estado:** ✅ **Resuelto (v0.13.10, hotfix v0.13.11)** — [PR #116](https://github.com/phoson-lat/phoson-engine-minimal/pull/116). OpenRouter ordenado por `agentic_index` desc (sin campo → al final, alfabético; current siempre primero); `list_models_for_providers()` concurrente; picker unificado multi-provider en ambos frontends (selección cambia `(model, provider)` juntos, reusando I-89); providers con fetch fallido marcados `unavailable` en picker y `/model list` (internamente `ModelListingError`; el fast path de 1 provider conserva fallback+warning exactos); docs sin la caché inexistente. Incluye dos fixes de corrección post-review encontrados validando en vivo: `/model <id>` explícito ahora siempre resuelve el provider real vía listing (antes solo lo hacía la rama del picker), y se corrigió la ambigüedad del heurístico de prefijo cuando un router (OpenRouter) re-expone el catálogo de otro vendor tal cual (ver CHANGELOG v0.13.10 y plan `.opencode/plans/i113-model-picker-unified.md`).
+* **Estado:** ✅ **Resuelto (v0.13.10, hotfix v0.13.11)** — [PR #116](https://github.com/phoson-lat/phoson-engine-minimal/pull/116). OpenRouter ordenado por `agentic_index` desc (sin campo → al final, alfabético; current siempre primero); `list_models_for_providers()` concurrente; picker unificado multi-provider en ambos frontends (selección cambia `(model, provider)` juntos, reusando I-89); providers con fetch fallido marcados `unavailable` en picker y `/model list` (internamente `ModelListingError`; el fast path de 1 provider conserva fallback+warning exactos); docs sin la caché inexistente. Incluye tres fixes de corrección post-review encontrados validando en vivo: (1) `/model <id>` explícito ahora siempre resuelve el provider real vía listing (antes solo lo hacía la rama del picker); (2) se corrigió la ambigüedad del heurístico de prefijo cuando un router (OpenRouter) re-expone el catálogo de otro vendor tal cual; (3) **hotfix v0.13.11** ([PR #117](https://github.com/phoson-lat/phoson-engine-minimal/pull/117)): el lookup de provider estaba gateado en `"/" in id`, así que los ids *sin* prefijo de servidores locales (vLLM/Ollama/LM Studio, p. ej. `Qwen3.8-27B-FP8`) nunca cambiaban el provider — ahora el lookup siempre corre y prefiere un provider distinto al activo cuando varios lo listan (ver CHANGELOG v0.13.10/v0.13.11 y plan `.opencode/plans/i113-model-picker-unified.md`).
 * **Área:** `phoson_cli/model_selector.py`, `phoson_cli/model_picker.py`, `phoson_cli/commands.py`, `phoson_cli/command_host.py`, `phoson_cli/fullscreen/command_host.py`, `phoson_cli/fullscreen/model_cache.py`, `phoson_cli/models.py`, `docs/api/phoson_cli.md`, `README.md`
 * **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟡 Medio
 * **Problema:**
@@ -177,7 +177,9 @@
 ---
 
 ### I-100 — [Feature #100] Habilitar / Deshabilitar MCPs a nivel servidor y herramienta
-* **Área:** `phoson_mcp/`, `phoson_cli/commands.py`
+* **Estado:** ✅ **Resuelto (v0.13.12)** — flags `enabled`/`tools` en `mcps.json` (retrocompatibles), `/mcp toggle <server> [tool]` con reapply en vivo, guards de ejecución `ServerDisabled`/`ToolDisabled`, marcado `(disabled)` en `/mcp status` (ver CHANGELOG v0.13.12).
+* **Plan de ataque:** ver `.opencode/plans/i100-mcp-server-tool-toggle.md`.
+* **Área:** `phoson_plugin_mcp/_plugin.py`, `phoson_cli/_mcp_commands.py`, `phoson_cli/session_utils.py`, `docs/mcp-cli.md`, `mcps.json.example`
 * **Prioridad:** **P2** · **Esfuerzo:** M-L · **Impacto:** 🟡 Medio
 * **Problema:** No existe forma de desactivar temporalmente un servidor MCP completo o una herramienta MCP específica sin borrar la configuración.
 * **Solución propuesta:**
@@ -216,8 +218,8 @@ Sprint Siguiente (UX & Performance)
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
 Sprint Posterior (Ecosistema & Distribución)
-├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider) ✅ v0.13.10
-├── I-100 (Toggle granular MCP servers & tools)
+├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider) ✅ v0.13.10 + hotfix v0.13.11
+├── I-100 (Toggle granular MCP servers & tools) ✅ v0.13.12
 └── I-93 (Binarios precompilados standalone en CI)
 ```
 

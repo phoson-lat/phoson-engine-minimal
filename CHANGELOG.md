@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.12 (2026-08-28)
+
+### Feat
+
+- **mcp**: per-server and per-tool enable/disable toggles
+  (IMPROVEMENTS.md I-100, issue #100).
+
+  - *Config flags.* `mcps.json` server entries now accept two optional,
+    backwards-compatible fields: `"enabled": false` disables the whole
+    server (no connection opened at startup, none of its tools exposed)
+    and `"tools": { "<remote_tool>": false }` disables single remote
+    tools (missing map/entry = enabled).
+  - *`/mcp toggle <server> [tool]`.* Flips either flag in `mcps.json`
+    (with `.bak` backup) and reloads the engine so it applies in-flight.
+    The tool argument accepts the remote name (`read_file`) or the local
+    prefixed name the model sees (`mcp_filesystem_read_file`). When MCP
+    is globally off the change is persisted with a warning instead of
+    an engine rebuild.
+  - *Guard rails.* Disabled servers/tools are skipped during discovery
+    and rejected at execution time (`ServerDisabled` / `ToolDisabled`)
+    so even a stale proxy tool call fails cleanly.
+  - *Visibility.* `/mcp status` marks disabled servers and tools with
+    `(disabled)`; `/mcp help` lists the new subcommand.
+  - *Docs.* `docs/mcp-cli.md` documents the flags and the toggle;
+    `mcps.json.example` shows `enabled`.
+
 ## v0.13.11 (2026-08-28)
 
 ### Fix

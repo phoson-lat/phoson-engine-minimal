@@ -26,7 +26,8 @@
       "transport": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": {}
+      "env": {},
+      "enabled": true
     },
     "postgres": {
       "transport": "stdio",
