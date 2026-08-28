@@ -45,7 +45,7 @@ from phoson_cli.formatting import (
     render_done_line,
     render_user_turn,
     render_start_line,
-    render_error_panel,
+    render_error_notice,
     render_tool_done_line,
     render_reasoning_panel,
     render_streaming_panel,
@@ -547,8 +547,13 @@ class Renderer:
             self.console.print(line)
 
     def _on_error(self, event: AgentErrorEvent) -> None:
-        """Render error panel."""
-        self.console.print(render_error_panel(event, self.theme))
+        """Render the single-line error notice (I-83).
+
+        The classic REPL prints to a real terminal (no mutable block
+        list), so repeated retries still add one line each — but a line,
+        not a ~6-line panel. The raw body is logged at debug level.
+        """
+        self.console.print(render_error_notice(event, self.theme))
 
     # ── Utility ───────────────────────────────────────────────────────────────
 

@@ -342,16 +342,80 @@ def test_step_done_invalidates_for_live_header() -> None:
     assert ticks, "AgentStepDoneEvent must invalidate (live header repaint)"
 
 
-def test_error_event_finalizes_turn_and_shows_panel() -> None:
+def test_error_event_finalizes_turn_and_shows_notice() -> None:
     sink, _ = _make_sink()
     sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
     sink.on_event(AgentReasoningEvent(content="thinking"))
-    sink.on_event(AgentErrorEvent(message="boom", code="auth"))
+    # code=None: no hint, so the (sanitized) message is what the notice shows.
+    sink.on_event(AgentErrorEvent(message="boom", code=None))
 
     assert sink.current_turn is None
     assert sink.take_reasoning() == "thinking"
     text = render_chat(sink, width=80)
     assert "boom" in text
+    # I-83: single-line notice, not a panel.
+    assert "⚠" in text
+    assert sink._error_notice_idx is not None
+
+
+def test_error_notice_is_overwritten_on_each_failed_retry() -> None:
+    """Three failed attempts → exactly ONE notice block (I-83)."""
+    sink, _ = _make_sink()
+
+    for message in ("first failure", "second failure", "third failure"):
+        sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+        sink.on_event(AgentErrorEvent(message=message, code=None, retryable=True))
+
+    assert sink._error_notice_idx is not None
+    notices = [b for b in sink.blocks if "failure" in str(b)]
+    assert len(notices) == 1
+    # The surviving notice shows the LATEST error, not the first.
+    text = render_chat(sink, width=80)
+    assert "third failure" in text
+    assert "first failure" not in text
+    assert "second failure" not in text
+
+
+def test_error_notice_dropped_when_retry_succeeds() -> None:
+    """The notice stays while the retry runs and disappears on success (I-83)."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentErrorEvent(message="boom", code=None, retryable=True))
+    assert sink._error_notice_idx is not None
+    assert any("boom" in str(b) for b in sink.blocks)
+
+    # The retry starts: the notice is still there (the attempt is in flight).
+    sink.on_event(AgentStartEvent(model="m", message_count=2, max_iterations=5))
+    assert any("boom" in str(b) for b in sink.blocks)
+
+    # The retry succeeds: the notice disappears, transcript is clean.
+    sink.on_event(AgentTokenEvent(content="hello"))
+    sink.on_event(
+        AgentDoneEvent(
+            result=AgentRunResult(final_content="hello", history=[], input_messages=[])
+        )
+    )
+    assert sink._error_notice_idx is None
+    assert not any("boom" in str(b) for b in sink.blocks)
+
+
+def test_error_notice_index_survives_transcript_reset() -> None:
+    """A stale index (blocks cleared without telling the sink) self-heals (I-83)."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentErrorEvent(message="boom", code=None, retryable=True))
+    assert sink._error_notice_idx is not None
+
+    # Simulate clear()/rewind re-draw: blocks dropped, index untouched.
+    sink.blocks.clear()
+
+    # Next error must append (not crash on the stale index).
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentErrorEvent(message="again", code=None, retryable=True))
+    assert sink._error_notice_idx == 0
+    text = render_chat(sink, width=80)
+    assert "again" in text
+    assert "boom" not in text
 
 
 def test_subagent_tasks_tracked_and_summary_replaces_panel() -> None:

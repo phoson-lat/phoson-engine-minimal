@@ -35,7 +35,7 @@ from ..formatting import (
     render_history,
     render_done_line,
     render_user_turn,
-    render_error_panel,
+    render_error_notice,
     render_tool_done_line,
     render_reasoning_panel,
     render_streaming_panel,
@@ -103,6 +103,10 @@ class FullScreenSink:
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
+        # Index in ``blocks`` of the pending single-line error notice
+        # (I-83). Repeated failures overwrite it in place instead of
+        # stacking panels; the next successful run start drops it.
+        self._error_notice_idx: int | None = None
 
     def _touch(self) -> None:
         self.dirty = True
@@ -146,6 +150,23 @@ class FullScreenSink:
         if self._stream_repaint_pending is not None:
             self._stream_repaint_pending.cancel()
             self._stream_repaint_pending = None
+
+    def drop_error_notice(self) -> None:
+        """Remove the pending single-line error notice from the transcript (I-83).
+
+        Called when a run completes successfully: the warning should not
+        leave a ghost line behind once the retry worked. Also called by
+        the app after transcript resets (``clear()`` / rewind re-draws)
+        to drop the index together with the blocks. The index is
+        self-healing anyway: a stale index (``>= len(blocks)``) is
+        treated as "no notice".
+        """
+        idx = self._error_notice_idx
+        if idx is None or idx >= len(self.blocks):
+            self._error_notice_idx = None
+            return
+        del self.blocks[idx]
+        self._error_notice_idx = None
 
     def status_text(self) -> str:
         """Short status string for the header bar."""
@@ -358,6 +379,9 @@ class FullScreenSink:
                     self._last_reasoning = turn.reasoning
                 self._freeze_current_text(turn)
                 self.current_turn = None
+                # The run succeeded: a previously failed retry is done,
+                # so the pending error notice disappears (I-83).
+                self.drop_error_notice()
                 line = render_done_line(event, self.theme)
                 if line is not None:
                     self.blocks.append(line)
@@ -368,7 +392,16 @@ class FullScreenSink:
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
                 self.current_turn = None
-                self.blocks.append(render_error_panel(event, self.theme))
+                # Single-line notice, overwritten in place on each failed
+                # retry instead of stacking a panel per attempt (I-83).
+                notice = render_error_notice(event, self.theme)
+                idx = self._error_notice_idx
+                if idx is not None and idx < len(self.blocks):
+                    self.blocks[idx] = notice
+                else:
+                    self.blocks.append(notice)
+                    idx = len(self.blocks) - 1
+                self._error_notice_idx = idx
 
         self._touch()
 

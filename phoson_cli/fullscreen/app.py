@@ -745,6 +745,7 @@ class PhosonApp:
 
     def clear(self) -> None:
         self.sink.blocks.clear()
+        self.sink.drop_error_notice()
         self.sink.dirty = True
         self._auto_scroll = True
         self._chat_scroll_top = 0
@@ -958,6 +959,7 @@ class PhosonApp:
         (discarded) block ids could shadow freshly rendered ones.
         """
         self.sink.blocks.clear()
+        self.sink.drop_error_notice()
         self._block_ansi_cache.clear(0)
         self._banner_block = render_banner(
             provider=self.repl.config.provider,
