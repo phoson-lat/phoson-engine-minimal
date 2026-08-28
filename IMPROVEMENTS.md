@@ -4,8 +4,8 @@
 >
 > **Cómo usar este documento:** cada ítem tiene ID, prioridad (P0–P3), esfuerzo estimado (S/M/L), impacto, y criterio de listo. La prioridad se calculó con: **(impacto en adopción × riesgo si no se hace) ÷ esfuerzo**. Los ítems P0 son los que bloquean uso serio hoy; P1 dan el mayor salto competitivo; P2 pulen; P3 son apuestas a futuro.
 >
-> **Estado de referencia:** v0.13.3 · 1358 tests passing · pyright 0 errors · ruff clean.
-> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5 · E6 (keybindings personalizables) cerrado en v0.12.6 · G1 (double-Esc rewind) cerrado en v0.13.0 · G2 (prompt caching) cerrado en v0.13.1 · G3 (selección de texto del chat: resuelto documentando el bypass nativo de terminal, `Shift+Drag`, en el footer y el README — se descartó un modo de copia propio tras comparar con Claude Code/Pi/OpenCode, ver detalle en G3) y fix de OpenRouter `extra_body` (follow-up de G2) cerrados en v0.13.2 (PR #102) · G4 (hyperlinks OSC 8 clicables vía `osc8_passthrough`) cerrado en v0.13.3.
+> **Estado de referencia:** v0.13.4 · 1408 tests passing · pyright 0 errors · ruff clean.
+> **Progreso:** B1–B3 cerrados en v0.8.1 (PR #71) · A1 fase 1 (PR #75), A3 (PR #74) y A2/A4 (PR #76) cerrados en v0.9.0 · C1–C4 cerrados en v0.10.0 (PR #81) · D1–D5 cerrados en v0.11.0 · reasoning effort xhigh/max + contexto vLLM cerrados en v0.12.0 (PR #86) · E1 (context management avanzado) cerrado en v0.12.1 (PR #87) · E2 (subagent panel con métricas en vivo) cerrado en v0.12.2 (PR #90) · E3 (autocomplete de rutas y `@file` mentions) cerrado en v0.12.3 · E4 (themes interactivos y auto-detección light/dark) cerrado en v0.12.4 · E5 (check de updates al arrancar) cerrado en v0.12.5 · E6 (keybindings personalizables) cerrado en v0.12.6 · G1 (double-Esc rewind) cerrado en v0.13.0 · G2 (prompt caching) cerrado en v0.13.1 · G3 (selección de texto del chat: resuelto documentando el bypass nativo de terminal, `Shift+Drag`, en el footer y el README — se descartó un modo de copia propio tras comparar con Claude Code/Pi/OpenCode, ver detalle en G3) y fix de OpenRouter `extra_body` (follow-up de G2) cerrados en v0.13.2 (PR #102) · G4 (hyperlinks OSC 8 clicables vía `osc8_passthrough`) cerrado en v0.13.3 · G5 (sistema de Skills: índice de una línea en el prefijo estable + cuerpo on-demand vía la tool `skill`) cerrado en v0.13.4.
 
 ---
 
@@ -39,7 +39,7 @@
 | [G2](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | Prompt caching (OpenRouter/Anthropic) — tokens cacheados + cabeceras | **P1** | M | 🔴 Alto | [#69](https://github.com/phoson-lat/phoson-engine-minimal/issues/69) | ✅ v0.13.1 |
 | [G3](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | Seleccionar/copiar texto del chat con el mouse (full-screen) | **P2** | S | 🟡 Bajo | [#57](https://github.com/phoson-lat/phoson-engine-minimal/issues/57) | ✅ v0.13.2 (footer hint) |
 | [G4](https://github.com/phoson-lat/phoson-engine-minimal/issues/58) | Hyperlinks clicables en respuestas (OSC 8 vía prompt_toolkit) | **P2** | M | 🟠 Medio | [#58](https://github.com/phoson-lat/phoson-engine-minimal/issues/58) | ✅ v0.13.3 |
-| [G5](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | Sistema de Skills (instrucciones on-demand, tipo Claude Code) | **P3** | L | 🟠 Medio | [#52](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | Backlog (diseño) |
+| [G5](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | Sistema de Skills (instrucciones on-demand, tipo Claude Code) | **P3** | L | 🟠 Medio | [#52](https://github.com/phoson-lat/phoson-engine-minimal/issues/52) | ✅ v0.13.4 |
 
 > **Fila `G*`** — mejoras que ya existían como *issues* abiertos de GitHub (no surgieron de la auditoría) y que se añaden aquí para tener un único tablero. El ID `G*` es local a esta tabla; la columna **Issue** enlaza al issue real.
 
@@ -70,8 +70,20 @@ El spike confirmó la segunda vía apuntada aquí: reinyectar OSC 8 post-procesa
 
 **Clic en el link:** es una feature del *terminal*, no de la app — mismo patrón que `Shift+Drag` en G3. El terminal decide el gesto (`Ctrl+click` es lo más común: kitty, iTerm2, GNOME Terminal/VTE, WezTerm; ver la doc de cada uno) y abre la URL sin que la app tenga que interceptar el clic, incluso con `mouse_support=True` capturando el resto del mouse para la rueda. Tests: `test_hyperlinks_unit.py` (7 — wrap de secuencia simple/múltiple, no-op en texto sin OSC 8, control case que reproduce el bug sin el fix, y verificación end-to-end contra `ANSI()` real + el bridge del full-screen) + 2 tests de `formatting.py` invertidos (ahora exigen que el OSC 8 esté presente, en vez de ausente).
 
-### G5 — Sistema de Skills ([#52](https://github.com/phoson-lat/phoson-engine-minimal/issues/52))
-Abstracción distinta de plugins y tools: un paquete descubrible de instrucciones (y scripts/recursos) que se carga en contexto **solo cuando es relevante**. Requiere diseño antes de implementar: qué dispara la carga (slash/keyword/tool call), dónde viven (`.phoson/skills/` vs `~/.phoson/skills/`), y cómo interactúa con `build_tools()`. Placeholder de diseño, no spec lista.
+### G5 — Sistema de Skills ([#52](https://github.com/phoson-lat/phoson-engine-minimal/issues/52)) ✅ v0.13.4
+Un *skill* es un directorio con `SKILL.md` (frontmatter `name` + `description`, luego instrucciones Markdown, opcionalmente junto a `scripts/`/`references/`). Es una tercera abstracción frente a las dos que ya existían: los **plugins** son hooks de engine siempre cargados, las **tools** ponen su schema en *cada* request, y un **skill dormido cuesta una línea**.
+
+**Divulgación progresiva en dos niveles — el diseño clave.** `render_skill_index` inyecta solo `name: description` por skill en el **prefijo estable** del system prompt; `load_skill_body` devuelve el cuerpo completo y se entrega como **resultado de tool**, es decir dentro de la *conversación*, no del prefijo. Esto es lo que hace a los skills compatibles con el prompt caching de G2: activar un skill en el turno 7 no invalida el prefijo cacheado. Medido sobre el propio skill del repo: **157 tokens indexados vs 2399 cargados (15×)**; el descubrimiento cuesta 0.43 ms, así que se re-ejecuta por llamada y un skill añadido a media sesión sirve en el turno siguiente sin reiniciar.
+
+**Las tres preguntas de diseño del issue, resueltas:**
+
+1. *¿Qué dispara la carga?* Una **tool call** (`skill(name)`), no un slash command ni keyword matching. La relevancia solo se conoce cuando se entiende la tarea, o sea después del mensaje del usuario: un slash command trasladaría la decisión al usuario (que aún no sabe qué skills hay), y el keyword matching dispara con falsos positivos ("la *arquitectura* de esta función") a la vez que se pierde paráfrasis. `/skills` existe, pero como **inspección** del usuario, no como mecanismo de activación.
+2. *¿Dónde viven?* Todas estas, primer match gana: `.phoson/skills/` (proyecto, versionable) → `.agents/skills/` + `.claude/skills/` (leídos por compatibilidad con repos ya configurados para otros harnesses, misma razón que el alias `CLAUDE.md` de A3) → `~/.phoson/skills/` (global). Los skills de proyecto sombrean a los globales del mismo nombre, replicando la regla de precedencia de `AGENTS.md` ("más cerca del cwd = más específico"). Los espejos por symlink (`.claude/skills/x -> ../../.agents/skills/x`, layout real de este repo) se colapsan por path resuelto.
+3. *¿Llevan tools/scripts propios?* Llevan recursos, **no tools nuevas**. El cuerpo se entrega junto a la raíz absoluta del skill y el listado de archivos incluidos, y el modelo los ejecuta con el `bash`/`read_file` que ya tiene. Cero tools nuevas por skill.
+
+**Interacción con `build_tools()`:** la tool `skill` solo entra al registro cuando existe al menos un skill (`build_tools(include_skill=...)` fuerza el comportamiento en tests). Un schema que el modelo nunca podrá usar con éxito es coste de prompt en *cada* request — justo lo que los skills existen para evitar, así que la tool de activación sigue la misma regla. Simétricamente, el índice solo se renderiza cuando la tool está presente: nunca se le anuncia al modelo algo que no puede llamar. Un scan que falla degrada a "sin tool de skills", no rompe el registro ni el composer.
+
+El parser de frontmatter es **sin dependencias** (nada de PyYAML): el subconjunto plano `key: value` que los skills usan realmente, incluyendo continuaciones indentadas para descripciones largas. Claves desconocidas se ignoran en vez de rechazarse — un campo extra no debe volver un skill indescubrible. Tests: `test_g5_skills_unit.py` (50), incluidos cinco de integración con el system prompt que exigen que el índice aparezca, sea byte-estable entre turnos y **nunca** arrastre un cuerpo.
 
 ---
 
@@ -549,7 +561,8 @@ Continuo / paralelo
 ├── E3 autocomplete de rutas + @file mentions  ✅ v0.12.3
 ├── E4 themes interactivos + auto-detección light/dark  ✅ v0.12.4
 ├── E5 check de updates al arrancar  ✅ v0.12.5
-└── E6 según demanda real de usuarios  ✅ v0.12.6
+├── E6 según demanda real de usuarios  ✅ v0.12.6
+└── G1–G5 issues de GitHub  ✅ v0.13.0 – v0.13.4
 ```
 
 ## Principios para decidir durante la ejecución

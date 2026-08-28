@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from phoson_agent import Plugin
 
 from .config import PhosonConfig
+from .skills import discover_skills, render_skill_index
 from .agents_md import load_agents_md
 
 _LOGGER = logging.getLogger("phoson_cli.session_utils")
@@ -33,7 +34,8 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are running in working directory: {cwd}. "
     "You are working on a {so} system with a terminal. Current date is {time}. "
     "Available tools: {tools}.{mcp_note}"
-    " Be concise, accurate, and use tools when needed.{memory_block}"
+    " Be concise, accurate, and use tools when needed."
+    "{skills_block}{memory_block}"
 )
 
 #: Wrapper framing for the AGENTS.md memory injected into the prompt.
@@ -46,6 +48,9 @@ _MEMORY_BLOCK_TEMPLATE = (
 
 #: Default AGENTS.md budget (tokens) when the caller does not override it.
 _AGENTS_MD_MAX_TOKENS_DEFAULT = 2000
+
+#: Default skills-index budget (tokens) — IMPROVEMENTS.md G5.
+_SKILLS_MAX_TOKENS_DEFAULT = 1000
 
 
 def _local_time_info() -> tuple[str, str]:
@@ -78,6 +83,7 @@ def _local_time_info() -> tuple[str, str]:
 def build_system_prompt(
     tools: list,
     agents_md_max_tokens: int | None = None,
+    skills_max_tokens: int | None = None,
 ) -> str:
     """Build the system prompt for the loaded tools.
 
@@ -92,8 +98,11 @@ def build_system_prompt(
     system's local timezone. Mentions the MCP tools currently loaded so the
     model knows they exist beyond the built-in set. AGENTS.md/CLAUDE.md
     memory files (global + repo hierarchy) are re-read on every call so
-    edits take effect on the next turn (IMPROVEMENTS.md A3). Shared by the
-    REPL and the one-shot mode.
+    edits take effect on the next turn (IMPROVEMENTS.md A3). The skills
+    index (IMPROVEMENTS.md G5) is appended the same way — one line per
+    discovered skill, only when the ``skill`` tool is in ``tools`` — so the
+    model knows what it can load on demand without paying for the bodies.
+    Shared by the REPL and the one-shot mode.
     """
     has_mcp = any(t.name.startswith("mcp_") for t in tools)
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
@@ -109,12 +118,24 @@ def build_system_prompt(
     if memory:
         memory_block = _MEMORY_BLOCK_TEMPLATE.format(content=memory)
 
+    # Skills index (G5): one line per skill, only advertised when the
+    # ``skill`` tool is actually in the registry — otherwise the model
+    # would be told to call a tool it does not have. Like the tool list,
+    # the index is stable for the session, so it stays cache-friendly.
+    skills_block = ""
+    if any(t.name == "skill" for t in tools):
+        skills_block = render_skill_index(
+            discover_skills(),
+            max_tokens=skills_max_tokens or _SKILLS_MAX_TOKENS_DEFAULT,
+        )
+
     return _SYSTEM_PROMPT_TEMPLATE.format(
         cwd=Path.cwd(),
         so=sys.platform,
         time=f"{local_time} Current timezone is: {tz_label}",
         tools=tool_names,
         mcp_note=mcp_note,
+        skills_block=skills_block,
         memory_block=memory_block,
     )
 

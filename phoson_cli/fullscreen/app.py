@@ -150,6 +150,23 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _skill_names() -> list[str]:
+    """Skill names for the ``/skills <name>`` completer (G5).
+
+    Evaluated per completion pass (``StaticArgCompleter`` accepts a
+    callable) so a skill added mid-session completes without a restart.
+    Discovery is a handful of ``stat`` calls, and it only runs once the
+    user has typed ``/skills ``. Never raises — a broken skills directory
+    must not break the composer.
+    """
+    from ..skills import discover_skills
+
+    try:
+        return [skill.name for skill in discover_skills()]
+    except Exception:  # noqa: BLE001 - completion is best-effort
+        return []
+
+
 class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
 
@@ -279,6 +296,9 @@ class PhosonApp:
                     ),
                     # /theme <tier> — the four tiers are a fixed set (E4).
                     StaticArgCompleter(("/theme ",), list(VALID_NAMES)),
+                    # /skills <name> — discovered lazily per completion
+                    # pass so a skill added mid-session shows up (G5).
+                    StaticArgCompleter(("/skills ",), _skill_names),
                     SessionsArgCompleter(self.session_cache),
                     ResumeArgCompleter(self.session_cache),
                     # @file mentions in free text (E3) — completes repo

@@ -255,6 +255,7 @@ _TOOL_VERBS: Final[dict[str, str]] = {
     "list_dir": "listing directory",
     "view_image": "viewing image",
     "bash": "running command",
+    "skill": "loading skill",
     "web_search": "searching the web",
     "web_fetch": "fetching page",
 }
@@ -281,7 +282,7 @@ def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
         cmd = str(args.get("command") or "")
         one_line = " ".join(cmd.split())
         return one_line[:72] + ("…" if len(one_line) > 72 else "")
-    for key in ("path", "query", "url", "pattern"):
+    for key in ("path", "query", "url", "pattern", "name"):
         value = args.get(key)
         if isinstance(value, str) and value:
             return value

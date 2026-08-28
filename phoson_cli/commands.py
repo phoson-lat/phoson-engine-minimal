@@ -91,7 +91,10 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         ("/new", "/tree", "/undo", "/compact", "/resume", "/sessions", "/delete"),
     ),
     ("Model", ("/model", "/provider", "/subagent-model", "/reasoning-effort")),
-    ("Info", ("/status", "/env", "/cost", "/tokens", "/steps", "/agents-md")),
+    (
+        "Info",
+        ("/status", "/env", "/cost", "/tokens", "/steps", "/agents-md", "/skills"),
+    ),
     (
         "Config & System",
         (
@@ -221,6 +224,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/agents-md",),
         "Show which AGENTS.md/CLAUDE.md memory files are loaded into the prompt",
         "_cmd_agents_md",
+    ),
+    CommandSpec(
+        ("/skills",),
+        "List available skills, or show one's instructions: /skills <name>",
+        "_cmd_skills",
     ),
     CommandSpec(("/env",), "Show provider, model and session info", "_cmd_env"),
     CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),
@@ -971,6 +979,58 @@ class CommandHandler:
             marker = "*" if path.parent == Path.cwd() else " "
             r.print_info(f" {marker} {path}  ({lines} lines)")
         r.print_info("(* in the working directory · re-read every turn)")
+        return True
+
+    async def _cmd_skills(self, cmd: Command) -> bool:
+        """List discovered skills, or show one's full instructions (G5)."""
+        from .skills import (
+            find_skill,
+            discover_skills,
+            load_skill_body,
+            skill_search_paths,
+        )
+
+        r = self._r
+        skills = discover_skills()
+        target = cmd.args.strip()
+
+        if target:
+            found = find_skill(target, skills)
+            if found is None:
+                r.print_error(
+                    f"Unknown skill {target!r}."
+                    + (
+                        " Available: " + ", ".join(s.name for s in skills)
+                        if skills
+                        else " No skills are installed."
+                    )
+                )
+                return True
+            r.print_info(f"{found.name}  ({found.path})")
+            r.print_info(load_skill_body(found))
+            return True
+
+        if not skills:
+            searched = ", ".join(str(p) for p, _ in skill_search_paths()) or "(none)"
+            r.print_info(
+                "No skills found. A skill is a directory with a SKILL.md file"
+                " (frontmatter: name + description) in .phoson/skills/ (project)"
+                " or ~/.phoson/skills/ (global)."
+            )
+            r.print_info(f"Directories scanned: {searched}")
+            return True
+
+        r.print_info(
+            f"{len(skills)} skill(s) indexed in the system prompt"
+            " · the agent loads one on demand with the `skill` tool:"
+        )
+        for skill_meta in skills:
+            detail = skill_meta.description or "(no description)"
+            if len(detail) > 96:
+                detail = detail[:95].rstrip() + "…"
+            r.print_info(f"  {skill_meta.name}  [{skill_meta.source}]")
+            r.print_info(f"      {detail}")
+        r.print_info("(/skills <name> shows a skill's full instructions)")
         return True
 
     async def _cmd_setup(self, cmd: Command) -> bool:  # noqa: ARG002

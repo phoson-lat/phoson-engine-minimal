@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.4 (2026-08-27)
+
+### Feat
+
+- **cli**: Skills system — on-demand instruction packages
+  (IMPROVEMENTS.md G5, issue #52). A *skill* is a directory with a
+  `SKILL.md` file (frontmatter `name` + `description`, then Markdown
+  instructions, optionally next to bundled `scripts/`/`references/`).
+  It is a third abstraction next to the two that already existed:
+  plugins are always-loaded engine hooks, tools put a schema in *every*
+  request, and skills cost **one line** while dormant.
+
+  - *Progressive disclosure, in two tiers.* `render_skill_index` injects
+    only `name: description` per skill into the **stable prefix** of the
+    system prompt; `load_skill_body` returns the full body, and it is
+    delivered as a **tool result** — i.e. into the conversation, not the
+    prefix — so activating a skill on turn 7 cannot invalidate the
+    provider's prompt cache (G2). Measured on this repo's own skill:
+    **157 tokens indexed vs 2399 loaded (15×)**; discovery costs
+    0.43 ms, so it re-runs per call and a skill added mid-session is
+    usable on the next turn without a restart.
+  - *Activation is a tool, not a slash command or keyword match.*
+    Relevance is only knowable after the task is understood, which is
+    after the user's message — a slash command would push the decision
+    onto the user, and keyword matching fires on false positives ("the
+    *architecture* of this function") while missing paraphrases. The
+    skill name is an **argument** of the single `skill` tool, so adding
+    a skill never changes the tool schemas sent every request (exactly
+    the cost skills exist to avoid).
+  - *Locations*, first match wins: `.phoson/skills/` (project),
+    `.agents/skills/` + `.claude/skills/` (read for compatibility with
+    repos already set up for other harnesses — same rationale as the
+    `CLAUDE.md` alias in A3), then `~/.phoson/skills/` (global). Project
+    skills shadow same-named global ones, mirroring the `AGENTS.md`
+    "closer to cwd is more specific" rule; symlinked mirrors
+    (`.claude/skills/x -> ../../.agents/skills/x`) are collapsed by
+    resolved path so nothing is listed twice.
+  - *The `skill` tool only joins the registry when a skill actually
+    exists* (`build_tools(include_skill=...)` overrides the
+    auto-detection). A schema the model can never use successfully is
+    pure prompt cost on every request; for the same reason the prompt
+    index is only rendered when the tool is present, so the model is
+    never told to call something it does not have.
+  - *New `/skills` command* lists what was discovered (with the source
+    directory) and `/skills <name>` prints a skill's full instructions;
+    inline `/skills <name>` completion in the full-screen composer.
+    Bundled resources are listed with the body alongside the skill's
+    absolute root, so the model runs them with the existing `bash` /
+    `read_file` tools — no new tool needed to make a skill executable.
+  - *Frontmatter parsing is dependency-free* (no YAML package): the flat
+    `key: value` subset skills use, including folded/indented
+    continuation lines for long descriptions. Unknown keys are ignored
+    rather than rejected — an extra field must never make a skill
+    undiscoverable. Malformed, binary or unreadable `SKILL.md` files are
+    logged and skipped, and a failing scan degrades to "no skill tool"
+    instead of breaking the registry or the composer.
+
+  Tests: `tests/phoson_cli/test_g5_skills_unit.py` (50 new — frontmatter
+  parsing incl. folded lines and unterminated fences, discovery across
+  all four locations, project-shadows-global precedence, symlink
+  dedup, nested marketplace layouts, `MAX_SKILLS`/description caps,
+  unreadable-file resilience, forgiving name lookup with ambiguous
+  prefixes rejected, index budget enforcement without mid-entry
+  truncation, body loading with resource listing and oversize
+  truncation, the `skill` tool's schema and error paths, conditional
+  registry wiring, and five system-prompt integration tests asserting
+  the index appears, stays byte-stable across turns, and **never**
+  carries a skill body).
+
 ## v0.13.3 (2026-08-28)
 
 ### Feat
