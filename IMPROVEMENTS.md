@@ -15,9 +15,11 @@
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
-| **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | **P1** | S-M | 🟠 Medio (soporte local vLLM/Qwen) | ⬜ Abierto |
+| **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | ~~P1~~ | — | — | ✅ Cerrado (no es bug nuestro — error de vLLM) |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ⬜ Abierto |
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ⬜ Abierto |
+| **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
+| **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
 | **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ⬜ Abierto |
 | **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ⬜ Abierto |
 
@@ -72,14 +74,13 @@
 ---
 
 ### I-82 — [Bug #82] vLLM: HTTP 400 "No user query found in messages" con modelos Qwen3.x
+* **Estado:** ✅ **Cerrado (2026-08-28)** — Tras investigar, el 400 lo generaba el servidor vLLM (su procesamiento del chat template de Qwen), no la estructura de mensajes que envía phoson. No hay cambio requerido en el engine; issue cerrado en GitHub como no reproducible de nuestro lado.
 * **Área:** `phoson_llm/chats/vllm.py`, `phoson_agent/agent.py`
-* **Prioridad:** **P1** · **Esfuerzo:** S-M · **Impacto:** 🟠 Medio
-* **Problema:** El template de chat de Qwen en vLLM requiere una estructura estricta de mensajes entre llamadas a herramientas (o rechaza historiales donde no detecta un turno de usuario intercalado adecuadamente tras tool responses).
-* **Solución propuesta:**
-  - Normalizar el historial de mensajes antes de enviarlo al adapter de vLLM, asegurando compatibilidad con el chat template de Qwen / OpenAI standard tool-call formatting.
-  - Documentar consideraciones para vLLM + Qwen en la guía de proveedores.
-* **Criterio de listo:**
-  - Secuencia de múltiples tool calls seguidas se ejecuta sin error 400 en vLLM con template de Qwen.
+* **Prioridad:** ~~P1~~ · **Esfuerzo:** — · **Impacto:** —
+* **Problema (original):** El template de chat de Qwen en vLLM requería una estructura estricta de mensajes entre llamadas a herramientas (o rechazaba historiales donde no detecta un turno de usuario intercalado adecuadamente tras tool responses).
+* **Resolución:**
+  - Verificado que el payload enviado por el adapter de vLLM es estándar OpenAI tool-call compatible; el 400 provenía del lado del servidor vLLM.
+  - Si reaparece en una versión concreta de vLLM, reabrir con: versión de vLLM + payload exacto + logs del servidor.
 
 ---
 
@@ -105,6 +106,41 @@
 * **Criterio de listo:**
   - Uso de CPU en idle cercano al 0% (<1%).
   - Reducción medible del consumo durante streaming sostenido.
+
+---
+
+### I-108 — [Bug #108] Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind
+* **Área:** `phoson_cli/fullscreen/app.py`, `phoson_cli/fullscreen/keys.py`
+* **Prioridad:** **P1** · **Esfuerzo:** S-M · **Impacto:** 🟠 Medio
+* **Problema:**
+  1. El doble-Esc (rewind) se detecta **solo por tiempo** (`_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0` en `handle_escape()`), no por identidad de tecla.
+  2. Muchos terminales codifican **Alt+<tecla>** como `ESC` + <tecla> (encoding Meta/Alt estándar). Para Alt+Backspace, prompt_toolkit expone ese `ESC` como un evento `escape` **indistinguible** de un Esc real.
+  3. Consecuencias: con un run en vuelo, el prefijo `ESC` de Alt+Backspace **cancela el agente** (rama "in-flight → cancel"); en idle, arma/completa la ventana de doble-tap y **abre el picker de rewind** sin intención del usuario.
+* **Solución propuesta:**
+  - Distinguir un Esc **solo** (keypress limpio) de un `ESC` que es **prefijo** de una secuencia más larga o parte de un acorde con Alt: solo el primero debe contar para cancel/rewind.
+  - Acortar la ventana de doble-tap (p. ej. ~300–500 ms) para reducir la probabilidad de capturar `ESC` ajenos (no resuelve por sí solo el caso de cancelación en vuelo).
+  - Para la cancelación en vuelo: exigir un Esc limpio (sin otros bytes en una ventana corta) antes de cancelar.
+  - Considerar desacoplar el single-Esc cancel y el doble-Esc rewind (hoy ambos montan sobre la acción `escape` y se remapan juntos).
+* **Criterio de listo:**
+  - Alt+Backspace (o cualquier tecla Alt-modificada con prefijo `ESC`) **no** cancela un run en vuelo ni abre el picker en idle.
+  - Doble-Esc deliberado sigue abriendo el picker; single-Esc en vuelo sigue cancelando de inmediato (regresión #68 intacta).
+  - Tests de enrutado de teclas vía PipeInput con bytes `ESC`+<key> que no disparan cancel/rewind.
+
+---
+
+### I-109 — [Bug #109] Rewind picker: orden viejo→nuevo e inclusión de entradas no-user (tool results)
+* **Área:** `phoson_cli/controller.py`, `phoson_cli/rewind_picker.py`
+* **Prioridad:** **P1** · **Esfuerzo:** S · **Impacto:** 🟠 Medio
+* **Problema:**
+  1. **Orden:** `SessionController.jump_candidates()` recorre el path activo en orden `root → cursor` y añade los candidatos a medida que avanza, por lo que el picker lista **viejo → nuevo** (índice 1 = turno más antiguo) con el cursor inicial en el más viejo. Debería ser **nuevo → viejo**, con el cursor en el mensaje más reciente (el más probable objetivo de un rewind).
+  2. **Contenido:** el filtro es **por role** (`message.role != "user"`), pero el engine guarda los **tool results con role `user`** (`phoson_agent/_tool_runner.py` añade `Message(role="user", content=[ToolResultBlock(...)])`; ver docstring de `ToolResultBlock` en `phoson_llm/schemas/inputs.py`). Esos nodos pasan el filtro y, al no contener `TextBlock`, se renderizan como filas **"(empty message)"** en el picker. (Assistant/system ya están excluidos por el role check.)
+* **Solución propuesta:**
+  - **Orden:** invertir la lista de candidatos (o construirla en reversa) para que sea nuevo→viejo y el cursor inicial quede en el turno de usuario más reciente.
+  - **Contenido:** hacer el filtro **consciente del contenido**, no solo del role: incluir un nodo solo si es un turno de usuario genuino — contenido `str` o con al menos un `TextBlock` — y excluir nodos cuyo contenido sea solo `ToolResultBlock` (tool results), manteniendo la exclusión de roles no-`user`.
+* **Criterio de listo:**
+  - El picker lista **solo** mensajes del usuario, ordenados **nuevo → viejo**, con el cursor inicial en el más reciente.
+  - Conversación con tool calls: el picker no muestra filas "(empty message)" ni nodos de tool results.
+  - Tests: `jump_candidates` con un path que mezcla user/assistant/tool-result(user-role) devuelve solo los turnos de usuario genuinos, en orden nuevo→viejo.
 
 ---
 
@@ -141,9 +177,11 @@ Sprint Próximo (Estabilidad de Contexto & Métricas)
 └── I-89 (/model persiste provider en config.toml) ✅ v0.13.7
 
 Sprint Siguiente (UX & Performance)
+├── I-108 (Alt+Backspace no debe leerse como doble-Esc / cancel)
+├── I-109 (Rewind picker: orden nuevo→viejo y solo mensajes user)
 ├── I-83 (Compactar paneles de error a 1 línea en reintentos)
 ├── I-84 (Optimización de CPU en idle/streaming)
-└── I-82 (vLLM compatibilidad Qwen3.x chat template)
+└── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
 Sprint Posterior (Ecosistema & Distribución)
 ├── I-100 (Toggle granular MCP servers & tools)
