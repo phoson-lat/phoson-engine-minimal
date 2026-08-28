@@ -17,9 +17,10 @@
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | ~~P1~~ | — | — | ✅ Cerrado (no es bug nuestro — error de vLLM) |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ✅ Resuelto (v0.13.8) |
-| **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ⬜ Abierto |
+| **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | 📝 Plan listo (`.opencode/plans/i84-cpu-idle-streaming.md`) |
 | **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
 | **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
+| **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ⬜ Abierto |
 | **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ⬜ Abierto |
 | **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ⬜ Abierto |
 
@@ -100,6 +101,7 @@
 ---
 
 ### I-84 — [Performance #84] Reducción de uso de CPU en TUI full-screen
+* **Plan de ataque:** ver `.opencode/plans/i84-cpu-idle-streaming.md` (medición baseline → quick wins: `min_redraw_interval` + throttles + ticker condicional → verificación).
 * **Área:** `phoson_cli/fullscreen/app.py`, `phoson_cli/fullscreen/sink.py`
 * **Prioridad:** **P1** · **Esfuerzo:** M · **Impacto:** 🟠 Medio
 * **Problema:** Uso continuo de 5–15% CPU en idle y 15–20% en streaming debido a re-renderizados innecesarios o tickers de animación muy agresivos.
@@ -147,6 +149,31 @@
 
 ---
 
+### I-113 — [Enhancement #113] OpenRouter: orden por `agentic_index` + unificar `/model`/`/provider` en un solo picker con marcado `unavailable`
+* **Área:** `phoson_cli/model_selector.py`, `phoson_cli/model_picker.py`, `phoson_cli/provider_picker.py`, `phoson_cli/commands.py`, `phoson_cli/command_host.py`, `phoson_cli/fullscreen/command_host.py`, `docs/api/phoson_cli.md`
+* **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟡 Medio
+* **Problema:**
+  1. **Sin orden útil en OpenRouter.** `_prioritize_current()` ordena todos los proveedores (incluido OpenRouter) por `id.lower()` alfabético, con solo el modelo actual fijado primero. La API de OpenRouter ya devuelve `benchmarks.artificial_analysis.agentic_index` para una parte importante del catálogo (~205 de 381 modelos a la fecha), señal mucho más relevante para elegir un modelo orientado a agentes/tool-use que el orden alfabético — y hoy no se usa.
+  2. **Selección en dos pasos.** El flujo actual obliga a `/provider` (picker propio) y luego `/model` (que solo lista el proveedor *activo*); no existe una vista única que muestre modelos de todos los proveedores configurados a la vez, así que comparar "qué modelo, de qué proveedor" implica saltar entre dos pickers.
+  3. **Fallo de listado silencioso e indistinguible.** Cuando el listado en vivo de un proveedor falla (timeout, 401, rate limit…), cada `_list_<provider>_models()` emite un `UserWarning` y degrada a una lista de 1 modelo (el modelo actual) — indistinguible de un proveedor que legítimamente solo tiene un modelo. No hay marcador visible de `unavailable` ni en el picker ni en `/model list`.
+  4. **Nota aclaratoria (no es un problema nuevo):** la caché en disco de `~/.phoson/models.json` para el listado de modelos **ya no existe** — `list_available_models()` siempre hace fetch en vivo y no lee/escribe la sección `cache` (cubierto por `test_list_available_models_never_writes_models_json` / `test_list_available_models_always_calls_the_live_fetcher`). Lo único desactualizado es que `docs/api/phoson_cli.md` (sección "Model registry") todavía describe esa caché como si existiera ("instant picker, TTL 24h, works offline") — corregir esa documentación es parte de este issue.
+* **Solución propuesta:**
+  - En `_list_openrouter_models`, ordenar por `benchmarks.artificial_analysis.agentic_index` descendente antes de pasar por `_prioritize_current` (que debe seguir fijando el modelo actual primero); los modelos sin el campo van al final, entre ellos en el orden alfabético actual. Considerar que `_prioritize_current` acepte un comparador/clave secundaria en vez de tener `id.lower()` hardcodeado, ya que el criterio es específico de OpenRouter.
+  - Añadir algo como `list_available_models_for_providers(config, providers) -> list[ProviderListing]` que consulte todos los proveedores configurados (`enabled_providers_from_config()`) **concurrentemente** (`asyncio.gather(..., return_exceptions=True)` o equivalente), devolviendo por proveedor su lista de `ModelOption` o un error.
+  - Nuevo picker unificado (o modo nuevo de `model_picker.py`) que muestre todos los modelos de todos los proveedores configurados en una sola lista, cada fila con `id  (provider)`, y una sección/marca separada para los proveedores que fallaron (`unavailable`). Seleccionar una fila de otro proveedor debe cambiar `(model, provider)` juntos, reusando la persistencia de I-89 (`set_model(model, provider=...)`).
+  - Colapsar/ajustar `pick_model`/`pick_provider` en `command_host.py` (clásico) y `fullscreen/command_host.py` (que hoy ni abre Float para modelo, solo autocompletado inline) para que ambos frontends expongan el nuevo picker unificado sin romper el modo autocompletado inline del full-screen.
+  - Actualizar `docs/api/phoson_cli.md` quitando el ejemplo de `cache` y la afirmación de "instant, works offline (TTL 24h)".
+* **Criterio de listo:**
+  - OpenRouter en `/model`, autocompletado inline y `/model list` ordenado por `agentic_index` descendente, modelo actual siempre primero; sin el campo van al final.
+  - Un solo picker/lista muestra modelos de todos los proveedores configurados, cada entrada con su proveedor entre paréntesis.
+  - Elegir un modelo de otro proveedor cambia ambos (modelo + proveedor) sin pasar por `/provider`.
+  - Un proveedor cuyo listado en vivo falla se marca visiblemente `unavailable` (no un fallback silencioso de 1 modelo) en el picker y en `/model list`.
+  - El fetch de listados de múltiples proveedores es concurrente, no secuencial.
+  - `docs/api/phoson_cli.md` ya no describe una caché de listado de modelos persistida en disco.
+  - Tests nuevos/actualizados: orden por `agentic_index` (con y sin el campo), agregación multi-proveedor, marcado de proveedor `unavailable`; `ruff format`/`ruff check`/`pyright`/`pytest` limpios.
+
+---
+
 ### I-100 — [Feature #100] Habilitar / Deshabilitar MCPs a nivel servidor y herramienta
 * **Área:** `phoson_mcp/`, `phoson_cli/commands.py`
 * **Prioridad:** **P2** · **Esfuerzo:** M-L · **Impacto:** 🟡 Medio
@@ -187,6 +214,7 @@ Sprint Siguiente (UX & Performance)
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
 Sprint Posterior (Ecosistema & Distribución)
+├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider)
 ├── I-100 (Toggle granular MCP servers & tools)
 └── I-93 (Binarios precompilados standalone en CI)
 ```
