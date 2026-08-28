@@ -65,6 +65,9 @@ class _Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     prompt_tokens_details: _PromptDetails = field(default_factory=_PromptDetails)
+    # OpenRouter reports the charged USD amount here; the real SDK
+    # exposes it as an extra field, and the loop reads it via getattr.
+    cost: float | None = None
 
 
 @dataclass
@@ -533,3 +536,115 @@ async def test_api_status_400_unrelated_is_not_context_error() -> None:
 
     err = next(e for e in events if isinstance(e, ErrorEvent))
     assert err.code == "unknown"
+
+
+# ─── Provider-reported cost (I-88: OpenRouter usage.cost) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_provider_reported_cost_is_authoritative() -> None:
+    """A usage.cost from the provider wins over the local price table and
+    is reported as known (I-88)."""
+    chunks = [
+        _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
+        _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),
+        _Chunk(usage=_Usage(prompt_tokens=100, completion_tokens=10, cost=0.0042)),
+    ]
+    client = _FakeClient(chunks)
+
+    # A price table that would compute a DIFFERENT cost — it must be ignored.
+    def fake_cost(*, model, input_tokens, output_tokens, **kw):
+        return 9.99, True
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=ModelConfig(model="any", max_tokens=8),
+            cost_calculator=fake_cost,
+        )
+    )
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.cost_usd == pytest.approx(0.0042)
+    assert usage.cost_known is True
+
+
+@pytest.mark.asyncio
+async def test_no_provider_cost_falls_back_to_calculator() -> None:
+    """When the provider sends no usage.cost (e.g. OpenAI), the local
+    price table is used (unchanged behaviour)."""
+    chunks = [
+        _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
+        _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),
+        _Chunk(usage=_Usage(prompt_tokens=100, completion_tokens=10)),  # no cost
+    ]
+    client = _FakeClient(chunks)
+
+    def fake_cost(*, model, input_tokens, output_tokens, **kw):
+        return 0.123, True
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=ModelConfig(model="any", max_tokens=8),
+            cost_calculator=fake_cost,
+        )
+    )
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.cost_usd == pytest.approx(0.123)
+    assert usage.cost_known is True
+
+
+@pytest.mark.asyncio
+async def test_default_cost_calculator_is_unknown_without_provider_cost() -> None:
+    """With the default (no) calculator and no provider cost, the event
+    reports cost 0 / cost_known False — the prior OpenRouter behaviour."""
+    chunks = [
+        _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
+        _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),
+        _Chunk(usage=_Usage(prompt_tokens=10, completion_tokens=5)),
+    ]
+    client = _FakeClient(chunks)
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=ModelConfig(model="any", max_tokens=8),
+        )
+    )
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.cost_usd == 0.0
+    assert usage.cost_known is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_cost_is_ignored() -> None:
+    """A non-numeric or negative usage.cost must be ignored, falling back
+    to the calculator rather than crashing or reporting a bad cost."""
+    for bad in ("not-a-number", -1.0, float("nan"), float("inf")):
+        chunks = [
+            _Chunk(choices=[_Choice(delta=_Delta(content="ok"))]),
+            _Chunk(choices=[_Choice(delta=_Delta(), finish_reason="stop")]),
+            _Chunk(usage=_Usage(prompt_tokens=10, completion_tokens=5, cost=bad)),
+        ]
+        client = _FakeClient(chunks)
+
+        def fake_cost(*, model, input_tokens, output_tokens, **kw):
+            return 0.5, True
+
+        events = await _collect(
+            stream_chat_completions(
+                client,  # type: ignore[arg-type]
+                messages=[Message(role="user", content="hi")],
+                config=ModelConfig(model="any", max_tokens=8),
+                cost_calculator=fake_cost,
+            )
+        )
+        usage = next(e for e in events if isinstance(e, UsageEvent))
+        assert usage.cost_usd == pytest.approx(0.5), f"bad={bad!r}"
+        assert usage.cost_known is True

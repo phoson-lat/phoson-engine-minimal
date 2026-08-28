@@ -25,11 +25,13 @@ module configures the client and adds the provider-specific bits:
     for Bedrock/Vertex). Models with implicit caching (OpenAI, DeepSeek,
     Gemini 2.5+) need nothing.
 
-The cost callback returns ``(0.0, False)`` because OpenRouter charges
-based on the upstream provider it routes to and the price table here
-would never be authoritative. Consumers that need a cost reading for
-OpenRouter should subscribe to OpenRouter's own ``/credits`` endpoint
-or pass a custom ``cost_calculator`` through a thin subclass.
+Cost accounting (IMPROVEMENTS.md I-88): OpenRouter includes a
+``cost`` field on the ``usage`` object of every response (the amount
+actually charged to the caller's account). The shared streaming loop
+reads it and reports it as an authoritative ``UsageEvent.cost_usd``
+(``cost_known=True``), so session metrics and the TUI header show the
+real USD cost instead of ``$0.0000``. No local price table is involved
+— the provider's number is the truth.
 """
 
 import os
@@ -130,7 +132,8 @@ class OpenRouterChat(BaseLLMChat):
             # OpenRouter still accepts the legacy `max_tokens` field across
             # all providers it routes to, so we keep using it.
             max_tokens_key="max_tokens",
-            # Cost is unknown — OpenRouter mediates many providers.
+            # No cost_calculator: OpenRouter reports the authoritative
+            # cost in usage.cost, which the shared loop reads directly.
             extra_kwargs=extra_kwargs or None,
         ):
             yield event

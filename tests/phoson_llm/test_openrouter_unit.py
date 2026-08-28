@@ -219,3 +219,95 @@ async def test_openrouter_sends_cache_control_for_anthropic_without_session() ->
     extra_body = captured["extra_body"]
     assert extra_body["cache_control"] == {"type": "ephemeral"}
     assert "session" not in extra_body
+
+
+# ─── I-88: OpenRouter usage.cost → real USD in the UsageEvent ────────────────
+
+
+class _ORUsage:
+    """Mimics the OpenAI SDK's CompletionUsage with OpenRouter's extra
+    ``cost`` field (reachable via getattr, as with ``extra='allow'``)."""
+
+    def __init__(self, prompt_tokens=0, completion_tokens=0, cost=None):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = prompt_tokens + completion_tokens
+        self.cost = cost
+        self.prompt_tokens_details = None
+
+
+class _ORClientCost:
+    """Fake OpenAI client whose stream emits a final usage chunk carrying
+    the provider-reported cost (I-88)."""
+
+    def __init__(self, cost):
+        self._cost = cost
+        self.chat = _ORChatNamespaceCost(cost)
+
+
+class _ORCompletionsCost:
+    def __init__(self, cost):
+        self._cost = cost
+
+    async def create(self, **kwargs):
+        async def _gen():
+            yield _ORChunk(choices=[_ORChoice("stop")])
+            yield _ORChunk(
+                choices=[],
+                usage=_ORUsage(
+                    prompt_tokens=100, completion_tokens=10, cost=self._cost
+                ),
+            )
+
+        return _gen()
+
+
+class _ORChatNamespaceCost:
+    def __init__(self, cost):
+        self.completions = _ORCompletionsCost(cost)
+
+
+@pytest.mark.asyncio
+async def test_openrouter_reports_provider_cost_in_usage_event() -> None:
+    """The UsageEvent must carry the provider's usage.cost (> $0.0000) as
+    an authoritative, known cost (I-88) — not the $0.0000 the price table
+    produced before this fix."""
+    from phoson_llm.schemas import UsageEvent
+
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClientCost(0.0042)
+
+    events = [
+        e
+        async for e in chat.stream(
+            [Message(role="user", content="hi")],
+            ModelConfig(model="anthropic/claude-sonnet-4-6"),
+        )
+    ]
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.cost_usd == pytest.approx(0.0042)
+    assert usage.cost_usd > 0.0
+    assert usage.cost_known is True
+
+
+@pytest.mark.asyncio
+async def test_openrouter_without_provider_cost_stays_unknown() -> None:
+    """When OpenRouter sends no usage.cost, the event stays cost 0 /
+    cost_known False (no fabricated price)."""
+    from phoson_llm.schemas import UsageEvent
+
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClientCost(None)
+
+    events = [
+        e
+        async for e in chat.stream(
+            [Message(role="user", content="hi")],
+            ModelConfig(model="anthropic/claude-sonnet-4-6"),
+        )
+    ]
+
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert usage.cost_usd == 0.0
+    assert usage.cost_known is False
