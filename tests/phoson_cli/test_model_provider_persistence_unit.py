@@ -383,6 +383,7 @@ async def test_model_command_same_provider_saves_model_only(
     # Pre-existing file with a provider line the save must not rewrite.
     save_config(config)
     repl = _DummyRepl(config)
+    _mock_listings(monkeypatch, openai=["gpt-4o", "gpt-4.1-mini"])
 
     result = await _handler(repl).handle(Command(name="/model", args="gpt-4.1-mini"))
 
@@ -480,29 +481,62 @@ async def test_model_command_explicit_unknown_prefix_resolves_via_listing(
 
 
 @pytest.mark.asyncio
-async def test_model_command_explicit_same_provider_skips_listing_lookup(
-    monkeypatch,
+async def test_model_command_explicit_unprefixed_id_switches_to_listing_provider(
+    tmp_path, monkeypatch
 ) -> None:
-    """No ``/`` in the id, or a prefix that already resolves for free
-    (known provider / router-kept), must NOT pay for the extra
-    multi-provider fetch."""
+    """Regression: an unprefixed local-server id (vLLM / Ollama / LM
+    Studio — no ``vendor/`` prefix) must still switch the provider.
+
+    The previous lookup gated on ``"/" in chosen``, so
+    ``/model Qwen3.8-27B-FP8`` while OpenRouter was active only saved
+    the model string and left the backend on OpenRouter.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="openrouter",
+        model="qwen/qwen3.8-max",
+        openrouter_api_key="sk-or-test",
+        vllm_base_url="http://localhost:8383/v1",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        openrouter=["qwen/qwen3.8-max"],
+        vllm=["Qwen3.8-27B-FP8"],
+    )
+
+    result = await _handler(repl).handle(Command(name="/model", args="Qwen3.8-27B-FP8"))
+
+    assert result is True
+    assert repl.model_calls == [("Qwen3.8-27B-FP8", "vllm")]
+    text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
+    assert 'provider = "vllm"' in text
+    assert 'model = "Qwen3.8-27B-FP8"' in text
+
+
+@pytest.mark.asyncio
+async def test_model_command_explicit_same_provider_unprefixed_stays_put(
+    tmp_path, monkeypatch
+) -> None:
+    """Unprefixed id that only the *active* provider lists → no switch."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     config = PhosonConfig(
         provider="openai",
         model="gpt-4o",
         openai_api_key="sk-openai-test",
+        sessions_dir=tmp_path / "sessions",
     )
     repl = _DummyRepl(config)
-
-    async def fail_if_called(cfg, providers):
-        raise AssertionError("list_models_for_providers must not be called")
-
-    monkeypatch.setattr("phoson_cli.commands.list_models_for_providers", fail_if_called)
-    monkeypatch.setattr("phoson_cli.commands.save_config", lambda *a, **k: None)
+    _mock_listings(monkeypatch, openai=["gpt-4o", "gpt-4.1-mini"])
 
     result = await _handler(repl).handle(Command(name="/model", args="gpt-4.1-mini"))
 
     assert result is True
     assert repl.model_calls == [("gpt-4.1-mini", None)]
+    text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
+    assert 'provider = "openai"' in text
+    assert 'model = "gpt-4.1-mini"' in text
 
 
 @pytest.mark.asyncio
