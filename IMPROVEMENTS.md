@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub con su prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis de causa raíz, solución propuesta y criterios de aceptación.
 >
-> **Estado de referencia:** v0.13.10 · 1501 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
+> **Estado de referencia:** v0.13.11 · 1508 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
 
 ---
 
@@ -151,7 +151,7 @@
 ---
 
 ### I-113 — [Enhancement #113] OpenRouter: orden por `agentic_index` + unificar `/model`/`/provider` en un solo picker con marcado `unavailable`
-* **Estado:** ✅ **Resuelto (v0.13.10)** — [PR #116](https://github.com/phoson-lat/phoson-engine-minimal/pull/116). OpenRouter ordenado por `agentic_index` desc (sin campo → al final, alfabético; current siempre primero); `list_models_for_providers()` concurrente; picker unificado multi-provider en ambos frontends (selección cambia `(model, provider)` juntos, reusando I-89); providers con fetch fallido marcados `unavailable` en picker y `/model list` (internamente `ModelListingError`; el fast path de 1 provider conserva fallback+warning exactos); docs sin la caché inexistente. Incluye dos fixes de corrección post-review encontrados validando en vivo: `/model <id>` explícito ahora siempre resuelve el provider real vía listing (antes solo lo hacía la rama del picker), y se corrigió la ambigüedad del heurístico de prefijo cuando un router (OpenRouter) re-expone el catálogo de otro vendor tal cual (ver CHANGELOG v0.13.10 y plan `.opencode/plans/i113-model-picker-unified.md`).
+* **Estado:** ✅ **Resuelto (v0.13.10, hotfix v0.13.11)** — [PR #116](https://github.com/phoson-lat/phoson-engine-minimal/pull/116). OpenRouter ordenado por `agentic_index` desc (sin campo → al final, alfabético; current siempre primero); `list_models_for_providers()` concurrente; picker unificado multi-provider en ambos frontends (selección cambia `(model, provider)` juntos, reusando I-89); providers con fetch fallido marcados `unavailable` en picker y `/model list` (internamente `ModelListingError`; el fast path de 1 provider conserva fallback+warning exactos); docs sin la caché inexistente. Incluye dos fixes de corrección post-review encontrados validando en vivo: `/model <id>` explícito ahora siempre resuelve el provider real vía listing (antes solo lo hacía la rama del picker), y se corrigió la ambigüedad del heurístico de prefijo cuando un router (OpenRouter) re-expone el catálogo de otro vendor tal cual (ver CHANGELOG v0.13.10 y plan `.opencode/plans/i113-model-picker-unified.md`).
 * **Área:** `phoson_cli/model_selector.py`, `phoson_cli/model_picker.py`, `phoson_cli/commands.py`, `phoson_cli/command_host.py`, `phoson_cli/fullscreen/command_host.py`, `phoson_cli/fullscreen/model_cache.py`, `phoson_cli/models.py`, `docs/api/phoson_cli.md`, `README.md`
 * **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟡 Medio
 * **Problema:**

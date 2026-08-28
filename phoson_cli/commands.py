@@ -551,7 +551,7 @@ class CommandHandler:
             option_provider = getattr(result, "provider", None) or next(
                 (m.provider for m in models if m.id == chosen), None
             )
-        elif target == "main" and "/" in chosen:
+        elif target == "main":
             # I-113 follow-up: an *explicit* ``/model <id>`` (typed, or
             # picked from inline autocomplete) skipped provider
             # resolution entirely — only the interactive-picker branch
@@ -564,28 +564,37 @@ class CommandHandler:
             # catalog output, not evidence of a directly-configured
             # "anthropic" provider — but with a non-router active
             # provider the heuristic can't tell the two apart and
-            # confidently (and wrongly) "resolves" to the vendor name,
-            # so it never even reaches the ``is None`` fallback this
-            # branch used to gate on. The only trustworthy signal is
-            # asking every configured provider's *live* listing which
-            # of them actually serves this exact id — same authority
-            # the interactive-picker branch already has.
+            # confidently (and wrongly) "resolves" to the vendor name.
+            #
+            # Local / OpenAI-compatible servers (vLLM, Ollama, LM Studio)
+            # also serve *unprefixed* ids ("Qwen3.8-27B-FP8"). Gating the
+            # lookup on ``"/" in chosen`` left those on the active
+            # provider — switching OpenRouter → vLLM via autocomplete
+            # only saved the model string.
+            #
+            # The only trustworthy signal is asking every configured
+            # provider's *live* listing which of them actually serves
+            # this exact id — same authority the picker branch already
+            # has. Prefer a listing that is *not* the active provider
+            # when several match (the user is switching); otherwise the
+            # first match (active provider is listed first).
             #
             # Falls back to the cheap prefix heuristic (below, via
             # model_provider_for) only when no configured provider's
-            # live listing contains the id at all (custom/local models,
-            # or every provider's listing failing).
+            # live listing contains the id at all.
             listings = await list_models_for_providers(
                 self.repl.config, self._available_providers()
             )
+            matches = [
+                listing.provider
+                for listing in listings
+                for option in listing.options
+                if option.id == chosen
+            ]
+            active = normalize_provider(self.repl.config.provider)
             option_provider = next(
-                (
-                    listing.provider
-                    for listing in listings
-                    for option in listing.options
-                    if option.id == chosen
-                ),
-                None,
+                (p for p in matches if normalize_provider(p) != active),
+                matches[0] if matches else None,
             )
 
         if target == "main":

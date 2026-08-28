@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.11 (2026-08-28)
+
+### Fix
+
+- **cli**: `/model <id>` without a `vendor/` prefix now switches the
+  provider too (I-113 follow-up). Local servers (vLLM, Ollama, LM
+  Studio) serve unprefixed ids like `Qwen3.8-27B-FP8`; the live-listing
+  lookup that resolves the real provider was gated on `"/" in id`, so
+  switching OpenRouter → vLLM via autocomplete only saved the model
+  string and left the backend on OpenRouter. The lookup now always
+  runs for an explicit `/model`, preferring a listing that is *not*
+  the active provider when several match.
+
 ## v0.13.10 (2026-08-28)
 
 ### Feat
