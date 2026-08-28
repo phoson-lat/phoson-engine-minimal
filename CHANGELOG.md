@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.3 (2026-08-28)
+
+### Feat
+
+- **cli**: clickable OSC 8 hyperlinks in Markdown responses
+  (IMPROVEMENTS.md G4, issue #58). Assistant answers with links now
+  render as real terminal hyperlinks (`ESC ] 8 ; ; URL ESC \`) in both
+  front ends, clickable in terminals that support OSC 8 (kitty, iTerm2,
+  WezTerm, GNOME Terminal, Ghostty, Alacritty, Windows Terminal, …) —
+  typically with `Ctrl+click`, the same "terminal intercepts the
+  gesture, not the app" pattern as `Shift+Drag` text selection (G3).
+
+  - *Root cause.* `formatting.py` passed `hyperlinks=False` to every
+    `Markdown(...)` call because prompt_toolkit's `ANSI()` parser only
+    understands CSI/SGR (`\x1b[...m`) escapes — an OSC 8 sequence
+    (`\x1b]8;;URL\x1b\\`), which doesn't start with `[`, fell through its
+    "ignore" branch character by character, leaking raw bytes
+    (`8;id=...;https://...`) as literal text around the link.
+  - *Fix.* New pure module `phoson_cli/hyperlinks.py::osc8_passthrough`
+    wraps every OSC 8 sequence in `\001`/`\002` (SOH/STX) before the
+    string reaches `ANSI(...)` — prompt_toolkit's own documented
+    mechanism for exactly this case: text between those markers becomes
+    a `"[ZeroWidthEscape]"` fragment, which the renderer writes with
+    `output.write_raw()`, untouched. Applied inside
+    `BlockAnsiCache.get_or_render` (`fullscreen/render.py`), once per
+    cached transcript block per width — the in-flight streaming turn
+    stays on the plain-text fast path until it freezes into a block, so
+    the hot render path is unaffected. The classic REPL prints straight
+    to a real `Console` (no `ANSI()` re-parse in between), so it only
+    needed `hyperlinks=True` turned back on.
+  - *Clicking the link* is a terminal feature, not an app one — the
+    terminal intercepts the gesture and opens the URL directly, even
+    with `mouse_support=True` capturing the rest of the mouse for the
+    chat scroll wheel.
+
+  Tests: `tests/phoson_cli/test_hyperlinks_unit.py` (7 new — OSC 8
+  sequence wrapping, no-op on plain ANSI/text, a control case
+  reproducing the original bug without the fix, an end-to-end check
+  against a real `prompt_toolkit.formatted_text.ANSI()` parse, and the
+  full-screen render bridge applying it to a cached block) plus 2
+  existing `formatting.py` regression tests flipped to assert OSC 8 is
+  now present (they previously asserted its absence, from the
+  `hyperlinks=False` fix this release replaces).
+
 ## v0.13.2 (2026-08-27)
 
 ### Docs

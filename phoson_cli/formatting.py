@@ -106,18 +106,21 @@ def render_streaming_panel(
                 # tone, not the terminal's white) — pass the theme color
                 # explicitly so the answer always renders in it.
                 #
-                # hyperlinks=False: Rich's default OSC 8 hyperlink escapes
-                # (``\x1b]8;;URL\x1b\\``) aren't understood by prompt_toolkit's
-                # ANSI() parser — it only recognizes CSI/SGR (``\x1b[...m``)
-                # codes, so an OSC 8 sequence gets torn apart and its raw
-                # bytes ("8;id=...;https://...") show up as literal text
-                # around the link. Rendering links as "text (url)" with plain
-                # SGR color codes avoids that entirely.
+                # hyperlinks=True (IMPROVEMENTS.md G4, #58): Rich's real OSC 8
+                # hyperlink escapes (``\x1b]8;;URL\x1b\\``) make links clickable
+                # in terminals that support it. prompt_toolkit's ANSI() parser
+                # doesn't understand OSC 8 on its own and would tear the
+                # sequence apart into literal text — the full-screen render
+                # path (fullscreen/render.py) runs
+                # ``phoson_cli.hyperlinks.osc8_passthrough`` on the ANSI string
+                # before wrapping it in ANSI(), which is what actually carries
+                # the sequence through intact. The classic REPL prints
+                # straight to a real Console, so it needs no such fix.
                 answer_render = Markdown(
                     content,
                     code_theme=theme.code_theme,
                     style=theme.text,
-                    hyperlinks=False,
+                    hyperlinks=True,
                 )
             except Exception:
                 answer_render = Text(content, style=theme.text)
@@ -488,7 +491,10 @@ def render_history(
                         content.strip(),
                         code_theme=theme.code_theme,
                         style=theme.text,
-                        hyperlinks=False,
+                        # hyperlinks=True: see render_streaming_panel above
+                        # (IMPROVEMENTS.md G4, #58) — the full-screen render
+                        # path carries the OSC 8 sequence through intact.
+                        hyperlinks=True,
                     )
                 )
             elif not isinstance(content, str):
@@ -502,7 +508,7 @@ def render_history(
                             combined,
                             code_theme=theme.code_theme,
                             style=theme.text,
-                            hyperlinks=False,
+                            hyperlinks=True,
                         )
                     )
                 for b in tool_uses:

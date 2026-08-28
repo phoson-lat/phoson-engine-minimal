@@ -413,7 +413,12 @@ class Renderer:
                     content,
                     code_theme=self.theme.code_theme,
                     style=self.theme.text,
-                    hyperlinks=False,
+                    # hyperlinks=True (IMPROVEMENTS.md G4, #58): this
+                    # console prints straight to the real terminal (no
+                    # ANSI() re-parse in between, unlike the full-screen
+                    # bridge), so Rich's OSC 8 escapes reach it intact —
+                    # clickable links in terminals that support OSC 8.
+                    hyperlinks=True,
                 )
             )
 

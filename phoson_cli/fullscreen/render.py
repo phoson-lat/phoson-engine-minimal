@@ -11,6 +11,17 @@ appended, so each block is rendered to its ANSI string exactly once and
 cached (keyed by block identity + width). Subsequent render passes only
 concatenate cached strings and re-render the live streaming panel —
 turning per-frame cost from O(entire transcript) into O(new blocks).
+
+Hyperlinks (IMPROVEMENTS.md G4, #58): ``formatting.py`` now lets Rich's
+``Markdown`` emit real OSC 8 hyperlink escapes, which
+``prompt_toolkit.formatted_text.ANSI()`` doesn't understand on its own and
+would tear apart into literal text. ``BlockAnsiCache.get_or_render`` runs
+``osc8_passthrough`` on each block's freshly rendered ANSI string before
+caching it — once per block per width, same as the render itself — so the
+sequence survives ``ANSI()``'s parse. Only cached transcript blocks can
+carry Markdown links; the in-flight turn streams as plain text
+(``stream_plain=True``) until it's frozen into a cached block, so nothing
+else in this module needs the same treatment.
 """
 
 import io
@@ -19,6 +30,7 @@ from rich.console import Console
 
 from .sink import FullScreenSink
 from ..formatting import render_activity_line, render_streaming_panel
+from ..hyperlinks import osc8_passthrough
 
 
 def _make_console(buf: io.StringIO, width: int) -> Console:
@@ -69,7 +81,7 @@ class BlockAnsiCache:
             self._buf.truncate()
         assert self._console is not None
         self._console.print(block)
-        text = self._buf.getvalue()
+        text = osc8_passthrough(self._buf.getvalue())
         self._entries[key] = (block, text)
         return text
 
