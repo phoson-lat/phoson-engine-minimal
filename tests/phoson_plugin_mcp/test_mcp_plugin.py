@@ -4,6 +4,8 @@ Unit tests for MCP plugin.
 
 import sys
 import json
+import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -204,6 +206,110 @@ class TestMCPPluginWithPath:
         # Verify plugin loaded
         assert len(engine._loaded_plugins) == 1
         assert engine._loaded_plugins[0].name == "phoson-plugin-mcp"
+
+
+@pytest.mark.skipif(not MCP_AVAILABLE, reason="mcp package not installed")
+class TestMCPToggles:
+    """I-100: server-level and tool-level enable/disable flags."""
+
+    def _plugin_with_servers(self, servers: dict) -> "MCPPlugin":
+        plugin = MCPPlugin()
+        plugin.servers = servers
+        return plugin
+
+    def test_is_server_enabled_default_true(self):
+        plugin = self._plugin_with_servers({"a": {}})
+        assert plugin.is_server_enabled("a") is True
+
+    def test_is_server_enabled_explicit_false(self):
+        plugin = self._plugin_with_servers({"a": {"enabled": False}})
+        assert plugin.is_server_enabled("a") is False
+
+    def test_is_server_enabled_unknown_server(self):
+        plugin = self._plugin_with_servers({})
+        assert plugin.is_server_enabled("nope") is True
+
+    def test_is_tool_enabled_default_true(self):
+        plugin = self._plugin_with_servers({"a": {}})
+        assert plugin.is_tool_enabled("a", "read_file") is True
+
+    def test_is_tool_enabled_explicit_false(self):
+        plugin = self._plugin_with_servers({"a": {"tools": {"read_file": False}}})
+        assert plugin.is_tool_enabled("a", "read_file") is False
+        assert plugin.is_tool_enabled("a", "write_file") is True
+
+    def test_is_tool_enabled_empty_map_all_active(self):
+        plugin = self._plugin_with_servers({"a": {"tools": {}}})
+        assert plugin.is_tool_enabled("a", "read_file") is True
+
+    def test_disabled_server_exposes_no_proxy_tools(self):
+        """A disabled server must not register even the deferred proxy tool."""
+        plugin = MCPPlugin()
+        plugin.servers = {
+            "on": {"command": "node"},
+            "off": {"command": "node", "enabled": False},
+        }
+        # Simulate deferred discovery: tools_cache empty -> proxy tools.
+        for server_name in plugin.servers.keys():
+            if plugin.is_server_enabled(server_name):
+                plugin.tools_cache.extend(plugin._create_proxy_tools(server_name))
+
+        names = [t.name for t in plugin.get_tools()]
+        assert "mcp_on_call" in names
+        assert not any(n.startswith("mcp_off_") for n in names)
+
+    def test_tool_filter_drops_disabled_tools(self):
+        """Remote tools with an explicit False in the tools map are skipped."""
+        plugin = self._plugin_with_servers({"fs": {"tools": {"read_file": False}}})
+        remote = [
+            SimpleNamespace(name="read_file", description="read", inputSchema={}),
+            SimpleNamespace(name="write_file", description="write", inputSchema={}),
+        ]
+        tools = plugin._agent_tools_from_remote_tools("fs", remote)
+        names = [t.name for t in tools]
+        assert names == ["mcp_fs_write_file"]
+
+    def test_disabled_server_is_skipped_during_discovery(self):
+        """`initialize` must not even connect to a disabled server."""
+        plugin = MCPPlugin()
+        plugin.config_file = Path("/nonexistent/phoson-mcp.json")
+        plugin.servers = {
+            "on": {"command": "node"},
+            "off": {"command": "node", "enabled": False},
+        }
+
+        discovered: list[str] = []
+
+        async def fake_discover(server_name, server_config):
+            discovered.append(server_name)
+            remote = SimpleNamespace(name="t", description="d", inputSchema={})
+            return plugin._agent_tools_from_remote_tools(server_name, [remote])
+
+        plugin._discover_server_tools = fake_discover
+        plugin._load_tools_from_servers()
+
+        assert discovered == ["on"]
+        assert [t.name for t in plugin.get_tools()] == ["mcp_on_t"]
+
+    def test_execution_guard_disabled_server(self):
+        plugin = self._plugin_with_servers({"off": {"enabled": False}})
+
+        async def run():
+            return await plugin._execute_mcp_tool("off", "read_file", {})
+
+        result = asyncio.run(run())
+        assert result["error_type"] == "ServerDisabled"
+
+    def test_execution_guard_disabled_tool(self):
+        plugin = self._plugin_with_servers(
+            {"fs": {"command": "node", "tools": {"read_file": False}}}
+        )
+
+        async def run():
+            return await plugin._execute_mcp_tool("fs", "read_file", {})
+
+        result = asyncio.run(run())
+        assert result["error_type"] == "ToolDisabled"
 
 
 class TestMCPPluginWithoutMCP:

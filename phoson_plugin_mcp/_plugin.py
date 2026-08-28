@@ -40,10 +40,23 @@ class MCPPlugin(Plugin):
                 "args": ["path/to/server.js"],
                 "env": {
                     "API_KEY": "value"
+                },
+                "enabled": true,
+                "tools": {
+                    "some_tool": true,
+                    "other_tool": false
                 }
             }
         }
     }
+
+    Per-server toggles (I-100; both optional, default = everything on):
+
+    - ``"enabled": false`` disables the whole server: none of its tools are
+      discovered or exposed to the model.
+    - ``"tools": {"<remote_tool>": false}`` disables a single remote tool
+      (keyed by the remote name, not the local ``mcp_<server>_<tool>``
+      name). A missing map or entry means enabled.
 
     SSE transport:
     {
@@ -147,7 +160,8 @@ class MCPPlugin(Plugin):
         # model can still call MCP servers by name.
         if not self.tools_cache:
             for server_name in self.servers.keys():
-                self.tools_cache.extend(self._create_proxy_tools(server_name))
+                if self.is_server_enabled(server_name):
+                    self.tools_cache.extend(self._create_proxy_tools(server_name))
 
         self._initialized = True
 
@@ -167,6 +181,8 @@ class MCPPlugin(Plugin):
             running_loop = False
 
         for server_name, server_config in self.servers.items():
+            if not self.is_server_enabled(server_name):
+                continue
             try:
                 discovered_tools = self._discover_tools_blocking(
                     server_name,
@@ -273,6 +289,8 @@ class MCPPlugin(Plugin):
 
         for remote_tool in remote_tools:
             remote_tool_name = remote_tool.name
+            if not self.is_tool_enabled(server_name, remote_tool_name):
+                continue
             safe_server_name = self._safe_tool_name_part(server_name)
             safe_remote_tool_name = self._safe_tool_name_part(remote_tool_name)
             local_tool_name = (
@@ -327,6 +345,24 @@ class MCPPlugin(Plugin):
         """
         server_config = self.servers[server_name]
         transport = server_config.get("transport", "stdio").lower()
+
+        if not self.is_server_enabled(server_name):
+            return {
+                "error": f"MCP server '{server_name}' is disabled",
+                "error_type": "ServerDisabled",
+                "server": server_name,
+                "tool": tool_name,
+            }
+
+        if not self.is_tool_enabled(server_name, tool_name):
+            return {
+                "error": (
+                    f"MCP tool '{tool_name}' on server '{server_name}' is disabled"
+                ),
+                "error_type": "ToolDisabled",
+                "server": server_name,
+                "tool": tool_name,
+            }
 
         if transport not in ("stdio", "sse", "http", "streamable_http"):
             return {
@@ -579,6 +615,25 @@ class MCPPlugin(Plugin):
         """Normalize a tool-name component for LLM provider compatibility."""
         normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
         return normalized or "tool"
+
+    def is_server_enabled(self, server_name: str) -> bool:
+        """Return whether ``server_name`` is active (default: enabled).
+
+        An explicit ``"enabled": false`` in the server's config disables the
+        whole server: none of its tools are discovered or exposed.
+        """
+        return bool(self.servers.get(server_name, {}).get("enabled", True))
+
+    def is_tool_enabled(self, server_name: str, remote_tool_name: str) -> bool:
+        """Return whether a single remote tool of a server is active.
+
+        The per-tool map is ``server_config["tools"][remote_name]``. A missing
+        map (or a missing entry) means *enabled* — only an explicit
+        ``false`` turns a tool off.
+        """
+        server_config = self.servers.get(server_name, {})
+        tools_map = server_config.get("tools") or {}
+        return bool(tools_map.get(remote_tool_name, True))
 
     def get_tools(self) -> list[AgentTool]:
         """Return tools from all configured MCP servers."""

@@ -143,6 +143,24 @@ Changes the MCP config file path.
 MCP config file → ./my-custom-mcp.json  ·  saved
 ```
 
+### `/mcp toggle <server> [tool]`
+Turns a whole server — or one specific tool of a server — on or off,
+persisting the change in `mcps.json` (with a `.bak` backup) and reloading
+the engine so it takes effect immediately. The flag is written to the
+server config (see `enabled` / `tools` below), so toggling a server that
+is currently `disabled` re-enables it.
+
+```
+> /mcp toggle github
+❌ github → disabled  ·  saved
+
+> /mcp toggle filesystem read_file
+❌ mcp_filesystem_read_file → disabled  ·  saved
+```
+
+The tool argument accepts either the remote name (`read_file`) or the
+local prefixed name the model sees (`mcp_filesystem_read_file`).
+
 ### `/mcp help`
 Shows help for the MCP commands.
 
@@ -153,6 +171,8 @@ MCP (Model Context Protocol) commands:
   /mcp enable          Enable MCP support
   /mcp disable         Disable MCP support
   /mcp config <path>   Set MCP config file path
+  /mcp toggle <server> Toggle a whole server on/off
+  /mcp toggle <server> <tool>  Toggle one tool on/off
   /mcp help            Show this help
 ```
 
@@ -207,6 +227,43 @@ Edit `~/.phoson/config.toml`:
 enable_mcp = true
 mcp_config_file = "~/.phoson/mcps.json"
 ```
+
+### Per-Server Toggles (`mcps.json`)
+
+Each server entry accepts two optional flags (I-100). Both default to
+*enabled*, so existing configs are unaffected:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "…"},
+      "enabled": false
+    },
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "tools": {
+        "read_file": true,
+        "write_file": false
+      }
+    }
+  }
+}
+```
+
+- **`enabled: false`** — disables the whole server: none of its tools are
+  discovered or sent to the model (and no connection is opened at startup).
+- **`tools`** — per-tool map keyed by the **remote** tool name (not the
+  local `mcp_<server>_<tool>` name). A missing map or entry means enabled;
+  only an explicit `false` turns a tool off.
+
+`/mcp toggle <server> [tool]` edits these flags for you. `/mcp status`
+marks disabled servers and tools with `(disabled)`.
 
 ## 🔌 Transport Types
 
