@@ -10,7 +10,13 @@ from anthropic.types import (
     InputJSONDelta,
 )
 
-from phoson_llm.utils import guess_mime, map_error_code, load_file_as_base64
+from phoson_llm.utils import (
+    CONTEXT_LENGTH_ERROR_CODE,
+    guess_mime,
+    map_error_code,
+    load_file_as_base64,
+    is_context_length_error,
+)
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -458,6 +464,8 @@ class AnthropicChat(BaseLLMChat):
 
         except anthropic.APIStatusError as e:
             code = map_error_code(e.status_code)
+            if is_context_length_error(e.status_code, str(e.message)):
+                code = CONTEXT_LENGTH_ERROR_CODE
             yield ErrorEvent(
                 message=str(e.message),
                 code=code,

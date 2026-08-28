@@ -4,7 +4,11 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from phoson_llm.utils import map_error_code
+from phoson_llm.utils import (
+    CONTEXT_LENGTH_ERROR_CODE,
+    map_error_code,
+    is_context_length_error,
+)
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -189,9 +193,12 @@ class OllamaChat(BaseLLMChat):
                         msg = f"Ollama API error {response.status_code}"
                         if detail:
                             msg = f"{msg}: {detail}"
+                        code = map_error_code(response.status_code)
+                        if is_context_length_error(response.status_code, msg):
+                            code = CONTEXT_LENGTH_ERROR_CODE
                         yield ErrorEvent(
                             message=msg,
-                            code=map_error_code(response.status_code),
+                            code=code,
                             retryable=_is_retryable_status(response.status_code),
                         )
                         return
@@ -280,9 +287,12 @@ class OllamaChat(BaseLLMChat):
             return
 
         except httpx.HTTPStatusError as e:
+            code = map_error_code(e.response.status_code)
+            if is_context_length_error(e.response.status_code, str(e)):
+                code = CONTEXT_LENGTH_ERROR_CODE
             yield ErrorEvent(
                 message=str(e),
-                code=map_error_code(e.response.status_code),
+                code=code,
                 retryable=_is_retryable_status(e.response.status_code),
             )
             return

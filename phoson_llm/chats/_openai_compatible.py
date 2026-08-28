@@ -17,7 +17,11 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 
-from phoson_llm.utils import map_error_code
+from phoson_llm.utils import (
+    CONTEXT_LENGTH_ERROR_CODE,
+    map_error_code,
+    is_context_length_error,
+)
 from phoson_llm.schemas import (
     LLMEvent,
     ErrorEvent,
@@ -492,6 +496,8 @@ async def stream_chat_completions(
 
     except APIStatusError as e:
         code = map_error_code(e.status_code)
+        if is_context_length_error(e.status_code, str(e.message)):
+            code = CONTEXT_LENGTH_ERROR_CODE
         yield ErrorEvent(
             message=str(e.message),
             code=code,
