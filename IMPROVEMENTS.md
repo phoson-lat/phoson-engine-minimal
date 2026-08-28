@@ -17,7 +17,7 @@
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | ~~P1~~ | — | — | ✅ Cerrado (no es bug nuestro — error de vLLM) |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ✅ Resuelto (v0.13.8) |
-| **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | 📝 Plan listo (`.opencode/plans/i84-cpu-idle-streaming.md`) |
+| **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ✅ Resuelto (v0.13.9) |
 | **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
 | **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
 | **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ⬜ Abierto |
@@ -101,7 +101,8 @@
 ---
 
 ### I-84 — [Performance #84] Reducción de uso de CPU en TUI full-screen
-* **Plan de ataque:** ver `.opencode/plans/i84-cpu-idle-streaming.md` (medición baseline → quick wins: `min_redraw_interval` + throttles + ticker condicional → verificación).
+* **Estado:** ✅ **Resuelto (v0.13.9)** — bug del throttle (`_touch()` incondicional en `on_event`), `min_redraw_interval=0.05`, ticker 0.20 s congelado durante streaming, header cacheado (ver CHANGELOG v0.13.9). Medido: streaming 29.6% → 5.2% CPU, thinking 8.3% → 3.3%.
+* **Plan de ataque:** ver `.opencode/plans/i84-cpu-idle-streaming.md`.
 * **Área:** `phoson_cli/fullscreen/app.py`, `phoson_cli/fullscreen/sink.py`
 * **Prioridad:** **P1** · **Esfuerzo:** M · **Impacto:** 🟠 Medio
 * **Problema:** Uso continuo de 5–15% CPU en idle y 15–20% en streaming debido a re-renderizados innecesarios o tickers de animación muy agresivos.
@@ -210,7 +211,7 @@ Sprint Siguiente (UX & Performance)
 ├── I-108 (Alt+Backspace no debe leerse como doble-Esc / cancel)
 ├── I-109 (Rewind picker: orden nuevo→viejo y solo mensajes user)
 ├── I-83 (Compactar paneles de error a 1 línea en reintentos) ✅ v0.13.8
-├── I-84 (Optimización de CPU en idle/streaming)
+├── I-84 (Optimización de CPU en idle/streaming) ✅ v0.13.9
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
 Sprint Posterior (Ecosistema & Distribución)
