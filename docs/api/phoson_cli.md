@@ -252,6 +252,7 @@ Start the REPL and type natural language or commands.
 | `/undo`           | Undo the last turn (branch before your last message) |
 | `/attach`         | Attach image/audio/video/pdf           |
 | `/attachments`    | List or clear attachments              |
+| `/skills`         | List skills (`/skills <name>` shows one's instructions) |
 | `/help`           | Show command reference                  |
 
 ### Slash Tab Completion
@@ -293,6 +294,35 @@ from phoson_cli.tools import SearchTool
 tool = SearchTool()
 result = tool.run(args={"query": "python async", "source": "duckduckgo"})
 ```
+
+### skill (Skills system)
+
+Loads a skill's full instructions on demand (IMPROVEMENTS.md G5). A skill
+is a directory with a `SKILL.md` file — frontmatter (`name`,
+`description`) plus Markdown instructions, optionally next to bundled
+`scripts/`/`references/`.
+
+Two-tier progressive disclosure:
+
+- **Index** — `skills.render_skill_index()` puts only `name: description`
+  per skill into the *stable prefix* of the system prompt (cheap and
+  constant, so the prompt cache still covers the whole prefix).
+- **Body** — `skills.load_skill_body()` is returned by this tool as a
+  normal *tool result*, so it lands in the conversation and never
+  invalidates the cached prefix.
+
+```python
+from phoson_cli.skills import discover_skills, render_skill_index
+
+skills = discover_skills()                 # project + global, deduped
+index = render_skill_index(skills)         # goes in the system prompt
+```
+
+Search order (first match by name wins): `.phoson/skills/`,
+`.agents/skills/`, `.claude/skills/` (repo root), then
+`~/.phoson/skills/`. The tool is registered only when at least one skill
+exists — `build_tools(include_skill=True|False)` overrides the
+auto-detection.
 
 ### SubAgentTool
 
