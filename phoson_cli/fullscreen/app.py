@@ -882,7 +882,7 @@ class PhosonApp:
             self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
         else:
             self.sink.print_history(path)
-        self.repl._context_tokens = self.repl.summarizer.estimate_tokens(path)
+        self.repl._context_tokens = self.repl._controller.estimate_active_path()
         self._auto_scroll = True
         self._chat_scroll_top = 0
         self.app.invalidate()
@@ -935,7 +935,7 @@ class PhosonApp:
             self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
         else:
             self.sink.print_history(path)
-        self.repl._context_tokens = self.repl.summarizer.estimate_tokens(path)
+        self.repl._context_tokens = self.repl._controller.estimate_active_path()
         self._auto_scroll = True
         self._chat_scroll_top = 0
         self.app.invalidate()

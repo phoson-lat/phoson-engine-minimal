@@ -361,9 +361,10 @@ async def test_apply_rewind_redraws_and_prepopulates(tmp_path) -> None:
 
     # Seed some transcript blocks (as a live turn would).
     app.sink.on_user_message("first", Message(role="user", content="first"))
-    full_path_tokens = repl.summarizer.estimate_tokens(
-        repl.tree.get_path(previous_leaf)
-    )
+    # The header uses the conservative request estimate (I-91): messages
+    # + system prompt + tool schemas. Compute the expected values the same
+    # way the app does so the assertion matches what it actually writes.
+    full_path_tokens = repl._controller.estimate_active_path()
 
     await app._apply_rewind(_user_node(repl, "second"))
 
@@ -377,10 +378,8 @@ async def test_apply_rewind_redraws_and_prepopulates(tmp_path) -> None:
     assert "reply 2" not in rendered  # and everything after it
     # Composer pre-populated with the selected turn's text.
     assert app._prompt_input.text == "second"
-    # Header token count reflects the shorter path.
-    shorter_path_tokens = repl.summarizer.estimate_tokens(
-        repl.tree.get_path(repl.current_node_id)
-    )
+    # Header token count reflects the shorter path (same estimator).
+    shorter_path_tokens = repl._controller.estimate_active_path()
     assert shorter_path_tokens < full_path_tokens
     assert repl._context_tokens == shorter_path_tokens
 

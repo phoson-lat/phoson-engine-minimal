@@ -404,7 +404,9 @@ def test_context_window_passthrough(tmp_path) -> None:
 async def test_set_model_rebuilds_engine_and_extras(tmp_path) -> None:
     controller, _ = _make_controller(tmp_path)
     controller.config.subagent_model = ""  # no explicit override in test
-    fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
+    fake_engine = SimpleNamespace(
+        context=SimpleNamespace(extra={}), tools=controller.tools
+    )
     with patch("phoson_cli.controller.AgentEngine", return_value=fake_engine):
         await controller.set_model("other-model")
     assert controller.current_model == "other-model"
@@ -424,7 +426,9 @@ async def test_set_model_refreshes_context_window(tmp_path) -> None:
     """
     controller, _ = _make_controller(tmp_path)
     controller.config.provider = "openai"
-    fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
+    fake_engine = SimpleNamespace(
+        context=SimpleNamespace(extra={}), tools=controller.tools
+    )
     with (
         patch(
             "phoson_cli.controller.build_chat",
@@ -444,7 +448,9 @@ async def test_set_model_refreshes_context_window(tmp_path) -> None:
 async def test_set_provider_uses_default_model_when_configured(tmp_path) -> None:
     controller, _ = _make_controller(tmp_path)
     data = {"providers": {"openrouter": {"default_model": "qwen3.8-27b"}}}
-    fake_engine = SimpleNamespace(context=SimpleNamespace(extra={}))
+    fake_engine = SimpleNamespace(
+        context=SimpleNamespace(extra={}), tools=controller.tools
+    )
     controller._cw_resolver.resolve = AsyncMock(return_value=64_000)
     with (
         patch(
@@ -645,3 +651,133 @@ async def test_load_session_replay_caps_very_long_history(tmp_path) -> None:
     path, tail = sink2.history_calls[0]
     assert tail == MAX_RESUME_REPLAY_MESSAGES
     assert len(path) == MAX_RESUME_REPLAY_MESSAGES + 25
+
+
+# ── I-91: mid-run compaction rebases the tree ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_turn_rebases_tree_on_mid_run_compaction(tmp_path) -> None:
+    """When the summarizer compacts mid-run, the tree must be grafted as a
+    new root branch (like manual /compact) instead of duplicating the
+    compacted tail onto the old path (I-91)."""
+    controller, sink = _make_controller(tmp_path)
+
+    # Seed a long-ish history so the run has something to compact.
+    seed = [Message(role="user", content=f"old {i}") for i in range(6)] + [
+        Message(role="assistant", content=f"ans {i}") for i in range(6)
+    ]
+    controller.tree.append_many(None, seed)
+    leaves = controller.tree.get_leaves()
+    controller.current_node_id = max(
+        leaves, key=lambda nid: controller.tree.nodes[nid].created_at
+    )
+    old_path_len = len(controller.tree.get_path(controller.current_node_id))
+
+    # The summarizer "compacted" mid-run: the event is queued *during*
+    # the stream (as the real middleware does) and the done event's
+    # history is the compacted list.
+    compacted = [
+        Message(role="user", content="[Conversation summary up to this point: S]"),
+        Message(role="user", content="ans 4"),
+        Message(role="assistant", content="ans 5"),
+    ]
+    from phoson_agent.plugins.summarizer import SummarizationEvent
+
+    def _stream(path, config):
+        async def _gen():
+            controller.summarizer._pending_compact_events.append(
+                SummarizationEvent(
+                    original_tokens=9000,
+                    compacted_tokens=2000,
+                    messages_removed=10,
+                    summary_length=100,
+                )
+            )
+            yield AgentStartEvent(model="m", message_count=len(path), max_iterations=50)
+            yield AgentDoneEvent(
+                result=AgentRunResult(
+                    final_content="done",
+                    history=list(compacted),
+                    input_messages=list(path),
+                    steps=[],
+                )
+            )
+
+        return _gen()
+
+    controller.engine.stream = _stream
+    outcome = await controller.run_turn("next question")
+
+    assert outcome.status == "done"
+
+    # The tree holds the compacted history as a new root branch.
+    path = controller.tree.get_path(controller.current_node_id)
+    assert len(path) == len(compacted)
+    assert any("Conversation summary" in str(m.content) for m in path)
+    # The old (pre-compaction) branch is still intact in the tree.
+    assert controller.tree.node_count() >= old_path_len + len(compacted)
+    # The front end was told about the compaction.
+    assert any("auto-compacted" in msg for _kind, msg in sink.notifications)
+    # The header estimate was refreshed from the compacted path.
+    assert controller._context_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_run_turn_without_compaction_appends_tail(tmp_path) -> None:
+    """No compaction events → the normal tail-append path is used (the
+    I-91 rebase must not fire spuriously)."""
+    controller, sink = _make_controller(tmp_path)
+
+    async def stream(path, config):
+        yield AgentStartEvent(model="m", message_count=len(path), max_iterations=50)
+        yield AgentDoneEvent(
+            result=AgentRunResult(
+                final_content="hello",
+                history=[
+                    Message(role="user", content="q"),
+                    Message(role="assistant", content="hello"),
+                ],
+                input_messages=[Message(role="user", content="q")],
+                steps=[],
+            )
+        )
+
+    controller.engine.stream = stream
+    outcome = await controller.run_turn("q")
+
+    assert outcome.status == "done"
+    path = controller.tree.get_path(controller.current_node_id)
+    # user turn + assistant answer appended to the (empty) root.
+    assert [m.role for m in path] == ["user", "assistant"]
+    assert not any("auto-compacted" in msg for _kind, msg in sink.notifications)
+
+
+@pytest.mark.asyncio
+async def test_estimate_active_path_counts_system_and_tools(tmp_path) -> None:
+    """The header indicator must use the same conservative estimate as
+    the gate (messages + system prompt + tool schemas) (I-91)."""
+    controller, _ = _make_controller(tmp_path)
+
+    controller.tree.append_many(
+        None,
+        [
+            Message(role="user", content="hi"),
+            Message(role="assistant", content="hello"),
+        ],
+    )
+    leaves = controller.tree.get_leaves()
+    controller.current_node_id = max(
+        leaves, key=lambda nid: controller.tree.nodes[nid].created_at
+    )
+
+    baseline = controller.estimate_active_path()
+    assert baseline > 0
+
+    # The estimate must include the tool schemas: with no tools at all
+    # the number is strictly smaller.
+    saved = controller.summarizer.tool_definitions
+    controller.summarizer.tool_definitions = None
+    without_tools = controller.estimate_active_path()
+    controller.summarizer.tool_definitions = saved
+    assert without_tools < baseline
