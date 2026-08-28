@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Docs
+
+- **cli**: document the `Shift+Drag` native-selection bypass for chat
+  text (IMPROVEMENTS.md G3, issue #57), instead of building a dedicated
+  copy mode. The chat pane needs `mouse_support=True` for the scroll
+  wheel, which is a terminal-level mouse-tracking switch (xterm DECSET
+  1000/1002/1006) — once it's on, the terminal reports every mouse event
+  to the app instead of handling click-drag as native selection, and
+  there is no way to keep the wheel app-driven while leaving drag native.
+  A prototype dedicated copy mode (keyboard range-select + mouse
+  drag-to-copy + OSC 52 SSH fallback) was built and then dropped after
+  comparing it against Claude Code, Pi and OpenCode: all three
+  reimplement the same drag-to-copy pattern to work around this same
+  trade-off, and OpenCode's issue tracker shows that pattern growing its
+  own bugs (clipboard clobbered by incidental selection, mouse capture
+  stuck across SSH/tmux/VS Code terminal restarts). The universal
+  bypass is a *terminal* feature, not an app one: holding `Shift` while
+  dragging tells the terminal to ignore the app's mouse tracking for
+  that gesture and fall back to its own native selection (GNOME
+  Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty, Windows
+  Terminal). Added `[Shift+Drag] Select text` to the full-screen footer
+  and a README section explaining the root cause — no new interaction
+  code, no new bug surface.
+
 ## v0.13.1 (2026-08-26)
 
 ### Feat

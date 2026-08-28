@@ -530,6 +530,20 @@ remapping `escape` in `[keys]` moves both the single-Esc cancel and the
 double-Esc rewind together (unbinding `escape` disables both); the jump
 undo `undo_jump` (default `Ctrl+Z`) is remappable on its own.
 
+**Selecting/copying chat text (full-screen TUI):** the chat pane sets
+`mouse_support=True` so the scroll wheel is handled by the app — this is
+a terminal-level mouse-tracking switch (xterm's own DECSET 1000/1002/1006
+modes), not something the app can opt out of selectively, and turning it
+on is what makes the terminal stop treating a plain click-drag as native
+text selection (every mouse-aware TUI — Claude Code, Pi, OpenCode — hits
+the same trade-off). Hold **Shift** while dragging to select text: this
+tells the *terminal itself* to ignore the app's mouse tracking for that
+gesture and fall back to its own native selection/copy, unaffected by
+whatever the app is doing (works in GNOME Terminal, iTerm2, Alacritty,
+WezTerm, Ghostty, kitty, Windows Terminal — check your terminal's docs if
+the modifier differs). The footer's `[Shift+Drag] Select text` hint is a
+reminder of this.
+
 **`@file` mentions:** type `@` in the message and the composer offers
 repo paths (fuzzy-filtered as you type, with a size hint per file);
 selecting one inserts the path. On send, each `@mention` is expanded into

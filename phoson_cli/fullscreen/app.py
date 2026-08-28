@@ -85,10 +85,31 @@ from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 from .session_cache import SessionListCache
 
+# Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
+# ``mouse_support=True`` so the scroll wheel can be handled by the app
+# (see `_on_chat_mouse`) — but enabling mouse tracking is a terminal-level
+# switch (xterm DECSET 1000/1002/1006), not something prompt_toolkit or
+# this app controls independently: once it is on, the terminal stops
+# treating click-drag as native text selection and instead reports every
+# mouse event to the app over the same channel as the wheel. There is no
+# way to keep the wheel app-driven while leaving plain drag as native
+# selection — it is a single on/off switch. Every mouse-aware TUI hits this
+# (Claude Code's NO_FLICKER mode, Pi, OpenCode all replace native selection
+# with their own drag-to-copy for the same reason, and OpenCode's issue
+# tracker shows that mechanism grows its own bugs — clipboard clobbered by
+# incidental selection, mouse capture stuck across SSH/tmux hops).
+# The one universal escape hatch is a *terminal* feature, not an app one:
+# holding Shift while dragging tells the terminal to ignore the app's mouse
+# tracking for that gesture and fall back to its own native selection
+# (works in GNOME Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty,
+# Windows Terminal — see each terminal's own docs for the exact modifier).
+# Advertising it in the footer (rather than only in a docstring) is the
+# fix: the terminal already does the work, the hint just needs to be
+# discoverable.
 _FOOTER_HINT = (
     '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
     "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
+    "  [Shift+Drag] Select text  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
 # How often the subagent panel animation frame advances while active.
