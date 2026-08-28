@@ -558,6 +558,6 @@ _THINKING_PHRASES = (
     "Almost there…",
 )
 
-# How many activity ticks (~0.2 s each, I-84) per thinking-phrase
-# rotation, i.e. roughly one new phrase every 2.5 s.
-_THINKING_PHRASE_TICKS = 12
+# How many activity ticks (~0.12 s each) per thinking-phrase rotation,
+# i.e. roughly one new phrase every 2.5 s.
+_THINKING_PHRASE_TICKS = 21

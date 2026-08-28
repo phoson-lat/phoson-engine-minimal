@@ -114,9 +114,11 @@ _FOOTER_HINT = (
     "  [Shift+Drag] Select text  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
 )
 
-# How often the subagent panel animation frame advances while active
-# (I-84: 0.12 s → 0.2 s, ~5 fps — visually the same, one third the ticks).
-_SUBAGENT_TICK_SECONDS = 0.20
+# How often the subagent panel animation frame advances while active.
+# Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
+# (2 s/rotation vs 1.2 s). The streaming freeze in
+# `tick_activity_frame()` — not the tick rate — is what cuts CPU.
+_SUBAGENT_TICK_SECONDS = 0.12
 
 # Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
 # (measured in monotonic seconds between *delivered* key presses) opens the
@@ -397,13 +399,15 @@ class PhosonApp:
             key_bindings=merge_key_bindings([base_kb, float_kb]),
             full_screen=True,
             mouse_support=True,
-            # I-84: hard floor on redraw frequency (20 fps cap). Coalesces
-            # the redundant invalidations from the activity ticker +
-            # streaming into fewer full layout/ANSI passes. Key *processing*
-            # is unaffected (only painting is deferred), so scroll/keys
-            # still paint on the first available frame for human-spaced
-            # input.
-            min_redraw_interval=0.05,
+            # I-84: floor on repaint frequency so a burst of invalidations
+            # coalesces into one layout/ANSI pass. Deliberately BELOW the
+            # activity tick interval (0.12 s) so a spinner tick is never
+            # deferred: each tick paints on its own frame and the braille
+            # animates at its full 8.3 fps. Key *processing* is unaffected
+            # regardless (only painting is deferred), so scroll/keys still
+            # paint on the first available frame — navigation stays
+            # event-driven and fluid.
+            min_redraw_interval=0.035,
         )
 
     def _apply_style(self) -> None:

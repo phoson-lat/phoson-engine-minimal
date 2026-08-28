@@ -101,7 +101,7 @@
 ---
 
 ### I-84 — [Performance #84] Reducción de uso de CPU en TUI full-screen
-* **Estado:** ✅ **Resuelto (v0.13.9)** — bug del throttle (`_touch()` incondicional en `on_event`), `min_redraw_interval=0.05`, ticker 0.20 s congelado durante streaming, header cacheado (ver CHANGELOG v0.13.9). Medido: streaming 29.6% → 5.2% CPU, thinking 8.3% → 3.3%.
+* **Estado:** ✅ **Resuelto (v0.13.9)** — bug del throttle (`_touch()` incondicional en `on_event`), `min_redraw_interval=0.035`, spinner congelado solo durante streaming (cadencia 0.12 s intacta), header cacheado (ver CHANGELOG v0.13.9). Medido: streaming 29.6% → 4.1% CPU, thinking 8.3% → 4.3% CPU.
 * **Plan de ataque:** ver `.opencode/plans/i84-cpu-idle-streaming.md`.
 * **Área:** `phoson_cli/fullscreen/app.py`, `phoson_cli/fullscreen/sink.py`
 * **Prioridad:** **P1** · **Esfuerzo:** M · **Impacto:** 🟠 Medio

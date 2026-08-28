@@ -558,12 +558,13 @@ def test_tick_activity_frame_phrase_rotation_stays_25s() -> None:
 
 def test_repaint_intervals_match_target_fps() -> None:
     """I-84: the tuning constants must stay at their intended cadences
-    (~10 fps stream repaint, ~5 fps activity ticks)."""
+    (~10 fps stream repaint, ~8.3 fps activity ticks for a smooth
+    braille spinner)."""
     from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
     from phoson_cli.fullscreen.sink import REPAINT_INTERVAL_SECONDS
 
     assert 0.09 <= REPAINT_INTERVAL_SECONDS <= 0.11  # ~10 fps
-    assert 0.18 <= _SUBAGENT_TICK_SECONDS <= 0.22  # ~5 fps
+    assert 0.10 <= _SUBAGENT_TICK_SECONDS <= 0.14  # ~8.3 fps
 
 
 def test_step_done_invalidation_is_throttled_like_streaming() -> None:

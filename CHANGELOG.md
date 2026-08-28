@@ -26,20 +26,22 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     unaffected — scroll/keys still paint on the first available frame,
     so navigation stays fluid (see plan `.opencode/plans/i84-cpu-idle-streaming.md`
     §3bis).
-  - *Adaptive activity ticks.* `_SUBAGENT_TICK_SECONDS` 0.12 → 0.20
-    (~5 fps, visually identical; `_THINKING_PHRASE_TICKS` 21 → 12 to
-    keep the ~2.5 s phrase rotation). `tick_activity_frame()` no longer
+  - *Adaptive activity ticks.* `tick_activity_frame()` no longer
     animates while streaming or a tool/subagent runs — the visible text
     is the feedback there; only the pure-thinking phase keeps the
-    spinner alive.
+    spinner alive. The 0.12 s tick cadence is kept unchanged: the first
+    pass slowed it to 0.2 s and `min_redraw_interval` to 0.05, which
+    made the braille spinner visibly lag (2 s/rotation, ticks deferred)
+    — reverted, with the floor lowered to 0.035 s so a spinner tick is
+    never deferred to the next frame (test-locked).
   - *Cached header.* `_get_header_text()` builds the HTML string once
     and only rebuilds when an input changes (model, cwd, tokens/cost,
     status, agents-md, update hint) — spinner-glyph repaints no longer
     re-stat the filesystem or reformat the header. Cache is dropped on
     `/theme`.
   - *Measured* (`scripts/bench_i84_cpu.py`, synthetic 60 tok/s burst
-    stream, headless TUI): thinking 8.3% → 3.3% CPU, streaming 29.6% →
-    5.2% CPU, idle 0% unchanged. New `PHOSON_PERF=1` env var logs
+    stream, headless TUI): thinking 8.3% → 4.3% CPU, streaming 29.6% →
+    4.1% CPU, idle 0% unchanged. New `PHOSON_PERF=1` env var logs
     renders/fps per turn (`phoson.cli.perf`) for before/after evidence.
 
 ## v0.13.8 (2026-08-28)
