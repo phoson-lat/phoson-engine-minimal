@@ -52,23 +52,33 @@ async def test_model_command_lists_available_models(monkeypatch) -> None:
     repl = DummyRepl()
     handler = CommandHandler(repl)
 
-    async def fake_list_available_models(config):
+    from phoson_cli.model_selector import ProviderListing
+
+    async def fake_list_models_for_providers(config, providers):
         return [
-            SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter"),
-            SimpleNamespace(id="google/gemini-2.5-flash", provider="openrouter"),
+            ProviderListing(
+                provider="openrouter",
+                options=[
+                    SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter"),
+                    SimpleNamespace(
+                        id="google/gemini-2.5-flash", provider="openrouter"
+                    ),
+                ],
+            )
         ]
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
 
     result = await handler.handle(Command(name="/model", args="list"))
 
     assert result is True
     assert repl.renderer.infos[0] == "Available models:"
-    assert "* openai/gpt-4.1-mini [openrouter]" in repl.renderer.infos[1]
-    assert "  google/gemini-2.5-flash [openrouter]" in repl.renderer.infos[2]
+    assert "openrouter" in repl.renderer.infos[1]
+    assert "* openai/gpt-4.1-mini" in repl.renderer.infos[2]
+    assert "google/gemini-2.5-flash" in repl.renderer.infos[3]
 
 
 @pytest.mark.asyncio
@@ -76,15 +86,28 @@ async def test_model_command_opens_picker_and_switches_model(monkeypatch) -> Non
     repl = DummyRepl()
     handler = CommandHandler(repl)
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter")]
+    from phoson_cli.model_selector import ProviderListing
 
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="google/gemini-2.5-flash", cancelled=False)
+    async def fake_list_models_for_providers(config, providers):
+        return [
+            ProviderListing(
+                provider="openrouter",
+                options=[
+                    SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter"),
+                ],
+            )
+        ]
+
+    async def fake_pick_model(models, current_model, page_size=12, theme=None, **kw):
+        return SimpleNamespace(
+            model_id="google/gemini-2.5-flash",
+            provider="openrouter",
+            cancelled=False,
+        )
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
 
@@ -96,9 +119,30 @@ async def test_model_command_opens_picker_and_switches_model(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_model_command_switches_model_directly() -> None:
+async def test_model_command_switches_model_directly(monkeypatch) -> None:
     repl = DummyRepl()
     handler = CommandHandler(repl)
+
+    # I-113 follow-up: an explicit vendor/-prefixed /model now always
+    # confirms the provider via a live listing lookup (the vendor/
+    # prefix alone is ambiguous — see the router-vendor-id regression in
+    # test_model_provider_persistence_unit.py) — mock it so this stays a
+    # fast, deterministic unit test instead of hitting the network.
+    async def fake_list_models_for_providers(config, providers):
+        return [
+            SimpleNamespace(
+                provider="openrouter",
+                available=True,
+                options=[
+                    SimpleNamespace(id="google/gemini-2.5-flash", provider="openrouter")
+                ],
+            )
+        ]
+
+    monkeypatch.setattr(
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
+    )
 
     result = await handler.handle(
         Command(name="/model", args="google/gemini-2.5-flash")
@@ -116,15 +160,28 @@ async def test_subagent_model_command_opens_picker_and_switches_model(
     repl = DummyRepl()
     handler = CommandHandler(repl)
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter")]
+    from phoson_cli.model_selector import ProviderListing
 
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="anthropic/claude-3.5-haiku", cancelled=False)
+    async def fake_list_models_for_providers(config, providers):
+        return [
+            ProviderListing(
+                provider="openrouter",
+                options=[
+                    SimpleNamespace(id="openai/gpt-4.1-mini", provider="openrouter")
+                ],
+            )
+        ]
+
+    async def fake_pick_model(models, current_model, page_size=12, theme=None, **kw):
+        return SimpleNamespace(
+            model_id="anthropic/claude-3.5-haiku",
+            provider="openrouter",
+            cancelled=False,
+        )
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
 

@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub con su prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis de causa raíz, solución propuesta y criterios de aceptación.
 >
-> **Estado de referencia:** v0.13.4 · 1408 tests passing · pyright 0 errors · ruff clean.
+> **Estado de referencia:** v0.13.10 · 1501 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
 
 ---
 
@@ -20,7 +20,7 @@
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ✅ Resuelto (v0.13.9) |
 | **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
 | **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
-| **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ⬜ Abierto |
+| **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ✅ Resuelto (v0.13.10) |
 | **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ⬜ Abierto |
 | **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ⬜ Abierto |
 
@@ -151,7 +151,8 @@
 ---
 
 ### I-113 — [Enhancement #113] OpenRouter: orden por `agentic_index` + unificar `/model`/`/provider` en un solo picker con marcado `unavailable`
-* **Área:** `phoson_cli/model_selector.py`, `phoson_cli/model_picker.py`, `phoson_cli/provider_picker.py`, `phoson_cli/commands.py`, `phoson_cli/command_host.py`, `phoson_cli/fullscreen/command_host.py`, `docs/api/phoson_cli.md`
+* **Estado:** ✅ **Resuelto (v0.13.10)** — OpenRouter ordenado por `agentic_index` desc (sin campo → al final, alfabético; current siempre primero); `list_models_for_providers()` concurrente; picker unificado multi-provider en ambos frontends (selección cambia `(model, provider)` juntos, reusando I-89); providers con fetch fallido marcados `unavailable` en picker y `/model list` (internamente `ModelListingError`; el fast path de 1 provider conserva fallback+warning exactos); docs sin la caché inexistente (ver CHANGELOG v0.13.10 y plan `.opencode/plans/i113-model-picker-unified.md`).
+* **Área:** `phoson_cli/model_selector.py`, `phoson_cli/model_picker.py`, `phoson_cli/commands.py`, `phoson_cli/command_host.py`, `phoson_cli/fullscreen/command_host.py`, `phoson_cli/fullscreen/model_cache.py`, `phoson_cli/models.py`, `docs/api/phoson_cli.md`, `README.md`
 * **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟡 Medio
 * **Problema:**
   1. **Sin orden útil en OpenRouter.** `_prioritize_current()` ordena todos los proveedores (incluido OpenRouter) por `id.lower()` alfabético, con solo el modelo actual fijado primero. La API de OpenRouter ya devuelve `benchmarks.artificial_analysis.agentic_index` para una parte importante del catálogo (~205 de 381 modelos a la fecha), señal mucho más relevante para elegir un modelo orientado a agentes/tool-use que el orden alfabético — y hoy no se usa.
@@ -215,7 +216,7 @@ Sprint Siguiente (UX & Performance)
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
 Sprint Posterior (Ecosistema & Distribución)
-├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider)
+├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider) ✅ v0.13.10
 ├── I-100 (Toggle granular MCP servers & tools)
 └── I-93 (Binarios precompilados standalone en CI)
 ```

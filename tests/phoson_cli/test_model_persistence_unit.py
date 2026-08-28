@@ -44,15 +44,28 @@ async def test_model_command_persists_selected_model(monkeypatch) -> None:
     handler = CommandHandler(repl)
     saved_configs: list[object] = []
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="google/gemini-2.5-flash", provider="openrouter")]
+    from phoson_cli.model_selector import ProviderListing
 
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="google/gemini-2.5-flash", cancelled=False)
+    async def fake_list_models_for_providers(config, providers):
+        return [
+            ProviderListing(
+                provider="openrouter",
+                options=[
+                    SimpleNamespace(id="google/gemini-2.5-flash", provider="openrouter")
+                ],
+            )
+        ]
+
+    async def fake_pick_model(models, current_model, page_size=12, theme=None, **kw):
+        return SimpleNamespace(
+            model_id="google/gemini-2.5-flash",
+            provider="openrouter",
+            cancelled=False,
+        )
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
     monkeypatch.setattr(
@@ -73,15 +86,30 @@ async def test_subagent_model_command_persists_selected_model(monkeypatch) -> No
     handler = CommandHandler(repl)
     saved_configs: list[object] = []
 
-    async def fake_list_available_models(config):
-        return [SimpleNamespace(id="anthropic/claude-3.5-haiku", provider="openrouter")]
+    from phoson_cli.model_selector import ProviderListing
 
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="anthropic/claude-3.5-haiku", cancelled=False)
+    async def fake_list_models_for_providers(config, providers):
+        return [
+            ProviderListing(
+                provider="openrouter",
+                options=[
+                    SimpleNamespace(
+                        id="anthropic/claude-3.5-haiku", provider="openrouter"
+                    )
+                ],
+            )
+        ]
+
+    async def fake_pick_model(models, current_model, page_size=12, theme=None, **kw):
+        return SimpleNamespace(
+            model_id="anthropic/claude-3.5-haiku",
+            provider="openrouter",
+            cancelled=False,
+        )
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models",
-        fake_list_available_models,
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
     monkeypatch.setattr(

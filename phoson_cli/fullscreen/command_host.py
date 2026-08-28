@@ -77,13 +77,33 @@ class FullScreenCommandHost:
         self.app.app.invalidate()
 
     async def pick_model(
-        self, models: list[ModelOption], current_model: str
+        self,
+        models: list[ModelOption],
+        current_model: str,
+        *,
+        unavailable: list[tuple[str, str]] | None = None,
     ) -> ModelPickerResult:
-        self.print_info(
-            "Type `/model <name>` — start typing for autocomplete suggestions "
-            "(e.g. `/model claude`), or `/model list` to see all models."
+        """Open the unified multi-provider model picker as a Float (I-113).
+
+        Bare ``/model`` now opens the same unified view the classic REPL
+        gets (all configured providers in one list, each row tagged with
+        its provider), instead of only pointing at inline autocomplete.
+        Inline autocomplete (type ``/model <name>``) is still available
+        and untouched — this just gives a bare ``/model`` a real picker.
+        """
+        if not models:
+            self.print_info("No models available.")
+            return ModelPickerResult(cancelled=True)
+        from ..model_picker import build_unified_model_picker
+
+        picker = build_unified_model_picker(
+            models,
+            current_model,
+            current_provider=self.app.repl.config.provider,
+            page_size=12,
+            theme=self.app.theme,
         )
-        return ModelPickerResult(cancelled=True)
+        return await self.app.run_float_picker(picker)
 
     async def pick_provider(
         self, providers: list[str], current_provider: str

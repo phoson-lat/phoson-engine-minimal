@@ -34,7 +34,15 @@ _MODEL_ARG_PREFIXES = ("/model ", "/subagent-model ")
 
 
 class ModelArgCompleter(Completer):
-    """Fuzzy-completes the model id argument of /model and /subagent-model."""
+    """Fuzzy-completes the model id argument of /model and /subagent-model.
+
+    Since I-113 the cache spans every configured provider, so for
+    ``/model`` each suggestion carries the owning provider as
+    ``display_meta`` (dimmed, right side of the dropdown row) — the
+    inserted text stays the bare id, which is what the command consumes.
+    ``/subagent-model`` doesn't show a provider: the sub-agent model
+    always runs on the active provider.
+    """
 
     def __init__(self, cache: ModelCache) -> None:
         self._inner = FuzzyCompleter(
@@ -53,7 +61,21 @@ class ModelArgCompleter(Completer):
                 # cursor), so completions from this sub-document apply
                 # unchanged to the real one — same trailing substring.
                 sub_document = Document(query, len(query))
-                yield from self._inner.get_completions(sub_document, complete_event)
+                show_provider = prefix == "/model "
+                for completion in self._inner.get_completions(
+                    sub_document, complete_event
+                ):
+                    if show_provider:
+                        provider = self._cache.model_providers.get(completion.text)
+                        if provider:
+                            yield Completion(
+                                completion.text,
+                                start_position=completion.start_position,
+                                display=completion.display,
+                                display_meta=provider,
+                            )
+                            continue
+                    yield completion
                 return
 
 

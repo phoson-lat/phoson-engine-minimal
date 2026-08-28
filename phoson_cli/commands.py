@@ -53,7 +53,7 @@ from .theme_picker import (  # noqa: F401 - patched by tests / host
 )
 from ._mcp_commands import _MCPSubcommands
 from .file_mentions import format_file_size, iter_candidate_paths
-from .model_selector import list_available_models
+from .model_selector import list_available_models, list_models_for_providers
 from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
 from .permissions_store import load_policy
 
@@ -162,7 +162,11 @@ def get_grouped_command_help() -> list[tuple[str, list[tuple[str, str]]]]:
 COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/exit", "/quit"), "Exit the REPL", "_cmd_exit"),
     CommandSpec(("/new", "/clear"), "Start a new session", "_cmd_new"),
-    CommandSpec(("/model",), "Pick or set the active model", "_cmd_model"),
+    CommandSpec(
+        ("/model",),
+        "Pick or set the active model (all configured providers)",
+        "_cmd_model",
+    ),
     CommandSpec(("/provider",), "Pick or set the active provider", "_cmd_provider"),
     CommandSpec(
         ("/subagent-model",),
@@ -472,31 +476,117 @@ class CommandHandler:
         )
 
         if explicit == "list":
-            models = await list_available_models(self.repl.config)
-            if not models:
+            label = "models" if target == "main" else "sub-agent models"
+            listings = None
+            if target == "main":
+                # I-113: list every configured provider, marking the ones
+                # whose live listing failed as unavailable (never a
+                # silent single-model fallback).
+                listings = await list_models_for_providers(
+                    self.repl.config, self._available_providers()
+                )
+            else:
+                models = await list_available_models(self.repl.config)
+                if not models:
+                    r.print_info("No models available.")
+                    return
+                r.print_info(f"Available {label}:")
+                for option in models:
+                    marker = "*" if option.id == current else " "
+                    suffix = f" [{option.provider}]" if option.provider else ""
+                    r.print_info(f" {marker} {option.id}{suffix}")
+                return
+            assert listings is not None
+            if not any(lst.options for lst in listings):
+                for provider, error in (
+                    (lst.provider, lst.error) for lst in listings if not lst.available
+                ):
+                    r.print_warn(f"{provider} unavailable: {error}")
                 r.print_info("No models available.")
                 return
-            label = "models" if target == "main" else "sub-agent models"
             r.print_info(f"Available {label}:")
-            for option in models:
-                marker = "*" if option.id == current else " "
-                suffix = f" [{option.provider}]" if option.provider else ""
-                r.print_info(f" {marker} {option.id}{suffix}")
+            for listing in listings:
+                if not listing.available:
+                    r.print_warn(
+                        f"  ⚠ {listing.provider} — unavailable: {listing.error}"
+                    )
+                    continue
+                r.print_info(f"  {listing.provider}:")
+                for option in listing.options:
+                    is_current = (
+                        target == "main"
+                        and option.id == current
+                        and option.provider == self.repl.config.provider
+                    )
+                    marker = "*" if is_current else " "
+                    r.print_info(f"   {marker} {option.id}")
             return
 
         chosen: str | None = explicit
         option_provider: str | None = None
         if not chosen:
-            models = await list_available_models(self.repl.config)
+            # I-113: one unified view of every configured provider
+            # (concurrent live fetch, active provider first). The host's
+            # pick_model receives a flat multi-provider list; each option
+            # carries its provider so selection below switches the
+            # (model, provider) pair via the I-89 path.
+            providers = self._available_providers()
+            listings = await list_models_for_providers(self.repl.config, providers)
+            models = [m for lst in listings for m in lst.options]
+            unavailable = [
+                (lst.provider, lst.error) for lst in listings if not lst.available
+            ]
             if not models:
+                for provider, error in unavailable:
+                    r.print_warn(f"{provider} unavailable: {error}")
                 r.print_info("No models available.")
                 return
-            result = await self.host.pick_model(models, current)
+            result = await self.host.pick_model(
+                models, current, unavailable=unavailable
+            )
             if result.cancelled or not result.model_id:
                 r.print_info("Cancelled.")
                 return
             chosen = result.model_id
-            option_provider = next((m.provider for m in models if m.id == chosen), None)
+            option_provider = getattr(result, "provider", None) or next(
+                (m.provider for m in models if m.id == chosen), None
+            )
+        elif target == "main" and "/" in chosen:
+            # I-113 follow-up: an *explicit* ``/model <id>`` (typed, or
+            # picked from inline autocomplete) skipped provider
+            # resolution entirely — only the interactive-picker branch
+            # set option_provider, so a bare vendor/ prefix went through
+            # model_provider_for()'s prefix-only heuristic instead.
+            #
+            # That heuristic is *ambiguous* whenever a router
+            # (OpenRouter, ...) re-exports another vendor's catalog id
+            # verbatim: "anthropic/claude-opus-5" is real OpenRouter
+            # catalog output, not evidence of a directly-configured
+            # "anthropic" provider — but with a non-router active
+            # provider the heuristic can't tell the two apart and
+            # confidently (and wrongly) "resolves" to the vendor name,
+            # so it never even reaches the ``is None`` fallback this
+            # branch used to gate on. The only trustworthy signal is
+            # asking every configured provider's *live* listing which
+            # of them actually serves this exact id — same authority
+            # the interactive-picker branch already has.
+            #
+            # Falls back to the cheap prefix heuristic (below, via
+            # model_provider_for) only when no configured provider's
+            # live listing contains the id at all (custom/local models,
+            # or every provider's listing failing).
+            listings = await list_models_for_providers(
+                self.repl.config, self._available_providers()
+            )
+            option_provider = next(
+                (
+                    listing.provider
+                    for listing in listings
+                    for option in listing.options
+                    if option.id == chosen
+                ),
+                None,
+            )
 
         if target == "main":
             # I-89: a model that belongs to another provider must switch the

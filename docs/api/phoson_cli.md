@@ -185,7 +185,7 @@ redraws forward.
 
 ### Model registry (`~/.phoson/models.json`)
 
-Optional user-managed file (0600, created lazily) with three sections:
+Optional user-managed file (0600, created lazily) with two sections:
 
 ```jsonc
 {
@@ -206,21 +206,37 @@ Optional user-managed file (0600, created lazily) with three sections:
       "default_model": "qwen3.8-27b",        // picked on provider switch
       "base_url": "https://proxy.example/v1" // OpenAI-compatible override
     }
-  },
-  // Cache (managed by the CLI, do not edit): provider model listings
-  // with a fetch timestamp, refreshed automatically by /model.
-  "cache": { "fetched_at": 1755700000.0, "providers": { "openrouter": [ ... ] } }
+  }
 }
 ```
 
 Behavior:
 
-- **Instant picker:** while the cache is fresh (TTL 24 h) `/model` shows
-  the cached listing without any network call — it works offline.
-- **Offline fallback:** if a live fetch fails, the stale cache is shown
-  (with a warning) instead of a single-model list.
-- **Context window:** for the prompt usage display the resolution order is
-  `models` override → cache → engine registry.
+- **Live listing:** `/model` and `/model list` always query every
+  configured provider live (concurrently, active provider first) —
+  **no model listing is persisted to disk**, so the picker never shows a
+  stale list and works offline only in the sense that local providers
+  (Ollama, vLLM, LM Studio) are queried locally.
+- **Unavailable providers:** when a provider's live fetch fails
+  (timeout, 401, rate limit…) it is shown explicitly as
+  `⚠ <provider> — unavailable: <reason>` in the picker and in
+  `/model list` — never a silent single-model fallback. The
+  single-provider fallback still applies to `/subagent-model` and the
+  inline `/model` autocomplete cache.
+- **Unified picker:** a bare `/model` opens one picker spanning all
+  configured providers — each row shows `id (provider)` — and selecting
+  a model from another provider switches the `(provider, model)` pair
+  together (persisted to `config.toml`).
+- **OpenRouter ordering:** the OpenRouter listing is sorted by
+  `benchmarks.artificial_analysis.agentic_index` (descending) so the
+  strongest agentic/tool-use models come first; models without the
+  field are listed last, alphabetically. The current model always
+  stays on top.
+- **Context window:** for the prompt usage display the resolution order
+  is `models` override → engine registry. Files written by older
+  versions may still carry a `cache` section, which
+  `resolve_context_window` reads as a last-resort hint for the display
+  only — the CLI never writes it anymore.
 - **base_url:** honored by all OpenAI-compatible providers, OpenAI,
   OpenRouter and Anthropic (proxies / self-hosted gateways).
 - The file is user-editable; invalid JSON never crashes the CLI (a warning

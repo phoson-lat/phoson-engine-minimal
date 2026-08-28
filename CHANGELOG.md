@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.10 (2026-08-28)
+
+### Feat
+
+- **cli**: unified model selection — one picker across every configured
+  provider, OpenRouter ordered by `agentic_index`, failed providers
+  marked `unavailable` (IMPROVEMENTS.md I-113, issue #113).
+
+  - *OpenRouter ordering.* `/model`, the inline autocomplete and
+    `/model list` now sort OpenRouter by
+    `benchmarks.artificial_analysis.agentic_index` (descending) — the
+    strongest agentic/tool-use models first; models without the field
+    are listed last, alphabetically. The current model always stays on
+    top. Non-OpenRouter providers keep their exact previous ordering.
+  - *Unified picker.* A bare `/model` opens one picker spanning all
+    configured providers (fetched **concurrently** via
+    `list_models_for_providers`, active provider first). Each row shows
+    `id (provider)`; the current *(model, provider)* pair is marked.
+    Selecting a model from another provider switches the pair together
+    and persists both to `config.toml` (reuses the I-89 path) — no more
+    `/provider` → `/model` two-step. Both frontends are parity: classic
+    opens the full-screen picker, the full-screen TUI opens the same
+    picker as a Float (inline `/model <name>` autocomplete stays, now
+    fed by all configured providers, with each suggestion showing its
+    owning provider dimmed on the right).
+  - *`unavailable` instead of silent fallback.* When a provider's live
+    listing fails (timeout, 401, rate limit…), it is shown explicitly
+    as `⚠ <provider> — unavailable: <reason>` in the picker and in
+    `/model list`. Internally listers now raise `ModelListingError`;
+    the single-provider fast path (`/subagent-model`, autocomplete
+    cache) keeps its exact old behavior (warning + current-model
+    fallback).
+  - *Docs.* `docs/api/phoson_cli.md` and `README.md` no longer describe
+    the removed on-disk model-listing cache ("instant picker, TTL 24 h,
+    works offline"); the live-listing / unavailable / unified-picker
+    behavior is documented instead.
+
+### Test
+
+- New/updated unit tests: `agentic_index` ordering (with/without the
+  field, ties, current-first), multi-provider aggregation and
+  concurrency, `unavailable` marking, unified-picker render + cross-
+  provider selection, fullscreen Float hosting and multi-provider
+  autocomplete cache.
+
 ## v0.13.9 (2026-08-28)
 
 ### Perf

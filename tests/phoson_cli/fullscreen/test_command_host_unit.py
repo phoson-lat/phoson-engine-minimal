@@ -53,7 +53,10 @@ class _FakeApp:
         self.sink = _FakeSink()
         self.theme = DARK
         self.seen_pickers: list[BasePicker] = []
-        self.repl = SimpleNamespace(storage=_FakeStorage())
+        self.repl = SimpleNamespace(
+            storage=_FakeStorage(),
+            config=SimpleNamespace(provider="openrouter"),
+        )
         self._picker_results = list(picker_results) if picker_results else None
 
         async def _run_float_picker(picker: BasePicker) -> object:
@@ -67,22 +70,37 @@ class _FakeApp:
 
 
 @pytest.mark.asyncio
-async def test_pick_model_points_at_inline_autocomplete_instead_of_a_float() -> None:
-    """Model selection is inline autocomplete (cli_abel-style), not a
+async def test_pick_model_opens_unified_float_picker() -> None:
+    """I-113: a bare ``/model`` opens the unified multi-provider picker as
+    a Float (inline autocomplete remains available when typing)."""
+    picker_result = ModelPickerResult(
+        model_id="claude-sonnet-4-6", provider="anthropic"
+    )
+    app = _FakeApp(picker_result=picker_result)
+    host = FullScreenCommandHost(app)
+    models = [
+        ModelOption(id="gpt-4o", label="GPT-4o", provider="openai"),
+        ModelOption(id="claude-sonnet-4-6", label="Sonnet", provider="anthropic"),
+    ]
 
-    modal — a bare ``/model`` must not open any Float; it just hints at
-    typing ``/model <name>`` for the dropdown.
-    """
+    result = await host.pick_model(
+        models, "gpt-4o", unavailable=[("groq", "ConnectError")]
+    )
+
+    assert result == picker_result
+    app.run_float_picker.assert_awaited_once()
+    assert isinstance(app.seen_pickers[0], BasePicker)
+
+
+@pytest.mark.asyncio
+async def test_pick_model_empty_returns_cancelled_without_float() -> None:
     app = _FakeApp()
     host = FullScreenCommandHost(app)
-    models = [ModelOption(id="gpt-4o", label="GPT-4o", provider="openai")]
 
-    result = await host.pick_model(models, "gpt-4o")
+    result = await host.pick_model([], "gpt-4o")
 
     assert result == ModelPickerResult(cancelled=True)
     app.run_float_picker.assert_not_called()
-    assert app.sink.notices
-    assert "/model" in app.sink.notices[0][1]
 
 
 @pytest.mark.asyncio

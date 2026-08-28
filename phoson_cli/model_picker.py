@@ -20,6 +20,9 @@ class _PickerState(TypedDict):
 class ModelPickerResult:
     model_id: str | None = None
     cancelled: bool = False
+    #: Provider of the selected option (I-113 unified picker). Lets
+    #: commands switch (model, provider) together via the I-89 path.
+    provider: str | None = None
 
 
 # ─── Formatting helpers ──────────────────────────────────────────────────────
@@ -114,9 +117,25 @@ def _render_models(
     page: int,
     page_size: int,
     query: str = "",
+    *,
+    current_provider: str = "",
+    unavailable: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str]]:
+    """Render one page.
+
+    ``current_provider`` is only used for the "active" marker when it is
+    not empty (multi-provider view: the current *pair* marks the row).
+    ``unavailable`` — ``(provider, error)`` rows for providers whose live
+    listing failed (I-113) — renders as a non-navigable section below the
+    selectable rows.
+    """
+    multi = bool(current_provider)
+    model_width = 34 if multi else 38
+    meta_width = 38 if multi else 44
+    title = "  Models\n" if multi else "  Available Models\n"
+
     lines: list[tuple[str, str]] = []
-    lines.append(("class:title", "  Available Models\n"))
+    lines.append(("class:title", title))
     lines.append(("class:search.label", "  Search: "))
     lines.append(("class:search", query or ""))
     if not query:
@@ -125,13 +144,56 @@ def _render_models(
     lines.append(
         (
             "class:header",
-            f"  {'#':>3}  {'Model':<38} {'Ctx':>7}  {'Pricing / Meta':<44}\n",
+            f"  {'#':>3}  {'Model':<{model_width}} {'Ctx':>7}"
+            f"  {'Pricing / Meta':<{meta_width}}\n",
         )
     )
     lines.append(("class:header", "  " + "─" * 102 + "\n"))
 
     if not models:
         lines.append(("class:empty", "  No models match the current filter.\n"))
+    else:
+        start = page * page_size
+        end = min(start + page_size, len(models))
+
+        for i in range(start, end):
+            model = models[i]
+            idx = i + 1
+            is_current = (
+                (model.id == current_model and model.provider == current_provider)
+                if multi
+                else (model.id == current_model)
+            )
+            is_selected = i == selected
+
+            if is_selected:
+                style = "class:row.selected"
+            elif is_current:
+                style = "class:row.active"
+            else:
+                style = "class:row"
+
+            marker = "▸" if is_selected else ("▶" if is_current else " ")
+            context = _format_context_length(model.context_length)
+            model_field = f"{model.id} ({model.provider})" if multi else model.id
+            meta = _format_meta(model)
+            line = (
+                f"  {marker} {idx:>2}  {_truncate(model_field, model_width)}"
+                f" {context:>7}  {_truncate(meta, meta_width)}\n"
+            )
+            lines.append((style, line))
+
+    if unavailable:
+        lines.append(("", "\n"))
+        for provider, error in unavailable:
+            lines.append(
+                (
+                    "class:empty",
+                    f"  ⚠ {provider} — unavailable: {error}\n",
+                )
+            )
+
+    if not models:
         lines.append(("\n", ""))
         lines.append(
             (
@@ -140,31 +202,6 @@ def _render_models(
             )
         )
         return lines
-
-    start = page * page_size
-    end = min(start + page_size, len(models))
-
-    for i in range(start, end):
-        model = models[i]
-        idx = i + 1
-        is_current = model.id == current_model
-        is_selected = i == selected
-
-        if is_selected:
-            style = "class:row.selected"
-        elif is_current:
-            style = "class:row.active"
-        else:
-            style = "class:row"
-
-        marker = "▸" if is_selected else ("▶" if is_current else " ")
-        context = _format_context_length(model.context_length)
-        meta = _format_meta(model)
-        line = (
-            f"  {marker} {idx:>2}  {_truncate(model.id, 38)} {context:>7}"
-            f"  {_truncate(meta, 44)}\n"
-        )
-        lines.append((style, line))
 
     total_pages = (len(models) + page_size - 1) // page_size
     page_info = f" Page {page + 1}/{total_pages} " if total_pages > 1 else ""
@@ -188,11 +225,66 @@ async def pick_model(
     current_model: str,
     page_size: int = 12,
     theme: "Theme | None" = None,
+    *,
+    current_provider: str = "",
+    unavailable: list[tuple[str, str]] | None = None,
 ) -> ModelPickerResult:
-    """Show an interactive picker over ``models`` with fuzzy search."""
+    """Show an interactive picker over ``models`` with fuzzy search.
+
+    ``current_provider`` (when set) switches the picker into the unified
+    multi-provider layout (I-113): rows show ``id (provider)`` and the
+    current *(model, provider)* pair is marked.
+    """
     if not models:
         return ModelPickerResult(cancelled=True)
-    return await build_model_picker(models, current_model, page_size, theme).run()
+    picker = build_model_picker(
+        models,
+        current_model,
+        page_size,
+        theme,
+        current_provider=current_provider,
+        unavailable=unavailable,
+    )
+    return await picker.run()
+
+
+def build_unified_model_picker(
+    models: list[ModelOption],
+    current_model: str,
+    current_provider: str,
+    unavailable: list[tuple[str, str]] | None = None,
+    page_size: int = 12,
+    theme: "Theme | None" = None,
+    *,
+    on_done: Callable[[ModelPickerResult], None] | None = None,
+    invalidate: Callable[[], None] | None = None,
+) -> BasePicker[ModelPickerResult]:
+    """Unified multi-provider model picker (I-113).
+
+    ``models`` is a flat, already-ordered list spanning every configured
+    provider (active provider first); each row shows ``id (provider)``
+    and the active marker matches the current *(model, provider)* pair.
+    ``unavailable`` — ``(provider, error)`` for providers whose live
+    listing failed — renders as a non-navigable section. Selecting a row
+    resolves to ``ModelPickerResult(model_id, provider)`` so the caller
+    can switch the (model, provider) pair together.
+    """
+    return build_model_picker(
+        models,
+        current_model,
+        page_size,
+        theme,
+        current_provider=current_provider,
+        unavailable=unavailable or None,
+        on_done=on_done,
+        invalidate=invalidate,
+    )
+
+
+def _is_current(model: ModelOption, current_model: str, current_provider: str) -> bool:
+    if current_provider:
+        return model.id == current_model and model.provider == current_provider
+    return model.id == current_model
 
 
 def build_model_picker(
@@ -201,6 +293,8 @@ def build_model_picker(
     page_size: int = 12,
     theme: "Theme | None" = None,
     *,
+    current_provider: str = "",
+    unavailable: list[tuple[str, str]] | None = None,
     on_done: Callable[[ModelPickerResult], None] | None = None,
     invalidate: Callable[[], None] | None = None,
 ) -> BasePicker[ModelPickerResult]:
@@ -209,9 +303,19 @@ def build_model_picker(
     Lets a host embed it as a Float (:meth:`BasePicker.as_float`) instead
     of it spinning up its own full-screen ``Application`` via ``run()``
     (``pick_model`` above does that for the classic REPL).
+
+    With ``current_provider`` set (unified multi-provider view, I-113)
+    rows show ``id (provider)`` and the active marker matches the
+    current *(model, provider)* pair; ``unavailable`` renders the
+    ``unavailable`` section for failed provider listings.
     """
     initial_selected = next(
-        (i for i, m in enumerate(models) if m.id == current_model), 0
+        (
+            i
+            for i, m in enumerate(models)
+            if _is_current(m, current_model, current_provider)
+        ),
+        0,
     )
     state: _PickerState = {
         "query": "",
@@ -228,6 +332,8 @@ def build_model_picker(
             state["page"],
             page_size,
             state["query"],
+            current_provider=current_provider,
+            unavailable=unavailable,
         )
 
     picker: BasePicker[ModelPickerResult] = BasePicker(
@@ -243,13 +349,21 @@ def build_model_picker(
         if not filtered:
             state.update(selected=0, page=0)
             return
-        sel = next((i for i, m in enumerate(filtered) if m.id == current_model), 0)
+        sel = next(
+            (
+                i
+                for i, m in enumerate(filtered)
+                if _is_current(m, current_model, current_provider)
+            ),
+            0,
+        )
         state.update(selected=sel, page=sel // page_size)
 
     def confirm() -> None:
         if not state["filtered"]:
             return
-        picker.done(ModelPickerResult(model_id=state["filtered"][state["selected"]].id))
+        selected = state["filtered"][state["selected"]]
+        picker.done(ModelPickerResult(model_id=selected.id, provider=selected.provider))
 
     def backspace() -> None:
         if not state["query"]:
