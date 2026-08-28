@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.6 (2026-08-28)
+
+### Feat
+
+- **cli/llm**: live cost/tokens in the TUI header + real OpenRouter USD
+  cost (IMPROVEMENTS.md I-88, issue #88). Two related gaps in cost
+  visibility: the header only updated when a whole turn completed, and
+  OpenRouter sessions showed `$0.0000`.
+
+  - *OpenRouter cost was dropped.* The adapter called the shared
+    streaming loop with no `cost_calculator`, so every `UsageEvent` was
+    `(0.0, cost_known=False)`. But OpenRouter **does** return the
+    charged amount in `usage.cost` (and `cost_details`) on the final
+    streaming chunk — the OpenAI SDK exposes it as an extra field
+    (`extra='allow'`), it just was never read.
+  - *Fix: provider cost is authoritative.* `stream_chat_completions`
+    now reads `usage.cost` via a new `_extract_provider_cost()` and
+    reports it as a known `UsageEvent.cost_usd`, overriding the local
+    price table (which stays as the fallback for providers that don't
+    report a cost, e.g. OpenAI). Invalid values (non-numeric, negative,
+    NaN/inf) are ignored, falling back to the calculator.
+  - *Header was not live.* `session_metrics` and `_context_tokens` were
+    only updated in `_finalize_run` (end of turn), so the header's
+    `tok · $cost` segment jumped at completion.
+  - *Fix: live metrics per step.* `_consume_stream` now folds each
+    completed `AgentStepDoneEvent` into the session totals via
+    `_update_live_metrics()` — cost/tokens accumulate as they happen and
+    the context indicator is refreshed against the engine's in-flight
+    history (the same conservative estimate the auto-compact gate uses,
+    I-91). `_finalize_run` no longer re-adds the steps (that would
+    double-count); it only commits the tree and the final indicator.
+    The full-screen sink repaints on each `AgentStepDoneEvent`
+    (throttled to the streaming cadence) so the header tracks the run.
+  - *Bonus:* partial work now survives a failed/cancelled run — steps
+    that completed before the failure keep their cost/tokens in the
+    session metrics instead of being discarded.
+
+  - *Tests.* 10 new: provider `usage.cost` is authoritative (beats the
+    price table), no provider cost → calculator fallback, default
+    calculator → cost 0/unknown, invalid cost ignored, OpenRouter E2E
+    reports cost > `$0.0000` (and stays unknown without it), controller
+    live accumulation with no double count, live context tokens track
+    the in-flight history, metrics survive error/cancel, sink repaints
+    on step done.
+
+### Fix
+
+- **cli**: `_finalize_run` no longer re-accumulates run steps into
+  `session_metrics` (they are now folded in live per step) — prevents
+  every step being counted twice.
+
 ## v0.13.5 (2026-08-27)
 
 ### Fix

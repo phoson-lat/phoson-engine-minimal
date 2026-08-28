@@ -9,6 +9,7 @@ configure the client and provide a cost callback.
 """
 
 import json
+import math
 import base64
 import warnings
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, NotRequired
@@ -528,13 +529,21 @@ async def stream_chat_completions(
             cache_read=getattr(prompt_details, "cached_tokens", 0) or 0,
             cache_write=getattr(prompt_details, "cache_write_tokens", 0) or 0,
         )
-        cost_usd, cost_known = cost_calculator(
-            model=config.model,
-            input_tokens=usage.input,
-            output_tokens=usage.output,
-            cache_read_tokens=usage.cache_read,
-            cache_write_tokens=usage.cache_write,
-        )
+        # A provider-reported cost (OpenRouter's ``usage.cost``) is the
+        # authoritative number — it is what the provider actually
+        # charged. Prefer it over the local price table, which is only a
+        # fallback for providers that don't report a cost (OpenAI, ...).
+        provider_cost = _extract_provider_cost(final_usage)
+        if provider_cost is not None:
+            cost_usd, cost_known = provider_cost, True
+        else:
+            cost_usd, cost_known = cost_calculator(
+                model=config.model,
+                input_tokens=usage.input,
+                output_tokens=usage.output,
+                cache_read_tokens=usage.cache_read,
+                cache_write_tokens=usage.cache_write,
+            )
         yield UsageEvent(
             model=config.model,
             usage=usage,
@@ -548,3 +557,33 @@ async def stream_chat_completions(
 def _is_retryable(code: str, status_code: int) -> bool:
     """Return True for errors a caller should retry."""
     return code == "rate_limit" or 500 <= status_code < 600
+
+
+def _extract_provider_cost(usage: object) -> float | None:
+    """Return the provider-reported USD cost from a usage object, if any.
+
+    OpenRouter (and a growing set of OpenAI-compatible gateways) include
+    a ``cost`` field on the ``usage`` object of the final streaming chunk
+    — the amount actually charged to the caller's account. The OpenAI
+    SDK models it as an *extra* field (``extra='allow'``), so it is
+    reachable via ``getattr`` rather than a typed attribute. OpenAI
+    itself does not send a ``cost`` field, so this returns ``None`` for
+    it and the caller falls back to the local price table.
+
+    Args:
+        usage: The final ``CompletionUsage``-like object from the stream.
+
+    Returns:
+        The cost in USD (a positive finite number), or ``None`` when the
+        provider did not report one or the value is unusable.
+    """
+    cost = getattr(usage, "cost", None)
+    if cost is None:
+        return None
+    try:
+        value = float(cost)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value

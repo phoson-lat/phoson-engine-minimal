@@ -21,10 +21,12 @@ from dataclasses import dataclass
 
 from phoson_agent import (
     Plugin,
+    RunStep,
     AgentEngine,
     AgentDoneEvent,
     AgentErrorEvent,
     AgentMiddleware,
+    AgentStepDoneEvent,
 )
 from phoson_llm.schemas import (
     REASONING_EFFORTS,
@@ -494,6 +496,12 @@ class SessionController:
         async def consume() -> None:
             nonlocal terminal
             async for event in self.engine.stream(path, config):
+                # Live metrics (I-88): fold each completed step into the
+                # session totals and refresh the context indicator as the
+                # run progresses, not only at the end. The front end's
+                # header reads these, so cost and tokens track the run.
+                if isinstance(event, AgentStepDoneEvent):
+                    self._update_live_metrics(event.step, config)
                 self.sink.on_event(event)
                 if isinstance(event, (AgentDoneEvent, AgentErrorEvent)):
                     terminal = event
@@ -510,12 +518,47 @@ class SessionController:
             )
         return terminal
 
+    def _update_live_metrics(self, step: "RunStep", config: ModelConfig) -> None:
+        """Fold one completed step into the live session metrics (I-88).
+
+        Called from :meth:`_consume_stream` as each
+        :class:`AgentStepDoneEvent` arrives, so the header's cost and
+        token indicators track the run in real time. Cost/token totals
+        are accumulated here (once, per step) — :meth:`_finalize_run`
+        must NOT re-add them, or every step would be counted twice.
+
+        The context indicator is refreshed against the engine's
+        in-flight history (the same conservative estimate the auto-
+        compact gate uses), not the tree — the tree is only updated at
+        the end of the run.
+        """
+        self.session_metrics.add_run_step(step)
+        self._context_tokens = self._estimate_in_flight(config)
+
+    def _estimate_in_flight(self, config: ModelConfig) -> int:
+        """Conservative token estimate of the engine's in-flight history.
+
+        Mirrors :meth:`estimate_active_path` but reads the engine's live
+        history (which includes the current run's messages before they
+        land in the tree) so the header tracks the run as it happens.
+        """
+        history = self.engine.get_partial_history()
+        return self.summarizer.estimate_request(
+            history,
+            system=config.system,
+            tools=self.summarizer.tool_definitions,
+        )
+
     def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
-        """Append new messages to tree, update metrics."""
+        """Append new messages to tree and refresh the context indicator.
+
+        Session metrics (cost/tokens/steps) are already accumulated live
+        in :meth:`_update_live_metrics` as each step completes (I-88) —
+        re-adding ``done_event.result.steps`` here would double-count
+        every step, so this only updates the tree and the final context
+        indicator (from the now-committed tree path).
+        """
         if self._rebase_after_compaction(done_event.result.history):
-            self._context_tokens = self.estimate_active_path()
-            for step in done_event.result.steps:
-                self.session_metrics.add_run_step(step)
             return
 
         new_messages = done_event.result.history[base_count:]
@@ -524,8 +567,6 @@ class SessionController:
             self.current_node_id = created[-1].id
 
         self._context_tokens = self.estimate_active_path()
-        for step in done_event.result.steps:
-            self.session_metrics.add_run_step(step)
 
     def _append_partial_history(self, base_count: int) -> None:
         """Slice engine partial history and append new nodes to the tree.

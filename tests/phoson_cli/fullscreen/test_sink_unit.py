@@ -329,6 +329,19 @@ def test_step_done_advances_counters() -> None:
     assert round(sink.current_turn.run_cost_usd, 3) == 0.03
 
 
+def test_step_done_invalidates_for_live_header() -> None:
+    """I-88: a completed step must repaint the UI so the header's
+    cost/token indicators (which the controller updates live) are shown
+    without waiting for the turn to finish."""
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    ticks.clear()
+
+    sink.on_event(AgentStepDoneEvent(step=_run_step(0.01)))
+
+    assert ticks, "AgentStepDoneEvent must invalidate (live header repaint)"
+
+
 def test_error_event_finalizes_turn_and_shows_panel() -> None:
     sink, _ = _make_sink()
     sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))

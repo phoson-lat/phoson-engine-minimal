@@ -344,6 +344,12 @@ class FullScreenSink:
                 if self.current_turn is not None:
                     self.current_turn.current_step += 1
                     self.current_turn.run_cost_usd += event.step.cost_usd
+                # Live header (I-88): the controller already folded this
+                # step into session_metrics and _context_tokens, so the
+                # header's cost/token indicators are fresh — repaint now
+                # (throttled to the streaming cadence) so the numbers
+                # track the run instead of jumping at the end.
+                self.touch_streaming()
 
             case AgentDoneEvent():
                 self.cancel_stream_throttle()
