@@ -51,8 +51,21 @@ class CommandHost(Protocol):
         ...
 
     async def pick_model(
-        self, models: list[ModelOption], current_model: str
-    ) -> ModelPickerResult: ...
+        self,
+        models: list[ModelOption],
+        current_model: str,
+        *,
+        unavailable: list[tuple[str, str]] | None = None,
+    ) -> ModelPickerResult:
+        """Open the model picker.
+
+        ``models`` may span several providers (I-113 unified view); each
+        option carries its ``provider``. ``unavailable`` lists
+        ``(provider, error)`` for providers whose live listing failed so
+        the host can show them as ``unavailable`` instead of a silent
+        empty list.
+        """
+        ...
 
     async def pick_provider(
         self, providers: list[str], current_provider: str
@@ -124,13 +137,19 @@ class RendererCommandHost:
         self.repl.renderer.console.print(renderable)
 
     async def pick_model(
-        self, models: list[ModelOption], current_model: str
+        self,
+        models: list[ModelOption],
+        current_model: str,
+        *,
+        unavailable: list[tuple[str, str]] | None = None,
     ) -> ModelPickerResult:
         from phoson_cli import commands as commands_mod
 
         return await commands_mod.pick_model(
             models=models,
             current_model=current_model,
+            unavailable=unavailable,
+            current_provider=getattr(self.repl.config, "provider", ""),
             theme=getattr(self.repl, "theme", None),
         )
 

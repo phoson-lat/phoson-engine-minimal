@@ -1,10 +1,47 @@
+import asyncio
 import warnings
+from types import SimpleNamespace
 from decimal import Decimal, InvalidOperation
+from dataclasses import field, replace, dataclass, is_dataclass
+from collections.abc import Callable
 
 import httpx
 
 from .config import PhosonConfig
-from .models import ModelOption, load_models_file, apply_model_overrides
+from .models import (
+    KNOWN_PROVIDERS,
+    ModelOption,
+    load_models_file,
+    provider_settings,
+    normalize_provider,
+    apply_model_overrides,
+)
+
+
+class ModelListingError(Exception):
+    """A provider's live model listing failed (network/API error).
+
+    Raised by the per-provider listers; the single-provider fast path
+    (``list_available_models``) catches it and degrades to the
+    current-model fallback + ``UserWarning`` exactly as before, while the
+    multi-provider view (``list_models_for_providers``) turns it into a
+    ``ProviderListing(available=False)`` instead of a silent fallback.
+    """
+
+
+@dataclass
+class ProviderListing:
+    """One provider's live model listing (I-113).
+
+    ``available=False`` means the live fetch failed (or there is no
+    lister for the provider) — callers must show an ``unavailable``
+    marker instead of treating ``options`` (empty) as the real catalog.
+    """
+
+    provider: str
+    options: list[ModelOption] = field(default_factory=list)
+    available: bool = True
+    error: str = ""
 
 
 async def list_available_models(config: PhosonConfig) -> list[ModelOption]:
@@ -14,14 +51,20 @@ async def list_available_models(config: PhosonConfig) -> list[ModelOption]:
     or read from ``~/.phoson/models.json``, so the picker never shows a
     stale list. User model overrides from that file (label, context
     window, custom entries) are still applied on top of whatever the
-    provider returns, or of the single current-model fallback a lister
-    returns when the request fails.
+    provider returns, or of the single current-model fallback used when
+    the live request fails (with a ``UserWarning``).
     """
     data = load_models_file()
     provider = config.provider.lower()
-    options = await _fetch_provider_models(config)
+    try:
+        options = await _fetch_provider_models(config)
+    except ModelListingError as exc:
+        warnings.warn(str(exc), UserWarning, stacklevel=2)
+        options = [ModelOption(id=config.model, label=config.model, provider=provider)]
     return _prioritize_current(
-        apply_model_overrides(data, options, provider), config.model
+        apply_model_overrides(data, options, provider),
+        config.model,
+        order_key=_provider_order_key(provider),
     )
 
 
@@ -69,6 +112,87 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
     return [ModelOption(id=config.model, label=config.model, provider=provider)]
 
 
+def _current_model_for(config: PhosonConfig, provider: str) -> str:
+    """Model id used as the *current* marker for *provider* (I-113).
+
+    The active provider keeps ``config.model``; other providers fall back
+    to their ``default_model`` from ``models.json`` (when configured),
+    then to ``config.model``.
+    """
+    if normalize_provider(provider) == normalize_provider(config.provider):
+        return config.model
+    return provider_settings(load_models_file(), provider).get(
+        "default_model", config.model
+    )
+
+
+def _variant_config(config: PhosonConfig, provider: str, model: str) -> PhosonConfig:
+    """Clone *config* with ``provider``/``model`` overridden.
+
+    ``dataclasses.replace`` for real :class:`PhosonConfig` instances; a
+    shallow attribute copy for stand-ins (tests use ``SimpleNamespace``).
+    """
+    if is_dataclass(config) and not isinstance(config, type):
+        return replace(config, provider=provider, model=model)
+    ns = SimpleNamespace(**vars(config))
+    ns.provider = provider
+    ns.model = model
+    return ns  # type: ignore[return-value]
+
+
+async def _fetch_listing(config: PhosonConfig, provider: str) -> list[ModelOption]:
+    """Live listing for *provider*, with overrides and ordering applied.
+
+    The single-provider ``config`` is cloned (see :func:`_variant_config`)
+    so the existing per-provider listers work unmodified. Raises
+    :class:`ModelListingError` when the live request fails.
+    """
+    current = _current_model_for(config, provider)
+    variant = _variant_config(config, provider, current)
+    options = await _fetch_provider_models(variant)
+    return _prioritize_current(
+        apply_model_overrides(load_models_file(), options, provider),
+        current,
+        order_key=_provider_order_key(provider),
+    )
+
+
+async def list_models_for_providers(
+    config: PhosonConfig, providers: list[str]
+) -> list[ProviderListing]:
+    """Live model listings for several providers **concurrently** (I-113).
+
+    The active provider comes first, then the rest in the given order.
+    Each provider that fails its live fetch (or has no known lister)
+    yields a ``ProviderListing(available=False, error=...)`` — never a
+    silent single-model fallback, so callers can mark it ``unavailable``.
+    """
+    active = normalize_provider(config.provider)
+    ordered = [p for p in providers if normalize_provider(p) == active]
+    ordered += [p for p in providers if normalize_provider(p) != active]
+
+    async def _one(provider: str) -> ProviderListing:
+        canonical = normalize_provider(provider)
+        if canonical not in KNOWN_PROVIDERS:
+            return ProviderListing(
+                provider=canonical, available=False, error="unknown provider"
+            )
+        try:
+            options = await _fetch_listing(config, canonical)
+        except ModelListingError as exc:
+            return ProviderListing(provider=canonical, available=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 — one provider must not sink the view
+            return ProviderListing(
+                provider=canonical,
+                available=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        return ProviderListing(provider=canonical, options=options)
+
+    results = await asyncio.gather(*(_one(p) for p in ordered))
+    return list(results)
+
+
 async def _list_openai_models(config: PhosonConfig) -> list[ModelOption]:
     api_key = getattr(config, "openai_api_key", None)
     if not api_key:
@@ -83,10 +207,7 @@ async def _list_openai_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch OpenAI models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="openai")]
+        raise ModelListingError(f"Failed to fetch OpenAI models: {exc}") from exc
 
     options = [
         ModelOption(
@@ -118,10 +239,7 @@ async def _list_anthropic_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Anthropic models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="anthropic")]
+        raise ModelListingError(f"Failed to fetch Anthropic models: {exc}") from exc
 
     options = [
         ModelOption(
@@ -151,10 +269,7 @@ async def _list_openrouter_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch OpenRouter models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="openrouter")]
+        raise ModelListingError(f"Failed to fetch OpenRouter models: {exc}") from exc
 
     items = data.get("data") or data.get("models") or []
     options = []
@@ -174,9 +289,14 @@ async def _list_openrouter_models(config: PhosonConfig) -> list[ModelOption]:
                 if isinstance(context_length, int)
                 else None,
                 pricing=pricing,
+                agentic_index=_openrouter_agentic_index(item),
             )
         )
-    return _prioritize_current(options, config.model)
+    return _prioritize_current(
+        options,
+        config.model,
+        order_key=_provider_order_key("openrouter"),
+    )
 
 
 async def _list_ollama_models(config: PhosonConfig) -> list[ModelOption]:
@@ -190,10 +310,7 @@ async def _list_ollama_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Ollama models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="ollama")]
+        raise ModelListingError(f"Failed to fetch Ollama models: {exc}") from exc
 
     options = []
     for item in data.get("models", []):
@@ -229,8 +346,7 @@ async def _list_groq_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(f"Failed to fetch Groq models: {exc}", UserWarning, stacklevel=2)
-        return [ModelOption(id=config.model, label=config.model, provider="groq")]
+        raise ModelListingError(f"Failed to fetch Groq models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="groq")
         for item in data.get("data", [])
@@ -252,10 +368,7 @@ async def _list_deepseek_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch DeepSeek models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="deepseek")]
+        raise ModelListingError(f"Failed to fetch DeepSeek models: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("id", ""), label=item.get("id", ""), provider="deepseek"
@@ -279,10 +392,7 @@ async def _list_together_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Together models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="together")]
+        raise ModelListingError(f"Failed to fetch Together models: {exc}") from exc
     items = data if isinstance(data, list) else data.get("data", [])
     options = [
         ModelOption(
@@ -310,10 +420,7 @@ async def _list_mistral_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Mistral models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="mistral")]
+        raise ModelListingError(f"Failed to fetch Mistral models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="mistral")
         for item in data.get("data", [])
@@ -335,10 +442,7 @@ async def _list_perplexity_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Perplexity models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="perplexity")]
+        raise ModelListingError(f"Failed to fetch Perplexity models: {exc}") from exc
     items = data.get("data", []) if isinstance(data, dict) else data
     options = [
         ModelOption(
@@ -365,10 +469,7 @@ async def _list_fireworks_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Fireworks models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="fireworks")]
+        raise ModelListingError(f"Failed to fetch Fireworks models: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("name", item.get("id", "")),
@@ -395,10 +496,7 @@ async def _list_cohere_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Cohere models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="cohere")]
+        raise ModelListingError(f"Failed to fetch Cohere models: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("name", item.get("id", "")),
@@ -424,8 +522,7 @@ async def _list_xai_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(f"Failed to fetch xAI models: {exc}", UserWarning, stacklevel=2)
-        return [ModelOption(id=config.model, label=config.model, provider="xai")]
+        raise ModelListingError(f"Failed to fetch xAI models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="xai")
         for item in data.get("data", [])
@@ -447,10 +544,7 @@ async def _list_nvidia_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch NVIDIA models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="nvidia")]
+        raise ModelListingError(f"Failed to fetch NVIDIA models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="nvidia")
         for item in data.get("data", [])
@@ -472,10 +566,7 @@ async def _list_github_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch GitHub Models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="github")]
+        raise ModelListingError(f"Failed to fetch GitHub Models: {exc}") from exc
     items = data if isinstance(data, list) else data.get("data", [])
     options = [
         ModelOption(
@@ -502,10 +593,7 @@ async def _list_gemini_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Gemini models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="gemini")]
+        raise ModelListingError(f"Failed to fetch Gemini models: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("name", "").replace("models/", ""),
@@ -535,10 +623,7 @@ async def _list_azure_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch Azure deployments: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="azure")]
+        raise ModelListingError(f"Failed to fetch Azure deployments: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("id", item.get("name", "")),
@@ -566,8 +651,7 @@ async def _list_vllm_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(f"Failed to fetch vLLM models: {exc}", UserWarning, stacklevel=2)
-        return [ModelOption(id=config.model, label=config.model, provider="vllm")]
+        raise ModelListingError(f"Failed to fetch vLLM models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="vllm")
         for item in data.get("data", [])
@@ -587,10 +671,7 @@ async def _list_lmstudio_models(config: PhosonConfig) -> list[ModelOption]:
             response.raise_for_status()
             data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        warnings.warn(
-            f"Failed to fetch LM Studio models: {exc}", UserWarning, stacklevel=2
-        )
-        return [ModelOption(id=config.model, label=config.model, provider="lmstudio")]
+        raise ModelListingError(f"Failed to fetch LM Studio models: {exc}") from exc
     options = [
         ModelOption(
             id=item.get("id", ""), label=item.get("id", ""), provider="lmstudio"
@@ -635,8 +716,16 @@ def _format_price_per_million(raw: object) -> str:
 
 
 def _prioritize_current(
-    options: list[ModelOption], current_model: str
+    options: list[ModelOption],
+    current_model: str,
+    *,
+    order_key: Callable[[ModelOption], tuple] | None = None,
 ) -> list[ModelOption]:
+    """Dedup and order ``options``: current model first, then *order_key*.
+
+    ``order_key`` is the provider-specific secondary comparator (I-113:
+    OpenRouter sorts by ``agentic_index``). Defaults to alphabetical by id.
+    """
     seen: set[str] = set()
     deduped: list[ModelOption] = []
     for option in options:
@@ -650,5 +739,38 @@ def _prioritize_current(
             ModelOption(id=current_model, label=current_model, provider="custom")
         )
 
-    deduped.sort(key=lambda option: (option.id != current_model, option.id.lower()))
+    sort_key = order_key or (lambda option: (option.id.lower(),))
+    deduped.sort(key=lambda option: (option.id != current_model, sort_key(option)))
     return deduped
+
+
+def _openrouter_order_key(option: ModelOption) -> tuple:
+    """I-113 secondary key: highest ``agentic_index`` first, models without
+    the field last (alphabetical among themselves)."""
+    if option.agentic_index is not None:
+        return (0.0, -option.agentic_index, option.id.lower())
+    return (1.0, 0.0, option.id.lower())
+
+
+def _provider_order_key(provider: str) -> Callable[[ModelOption], tuple] | None:
+    """Provider-specific ``_prioritize_current`` key, or the alphabetical
+    default (``None``)."""
+    if provider == "openrouter":
+        return _openrouter_order_key
+    return None
+
+
+def _openrouter_agentic_index(item: dict) -> float | None:
+    """``benchmarks.artificial_analysis.agentic_index`` from an OpenRouter model."""
+    benchmarks = item.get("benchmarks")
+    if not isinstance(benchmarks, dict):
+        return None
+    aa = benchmarks.get("artificial_analysis")
+    if not isinstance(aa, dict):
+        return None
+    index = aa.get("agentic_index")
+    if isinstance(index, bool):
+        return None
+    if isinstance(index, (int, float)):
+        return float(index)
+    return None

@@ -9,6 +9,8 @@ patch ``PhosonRepl._run_agent`` to avoid a real network call.
 """
 
 import asyncio
+import logging
+import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -825,3 +827,50 @@ def test_escape_is_a_noop_when_idle(app: PhosonApp) -> None:
     with patch.object(app.repl, "cancel_current") as mock_cancel:
         _trigger(app, "escape")
         mock_cancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_async_captures_warnings_for_the_session_only(
+    app: PhosonApp,
+) -> None:
+    """I-113 follow-up regression: a raw ``warnings.warn(...)`` (e.g. the
+    vLLM/context-window "response did not include <model>" fallback)
+    must not hit ``warnings.showwarning`` — the default implementation
+    writes straight to stderr and corrupts the alt-screen mid-render.
+    ``run_async`` routes it through logging instead (captured by the
+    session's ``NullHandler``) for its duration, and restores the
+    default ``showwarning`` on exit either way.
+    """
+    original_showwarning = warnings.showwarning
+    seen_during_session: list[str] = []
+
+    async def _fake_app_run_async() -> None:
+        # Runs "inside" run_async, after logging.captureWarnings(True) —
+        # showwarning must no longer be the default stderr writer.
+        assert warnings.showwarning is not original_showwarning
+        warnings.warn("during session", UserWarning, stacklevel=2)
+
+    def _fake_showwarning(message, *args, **kwargs):  # noqa: ANN001, ANN002
+        seen_during_session.append(str(message))
+
+    try:
+        with (
+            patch.object(app.app, "run_async", new=_fake_app_run_async),
+            patch.object(app.repl, "shutdown", new=AsyncMock()),
+            patch.object(app.repl, "start_update_check"),
+            patch.object(app.model_cache, "refresh", new=AsyncMock()),
+            patch.object(app.session_cache, "refresh", new=AsyncMock()),
+            patch("logging.Logger.warning", side_effect=_fake_showwarning),
+        ):
+            await app.run_async()
+
+        # Went through logging (captured above), never hit showwarning
+        # directly while the session ran.
+        assert len(seen_during_session) == 1
+        assert "during session" in seen_during_session[0]
+        # Restored afterwards — classic-mode / next session warnings are
+        # unaffected.
+        assert warnings.showwarning is original_showwarning
+    finally:
+        warnings.showwarning = original_showwarning
+        logging.captureWarnings(False)

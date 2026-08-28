@@ -154,6 +154,32 @@ def _handler(repl: _DummyRepl) -> CommandHandler:
     return CommandHandler(repl)
 
 
+def _mock_listings(monkeypatch, **provider_to_ids: list[str]) -> None:
+    """Patch ``list_models_for_providers`` with a fixed id → provider map.
+
+    Used by the explicit-``/model <id>`` tests below (I-113 follow-up):
+    since the command now always resolves the id's *real* provider via a
+    live listing lookup (never the ambiguous vendor/-prefix heuristic
+    alone — see the regression this guards against), tests must control
+    that lookup instead of hitting the network.
+    """
+    from phoson_cli.model_selector import ProviderListing
+
+    async def fake_list_models_for_providers(cfg, providers):
+        return [
+            ProviderListing(
+                provider=provider,
+                options=[SimpleNamespace(id=i, provider=provider) for i in ids],
+            )
+            for provider, ids in provider_to_ids.items()
+        ]
+
+    monkeypatch.setattr(
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
+    )
+
+
 @pytest.mark.asyncio
 async def test_model_command_persists_provider_and_model(tmp_path, monkeypatch) -> None:
     """Explicit /model <id> of another provider switches + saves both."""
@@ -166,6 +192,11 @@ async def test_model_command_persists_provider_and_model(tmp_path, monkeypatch) 
         sessions_dir=tmp_path / "sessions",
     )
     repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        anthropic=["claude-sonnet-4-6"],
+        openai=["openai/gpt-4o"],
+    )
 
     result = await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
 
@@ -194,6 +225,14 @@ async def test_model_command_refuses_unconfigured_provider(
         sessions_dir=tmp_path / "sessions",
     )
     repl = _DummyRepl(config)
+    # openai isn't configured (no credentials) — its listing can't be
+    # queried live either, so this only proves the id resolves to a
+    # provider the credential check then rejects.
+    _mock_listings(
+        monkeypatch,
+        anthropic=["claude-sonnet-4-6"],
+        openai=["openai/gpt-4o"],
+    )
 
     result = await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
 
@@ -207,16 +246,21 @@ async def test_model_command_refuses_unconfigured_provider(
 async def test_model_command_router_prefix_keeps_provider(
     tmp_path, monkeypatch
 ) -> None:
-    """With a router active, vendor-prefixed ids do not switch provider."""
+    """A vendor-prefixed id that OpenRouter itself lists (not OpenAI, not
+    a separately-configured OpenAI credential) keeps OpenRouter active —
+    the live listing lookup, not the vendor/ prefix, drives the switch."""
     monkeypatch.setenv("HOME", str(tmp_path))
     config = PhosonConfig(
         provider="openrouter",
         model="qwen/qwen3.6-plus",
         openrouter_api_key="sk-or-test",
-        openai_api_key="sk-openai-test",
         sessions_dir=tmp_path / "sessions",
     )
     repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        openrouter=["qwen/qwen3.6-plus", "openai/gpt-4o"],
+    )
 
     result = await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
 
@@ -226,6 +270,49 @@ async def test_model_command_router_prefix_keeps_provider(
     text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
     assert 'provider = "openrouter"' in text
     assert 'model = "openai/gpt-4o"' in text
+
+
+@pytest.mark.asyncio
+async def test_model_command_router_vendor_id_not_a_real_provider_match(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression: a router-served id whose vendor/ prefix *looks* like a
+    real, separately-configured provider name must NOT be attributed to
+    that provider — it must resolve to whichever provider's live listing
+    actually contains it (here: openrouter, not a real "anthropic" API).
+
+    This is the exact bug reported against I-113: with vllm active,
+    picking "anthropic/claude-opus-5" (an OpenRouter catalog entry, not
+    a real Anthropic-API model) incorrectly rejected the switch with
+    "belongs to provider anthropic, which has no credentials configured"
+    because the vendor/ prefix heuristic assumed "anthropic" was the
+    real backend instead of asking who actually lists the id.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="vllm",
+        model="Qwen3.8-27B-FP8",
+        vllm_base_url="http://localhost:8383/v1",
+        openrouter_api_key="sk-or-test",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        vllm=["Qwen3.8-27B-FP8"],
+        openrouter=["anthropic/claude-opus-5"],
+    )
+
+    result = await _handler(repl).handle(
+        Command(name="/model", args="anthropic/claude-opus-5")
+    )
+
+    assert result is True
+    assert not repl.renderer.errors, repl.renderer.errors
+    assert repl.model_calls == [("anthropic/claude-opus-5", "openrouter")]
+    text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'model = "anthropic/claude-opus-5"' in text
 
 
 @pytest.mark.asyncio
@@ -243,17 +330,32 @@ async def test_model_command_picker_option_provider_is_authoritative(
     )
     repl = _DummyRepl(config)
 
-    async def fake_list_available_models(cfg):
+    from phoson_cli.model_selector import ProviderListing
+
+    async def fake_list_models_for_providers(cfg, providers):
         return [
-            SimpleNamespace(id="llama-3.3-70b", provider="groq"),
-            SimpleNamespace(id="claude-sonnet-4-6", provider="anthropic"),
+            ProviderListing(
+                provider="anthropic",
+                options=[
+                    SimpleNamespace(id="claude-sonnet-4-6", provider="anthropic"),
+                ],
+            ),
+            ProviderListing(
+                provider="groq",
+                options=[
+                    SimpleNamespace(id="llama-3.3-70b", provider="groq"),
+                ],
+            ),
         ]
 
-    async def fake_pick_model(models, current_model, theme=None):
-        return SimpleNamespace(model_id="llama-3.3-70b", cancelled=False)
+    async def fake_pick_model(models, current_model, page_size=12, theme=None, **kw):
+        return SimpleNamespace(
+            model_id="llama-3.3-70b", provider="groq", cancelled=False
+        )
 
     monkeypatch.setattr(
-        "phoson_cli.commands.list_available_models", fake_list_available_models
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
     )
     monkeypatch.setattr("phoson_cli.commands.pick_model", fake_pick_model)
 
@@ -306,6 +408,11 @@ async def test_model_command_env_provider_becomes_self_containing_file(
         sessions_dir=tmp_path / "sessions",
     )
     repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        anthropic=["claude-sonnet-4-6"],
+        openai=["openai/gpt-4o"],
+    )
 
     await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
 
@@ -318,6 +425,84 @@ async def test_model_command_env_provider_becomes_self_containing_file(
     reloaded = load_config()
     assert reloaded.provider == "openai"
     assert reloaded.model == "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_model_command_explicit_unknown_prefix_resolves_via_listing(
+    tmp_path, monkeypatch
+) -> None:
+    """I-113 follow-up regression: an explicit ``/model <id>`` whose
+    vendor/ prefix isn't itself a known provider (e.g. an OpenRouter
+    catalog entry like "qwen/qwen3.8-27b" — "qwen" isn't a backend
+    phoson talks to directly) must still switch the *actual* provider by
+    looking the id up across every configured provider's live listing,
+    instead of silently keeping the active one (here: vllm) while only
+    the "model" string gets saved.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="vllm",
+        model="Qwen3.8-27B-FP8",
+        vllm_base_url="http://localhost:8383/v1",
+        openrouter_api_key="sk-or-test",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+
+    from phoson_cli.model_selector import ProviderListing
+
+    async def fake_list_models_for_providers(cfg, providers):
+        return [
+            ProviderListing(
+                provider="vllm",
+                options=[SimpleNamespace(id="Qwen3.8-27B-FP8", provider="vllm")],
+            ),
+            ProviderListing(
+                provider="openrouter",
+                options=[SimpleNamespace(id="qwen/qwen3.8-27b", provider="openrouter")],
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "phoson_cli.commands.list_models_for_providers",
+        fake_list_models_for_providers,
+    )
+
+    result = await _handler(repl).handle(
+        Command(name="/model", args="qwen/qwen3.8-27b")
+    )
+
+    assert result is True
+    assert repl.model_calls == [("qwen/qwen3.8-27b", "openrouter")]
+    text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
+    assert 'provider = "openrouter"' in text
+    assert 'model = "qwen/qwen3.8-27b"' in text
+
+
+@pytest.mark.asyncio
+async def test_model_command_explicit_same_provider_skips_listing_lookup(
+    monkeypatch,
+) -> None:
+    """No ``/`` in the id, or a prefix that already resolves for free
+    (known provider / router-kept), must NOT pay for the extra
+    multi-provider fetch."""
+    config = PhosonConfig(
+        provider="openai",
+        model="gpt-4o",
+        openai_api_key="sk-openai-test",
+    )
+    repl = _DummyRepl(config)
+
+    async def fail_if_called(cfg, providers):
+        raise AssertionError("list_models_for_providers must not be called")
+
+    monkeypatch.setattr("phoson_cli.commands.list_models_for_providers", fail_if_called)
+    monkeypatch.setattr("phoson_cli.commands.save_config", lambda *a, **k: None)
+
+    result = await _handler(repl).handle(Command(name="/model", args="gpt-4.1-mini"))
+
+    assert result is True
+    assert repl.model_calls == [("gpt-4.1-mini", None)]
 
 
 @pytest.mark.asyncio

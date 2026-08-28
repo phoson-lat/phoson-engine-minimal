@@ -40,6 +40,9 @@ class ModelOption:
     description: str = ""
     context_length: int | None = None
     pricing: str = ""
+    #: OpenRouter `benchmarks.artificial_analysis.agentic_index` (I-113).
+    #: ``None`` when the provider (or model) doesn't expose it.
+    agentic_index: float | None = None
 
 
 def models_file_path(home: str | Path | None = None) -> Path:
@@ -240,6 +243,7 @@ def apply_model_overrides(
                     else opt.context_length
                 ),
                 pricing=opt.pricing,
+                agentic_index=opt.agentic_index,
             )
         )
 

@@ -1178,9 +1178,18 @@ class PhosonApp:
         # libraries still emit records for real handler setups.
         logging.getLogger().handlers.append(logging.NullHandler())
         logging.getLogger().propagate = False
+        # ``warnings.warn(...)`` (context-window/model-listing fallbacks —
+        # e.g. vLLM's /v1/models not listing the configured model id)
+        # bypasses logging entirely and writes straight to stderr via
+        # ``warnings.showwarning``, corrupting the alt-screen mid-render.
+        # Route it through logging (→ the NullHandler above) for the
+        # duration of the session; ``main()`` restores the default
+        # showwarning on exit so classic-mode warnings are unaffected.
+        logging.captureWarnings(True)
         try:
             await self.app.run_async()
         finally:
+            logging.captureWarnings(False)
             await self.repl.shutdown()
 
 
