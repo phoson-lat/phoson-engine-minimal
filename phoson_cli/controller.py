@@ -43,7 +43,12 @@ from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .tools import build_tools, build_tools_dict
 from .config import COMPACT_MODES, PhosonConfig, build_chat, save_config
-from .models import load_models_file, provider_settings, resolve_context_window
+from .models import (
+    load_models_file,
+    provider_settings,
+    normalize_provider,
+    resolve_context_window,
+)
 from ._session import SessionState, SessionMetrics
 from .attachments import AttachmentManager
 from .ui_protocols import AgentEventSink, ConfirmationService
@@ -1049,8 +1054,18 @@ class SessionController:
         default_model = settings.get("default_model")
         await self.set_model(default_model or self.config.model)
 
-    async def set_model(self, model: str) -> None:
-        """Switch to a different model, rebuild the engine, refresh context window."""
+    async def set_model(self, model: str, provider: str | None = None) -> None:
+        """Switch to a different model, rebuild the engine, refresh context window.
+
+        When ``provider`` is given and differs from the active one, the
+        provider is switched too (I-89): a model id that belongs to another
+        provider must leave the runtime — and the persisted config — as a
+        consistent ``(provider, model)`` pair.
+        """
+        if provider is not None and normalize_provider(provider) != normalize_provider(
+            self.config.provider
+        ):
+            self.config.provider = provider
         self.current_model = model
         self.config.model = model
         # Sub-agent model follows the main model unless explicitly overridden.
