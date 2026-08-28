@@ -163,9 +163,14 @@ def _make_run_step(cost: float = 0.001) -> RunStep:
     )
 
 
-def test_finalize_run_accumulates_metrics(repl: PhosonRepl) -> None:
-    """_finalize_run updates session_metrics.step_count and total_cost_usd."""
-    from phoson_llm.schemas import Message
+def test_metrics_accumulate_live_and_finalize_does_not_double_count(
+    repl: PhosonRepl,
+) -> None:
+    """I-88: session metrics are folded in as each step completes (live, in
+    _update_live_metrics). _finalize_run must NOT re-add the steps, or every
+    step would be counted twice. The total equals the sum of the steps
+    exactly once."""
+    from phoson_llm.schemas import Message, ModelConfig
 
     # Seed the tree with a user message so base_count is 1.
     user_msg = Message(role="user", content="hi")
@@ -181,10 +186,16 @@ def test_finalize_run_accumulates_metrics(repl: PhosonRepl) -> None:
         total_cost_usd=0.03,
     )
     done_event = AgentDoneEvent(result=result)
+    config = ModelConfig(model="test-model")
 
-    # Patch summarizer to avoid real token estimation
-    repl.summarizer.estimate_tokens = MagicMock(return_value=42)
+    # Live accumulation: the controller folds each step in as it completes.
+    for step in steps:
+        repl._controller._update_live_metrics(step, config)
+    # At this point the totals are already correct.
+    assert repl.session_metrics.step_count == 2
+    assert repl.session_metrics.total_cost_usd == pytest.approx(0.03)
 
+    # Finalizing must not re-add them (no double count).
     repl._finalize_run(done_event, base_count)
 
     assert repl.session_metrics.step_count == 2

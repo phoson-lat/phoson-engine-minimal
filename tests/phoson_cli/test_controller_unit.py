@@ -20,6 +20,7 @@ from phoson_agent.models import (
     AgentErrorEvent,
     AgentStartEvent,
     AgentTokenEvent,
+    AgentStepDoneEvent,
 )
 from phoson_cli.controller import SessionController
 from phoson_cli.ui_protocols import AgentEventSink
@@ -377,9 +378,14 @@ async def test_metrics_updated_from_steps(tmp_path) -> None:
             )
         ],
     )
+    # The real engine emits an AgentStepDoneEvent per step as it runs;
+    # metrics are accumulated live from those events (I-88), so the fake
+    # stream must mirror that — the done event's steps list is not the
+    # accumulation source (that would double-count).
     controller.engine.stream = _fake_stream(
         [
             AgentStartEvent(model="m", message_count=1, max_iterations=50),
+            AgentStepDoneEvent(step=result.steps[0]),
             AgentDoneEvent(result=result),
         ]
     )
@@ -781,3 +787,130 @@ async def test_estimate_active_path_counts_system_and_tools(tmp_path) -> None:
     without_tools = controller.estimate_active_path()
     controller.summarizer.tool_definitions = saved
     assert without_tools < baseline
+
+
+# ── I-88: live metrics (cost + tokens track the run, no double count) ────────
+
+
+def _step(kind="llm", cost=0.0, input_tokens=0, output_tokens=0):
+    now = datetime.datetime.now()
+    return RunStep(
+        kind=kind,
+        started_at=now,
+        ended_at=now,
+        duration_ms=10,
+        usage=TokenUsage(input=input_tokens, output=output_tokens),
+        cost_usd=cost,
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_metrics_accumulate_per_step_and_no_double_count(tmp_path) -> None:
+    """Cost/tokens are folded into session_metrics as each step completes
+    (live), and _finalize_run must NOT re-add them — total equals the sum
+    of the steps exactly once (I-88)."""
+    controller, _sink = _make_controller(tmp_path)
+
+    step1 = _step(cost=0.01, input_tokens=10, output_tokens=5)
+    step2 = _step(cost=0.02, input_tokens=20, output_tokens=8)
+    step3 = _step(kind="tool", cost=0.0, input_tokens=0, output_tokens=0)
+
+    result = AgentRunResult(
+        final_content="a",
+        history=[
+            Message(role="user", content="q"),
+            Message(role="assistant", content="a"),
+        ],
+        input_messages=[Message(role="user", content="q")],
+        steps=[step1, step2, step3],
+    )
+
+    # Snapshot the live totals right before the done event is emitted —
+    # all three steps must already be folded in (live, not at the end).
+    live_totals: dict[str, object] = {}
+
+    async def stream(path, config):
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield AgentStepDoneEvent(step=step1)
+        yield AgentStepDoneEvent(step=step2)
+        yield AgentStepDoneEvent(step=step3)
+        live_totals["cost"] = controller.session_metrics.total_cost_usd
+        live_totals["steps"] = controller.session_metrics.step_count
+        yield AgentDoneEvent(result=result)
+
+    controller.engine.stream = stream
+    await controller.run_turn("q")
+
+    # Live: by the time the done event was emitted, all 3 steps were in.
+    assert live_totals["cost"] == pytest.approx(0.03)
+    assert live_totals["steps"] == 3
+
+    # Final: still exactly the sum — no double count from _finalize_run.
+    assert controller.session_metrics.step_count == 3
+    assert controller.session_metrics.total_cost_usd == pytest.approx(0.03)
+    assert controller.session_metrics.total_input_tokens == 30
+    assert controller.session_metrics.total_output_tokens == 13
+
+
+@pytest.mark.asyncio
+async def test_live_context_tokens_track_in_flight_history(tmp_path) -> None:
+    """The context indicator is refreshed against the engine's in-flight
+    history as steps complete, so it grows with the run (I-88)."""
+    controller, _sink = _make_controller(tmp_path)
+
+    # Seed the engine's in-flight history so the estimate has something to
+    # count (the real engine appends messages as the run progresses).
+    controller.engine._history = [
+        Message(role="user", content="word " * 200),
+        Message(role="assistant", content="word " * 200),
+    ]
+
+    step = _step(cost=0.01, input_tokens=10, output_tokens=5)
+    result = AgentRunResult(
+        final_content="a",
+        history=[
+            Message(role="user", content="q"),
+            Message(role="assistant", content="a"),
+        ],
+        input_messages=[Message(role="user", content="q")],
+        steps=[step],
+    )
+
+    seen_context_tokens: list[int] = []
+
+    async def stream(path, config):
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield AgentStepDoneEvent(step=step)
+        seen_context_tokens.append(controller._context_tokens)
+        yield AgentDoneEvent(result=result)
+
+    controller.engine.stream = stream
+    await controller.run_turn("q")
+
+    # The live refresh saw the in-flight history (a non-trivial estimate).
+    assert seen_context_tokens and seen_context_tokens[0] > 0
+    # And the final indicator is also populated from the committed tree.
+    assert controller._context_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_live_metrics_survive_error_and_cancel(tmp_path) -> None:
+    """Steps that completed before a failure/cancel keep their cost/tokens
+    in the session metrics (live accumulation), so partial work is not
+    lost from the accounting (I-88)."""
+    controller, _sink = _make_controller(tmp_path)
+
+    step = _step(cost=0.05, input_tokens=10, output_tokens=5)
+
+    async def stream(path, config):
+        yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+        yield AgentStepDoneEvent(step=step)
+        yield AgentErrorEvent(message="boom", code="server_error", retryable=False)
+
+    controller.engine.stream = stream
+    outcome = await controller.run_turn("q")
+
+    assert outcome.status == "error"
+    assert controller.session_metrics.step_count == 1
+    assert controller.session_metrics.total_cost_usd == pytest.approx(0.05)
+    assert controller.session_metrics.total_output_tokens == 5
