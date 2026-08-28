@@ -11,15 +11,19 @@ module configures the client and adds the provider-specific bits:
   Hermes, ...) attribute their usage. Pass ``http_referer`` /
   ``app_title`` to override.
 - **Prompt caching** (IMPROVEMENTS.md G2 / #69):
-  - ``config.session_id`` is forwarded as the top-level ``session_id``
-    body field — OpenRouter uses it as the *sticky routing* key, so
-    repeated requests of a conversation land on the same upstream
-    provider and its prompt cache stays warm from the first turn.
-  - For ``anthropic/*`` models the top-level
-    ``cache_control: {"type": "ephemeral"}`` field enables
-    *automatic* caching (OpenRouter advances the breakpoint as the
-    conversation grows and translates it for Bedrock/Vertex). Models
-    with implicit caching (OpenAI, DeepSeek, Gemini 2.5+) need nothing.
+  - ``config.session_id`` is forwarded as ``extra_body["session"]`` —
+    OpenRouter uses it as the *sticky routing* key, so repeated requests
+    of a conversation land on the same upstream provider and its prompt
+    cache stays warm from the first turn. (Sent through ``extra_body``
+    rather than as a bare top-level kwarg because the OpenAI SDK's
+    ``chat.completions.create()`` only recognizes the fields it declares
+    itself — anything else is silently dropped unless routed through
+    ``extra_body``.)
+  - For ``anthropic/*`` models ``extra_body["cache_control"] =
+    {"type": "ephemeral"}`` enables *automatic* caching (OpenRouter
+    advances the breakpoint as the conversation grows and translates it
+    for Bedrock/Vertex). Models with implicit caching (OpenAI, DeepSeek,
+    Gemini 2.5+) need nothing.
 
 The cost callback returns ``(0.0, False)`` because OpenRouter charges
 based on the upstream provider it routes to and the price table here
@@ -96,16 +100,27 @@ class OpenRouterChat(BaseLLMChat):
     ) -> AsyncIterator[LLMEvent]:
         """Stream a response from the OpenRouter model."""
         extra_kwargs: dict[str, object] = {}
+        # ``chat.completions.create()`` (OpenAI SDK) only recognizes the
+        # fields it declares as top-level kwargs; anything else has to go
+        # through ``extra_body`` to actually reach the request payload —
+        # passing ``session_id``/``cache_control`` as bare top-level keys
+        # is silently dropped en route. Built as a typed local (not through
+        # ``extra_kwargs`` directly) so both branches below can populate it
+        # without re-reading an ``object``-typed value out of ``extra_kwargs``.
+        extra_body: dict[str, object] = {}
 
         # Sticky routing: pin the whole conversation to one upstream
         # provider so its prompt cache stays warm (and so the
         # conversation does not silently switch models mid-session).
         if config.session_id:
-            extra_kwargs["session_id"] = config.session_id
+            extra_body["session"] = config.session_id
 
         # Automatic prompt caching for Anthropic routes.
         if config.model.startswith("anthropic/"):
-            extra_kwargs["cache_control"] = _EPHEMERAL_CACHE_CONTROL
+            extra_body["cache_control"] = _EPHEMERAL_CACHE_CONTROL
+
+        if extra_body:
+            extra_kwargs["extra_body"] = extra_body
 
         async for event in stream_chat_completions(
             self._client,
