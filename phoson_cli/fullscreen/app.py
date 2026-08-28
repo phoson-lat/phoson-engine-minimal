@@ -11,6 +11,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
+import os
 import time
 import uuid
 import shutil
@@ -20,6 +21,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
+from collections.abc import Callable
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -113,6 +115,9 @@ _FOOTER_HINT = (
 )
 
 # How often the subagent panel animation frame advances while active.
+# Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
+# (2 s/rotation vs 1.2 s). The streaming freeze in
+# `tick_activity_frame()` — not the tick rate — is what cuts CPU.
 _SUBAGENT_TICK_SECONDS = 0.12
 
 # Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
@@ -148,6 +153,36 @@ _DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
 def _one_line(text: str) -> str:
     """Collapse whitespace to a single line (rewind notices/previews)."""
     return " ".join(text.split())
+
+
+_PERF_LOGGER = logging.getLogger("phoson.cli.perf")
+
+
+def enable_perf_counter(app: Application) -> Callable[[], int] | None:
+    """Attach the per-turn render counter (I-84, phase 0).
+
+    Enabled by ``PHOSON_PERF=1``: logs one line per agent turn with the
+    number of full render passes prompt_toolkit performed during the turn
+    and the effective fps. The counter reads ``Application.render_counter``
+    (already maintained by prompt_toolkit), so the steady-state cost with
+    the env var unset is a single ``bool(None)`` check in ``_run_turn``.
+
+    The dedicated logger gets its own stderr handler: while the TUI is up
+    the root logger has a NullHandler (so raw library warnings never leak
+    over the UI) and would otherwise swallow this one.
+    """
+    if app.render_counter is None:  # defensive: never crashes if renamed
+        return None
+    if not _PERF_LOGGER.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s: %(message)s"))
+        _PERF_LOGGER.addHandler(_handler)
+    _PERF_LOGGER.setLevel(logging.INFO)
+
+    def _count() -> int:
+        return app.render_counter or 0
+
+    return _count
 
 
 def _skill_names() -> list[str]:
@@ -197,6 +232,9 @@ class PhosonApp:
         # Header AGENTS.md indicator cache (see `_has_agents_md`).
         self._agents_md_cached: bool | None = None
         self._agents_md_checked_at: float = 0.0
+        # Header HTML cache (I-84): rebuilt only when an input changes.
+        self._header_cache_key: tuple[str, ...] | None = None
+        self._header_cache = HTML("")
 
         # Float overlay state (pickers, confirmations). While a Float is
         # open, the base key bindings are entirely disabled and only the
@@ -361,6 +399,15 @@ class PhosonApp:
             key_bindings=merge_key_bindings([base_kb, float_kb]),
             full_screen=True,
             mouse_support=True,
+            # I-84: floor on repaint frequency so a burst of invalidations
+            # coalesces into one layout/ANSI pass. Deliberately BELOW the
+            # activity tick interval (0.12 s) so a spinner tick is never
+            # deferred: each tick paints on its own frame and the braille
+            # animates at its full 8.3 fps. Key *processing* is unaffected
+            # regardless (only painting is deferred), so scroll/keys still
+            # paint on the first available frame — navigation stays
+            # event-driven and fluid.
+            min_redraw_interval=0.035,
         )
 
     def _apply_style(self) -> None:
@@ -405,6 +452,7 @@ class PhosonApp:
             self.sink.blocks[index] = self._banner_block
         self._apply_style()
         self._block_ansi_cache.clear(0)
+        self._header_cache_key = None  # rebuild header for the new palette
         self.sink.dirty = True
         self.app.invalidate()
 
@@ -494,6 +542,10 @@ class PhosonApp:
         The header is the single location for session facts in the
         full-screen UI. The lower line deliberately contains only keyboard
         hints, so no model/provider/cost/token/cwd value is repeated.
+
+        I-84: the HTML string is cached and only rebuilt when one of its
+        inputs changes — repainting the chat for a spinner glyph must not
+        re-stat the filesystem or reformat the header on every frame.
         """
         repl = self.repl
         cost = repl.session_metrics.total_cost_usd
@@ -512,19 +564,31 @@ class PhosonApp:
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
 
-        return HTML(
-            '<style class="header"> phoson </style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{model_provider}</style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{cwd}</style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{token_cost}</style>'
-            f'<style class="header_dim">{attach_part}{memory_part}</style>'
-            '<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{status}</style>'
-            f'<style class="header_dim">{update_part}</style>'
+        key = (
+            model_provider,
+            cwd,
+            token_cost,
+            attach_part,
+            memory_part,
+            update_part,
+            status,
         )
+        if self._header_cache_key != key:
+            self._header_cache_key = key
+            self._header_cache = HTML(
+                '<style class="header"> phoson </style>'
+                '<style class="header_dim"> | </style>'
+                f'<style class="header_dim">{model_provider}</style>'
+                '<style class="header_dim"> | </style>'
+                f'<style class="header_dim">{cwd}</style>'
+                '<style class="header_dim"> | </style>'
+                f'<style class="header_dim">{token_cost}</style>'
+                f'<style class="header_dim">{attach_part}{memory_part}</style>'
+                '<style class="header_dim"> | </style>'
+                f'<style class="header_dim">{status}</style>'
+                f'<style class="header_dim">{update_part}</style>'
+            )
+        return self._header_cache
 
     def _has_agents_md(self) -> bool:
         """Whether any AGENTS.md/CLAUDE.md memory file applies here.
@@ -649,6 +713,11 @@ class PhosonApp:
         # AgentStartEvent. This removes the otherwise silent post-Enter gap.
         self.sink.begin_activity()
         ticker = self.app.create_background_task(self._tick_activity_indicators())
+        count_renders = (
+            enable_perf_counter(self.app) if os.environ.get("PHOSON_PERF") else None
+        )
+        turn_start = time.monotonic()
+        renders_before = count_renders() if count_renders else 0
         try:
             await self.repl._run_agent(text)
         except asyncio.CancelledError:
@@ -657,6 +726,15 @@ class PhosonApp:
             ticker.cancel()
             self.sink.end_pending_activity()
             self.app.invalidate()
+            if count_renders is not None:
+                elapsed = time.monotonic() - turn_start
+                renders = count_renders() - renders_before
+                _PERF_LOGGER.info(
+                    "perf: turn=%.1fs renders=%d avg_fps=%.1f",
+                    elapsed,
+                    renders,
+                    renders / elapsed if elapsed > 0 else 0.0,
+                )
 
     async def _tick_activity_indicators(self) -> None:
         """Animate the transient in-chat activity and subagent indicators."""

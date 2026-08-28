@@ -446,3 +446,157 @@ def test_notify_and_attachments_append_blocks() -> None:
 def test_render_chat_placeholder_when_empty() -> None:
     sink, _ = _make_sink()
     assert "Type a message" in render_chat(sink, width=80)
+
+
+# ── I-84: repaint throttling ─────────────────────────────────────────────────
+
+
+def test_token_events_do_not_invalidate_per_token() -> None:
+    """I-84: the unconditional per-event _touch() used to defeat the
+    touch_streaming() throttle — every token invalidated. A burst of tokens
+    inside one REPAINT_INTERVAL window must produce exactly one immediate
+    invalidation (the rest is coalesced into the trailing repaint timer).
+    Runs inside a live loop: without one the throttle degrades to
+    repaint-now by design (sync callers can't schedule timers)."""
+    import asyncio
+
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+
+    async def burst() -> None:
+        ticks.clear()
+        for _ in range(25):
+            sink.on_event(AgentTokenEvent(content="x "))
+
+    asyncio.run(burst())
+    assert len(ticks) == 1  # one immediate repaint, not one per token
+
+
+def test_streaming_trailing_repaint_never_lost() -> None:
+    """I-84: the throttled repaint schedules a trailing timer; when it fires,
+    the last streamed chunk is still painted (never left unrendered)."""
+    import asyncio
+
+    from phoson_cli.fullscreen.sink import REPAINT_INTERVAL_SECONDS
+
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+
+    async def drive() -> None:
+        ticks.clear()
+        sink.on_event(AgentTokenEvent(content="first "))
+        sink.on_event(AgentTokenEvent(content="last chunk"))
+        # Wait for the trailing timer to fire.
+        await asyncio.sleep(REPAINT_INTERVAL_SECONDS + 0.05)
+        sink.on_event(AgentDoneEvent(result=_done_result()))
+
+    asyncio.run(drive())
+    # 1 immediate (first token) + 1 trailing repaint, then the done line.
+    assert len(ticks) >= 2
+    # The final turn must have frozen the streamed content into a block —
+    # assert via the rendered ANSI (blocks are Rich renderables, not text).
+    assert "last chunk" in render_chat(sink, width=80)
+
+
+def _done_result() -> "AgentRunResult":
+    return AgentRunResult(
+        final_content="first  last chunk",
+        history=[],
+        input_messages=[],
+    )
+
+
+def test_tick_activity_frame_frozen_while_streaming() -> None:
+    """I-84: while tokens are streaming (or a tool runs), the spinner glyph
+    is invisible churn — ticks return False and do not advance the frame."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+
+    first_frame = sink.activity_frame()
+    # Pure thinking: ticks animate.
+    assert sink.tick_activity_frame() is True
+    assert sink.activity_frame() != first_frame
+
+    # Streaming: ticks are inert.
+    sink.current_turn.content = "streamed"
+    frame = sink.activity_frame()
+    for _ in range(5):
+        assert sink.tick_activity_frame() is False
+    assert sink.activity_frame() == frame
+
+    # Tool-running: also inert.
+    sink.current_turn.content = ""
+    sink.current_turn.running_tool = True
+    assert sink.tick_activity_frame() is False
+
+    # Idle sink: no turn, no repaint.
+    sink.current_turn = None
+    assert sink.tick_activity_frame() is False
+
+
+def test_tick_activity_frame_phrase_rotation_stays_25s() -> None:
+    """I-84: tick cadence moved 0.12 s → 0.2 s, so the phrase-rotation tick
+    count moved 21 → 12 to keep roughly 2.5 s per phrase."""
+    from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
+    from phoson_cli.fullscreen.sink import (
+        _THINKING_PHRASES,
+        _THINKING_PHRASE_TICKS,
+    )
+
+    sink, _ = _make_sink()
+    sink.begin_activity()
+    assert sink.activity_text() == _THINKING_PHRASES[0]
+
+    for _ in range(_THINKING_PHRASE_TICKS):
+        sink.tick_activity_frame()
+    assert sink.activity_text() == _THINKING_PHRASES[1]
+
+    # The rotation period stays in the 2–3 s band.
+    rotation_seconds = _THINKING_PHRASE_TICKS * _SUBAGENT_TICK_SECONDS
+    assert 2.0 <= rotation_seconds <= 3.0
+
+
+def test_repaint_intervals_match_target_fps() -> None:
+    """I-84: the tuning constants must stay at their intended cadences
+    (~10 fps stream repaint, ~8.3 fps activity ticks for a smooth
+    braille spinner)."""
+    from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
+    from phoson_cli.fullscreen.sink import REPAINT_INTERVAL_SECONDS
+
+    assert 0.09 <= REPAINT_INTERVAL_SECONDS <= 0.11  # ~10 fps
+    assert 0.10 <= _SUBAGENT_TICK_SECONDS <= 0.14  # ~8.3 fps
+
+
+def test_step_done_invalidation_is_throttled_like_streaming() -> None:
+    """I-84: AgentStepDoneEvent (I-88 live header metrics) shares the
+    streaming throttle — inside a live loop, a burst of step-done events
+    in one window coalesces into a single immediate repaint + trailing
+    timer. Without a loop it degrades to repaint-now by design."""
+    import asyncio
+
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+
+    async def burst() -> None:
+        ticks.clear()
+        for _ in range(5):
+            sink.on_event(AgentStepDoneEvent(step=_run_step()))
+
+    asyncio.run(burst())
+    assert len(ticks) == 1
+
+
+def test_error_notice_still_immediate_with_stream_event_flag() -> None:
+    """I-84: an error arriving after streamed tokens must invalidate
+    immediately (the notice cannot wait for the trailing timer) and must
+    not leave the _stream_event flag latched."""
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+    # Prime the throttle so the next token would NOT invalidate immediately.
+    sink.on_event(AgentTokenEvent(content="partial "))
+    ticks.clear()
+
+    sink.on_event(AgentErrorEvent(message="boom", code="server_error"))
+
+    assert len(ticks) == 1  # immediate, not throttled
+    assert sink._stream_event is False  # flag not latched

@@ -103,6 +103,11 @@ class FullScreenSink:
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
+        # True while the event currently being processed is a token/reasoning
+        # event (I-84): its repaint goes through the throttled
+        # touch_streaming() instead of the unconditional _touch() at the end
+        # of on_event, which would otherwise defeat the throttle.
+        self._stream_event: bool = False
         # Index in ``blocks`` of the pending single-line error notice
         # (I-83). Repeated failures overwrite it in place instead of
         # stacking panels; the next successful run start drops it.
@@ -118,7 +123,7 @@ class FullScreenSink:
         Tokens can arrive hundreds of times per second; with the ANSI
         block cache each frame is cheap, but waking prompt_toolkit's
         renderer that often is still wasted work. Coalesce repaints to
-        ~16fps (REPAINT_INTERVAL_SECONDS) while a turn is in flight.
+        ~10fps (REPAINT_INTERVAL_SECONDS, I-84) while a turn is in flight.
         The final token always schedules a trailing repaint so the last
         chunk of text is never left unrendered.
         """
@@ -240,22 +245,23 @@ class FullScreenSink:
         return SPINNER_FRAMES[index]
 
     def tick_activity_frame(self) -> bool:
-        """Advance the in-chat spinner; return whether a turn is active.
+        """Advance the in-chat spinner; return whether a repaint is due.
 
-        Also rotates the thinking phrase once per ``_THINKING_PHRASE_TICKS``
-        ticks (~2.5 s) — but only while actually thinking, so the phase
-        label doesn't churn under "Streaming…" / "Running tool…".
+        Only the *thinking* phase animates (I-84): while tokens are
+        streaming, or a tool/subagent is running, the visible text or tool
+        card IS the feedback — the spinner glyph is invisible churn, and
+        its repaints are redundant with the streaming/tool events' own
+        (throttled) repaints. The thinking phrase rotates once per
+        ``_THINKING_PHRASE_TICKS`` ticks (~2.5 s) so a long wait reads as
+        progress rather than a frozen label.
         """
         turn = self.current_turn
         if turn is None:
             return False
+        if turn.content or turn.running_tool or turn.subagent_tasks:
+            return False
         turn.activity_frame += 1
-        if (
-            not turn.content
-            and not turn.running_tool
-            and not turn.subagent_tasks
-            and turn.activity_frame % _THINKING_PHRASE_TICKS == 0
-        ):
+        if turn.activity_frame % _THINKING_PHRASE_TICKS == 0:
             turn.thinking_phrase_index += 1
         return True
 
@@ -289,12 +295,12 @@ class FullScreenSink:
             case AgentTokenEvent():
                 if self.current_turn is not None:
                     self.current_turn.content += event.content
-                    self.touch_streaming()
+                    self._stream_event = True
 
             case AgentReasoningEvent():
                 if self.current_turn is not None:
                     self.current_turn.reasoning += event.content
-                    self.touch_streaming()
+                    self._stream_event = True
 
             case AgentToolStartEvent():
                 turn = self.current_turn
@@ -370,7 +376,7 @@ class FullScreenSink:
                 # header's cost/token indicators are fresh — repaint now
                 # (throttled to the streaming cadence) so the numbers
                 # track the run instead of jumping at the end.
-                self.touch_streaming()
+                self._stream_event = True
 
             case AgentDoneEvent():
                 self.cancel_stream_throttle()
@@ -403,7 +409,17 @@ class FullScreenSink:
                     idx = len(self.blocks) - 1
                 self._error_notice_idx = idx
 
-        self._touch()
+        # I-84: this used to be an unconditional _touch() that defeated the
+        # touch_streaming() throttle — every token invalidated regardless
+        # of the 10 fps cadence. Token/reasoning events are the only cases
+        # where the throttled (possibly trailing-scheduled) repaint
+        # replaces the immediate one; all other events keep their
+        # immediate invalidation.
+        if self._stream_event:
+            self._stream_event = False
+            self.touch_streaming()
+        else:
+            self._touch()
 
     def _freeze_current_text(self, turn: CurrentTurn | None) -> None:
         """Turn whatever's accumulated in ``turn.content`` into a block.
@@ -521,9 +537,11 @@ class FullScreenSink:
 
 __all__ = ["FullScreenSink", "CurrentTurn", "REPAINT_INTERVAL_SECONDS"]
 
-#: Target repaint interval while streaming tokens (~16fps). Token events
-#: coalesce into at most one scheduled repaint per interval.
-REPAINT_INTERVAL_SECONDS = 0.06
+#: Target repaint interval while streaming tokens (I-84: ~10 fps; 16 fps
+#: of text changing character by character is indistinguishable to the
+#: eye and cut ~40% of repaints). Token events coalesce into at most one
+#: scheduled repaint per interval.
+REPAINT_INTERVAL_SECONDS = 0.10
 
 # Rotating labels for the *thinking* phase of the activity line. Kept short
 # (they share one line with the spinner) and deliberately light on tone —

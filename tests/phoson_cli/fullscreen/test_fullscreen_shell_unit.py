@@ -77,6 +77,57 @@ def test_shell_builds_full_screen_application(app: PhosonApp) -> None:
     assert app.app.style is not None
 
 
+def test_shell_caps_redraw_frequency_with_min_redraw_interval(app: PhosonApp) -> None:
+    """I-84: the Application sets a floor on repaint frequency so bursts of
+    invalidations coalesce into fewer full layout/ANSI passes. The floor
+    must stay BELOW the activity tick interval (0.12 s) or a spinner tick
+    that lands inside the window gets deferred to the next tick — the
+    braille then animates at half speed (visible lag)."""
+    from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
+
+    assert app.app.min_redraw_interval is not None
+    assert 0.02 <= app.app.min_redraw_interval < _SUBAGENT_TICK_SECONDS
+
+
+def test_spinner_tick_cadence_stays_smooth() -> None:
+    """I-84 regression (post-fix): the activity ticker must keep its
+    0.12 s cadence — 0.2 s made the braille spinner visibly lag. The CPU
+    savings come from the streaming freeze + throttle fix, not the rate."""
+    from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
+
+    assert 0.10 <= _SUBAGENT_TICK_SECONDS <= 0.14
+
+
+def test_header_html_is_cached_until_an_input_changes(app: PhosonApp) -> None:
+    """I-84: the header string is only rebuilt when one of its inputs
+    (cost/tokens/status/model/...) changes — repainting for a spinner
+    glyph must not reformat or re-stat the header on every frame."""
+    from phoson_agent import AgentStartEvent
+
+    first = app._get_header_text()
+    second = app._get_header_text()
+    assert first is second  # unchanged inputs → same cached object
+
+    # A live turn changes the status text → rebuild.
+    app.sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+    third = app._get_header_text()
+    assert third is not first
+    assert "thinking" in str(third.value)
+
+    # No change again → cached.
+    assert app._get_header_text() is third
+
+
+def test_header_cache_invalidated_on_theme_switch(app: PhosonApp) -> None:
+    """I-84: /theme rebuilds the cached header for the new palette."""
+    from phoson_cli.theme import LIGHT
+
+    first = app._get_header_text()
+    app.apply_theme(LIGHT)
+    second = app._get_header_text()
+    assert second is not first
+
+
 def test_shell_creates_nested_history_directory(tmp_path) -> None:
     """A2: FileHistory can use a configured path whose parent is absent."""
     history_file = tmp_path / "nested" / "history" / "input.txt"

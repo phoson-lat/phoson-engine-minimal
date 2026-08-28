@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.9 (2026-08-28)
+
+### Perf
+
+- **cli(fullscreen)**: full-screen TUI CPU usage cut while idle and
+  streaming (IMPROVEMENTS.md I-84, issue #84).
+
+  - *Bug: the stream-repaint throttle was defeated.* `FullScreenSink.on_event`
+    ended with an **unconditional** `_touch()`, so every token
+    invalidated the UI regardless of `touch_streaming()`'s 10 fps
+    coalescing (measured: ~65 repaints/s sustained instead of ~10).
+    Token/reasoning/step-done events now mark `_stream_event` and the
+    final touch routes them through the (trailing-timer) throttle; all
+    other events keep their immediate invalidation.
+  - *Hard redraw floor.* `Application` now runs with
+    `min_redraw_interval=0.05` (20 fps cap): redundant invalidations
+    coalesce at the prompt_toolkit level. Key *processing* is
+    unaffected — scroll/keys still paint on the first available frame,
+    so navigation stays fluid (see plan `.opencode/plans/i84-cpu-idle-streaming.md`
+    §3bis).
+  - *Adaptive activity ticks.* `tick_activity_frame()` no longer
+    animates while streaming or a tool/subagent runs — the visible text
+    is the feedback there; only the pure-thinking phase keeps the
+    spinner alive. The 0.12 s tick cadence is kept unchanged: the first
+    pass slowed it to 0.2 s and `min_redraw_interval` to 0.05, which
+    made the braille spinner visibly lag (2 s/rotation, ticks deferred)
+    — reverted, with the floor lowered to 0.035 s so a spinner tick is
+    never deferred to the next frame (test-locked).
+  - *Cached header.* `_get_header_text()` builds the HTML string once
+    and only rebuilds when an input changes (model, cwd, tokens/cost,
+    status, agents-md, update hint) — spinner-glyph repaints no longer
+    re-stat the filesystem or reformat the header. Cache is dropped on
+    `/theme`.
+  - *Measured* (`scripts/bench_i84_cpu.py`, synthetic 60 tok/s burst
+    stream, headless TUI): thinking 8.3% → 4.3% CPU, streaming 29.6% →
+    4.1% CPU, idle 0% unchanged. New `PHOSON_PERF=1` env var logs
+    renders/fps per turn (`phoson.cli.perf`) for before/after evidence.
+
 ## v0.13.8 (2026-08-28)
 
 ### Feat
