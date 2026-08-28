@@ -16,7 +16,7 @@
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | ~~P1~~ | — | — | ✅ Cerrado (no es bug nuestro — error de vLLM) |
-| **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ⬜ Abierto |
+| **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ✅ Resuelto (v0.13.8) |
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ⬜ Abierto |
 | **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
 | **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
@@ -85,14 +85,17 @@
 ---
 
 ### I-83 — [Enhancement #83] Compactar errores del modelo a 1 línea y sobreescribir en cada reintento
-* **Área:** `phoson_cli/fullscreen/render.py`, `phoson_cli/formatting.py`
+* **Estado:** ✅ **Resuelto (v0.13.8)** — `render_error_notice()` de 1 línea compartido por ambos frontends; el sink fullscreen sobreescribe el notice pendiente en cada fallo y lo elimina cuando el reintento siguiente completa con éxito; el JSON crudo va a `logger.debug` (ver CHANGELOG v0.13.8).
+* **Área:** `phoson_cli/formatting.py`, `phoson_cli/fullscreen/sink.py`, `phoson_cli/renderer.py`
 * **Prioridad:** **P1** · **Esfuerzo:** S-M · **Impacto:** 🟠 Medio
-* **Problema:** Los errores de API/red renderizan paneles grandes con JSON crudo que se apilan con cada reintento, ensuciando el transcript.
-* **Solución propuesta:**
-  - Resumir mensajes de error comunes a una sola línea con badge de advertencia y hint accionable.
-  - En la TUI, mutar/reemplazar el bloque de error del reintento previo en vez de añadir un nuevo bloque por cada reintento fallido.
+* **Problema:** Los errores de API/red renderizaban paneles grandes con JSON crudo que se apilaban con cada reintento, ensuciando el transcript.
+* **Solución implementada:**
+  - `render_error_notice(event, theme) -> Text`: `⚠ {code} · retryable — {hint}` (o mensaje saneado/truncado sin hint), sin JSON crudo.
+  - `FullScreenSink._error_notice_idx`: reemplazo in-place en `AgentErrorEvent` repetido; `drop_error_notice()` en `AgentDoneEvent` (reintento exitoso) y en resets del transcript (`clear()`/rewind), con auto-reparación de índice obsoleto.
+  - Classic `Renderer._on_error` imprime el notice (1 línea por reintento, no panel).
+  - Nota de diseño: el issue proponía borrar el notice en `AgentStartEvent`; se hizo en `AgentDoneEvent` porque el engine siempre emite `start → error` por run (borrar en start haría de la sobreescripción código muerto) y el issue pide que desaparezca cuando el intento siguiente **exita**.
 * **Criterio de listo:**
-  - Tres reintentos fallidos ocupan solo 1 línea en el transcript en lugar de 3 paneles apilados.
+  - Tres reintentos fallidos ocupan solo 1 línea en el transcript en lugar de 3 paneles apilados. ✅
 
 ---
 
@@ -179,7 +182,7 @@ Sprint Próximo (Estabilidad de Contexto & Métricas)
 Sprint Siguiente (UX & Performance)
 ├── I-108 (Alt+Backspace no debe leerse como doble-Esc / cancel)
 ├── I-109 (Rewind picker: orden nuevo→viejo y solo mensajes user)
-├── I-83 (Compactar paneles de error a 1 línea en reintentos)
+├── I-83 (Compactar paneles de error a 1 línea en reintentos) ✅ v0.13.8
 ├── I-84 (Optimización de CPU en idle/streaming)
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
 
