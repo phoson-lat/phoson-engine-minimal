@@ -43,6 +43,37 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     works offline"); the live-listing / unavailable / unified-picker
     behavior is documented instead.
 
+### Fix
+
+- **cli**: explicit `/model <id>` (typed or autocompleted) now always
+  resolves the *real* provider before switching, instead of silently
+  keeping the active one while only the `model` string got saved
+  (found while validating I-113 in a live session).
+
+  - A model whose vendor/ prefix isn't itself a provider phoson talks
+    to directly (e.g. an OpenRouter catalog entry like
+    `qwen/qwen3.8-27b`) never triggered a provider switch at all.
+  - Worse, the vendor/-prefix heuristic (`model_provider_for`) is
+    *ambiguous* whenever a router re-exports another vendor's catalog
+    id verbatim: `anthropic/claude-opus-5` served by OpenRouter is not
+    evidence of a directly-configured Anthropic credential. With a
+    non-router active provider (e.g. `vllm`), the heuristic confidently
+    (and wrongly) resolved to `anthropic`, rejecting the switch with
+    *"belongs to provider anthropic, which has no credentials
+    configured"* even though the model was legitimately servable via
+    OpenRouter.
+  - Fix: any explicit `/model <id>` containing `/` now confirms the
+    real provider via a live multi-provider listing lookup (the same
+    authority the interactive-picker branch already had), falling back
+    to the prefix heuristic only when no configured provider's listing
+    contains the id at all.
+  - `logging.captureWarnings(True)` for the duration of a full-screen
+    session: raw `warnings.warn(...)` (e.g. the vLLM/context-window
+    "response did not include `<model>`" fallback) bypassed logging
+    entirely and corrupted the alt-screen via direct stderr writes; now
+    routed through logging (captured by the session's existing
+    `NullHandler`) and restored on exit.
+
 ### Test
 
 - New/updated unit tests: `agentic_index` ordering (with/without the
