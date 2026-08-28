@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## Unreleased
+## v0.13.2 (2026-08-27)
 
 ### Docs
 
@@ -31,6 +31,17 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   Terminal). Added `[Shift+Drag] Select text` to the full-screen footer
   and a README section explaining the root cause — no new interaction
   code, no new bug surface.
+
+### Fix
+
+- **llm**: send `session_id` and `cache_control` inside `extra_body` for
+  OpenRouter (follow-up to G2, issue #69). The OpenAI SDK's
+  `chat.completions.create()` only recognizes the fields it declares as
+  top-level kwargs — both were being passed as bare top-level keys and
+  silently dropped en route instead of reaching the request payload,
+  which meant OpenRouter's sticky routing and Anthropic automatic
+  caching were not actually enabled from the CLI. Both now go through a
+  typed `extra_body` dict.
 
 ## v0.13.1 (2026-08-26)
 
