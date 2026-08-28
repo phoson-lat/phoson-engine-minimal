@@ -209,9 +209,19 @@ class GeminiChat(BaseLLMChat):
                                 )
 
         except Exception as e:
+            from phoson_llm.utils import (
+                CONTEXT_LENGTH_ERROR_CODE,
+                is_context_length_error,
+            )
             from phoson_llm.schemas import ErrorEvent
 
-            yield ErrorEvent(message=str(e), code="provider_error", retryable=False)
+            status = getattr(e, "code", None)
+            if not isinstance(status, int):
+                status = None
+            code = "provider_error"
+            if is_context_length_error(status, str(e)):
+                code = CONTEXT_LENGTH_ERROR_CODE
+            yield ErrorEvent(message=str(e), code=code, retryable=False)
             return
 
         if usage:

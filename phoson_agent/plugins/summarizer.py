@@ -21,16 +21,27 @@ from collections.abc import AsyncIterator
 
 import tiktoken
 
+from phoson_llm.utils import (
+    CONTEXT_LENGTH_ERROR_CODE,
+    extract_context_window,
+)
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
     TextBlock,
+    AudioBlock,
     ErrorEvent,
+    ImageBlock,
     TokenEvent,
     UsageEvent,
+    VideoBlock,
     ModelConfig,
     ToolUseBlock,
+    DocumentBlock,
+    ToolCallEvent,
+    ToolDefinition,
     ToolResultBlock,
+    ReasoningTokenEvent,
 )
 from phoson_agent.models import AgentEvent
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
@@ -52,6 +63,43 @@ _ENCODINGS: dict[str, str] = {
 
 # Overhead tokens per message (role metadata, formatting)
 _MSG_OVERHEAD = 4
+
+# Conservative flat estimates for multimodal blocks (I-91). tiktoken cannot
+# score media payloads, and a 4-token per-message overhead wildly
+# underestimates them: OpenAI's high-detail image tiles to ~1056-1700
+# tokens, Anthropic's PDF is ~20 tokens/page. These constants are
+# deliberately on the high side — underestimating is what makes the
+# auto-compact gate fire too late.
+_IMAGE_TOKENS = 1_700  # OpenAI high-detail ceiling
+_IMAGE_LOW_DETAIL_TOKENS = 1_056
+_AUDIO_TOKENS = 2_000  # ~30s of audio at GPT-4o-mini rates
+_VIDEO_TOKENS = 8_000  # sampled frames; provider-dependent
+_DOCUMENT_TOKENS_PER_PAGE = 20  # Anthropic PDF pages
+_DOCUMENT_TOKENS_DEFAULT = 1_000  # page count unknown
+#: Fraction of the context window reserved on top of ``max_tokens`` to
+#: absorb tokenizer approximation error (±10-15% on non-OpenAI models).
+_ESTIMATION_SAFETY_FRACTION = 0.10
+
+
+def estimate_block_tokens(encoding, block) -> int:
+    """Token estimate for one content block (text is exact, media flat)."""
+    if isinstance(block, TextBlock):
+        return len(encoding.encode(block.text))
+    if isinstance(block, ToolUseBlock):
+        return len(encoding.encode(json.dumps(block.args)))
+    if isinstance(block, ToolResultBlock):
+        return len(encoding.encode(block.result))
+    if isinstance(block, ImageBlock):
+        return _IMAGE_LOW_DETAIL_TOKENS if block.detail == "low" else _IMAGE_TOKENS
+    if isinstance(block, AudioBlock):
+        return _AUDIO_TOKENS
+    if isinstance(block, VideoBlock):
+        return _VIDEO_TOKENS
+    if isinstance(block, DocumentBlock):
+        pages = block.pages if isinstance(block.pages, int) and block.pages > 0 else 0
+        return pages * _DOCUMENT_TOKENS_PER_PAGE + _DOCUMENT_TOKENS_DEFAULT
+    # Unknown block type — count its repr so nothing is silently free.
+    return len(encoding.encode(repr(block)))
 
 
 class TokenEstimator:
@@ -75,6 +123,9 @@ class TokenEstimator:
 
         Accounts for content text + per-message overhead.
         For tool_use/tool_result blocks, includes args/result text.
+        Multimodal blocks (image/audio/video/document) carry a
+        conservative flat estimate each (I-91) — they were previously
+        skipped, which undercounted vision/document sessions.
         """
         total = 0
         for msg in messages:
@@ -84,16 +135,63 @@ class TokenEstimator:
                 continue
 
             for block in msg.content:
-                if isinstance(block, TextBlock):
-                    total += self.count_text(block.text)
-                elif isinstance(block, ToolUseBlock):
-                    total += self.count_text(json.dumps(block.args))
-                elif isinstance(block, ToolResultBlock):
-                    total += self.count_text(block.result)
-                # Multimodal blocks (image/audio/video/document) carry no
-                # text payload tiktoken can score; we skip them and let the
-                # _MSG_OVERHEAD constant absorb their structural cost.
+                total += estimate_block_tokens(self._encoding, block)
         return total
+
+    def count_tools(self, tools: list[ToolDefinition] | None) -> int:
+        """Estimate the token weight of the tool schemas sent with the call.
+
+        The provider serializes the full JSON schema of every tool on
+        *every* request; the auto-compact gate must count them (I-91).
+        """
+        if not tools:
+            return 0
+        return self.count_text(
+            json.dumps(
+                [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        },
+                    }
+                    for t in tools
+                ],
+                ensure_ascii=True,
+            )
+        )
+
+    def count_system(self, system: str | None) -> int:
+        """Estimate the token weight of the system prompt (I-91).
+
+        The system prompt travels in ``ModelConfig.system`` (or as a
+        leading system message); it is part of every request and the
+        auto-compact gate must count it.
+        """
+        if not system:
+            return 0
+        return self.count_text(system)
+
+    def estimate_request(
+        self,
+        messages: list[Message],
+        *,
+        system: str | None = None,
+        tools: list[ToolDefinition] | None = None,
+    ) -> int:
+        """Conservative estimate of the *full request* token count (I-91).
+
+        Messages + system prompt + tool schemas — i.e. everything the
+        provider will charge input tokens for. This is the number the
+        auto-compact gate and the header indicator use.
+        """
+        return (
+            self.count_messages(messages)
+            + self.count_system(system)
+            + self.count_tools(tools)
+        )
 
     @classmethod
     def for_provider(cls, provider: str) -> "TokenEstimator":
@@ -265,6 +363,11 @@ class SummarizationMiddleware(AgentMiddleware):
     #: Disables automatic compaction entirely (``/compact off``). Manual
     #: compactions keep working; this only gates :meth:`wrap_llm_call`.
     auto_enabled: bool = True
+    #: Tool schemas sent with every LLM call (I-91). The controller
+    #: mirrors the engine's tool registry here so the auto-compact gate
+    #: counts the schema weight in its token estimate. ``None`` means
+    #: "no tools" — the estimate then skips the schema term.
+    tool_definitions: list[ToolDefinition] | None = None
 
     # Internal state. Both are constructed in ``__post_init__``; using
     # ``init=False`` keeps them out of the dataclass constructor and out of
@@ -308,6 +411,24 @@ class SummarizationMiddleware(AgentMiddleware):
         """
         return self._estimator.count_messages(messages)
 
+    def estimate_request(
+        self,
+        messages: list[Message],
+        *,
+        system: str | None = None,
+        tools: list[ToolDefinition] | None = None,
+    ) -> int:
+        """Conservative estimate of a full request (I-91).
+
+        Messages + system prompt + tool schemas — the same number the
+        auto-compact gate uses, so the header indicator and ``/status``
+        agree with the gate. When *tools* is None the middleware's
+        :attr:`tool_definitions` (mirrored by the controller) is used.
+        """
+        if tools is None:
+            tools = self.tool_definitions
+        return self._estimator.estimate_request(messages, system=system, tools=tools)
+
     # ── Core logic ────────────────────────────────────────────────────
 
     async def on_before_llm(
@@ -337,28 +458,119 @@ class SummarizationMiddleware(AgentMiddleware):
     ) -> AsyncIterator[LLMEvent]:
         """Intercept the LLM call to check if compaction is needed.
 
-        If compaction is needed, we first perform a summarization call,
-        then proceed with the compacted messages.
+        I-91 changes over the original gate:
+
+        - The estimate is *conservative*: it counts the system prompt
+          and the tool schemas in addition to the messages, and the
+          trigger threshold reserves ``config.max_tokens`` plus a safety
+          fraction of the window, so the gate fires before the provider
+          would reject the request.
+        - If the provider still rejects the request with a
+          context-length error (HTTP 400) *before any user-visible
+          output*, the middleware performs an **emergency compaction**
+          and retries the call once. A second context-length error
+          propagates — no retry loops.
+        - Compaction splices the compacted list *in place* into
+          ``messages`` so the engine's history (the same list object)
+          stays compact for the rest of the run instead of re-compacting
+          every iteration.
         """
-        # Check if compaction is needed
-        current_tokens = self._estimator.count_messages(messages)
-        if not self.auto_enabled:
-            # Automatic compaction disabled (``/compact off``) — pass
-            # through untouched; manual compactions are unaffected.
-            async for event in call_next(messages, config):
+        if self.auto_enabled and await self._should_compact(messages, config):
+            (
+                compacted,
+                before_tokens,
+                after_tokens,
+                summary_text,
+                fwd,
+            ) = await self._compact(call_next, messages, config)
+            for event in fwd:
                 yield event
-            return
+            if compacted is not None:
+                self._record_compaction(
+                    messages,
+                    compacted,
+                    before_tokens=before_tokens,
+                    after_tokens=after_tokens,
+                    summary_length=len(summary_text),
+                )
+                # Splice in place: the engine's history list is the same
+                # object, so every subsequent iteration sees the
+                # compacted history (no re-compaction per iteration).
+                messages[:] = compacted
 
+        # Run the call and, if the provider rejects it for context
+        # length before any visible output, rescue with an emergency
+        # compaction and retry once.
+        async for event in self._call_with_context_rescue(call_next, messages, config):
+            yield event
+
+    # ── Gate (I-91) ───────────────────────────────────────────────────
+
+    def _request_tokens(self, messages: list[Message], config: ModelConfig) -> int:
+        """Conservative token estimate of the full request (I-91).
+
+        Messages + system prompt (``config.system`` or a leading system
+        message) + tool schemas.
+        """
+        system = config.system
+        if not system:
+            for msg in messages:
+                if msg.role == "system" and isinstance(msg.content, str):
+                    system = msg.content
+                    break
+        return self._estimator.estimate_request(
+            messages, system=system, tools=self.tool_definitions
+        )
+
+    def _trigger_tokens(self, context_window: int, config: ModelConfig) -> int:
+        """Token count at which the gate fires (I-91).
+
+        The configured threshold, but never so high that the request
+        plus the reserved output plus a safety margin would exceed the
+        window — the provider rejects the request once *input + output*
+        exceeds the context window, so a gate that only watches the
+        input fraction fires too late.
+
+        The output reservation is capped at half the window: a
+        ``max_tokens`` larger than the window (the default 32768 on a
+        small local model) cannot be reserved in full, and the
+        provider would cap the output at ``window - input`` anyway.
+        """
+        output_reserve = min(config.max_tokens, max(1, context_window // 2))
+        safety = int(context_window * _ESTIMATION_SAFETY_FRACTION)
+        return max(
+            0,
+            min(
+                int(context_window * self.threshold),
+                context_window - output_reserve - safety,
+            ),
+        )
+
+    async def _should_compact(
+        self, messages: list[Message], config: ModelConfig
+    ) -> bool:
+        """Whether the auto-compact gate fires for this request (I-91)."""
         context_window = await self._resolver.resolve(self.provider, self.model)
-        threshold_tokens = int(context_window * self.threshold)
+        current_tokens = self._request_tokens(messages, config)
+        return current_tokens > self._trigger_tokens(context_window, config)
 
-        if current_tokens <= threshold_tokens:
-            # No compaction needed — pass through
-            async for event in call_next(messages, config):
-                yield event
-            return
+    # ── Compaction core ───────────────────────────────────────────────
 
-        # Separate messages
+    async def _compact(
+        self,
+        call_next: LLMCallNext,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> tuple[list[Message] | None, int, int, str, list[LLMEvent]]:
+        """Summarize the old middle of *messages* and build the compacted list.
+
+        Returns ``(compacted, before_tokens, after_tokens, summary_text,
+        forward_events)``. ``compacted`` is None when there is nothing to
+        summarize (the tail already holds everything) or the summary call
+        failed. ``forward_events`` carries the summary call's
+        ``UsageEvent`` so its cost is not silently dropped.
+        """
+        before = self._request_tokens(messages, config)
         system_msgs: list[Message] = []
         others: list[Message] = []
         for msg in messages:
@@ -367,16 +579,11 @@ class SummarizationMiddleware(AgentMiddleware):
             else:
                 others.append(msg)
 
-        if len(others) > self.min_keep_messages:
-            keep = others[-self.min_keep_messages :]
-        else:
-            keep = others
+        keep = others[-self.min_keep_messages :]
         to_summarize = others[: len(others) - len(keep)]
 
         if not to_summarize:
-            async for event in call_next(messages, config):
-                yield event
-            return
+            return None, before, before, "", []
 
         # Generate summary — same prompt builder as the manual /compact
         # path so auto and manual compactions produce identical artifacts.
@@ -385,25 +592,18 @@ class SummarizationMiddleware(AgentMiddleware):
         summary_messages = [Message(role="user", content=summary_prompt)]
         # 4096 (not 2048) because the structured handoff document is longer
         # than a free-form paragraph; matches the manual /compact path.
-        summary_config = ModelConfig(model=self.model, max_tokens=4096, temperature=0.3)
+        summary_config = ModelConfig(
+            model=config.model or self.model, max_tokens=4096, temperature=0.3
+        )
 
-        summary_text = ""
-        async for event in call_next(summary_messages, summary_config):
-            # We swallow visual events (start/token/done) from the
-            # internal summary call to keep the UX clean, but we MUST
-            # forward UsageEvent so the caller can account for the cost
-            # of the summarization itself, and ErrorEvent so failures
-            # are visible.
-            if isinstance(event, TokenEvent):
-                summary_text += event.content
-                continue
-            if isinstance(event, (UsageEvent, ErrorEvent)):
-                yield event
-                continue
-            # Drop LLMStart/LLMDone/Reasoning/ToolCall events — they
-            # belong to the internal summary turn, not to the user's.
+        summary_text, summary_failed, forward = await self._run_summary_call(
+            call_next(summary_messages, summary_config)
+        )
+        if summary_failed:
+            # The summary round trip itself failed — compaction cannot
+            # proceed; the caller passes the original messages through.
+            return None, before, before, "", forward
 
-        # Build compacted messages
         compacted = list(system_msgs)
         if summary_text.strip():
             summary_content = (
@@ -411,22 +611,236 @@ class SummarizationMiddleware(AgentMiddleware):
             )
             compacted.append(Message(role="user", content=summary_content))
         compacted.extend(keep)
+        after = self._request_tokens(compacted, config)
+        return compacted, before, after, summary_text, forward
 
-        compacted_tokens = self._estimator.count_messages(compacted)
-        messages_removed = len(messages) - len(compacted)
+    async def _run_summary_call(
+        self, events: AsyncIterator[LLMEvent]
+    ) -> tuple[str, bool, list[LLMEvent]]:
+        """Consume the internal summary stream.
 
+        Returns ``(summary_text, failed, forward_events)``. Visual
+        events of the summary turn are swallowed (they belong to the
+        internal call, not the user's turn) but the ``UsageEvent`` is
+        kept so the caller can forward it — the cost of the
+        summarization must reach the session metrics. A failure of the
+        summary call is reported via ``failed`` so the caller can fall
+        back to the un-compacted messages instead of losing the turn.
+        """
+        summary_text = ""
+        failed = False
+        forward: list[LLMEvent] = []
+        async for event in events:
+            if isinstance(event, TokenEvent):
+                summary_text += event.content
+            elif isinstance(event, ErrorEvent):
+                failed = True
+            elif isinstance(event, UsageEvent):
+                forward.append(event)
+        return summary_text, failed, forward
+
+    def _record_compaction(
+        self,
+        messages: list[Message],
+        compacted: list[Message],
+        *,
+        before_tokens: int,
+        after_tokens: int,
+        summary_length: int,
+    ) -> None:
+        """Queue a :class:`SummarizationEvent` for the front end."""
         self._pending_compact_events.append(
             SummarizationEvent(
-                original_tokens=current_tokens,
-                compacted_tokens=compacted_tokens,
-                messages_removed=messages_removed,
-                summary_length=len(summary_text),
+                original_tokens=before_tokens,
+                compacted_tokens=after_tokens,
+                messages_removed=len(messages) - len(compacted),
+                summary_length=summary_length,
             )
         )
 
-        # Now proceed with the actual LLM call using compacted messages
-        async for event in call_next(compacted, config):
+    # ── Emergency rescue on context-length 400 (I-91) ─────────────────
+
+    async def _call_with_context_rescue(
+        self,
+        call_next: LLMCallNext,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> AsyncIterator[LLMEvent]:
+        """Run the LLM call; rescue a context-length 400 with compaction.
+
+        If the stream yields a context-length :class:`ErrorEvent`
+        *before any user-visible output* (token/reasoning/tool call),
+        the middleware:
+
+        1. learns the real context window from the error message when
+           the provider states it (calibrates future gates),
+        2. performs an emergency compaction (or, when the summary call
+           fails or there is nothing to summarize, a hard truncation
+           that keeps the recent tail plus a notice),
+        3. retries the call **once**. A second context-length error —
+           or any error after visible output — propagates.
+        """
+        committed = False
+        rescued = False
+        context_error: ErrorEvent | None = None
+
+        async for event in call_next(messages, config):
+            if isinstance(event, ErrorEvent):
+                if (
+                    not committed
+                    and not rescued
+                    and event.code == CONTEXT_LENGTH_ERROR_CODE
+                ):
+                    context_error = event
+                    break
+                yield event
+                return
+            if isinstance(event, (TokenEvent, ReasoningTokenEvent, ToolCallEvent)):
+                committed = True
             yield event
+
+        if context_error is None:
+            return
+
+        # 1) Learn the window the provider just told us about.
+        window = extract_context_window(context_error.message)
+        if window is not None:
+            try:
+                self._resolver.override(self.provider, self.model, window)
+            except AttributeError:  # non-resolver stand-ins in tests
+                pass
+
+        # 2) Emergency compaction — the prompt itself must fit the
+        #    window, so cut the front of the history until it does.
+        compacted, rescue_summary_length = await self._emergency_compact(
+            call_next, messages, config
+        )
+        if compacted is None:
+            # Nothing left to cut (only the recent tail remains) —
+            # compaction cannot make the request smaller; propagate.
+            yield context_error
+            return
+
+        self._record_compaction(
+            messages,
+            compacted,
+            before_tokens=self._request_tokens(messages, config),
+            after_tokens=self._request_tokens(compacted, config),
+            summary_length=rescue_summary_length,
+        )
+        messages[:] = compacted
+
+        # 3) Retry once.
+        rescued = True
+        async for event in call_next(messages, config):
+            if isinstance(event, ErrorEvent):
+                if not committed and event.code == CONTEXT_LENGTH_ERROR_CODE:
+                    # Still too long after compaction — give up.
+                    yield event
+                    return
+            if isinstance(event, (TokenEvent, ReasoningTokenEvent, ToolCallEvent)):
+                committed = True
+            yield event
+
+    async def _emergency_compact(
+        self,
+        call_next: LLMCallNext,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> tuple[list[Message] | None, int]:
+        """Build an emergency-compacted list guaranteed to fit the window.
+
+        Strategy: keep the system prefix and the recent tail, then cut
+        the oldest non-system messages until the *summary prompt itself*
+        fits — the summary call must not hit the same 400. If the
+        summary call fails (or there is nothing to summarize), fall back
+        to a hard truncation: recent tail + a notice naming the dropped
+        messages, which is always smaller than the original request.
+
+        Returns:
+            ``(compacted, summary_length)`` — the compacted list (or
+            None when the request cannot be made smaller, i.e. only the
+            recent tail remains) and the length of the generated summary
+            (0 for the hard-truncation fallback).
+        """
+        context_window = await self._resolver.resolve(self.provider, self.model)
+        budget = self._trigger_tokens(context_window, config)
+
+        system_msgs: list[Message] = []
+        others: list[Message] = []
+        for msg in messages:
+            if msg.role == "system":
+                system_msgs.append(msg)
+            else:
+                others.append(msg)
+
+        keep = others[-self.min_keep_messages :]
+        to_summarize = others[: len(others) - len(keep)]
+
+        if not to_summarize:
+            return None, 0
+
+        # Cut the front until the summary prompt fits the budget.
+        max_prompt_tokens = max(
+            1,
+            budget - self._estimator.count_system(config.system) - _MSG_OVERHEAD,
+        )
+        chunk = to_summarize
+        while chunk:
+            if (
+                self._estimator.count_messages(
+                    [Message(role="user", content=self.build_summary_prompt(chunk))]
+                )
+                <= max_prompt_tokens
+            ):
+                break
+            chunk = chunk[1:]
+
+        summary_text = ""
+        if chunk:
+            summary_messages = [
+                Message(role="user", content=self.build_summary_prompt(chunk))
+            ]
+            summary_config = ModelConfig(
+                model=config.model or self.model, max_tokens=4096, temperature=0.3
+            )
+            summary_text, failed, _fwd = await self._run_summary_call(
+                call_next(summary_messages, summary_config)
+            )
+        else:
+            failed = True
+
+        if not failed and summary_text.strip():
+            compacted = list(system_msgs)
+            compacted.append(
+                Message(
+                    role="user",
+                    content=(
+                        f"[Emergency compaction — conversation summary up to "
+                        f"this point: {summary_text.strip()}]"
+                    ),
+                )
+            )
+            compacted.extend(keep)
+            return compacted, len(summary_text)
+
+        # Hard truncation: the summary call failed (or nothing fit) —
+        # keep the recent tail and a notice. Always smaller than the
+        # original request, which is all the rescue can promise.
+        dropped = len(to_summarize)
+        compacted = list(system_msgs)
+        compacted.append(
+            Message(
+                role="user",
+                content=(
+                    f"[Emergency compaction — {dropped} older message(s) were "
+                    "dropped to fit the model's context window; the summary "
+                    "call failed.]"
+                ),
+            )
+        )
+        compacted.extend(keep)
+        return compacted, 0
 
     # ── Accessor for compact events ───────────────────────────────────
 

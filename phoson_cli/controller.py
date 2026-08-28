@@ -32,6 +32,7 @@ from phoson_llm.schemas import (
     TextBlock,
     ModelConfig,
     ContentBlock,
+    ToolDefinition,
 )
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_agent.plugins.offload import OffloadMiddleware
@@ -351,6 +352,18 @@ class SessionController:
 
         # Inject runtime context for sub-agents.
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
+
+        # Mirror the engine's tool schemas (built-in + plugin/MCP tools)
+        # into the summarizer so the auto-compact gate counts the schema
+        # weight of every request (IMPROVEMENTS.md I-91).
+        self.summarizer.tool_definitions = [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.parameters,
+            )
+            for tool in self.engine.tools
+        ]
         self.engine.context.extra["available_tools"] = self.tools_dict
         self.engine.context.extra["default_model"] = self.subagent_model
         # Fallback for sub-agents when the subagent model is unavailable.
@@ -499,14 +512,18 @@ class SessionController:
 
     def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
         """Append new messages to tree, update metrics."""
+        if self._rebase_after_compaction(done_event.result.history):
+            self._context_tokens = self.estimate_active_path()
+            for step in done_event.result.steps:
+                self.session_metrics.add_run_step(step)
+            return
+
         new_messages = done_event.result.history[base_count:]
         if new_messages:
             created = self.tree.append_many(self.current_node_id, new_messages)
             self.current_node_id = created[-1].id
 
-        self._context_tokens = self.summarizer.estimate_tokens(
-            done_event.result.history
-        )
+        self._context_tokens = self.estimate_active_path()
         for step in done_event.result.steps:
             self.session_metrics.add_run_step(step)
 
@@ -516,10 +533,57 @@ class SessionController:
         Updates ``current_node_id`` to the last appended node.
         """
         partial = self.engine.get_partial_history()
+        if self._rebase_after_compaction(partial):
+            return
         new_messages = partial[base_count:]
         if new_messages:
             created = self.tree.append_many(self.current_node_id, new_messages)
             self.current_node_id = created[-1].id
+
+    def _rebase_after_compaction(self, history: list[Message]) -> bool:
+        """Rebase the tree onto a compacted engine history (I-91).
+
+        When a mid-run auto-compaction (or the emergency 400 rescue)
+        spliced the engine's history, the tree's active path no longer
+        matches it — appending the tail would duplicate the compacted
+        messages. The fix mirrors the manual ``/compact``: graft the
+        compacted history as a **new branch off the root** (the old
+        branch stays intact, visible via ``/tree``) and move the cursor
+        to its last node.
+
+        Returns:
+            True when a rebase happened (the caller must not also append
+            the history tail).
+        """
+        compact_events = self.summarizer.pop_compact_events()
+        if not compact_events:
+            return False
+        if not history:
+            return False
+        created = self.tree.append_many(None, history)
+        self.current_node_id = created[-1].id
+        self._context_tokens = self.estimate_active_path()
+        self.sink.notify(
+            "info",
+            f"Context auto-compacted ({compact_events[0].original_tokens} → "
+            f"{compact_events[0].compacted_tokens} tokens, "
+            f"{compact_events[0].messages_removed} messages summarized).",
+        )
+        return True
+
+    def estimate_active_path(self) -> int:
+        """Conservative token estimate of the active path (I-91).
+
+        Counts messages + system prompt + tool schemas — the same number
+        the auto-compact gate uses, so the header indicator never lags
+        behind the gate.
+        """
+        path = self.tree.get_path(self.current_node_id)
+        return self.summarizer.estimate_request(
+            path,
+            system=build_system_prompt(self.engine.tools),
+            tools=self.summarizer.tool_definitions,
+        )
 
     def _persist_run_reasoning(self) -> None:
         """Attach captured reasoning to the last assistant node on the path.
@@ -596,6 +660,11 @@ class SessionController:
         # Cleared when the run ends, whatever the terminal state.
         self.summarizer.set_retained_reasoning(path, self._path_reasoning_map(path))
 
+        # Drop compaction events queued by a *previous* turn or a manual
+        # /compact — only compactions that happen during THIS run should
+        # trigger the tree rebase in _finalize_run (I-91).
+        self.summarizer.pop_compact_events()
+
         self.sink.on_user_message(user_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
@@ -611,7 +680,7 @@ class SessionController:
         )
 
         await self._refresh_context_window()
-        self._context_tokens = self.summarizer.estimate_tokens(path)
+        self._context_tokens = self.estimate_active_path()
 
         try:
             terminal_event = await self._consume_stream(path, config)

@@ -77,8 +77,26 @@ class ContextWindowResolver:
         self._ollama_cache: dict[str, int] = {}
         self._openrouter_cache: dict[str, int] = {}
         self._vllm_cache: dict[str, int] = {}
+        self._overrides: dict[str, int] = {}
 
     # ── Public ────────────────────────────────────────────────────────
+
+    def override(
+        self,
+        provider: str,
+        model: str,
+        context_window: int,
+    ) -> None:
+        """Pin the context window for ``provider/model`` (I-91).
+
+        Used when the provider reveals the real limit in an error
+        message (e.g. vLLM's "maximum context length is 8192 tokens")
+        for a model that the registry/dynamic lookups could not
+        resolve. Takes precedence over every other resolution source
+        for this resolver instance.
+        """
+        if context_window > 0:
+            self._overrides[f"{provider}/{model}"] = int(context_window)
 
     async def resolve(
         self,
@@ -87,6 +105,10 @@ class ContextWindowResolver:
     ) -> int:
         """Returns the context_window in tokens for the given model."""
         key = f"{provider}/{model}"
+
+        # 0. Explicit override (learned from provider error messages)
+        if key in self._overrides:
+            return self._overrides[key]
 
         # 1. Static registry
         if key in CONTEXT_WINDOW_REGISTRY:

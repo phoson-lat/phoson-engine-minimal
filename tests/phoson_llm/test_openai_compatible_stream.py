@@ -458,3 +458,78 @@ async def test_api_status_5xx_is_retryable() -> None:
 
     err = next(e for e in events if isinstance(e, ErrorEvent))
     assert err.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_api_status_400_context_length_is_classified() -> None:
+    """I-91: a 400 'prompt is too long' must carry the
+    ``context_length_exceeded`` code so the summarizer's emergency
+    compaction can rescue it."""
+    from openai import APIStatusError
+
+    from phoson_llm.utils import CONTEXT_LENGTH_ERROR_CODE
+
+    class _BoomCompletions:
+        async def create(self, **kwargs: object) -> _FakeStream:
+            req = type("Req", (), {})()
+            message = "prompt is too long: 199999 tokens > 198000 maximum"
+            body = {"error": {"message": message}}
+            raise APIStatusError(
+                message,
+                response=type(
+                    "Resp",
+                    (),
+                    {"status_code": 400, "request": req, "headers": {}},
+                )(),
+                body=body,
+            )
+
+    client = _FakeClient([])
+    client.chat.completions = _BoomCompletions()  # type: ignore[assignment]
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=ModelConfig(model="any", max_tokens=8),
+        )
+    )
+
+    err = next(e for e in events if isinstance(e, ErrorEvent))
+    assert err.code == CONTEXT_LENGTH_ERROR_CODE
+    assert err.retryable is False
+
+
+@pytest.mark.asyncio
+async def test_api_status_400_unrelated_is_not_context_error() -> None:
+    """I-91: an unrelated 400 keeps the generic code — it must not
+    trigger emergency compaction."""
+    from openai import APIStatusError
+
+    class _BoomCompletions:
+        async def create(self, **kwargs: object) -> _FakeStream:
+            req = type("Req", (), {})()
+            body = {"error": {"message": "invalid model name"}}
+            raise APIStatusError(
+                "boom",
+                response=type(
+                    "Resp",
+                    (),
+                    {"status_code": 400, "request": req, "headers": {}},
+                )(),
+                body=body,
+            )
+
+    client = _FakeClient([])
+    client.chat.completions = _BoomCompletions()  # type: ignore[assignment]
+
+    events = await _collect(
+        stream_chat_completions(
+            client,  # type: ignore[arg-type]
+            messages=[Message(role="user", content="hi")],
+            config=ModelConfig(model="any", max_tokens=8),
+        )
+    )
+
+    err = next(e for e in events if isinstance(e, ErrorEvent))
+    assert err.code == "unknown"
