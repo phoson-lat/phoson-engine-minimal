@@ -13,7 +13,7 @@
 | ID | Issue | Título | Prioridad | Esfuerzo | Impacto | Estado |
 |----|-------|--------|-----------|----------|---------|--------|
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
-| **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ⬜ Abierto |
+| **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ⬜ Abierto |
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | **P1** | S-M | 🟠 Medio (soporte local vLLM/Qwen) | ⬜ Abierto |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ⬜ Abierto |
@@ -42,6 +42,7 @@
 ---
 
 ### I-88 — [Bug #88] Actualización en vivo de tokens/costo en Header + captura de costo USD en OpenRouter
+* **Estado:** ✅ **Resuelto (v0.13.6)** — costo `usage.cost` de OpenRouter autoritativo + métricas en vivo por step (ver CHANGELOG v0.13.6).
 * **Área:** `phoson_cli/fullscreen/app.py`, `phoson_llm/chats/openrouter.py`
 * **Prioridad:** **P0** · **Esfuerzo:** S · **Impacto:** 🔴 Alto
 * **Problema:**
@@ -135,7 +136,7 @@
 ```
 Sprint Próximo (Estabilidad de Contexto & Métricas)
 ├── I-91 (Auto-compact gate + fallback 400) ✅ v0.13.5
-├── I-88 (Header live metrics + OpenRouter USD cost)
+├── I-88 (Header live metrics + OpenRouter USD cost) ✅ v0.13.6
 └── I-89 (/model persiste provider en config.toml)
 
 Sprint Siguiente (UX & Performance)
