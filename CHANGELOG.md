@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.13.5 (2026-08-27)
+
+### Fix
+
+- **agent/llm**: auto-compact gate underestimates tokens & no fallback on
+  provider 400 (IMPROVEMENTS.md I-91, issue #91). Long sessions could
+  die with `HTTP 400: prompt is too long` even though the header showed
+  the context "fine" — two independent bugs compounded.
+
+  - *Root cause 1: the gate counted a fraction of the request.*
+    `TokenEstimator.count_messages` only scored message text + tool
+    args/results; it skipped the **system prompt** (it travels in
+    `ModelConfig.system`, not in `messages`), the **tool schemas**
+    (sent with every request) and **multimodal blocks** (images/audio/
+    video/PDFs were worth 4 tokens of overhead). And the trigger was
+    `threshold × window` on the *input* alone — with the default
+    `max_tokens=32768` on a 128k window, the provider rejects the
+    request at ~95k input while the gate only fired at 102k (80%).
+    The gate could never fire in time.
+  - *Fix 1: conservative request-level estimate.* New
+    `TokenEstimator.estimate_request(messages, system=, tools=)` counts
+    messages + system prompt + tool schemas, with flat conservative
+    estimates for media blocks (image 1700 / low-detail 1056, audio
+    2000, video 8000, PDF 20/page + 1000). The trigger is now
+    `min(threshold × window, window − max_tokens − 10% safety)` — it
+    fires before the provider can reject. The controller mirrors the
+    engine's tool registry into `summarizer.tool_definitions` so the
+    gate and the header indicator use the *same* number.
+  - *Root cause 2: a 400 context error was terminal.* 400 mapped to
+    `code="unknown"`, `retryable=False`, and the run died — no recovery
+    path existed.
+  - *Fix 2: emergency rescue.* The adapters now classify a 400 whose
+    message matches a context-length pattern as
+    `code="context_length_exceeded"` (OpenAI-compatible family,
+    Anthropic, Ollama, Gemini). In `SummarizationMiddleware`, a
+    context-length error **before any user-visible output** triggers an
+    emergency compaction and **one** retry: the history front is cut
+    until the *summary prompt itself* fits the window (the summary call
+    must not hit the same 400), the summary replaces the old middle,
+    and the turn continues. If the summary call fails or nothing is
+    left to summarize, it degrades to a hard truncation (recent tail +
+    notice) — the session survives either way. A second context-length
+    error propagates (no retry loops); an error after visible output is
+    forwarded as-is (committed response, no duplicate output). The
+    rescue also **learns the real window** from the error message
+    ("maximum context length is 8192") via a new
+    `ContextWindowResolver.override()`, calibrating future gates for
+    models the registry doesn't know.
+  - *Fix 3: compaction is now persistent.* The old gate built a
+    compacted copy for one call and discarded it — the engine's
+    history (same list object) kept growing, so every subsequent
+    iteration re-fired the gate and paid a *second* summary call.
+    Compaction now splices in place (`messages[:] = compacted`), and
+    the controller rebases the conversation tree onto the compacted
+    history as a new root branch (same semantics as manual `/compact`:
+    the old branch stays, visible via `/tree`), announcing the
+    compaction to the user. The header indicator
+    (`SessionController.estimate_active_path`) uses the conservative
+    estimate, so the number you see is the number the gate uses.
+
+  - *Tests.* 30 new: gate fires below 100% with output reserved;
+    system+tools counted; media blocks counted; 400 rescue compacts +
+    retries once and the session continues; rescue gives up after a
+    second 400 (no loops); no rescue after visible output; rescue works
+    with `/compact off`; hard-truncation fallback when the summary call
+    fails; in-place splice (identity); summary `UsageEvent` cost still
+    forwarded; adapter 400 classification (OpenAI-compatible);
+    controller tree rebase + header coherence.
+
 ## v0.13.4 (2026-08-27)
 
 ### Feat
