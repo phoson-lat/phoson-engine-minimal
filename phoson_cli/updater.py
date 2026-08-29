@@ -49,13 +49,23 @@ LAST_UPDATE_CHECK = "last_update_check"
 
 
 def get_current_version() -> str:
-    """Version of the installed distribution, or ``"dev"`` from source."""
+    """Version of the installed distribution, or ``"dev"`` from source.
+
+    The standalone binary (issue #93) does not ship package metadata, so
+    the version is injected at build time (``phoson_cli._FROZEN_VERSION``);
+    :func:`~phoson_cli._frozen.frozen_version` prefers that when present.
+    """
     from importlib.metadata import PackageNotFoundError, version
 
+    from phoson_cli._frozen import is_frozen, frozen_version
+
     try:
-        return version(PACKAGE)
+        current = version(PACKAGE)
     except PackageNotFoundError:
-        return "dev"
+        current = "dev"
+    if is_frozen():
+        return frozen_version(current)
+    return current
 
 
 def _version_key(version: str) -> tuple:
@@ -192,15 +202,23 @@ class InstallMode:
     UVX = "uvx"
     PIP = "pip"
     SOURCE = "source"
+    FROZEN = "frozen"  # standalone PyInstaller binary (issue #93)
     UNKNOWN = "unknown"
 
 
 def detect_install_mode() -> str:
     """Best-effort detection of how this CLI process was launched.
 
-    Order matters: the uv-tool/uvx prefix checks come first (their venvs
-    also contain ``site-packages``), then the package path, then source.
+    Order matters: the frozen check comes first (a binary bundles a
+    Python that also looks like a regular prefix), then the
+    uv-tool/uvx prefix checks (their venvs also contain
+    ``site-packages``), then the package path, then source.
     """
+    from phoson_cli._frozen import is_frozen
+
+    if is_frozen():
+        return InstallMode.FROZEN
+
     prefix = Path(sys.prefix)
     exe = Path(sys.executable)
     pkg_dir = Path(__file__).resolve().parent
@@ -256,6 +274,11 @@ async def run_upgrade_command(command: list[str]) -> tuple[int, str]:
 
 def manual_hint(mode: str) -> str:
     """How a human can update themselves, per install mode."""
+    if mode == InstallMode.FROZEN:
+        return (
+            "re-download the latest phoson-cli binary from the GitHub "
+            "Releases page and replace the current executable"
+        )
     if mode == InstallMode.UV_TOOL:
         return f"uv tool upgrade {PACKAGE}"
     if mode == InstallMode.PIP:

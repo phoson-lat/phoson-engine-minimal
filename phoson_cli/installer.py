@@ -14,11 +14,10 @@ from phoson_cli.theme import load_theme, build_wizard_prompt_style
 from phoson_cli.labels import PROVIDER_LABELS
 
 from .config import PhosonConfig, save_config
+from ._frozen import asset_path
 from .model_selector import list_available_models
 
-_PHOS_ART = (
-    (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
-)
+_PHOS_ART = asset_path("phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
 
 
 class SetupWizard:

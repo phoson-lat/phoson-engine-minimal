@@ -6,20 +6,19 @@ console) to do their work. Lifting them out keeps ``repl.py`` focused
 on the input loop and makes the rendering trivially testable.
 """
 
-from pathlib import Path
-
 from rich.rule import Rule
 from rich.text import Text
 from rich.columns import Columns
 from rich.console import Group, Console, RenderableType
 
 from phoson_cli.theme import Theme
+from phoson_cli._frozen import asset_path
 from phoson_agent.sessions.models import ConversationTree
 
-# Loaded once at import time so the banner prints instantly on cold REPL start.
-_PHOS_ART = (
-    (Path(__file__).parent / "phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
-)
+# Loaded once at import time so the banner prints instantly on cold REPL
+# start. Resolves both the source layout and the PyInstaller bundle
+# (issue #93: the binary stages the asset under sys._MEIPASS).
+_PHOS_ART = asset_path("phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
 
 
 def _short_id(node_id: str) -> str:

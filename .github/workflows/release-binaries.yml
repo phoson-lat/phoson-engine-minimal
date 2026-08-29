@@ -1,0 +1,124 @@
+# Standalone phoson-cli binaries (IMPROVEMENTS.md I-93, issue #93).
+#
+# Builds one PyInstaller onefile binary per OS/arch from the release tag
+# and attaches them to the GitHub release. The version is taken from the
+# tag (``v0.15.0`` → ``0.15.0``) and injected into the bundle
+# (``phoson_cli/_frozen_version.txt``) so `phoson-cli --version` works
+# from the binary even though a bundle ships no package metadata.
+name: release-binaries
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the binaries (X.Y.Z)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            pyinstaller_os: linux
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            pyinstaller_os: linux
+            arch: arm64
+          - os: macos-latest
+            pyinstaller_os: darwin
+            arch: arm64
+          - os: macos-13
+            pyinstaller_os: darwin
+            arch: x86_64
+          - os: windows-latest
+            pyinstaller_os: windows
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Release tag: v0.15.0 → 0.15.0
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        # --no-install-project: the spec analyzes phoson_cli/ from the
+        # working tree (SPECPATH); only the runtime deps are needed in
+        # the venv. All extras so the optional provider SDKs (gemini,
+        # mistral, aws) are collected into the binary when available.
+        run: uv sync --no-install-project --all-extras
+
+      - name: Install PyInstaller
+        run: uv pip install pyinstaller
+
+      - name: Build binary
+        run: uv run pyinstaller phoson_cli.spec --version=${{ steps.version.outputs.version }}
+
+      - name: Inspect output
+        shell: bash
+        run: ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phoson-cli-${{ matrix.pyinstaller_os }}-${{ matrix.arch }}
+          path: dist/phoson-cli*
+
+  attach:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Rename to release asset names
+        # download-artifact unpacks each artifact into a dir named after
+        # the artifact (e.g. dist/phoson-cli-linux-x86_64/phoson-cli).
+        # Flatten to the release asset names documented in the README
+        # table; Windows binaries get the .exe they already carry.
+        shell: bash
+        run: |
+          mkdir release
+          for f in dist/*/phoson-cli*; do
+            [[ -f "$f" ]] || continue
+            artifact="$(basename "$(dirname "$f")")"
+            out="release/${artifact}"
+            # Windows binaries keep the .exe extension in the asset name
+            # (see the README table).
+            if [[ "$artifact" == *windows* ]]; then
+              out="${out}.exe"
+            fi
+            cp "$f" "$out"
+          done
+          ls -la release/
+
+      - name: Upload binaries to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/phoson-cli-*
