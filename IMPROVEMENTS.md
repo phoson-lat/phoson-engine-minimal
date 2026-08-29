@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub con su prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis de causa raíz, solución propuesta y criterios de aceptación.
 >
-> **Estado de referencia:** v0.13.11 · 1508 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
+> **Estado de referencia:** v0.15.0 · 1554 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
 
 ---
 
@@ -18,11 +18,11 @@
 | **I-82** | [#82](https://github.com/phoson-lat/phoson-engine-minimal/issues/82) | vLLM provider: HTTP 400 "No user query found in messages" con Qwen3.x | ~~P1~~ | — | — | ✅ Cerrado (no es bug nuestro — error de vLLM) |
 | **I-83** | [#83](https://github.com/phoson-lat/phoson-engine-minimal/issues/83) | Compactar paneles de error a 1 línea y sobreescribir en cada reintento | **P1** | S-M | 🟠 Medio (ruido visual en TUI) | ✅ Resuelto (v0.13.8) |
 | **I-84** | [#84](https://github.com/phoson-lat/phoson-engine-minimal/issues/84) | Reducción de uso de CPU en la TUI full-screen (idle y streaming) | **P1** | M | 🟠 Medio (eficiencia y batería) | ✅ Resuelto (v0.13.9) |
-| **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ⬜ Abierto |
-| **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ⬜ Abierto |
+| **I-108** | [#108](https://github.com/phoson-lat/phoson-engine-minimal/issues/108) | Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind | **P1** | S-M | 🟠 Medio (fiabilidad de UX / cancelación accidental) | ✅ Resuelto (v0.15.0) |
+| **I-109** | [#109](https://github.com/phoson-lat/phoson-engine-minimal/issues/109) | Rewind picker: lista viejo→nuevo e incluye entradas no-user (tool results como "(empty message)") | **P1** | S | 🟠 Medio (claridad de UX del rewind) | ✅ Resuelto (v0.15.0) |
 | **I-113** | [#113](https://github.com/phoson-lat/phoson-engine-minimal/issues/113) | OpenRouter sin orden por `agentic_index` + `/model`/`/provider` requieren dos pasos y no marcan providers `unavailable` | **P2** | M | 🟡 Medio (UX de selección de modelo) | ✅ Resuelto (v0.13.10, hotfix v0.13.11) |
 | **I-100** | [#100](https://github.com/phoson-lat/phoson-engine-minimal/issues/100) | Activar/desactivar MCPs a nivel servidor y nivel herramienta | **P2** | M-L | 🟡 Medio (gestión granular de tools) | ✅ Resuelto (v0.13.12) |
-| **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ⬜ Abierto |
+| **I-93** | [#93](https://github.com/phoson-lat/phoson-engine-minimal/issues/93) | Paquetes preconstruidos para Linux, macOS y Windows | **P2** | L | 🟢 Bajo (distribución binaria standalone) | ✅ Resuelto (v0.15.0) |
 
 ---
 
@@ -116,7 +116,8 @@
 ---
 
 ### I-108 — [Bug #108] Alt+Backspace se interpreta como doble-Esc: cancela el run en vuelo o abre el picker de rewind
-* **Área:** `phoson_cli/fullscreen/app.py`, `phoson_cli/fullscreen/keys.py`
+* **Estado:** ✅ **Resuelto (v0.15.0)** — guard de "Esc prefijo" vía `key_processor.input_queue`: un Esc solo cuenta (cancel/rewind) cuando la tecla siguiente en la cola NO es un payload Meta imprimible (ver abajo y CHANGELOG v0.15.0).
+* **Área:** `phoson_cli/fullscreen/app.py`
 * **Prioridad:** **P1** · **Esfuerzo:** S-M · **Impacto:** 🟠 Medio
 * **Problema:**
   1. El doble-Esc (rewind) se detecta **solo por tiempo** (`_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0` en `handle_escape()`), no por identidad de tecla.
@@ -135,6 +136,7 @@
 ---
 
 ### I-109 — [Bug #109] Rewind picker: orden viejo→nuevo e inclusión de entradas no-user (tool results)
+* **Estado:** ✅ **Resuelto (v0.15.0)** — `jump_candidates()` recorre el path en reversa (nuevo→viejo) y hace el filtro consciente del contenido: un nodo role-`user` solo califica si su contenido es `str` o contiene al menos un `TextBlock` (ver CHANGELOG v0.15.0).
 * **Área:** `phoson_cli/controller.py`, `phoson_cli/rewind_picker.py`
 * **Prioridad:** **P1** · **Esfuerzo:** S · **Impacto:** 🟠 Medio
 * **Problema:**
@@ -192,13 +194,20 @@
 ---
 
 ### I-93 — [Feature #93] Empaquetado binario preconstruido (Linux / macOS / Windows)
-* **Área:** `.github/workflows/`, CI / packaging tooling (PyInstaller / PyOxidizer / Shiv)
+* **Estado:** ✅ **Resuelto (v0.15.0)** — spec de PyInstaller (`phoson_cli.spec`) + workflow `release-binaries.yml` (5 plataformas: linux x86_64/arm64, darwin x86_64/arm64, windows x86_64) que adjunta los binarios a cada release; helpers de runtime congelado en `phoson_cli/_frozen.py` (resolución de assets vía `sys._MEIPASS`, versión inyectada en build) y modo `FROZEN` en el updater.
+* **Área:** `.github/workflows/release-binaries.yml`, `phoson_cli.spec`, `phoson_cli/_frozen.py`, `phoson_cli/_views.py`, `phoson_cli/installer.py`, `phoson_cli/updater.py`
 * **Prioridad:** **P2** · **Esfuerzo:** L · **Impacto:** 🟢 Bajo
 * **Problema:** Requiere entorno Python ≥3.12 y herramientas de gestión (`uv`/`pip`) para la instalación de usuarios finales.
-* **Solución propuesta:**
-  - Configurar workflow de release con `PyInstaller` o standalone binary packaging en GitHub Actions para plataformas x86_64 y ARM64.
+* **Solución implementada:**
+  - `phoson_cli.spec`: entry point `phoson_cli/__main__.py`; data asset `phos-ascii.txt` staged bajo `phoson_cli/`; hidden imports para los SDK de providers/plugins que se importan con lazy-import (gemini, mistral, boto3, mcp, asyncpg, redis, qdrant) + `collect_submodules` de los 6 paquetes propios (el plugin loader los importa dinámicamente); flag `--version X.Y.Z` inyecta `phoson_cli/_frozen_version.txt` en el bundle.
+  - `.github/workflows/release-binaries.yml`: matrix de 5 runners (ubuntu-latest, ubuntu-24.04-arm, macos-latest=arm64, macos-13=x86_64, windows-latest); versión tomada del tag del release (`v0.15.0` → `0.15.0`); build con `uv sync --no-install-project --all-extras` + `pyinstaller phoson_cli.spec --version=<v>`; job `attach` que renombra los artifacts a los nombres de la tabla del README y los sube con `softprops/action-gh-release`.
+  - `phoson_cli/_frozen.py`: `asset_path()` resuelve assets en `sys._MEIPASS/phoson_cli/` (bundle onefile) o junto al módulo (source); `is_frozen()` desde `sys.frozen`; `frozen_version()` lee `_frozen_version.txt` inyectado en build (el bundle no trae metadata de paquete).
+  - `updater.py`: nuevo `InstallMode.FROZEN` (detectado primero, antes que uv/pip); `get_current_version()` usa `frozen_version` cuando está congelado; `manual_hint` para frozen apunta a la página de Releases.
+  - README: sección "Standalone binaries (no Python required)" con la tabla de assets.
 * **Criterio de listo:**
-  - Binarios autónomos descargables desde la sección de Releases de GitHub.
+  - Binarios autónomos descargables desde la sección de Releases de GitHub. ✅ (workflow publicado; se verifica en el primer release)
+  - `phoson-cli --version` funciona dentro del binario (versión inyectada, sin metadata).
+  - `test_frozen_unit.py`: 12 tests de asset_path (source + MEIPASS), is_frozen, frozen_version, integración updater (modo FROZEN).
 
 ---
 
@@ -211,8 +220,8 @@ Sprint Próximo (Estabilidad de Contexto & Métricas)
 └── I-89 (/model persiste provider en config.toml) ✅ v0.13.7
 
 Sprint Siguiente (UX & Performance)
-├── I-108 (Alt+Backspace no debe leerse como doble-Esc / cancel)
-├── I-109 (Rewind picker: orden nuevo→viejo y solo mensajes user)
+├── I-108 (Alt+Backspace no debe leerse como doble-Esc / cancel) ✅ v0.15.0
+├── I-109 (Rewind picker: orden nuevo→viejo y solo mensajes user) ✅ v0.15.0
 ├── I-83 (Compactar paneles de error a 1 línea en reintentos) ✅ v0.13.8
 ├── I-84 (Optimización de CPU en idle/streaming) ✅ v0.13.9
 └── I-82 (vLLM Qwen3.x) ✅ Cerrado — error de vLLM, no del engine
@@ -220,7 +229,7 @@ Sprint Siguiente (UX & Performance)
 Sprint Posterior (Ecosistema & Distribución)
 ├── I-113 (OpenRouter agentic_index sort + picker unificado /model+/provider) ✅ v0.13.10 + hotfix v0.13.11
 ├── I-100 (Toggle granular MCP servers & tools) ✅ v0.13.12
-└── I-93 (Binarios precompilados standalone en CI)
+└── I-93 (Binarios precompilados standalone en CI) ✅ v0.15.0
 ```
 
 ## Principios de desarrollo

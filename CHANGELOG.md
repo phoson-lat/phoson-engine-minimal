@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.15.0 (2026-08-29)
+
+### Fix
+
+- **cli**: Alt+Backspace (y cualquier tecla Alt-modificada) ya no se
+  interpreta como Esc — no cancela un run en vuelo ni abre el picker de
+  rewind (IMPROVEMENTS.md I-108, issue #108).
+
+  Los terminales codifican Alt+<tecla> como `ESC` + <tecla> (convención
+  Meta). Para Alt+Backspace los bytes son `0x1b 0x7f` y el parser VT100
+  de prompt_toolkit los entrega como dos KeyPress — `escape` y `c-h` —
+  en el mismo lote; con la binding `eager` de `escape`, el handler
+  disparaba para el `ESC` aunque fuera prefijo de la secuencia.
+  `PhosonApp._is_prefixed_escape()` asoma a
+  `app.key_processor.input_queue` (el resto del lote ya está en la cola
+  cuando el handler eager corre) y suprime el Esc solo cuando la
+  siguiente tecla tiene `data` en el rango 0x20–0x7F (el payload
+  Meta): no confunde con un doble-Esc real (segundo `ESC`, data `0x1b`),
+  ni con un Ctrl+C/Enter ajenos en la cola (data < 0x20). Regresión #68
+  intacta: un Esc limpio en vuelo sigue cancelando de inmediato.
+  Tests: PipeInput con `ESC+0x7f`/`ESC+x` (idle y mid-run) +
+  `ESC` solo mid-run + caso unitario de la heurística.
+
+### Fix
+
+- **cli**: el rewind picker lista solo turnos genuinos del usuario, en
+  orden nuevo→viejo, con el cursor inicial en el más reciente
+  (IMPROVEMENTS.md I-109, issue #109).
+
+  `SessionController.jump_candidates()` ahora recorre el path activo en
+  **reversa** (el candidato 1 es el turno de usuario más reciente, el
+  más probable objetivo de un rewind) y hace el filtro **consciente del
+  contenido**: un nodo role-`user` solo califica si su contenido es
+  `str` o contiene al menos un `TextBlock`. Los tool results se guardan
+  con role `user` y contenido solo `ToolResultBlock`
+  (`phoson_agent/_tool_runner.py`); con el filtro por role solían
+  filtrar como filas "(empty message)". Un turno de usuario con string
+  vacío/blanco sigue apareciendo (es un turno real).
+
+### Feat
+
+- **cli**: binarios standalone de `phoson-cli` para Linux, macOS y
+  Windows sin Python (IMPROVEMENTS.md I-93, issue #93).
+
+  - *Spec.* `phoson_cli.spec` (PyInstaller onefile, entry
+    `phoson_cli/__main__`): stages `phos-ascii.txt` bajo
+    `phoson_cli/`, recoge hidden imports de los 6 paquetes propios
+    (el plugin loader los importa con `importlib.import_module`) y de
+    los SDK opcionales de providers (google-genai, mistralai, boto3) y
+    plugins (mcp, asyncpg, redis, qdrant) cuando están en el entorno de
+    build; `--version X.Y.Z` inyecta `phoson_cli/_frozen_version.txt`
+    en el bundle.
+  - *CI.* `release-binaries.yml`: matrix de 5 runners (Linux x86_64 y
+    ARM64, macOS Apple Silicon e Intel, Windows x86_64); la versión
+    viene del tag del release; adjunta los binarios al release con los
+    nombres de la tabla del README (`phoson-cli-linux-x86_64`,
+    `phoson-cli-darwin-arm64`, `phoson-cli-windows-x86_64.exe`, …).
+  - *Runtime congelado.* `phoson_cli/_frozen.py`: `asset_path()`
+    resuelve assets en `sys._MEIPASS/phoson_cli/` (bundle) o junto al
+    módulo (source); `frozen_version()` lee la versión inyectada en
+    build porque un bundle no trae metadata de paquete. El banner
+    (`_views.py`, `installer.py`) lo usa.
+  - *Updater.* nuevo `InstallMode.FROZEN` (detectado primero);
+    `get_current_version()` prefiere la versión inyectada; el hint de
+    actualización para el binario apunta a la página de Releases.
+  - *Docs.* README: sección "Standalone binaries (no Python required)"
+    con la tabla de assets por plataforma.
+
 ## v0.13.12 (2026-08-28)
 
 ### Feat
