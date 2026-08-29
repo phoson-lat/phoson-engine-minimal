@@ -3,33 +3,34 @@
 
 Build (from the repo root):
     uv pip install pyinstaller
-    pyinstaller phoson_cli.spec --version 0.15.0
+    PHOSON_VERSION=0.15.0 pyinstaller phoson_cli.spec
 
 The spec does two things on top of a bare entry-point build:
 
 1. **Data assets.** ``phos-ascii.txt`` (banner art) is staged into the
    bundle under ``phoson_cli/`` where ``phoson_cli._frozen.asset_path``
    looks.
-2. **Version injection.** ``--version X.Y.Z`` (passed by the release
-   workflow from the git tag) is written to
+2. **Version injection.** ``PHOSON_VERSION=X.Y.Z`` (exported by the
+   release workflow from the git tag) is written to
    ``phoson_cli/_frozen_version.txt`` in the bundle;
    ``updater.get_current_version()`` →
    :func:`phoson_cli._frozen.frozen_version` reads it, because a bundle
    does not ship the package's ``.dist-info``.
+
+The version arrives via environment, NOT a CLI flag: PyInstaller
+parses its own command line (where ``-v/--version`` is its reserved
+"show version" flag) *before* the spec runs, so a ``--version=...``
+argument would be rejected.
 """
 
+import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 # ── Flags ─────────────────────────────────────────────────────────────────────
-# ``--version=0.15.0`` is consumed here so PyInstaller's own arg parser
-# never sees an unknown option.
-VERSION = next(
-    (a.split("=", 1)[1] for a in sys.argv if a.startswith("--version=")), None
-)
-sys.argv = [a for a in sys.argv if not a.startswith("--version=")]
+VERSION = os.environ.get("PHOSON_VERSION") or None
 
 ROOT = Path(SPECPATH)
 DIST_NAME = "phoson-cli"
