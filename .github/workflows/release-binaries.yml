@@ -9,7 +9,11 @@ name: release-binaries
 
 on:
   release:
-    types: [published, edited]
+    # "published" ONLY. "edited" must not be included: the `attach` job
+    # uploads assets to the release, which itself counts as an edit and
+    # would re-trigger this workflow in a loop (build → attach → upload
+    # → edited → build → ...).
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
