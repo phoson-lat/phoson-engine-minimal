@@ -1123,20 +1123,32 @@ class SessionController:
         return node_path
 
     def jump_candidates(self) -> list[tuple[str, str]]:
-        """Rewind targets: ``(user_node_id, preview)`` pairs, oldest first (G1).
+        """Rewind targets: ``(user_node_id, preview)`` pairs, newest first (G1).
 
-        One entry per *user* node on the active path (root → cursor)
-        whose parent exists — picking one lands the cursor on that node's
-        *parent*, i.e. right before the selected turn, so the next user
-        message replaces it and everything after (Claude Code's
-        double-Esc UX). The first root node is skipped: there is no
-        earlier node to land on. The preview is the message's plain text
-        truncated to one line.
+        One entry per *genuine user* node on the active path whose parent
+        exists — picking one lands the cursor on that node's *parent*,
+        i.e. right before the selected turn, so the next user message
+        replaces it and everything after (Claude Code's double-Esc UX).
+        The first root node is skipped: there is no earlier node to land
+        on. The preview is the message's plain text truncated to one line.
+
+        Ordering and filtering (issue #109):
+        - **Newest → oldest.** The path is walked in reverse, so the
+          candidate list (and the picker's initial cursor) starts at the
+          most recent user turn — the most likely rewind target.
+        - **Content-aware filter.** Tool results are stored in the tree
+          with role ``user`` (``_tool_runner`` appends
+          ``Message(role="user", content=[ToolResultBlock(...)])``), so
+          a role-only check leaks them in as "(empty message)" rows.
+          A node qualifies only if its content is a string or contains
+          at least one ``TextBlock`` — tool-result-only (and any other
+          block-only) nodes are excluded.
         """
         from phoson_llm.schemas import TextBlock
 
         targets: list[tuple[str, str]] = []
-        for node in self._node_path():
+        # Reverse walk → newest first (issue #109).
+        for node in reversed(self._node_path()):
             message = node.message
             if message.role != "user" or node.parent_id is None:
                 continue
@@ -1145,8 +1157,17 @@ class SessionController:
                 text = content
             elif content:
                 text = " ".join(b.text for b in content if isinstance(b, TextBlock))
+                if not text:
+                    # No TextBlock in block content: not a genuine user
+                    # turn — the tool runner stores results as
+                    # Message(role="user", content=[ToolResultBlock]) and
+                    # those would render as "(empty message)" rows in the
+                    # picker (issue #109).
+                    continue
             else:
                 text = ""
+            # Whitespace-only *string* content is still a genuine (empty)
+            # user turn — it keeps its "(empty message)" preview.
             preview = " ".join(text.split()) or "(empty message)"
             if len(preview) > 48:
                 preview = preview[:47] + "…"

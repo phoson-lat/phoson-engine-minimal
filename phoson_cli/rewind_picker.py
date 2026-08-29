@@ -2,11 +2,12 @@
 
 The full-screen double-Esc rewind flow (IMPROVEMENTS.md G1, issue #51)
 opens this as a modal Float inside the running TUI: it lists the user
-turns of the active conversation path (oldest first) and lands the
-cursor on the node *before* the selected one, so the next message
-replaces the selected turn and everything after it — the same UX as
-Claude Code's double-Esc. The discarded messages stay in the tree as an
-abandoned branch (visible via ``/tree``); nothing is deleted.
+turns of the active conversation path (newest first, so the initial
+cursor sits on the most recent turn — the most likely rewind target)
+and lands the cursor on the node *before* the selected one, so the next
+message replaces the selected turn and everything after it — the same
+UX as Claude Code's double-Esc. The discarded messages stay in the tree
+as an abandoned branch (visible via ``/tree``); nothing is deleted.
 
 The classic front end reuses the same picker via ``run()`` (a full-screen
 prompt_toolkit Application), exactly like the session picker.
@@ -93,7 +94,7 @@ def build_rewind_picker(
     that for the classic REPL).
 
     Args:
-        candidates: ``(node_id, preview)`` pairs, oldest first, from
+        candidates: ``(node_id, preview)`` pairs, newest first, from
             ``SessionController.jump_candidates()``.
         page_size: Rows per page.
         theme: The active theme (resolved via ``load_theme()`` when None).
