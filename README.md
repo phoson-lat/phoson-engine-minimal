@@ -264,6 +264,31 @@ uv run pre-commit install --hook-type commit-msg
 uv run pre-commit install --hook-type pre-push
 ```
 
+### Standalone binaries (no Python required)
+
+Prebuilt `phoson-cli` binaries are attached to each
+[GitHub release](https://github.com/phoson-lat/phoson-engine-minimal/releases)
+— no Python interpreter or `uv`/`pip` needed (issue #93):
+
+| Platform | Asset |
+|----------|-------|
+| Linux x86_64 | `phoson-cli-linux-x86_64` |
+| Linux ARM64 | `phoson-cli-linux-arm64` |
+| macOS Apple Silicon | `phoson-cli-darwin-arm64` |
+| macOS Intel | `phoson-cli-darwin-x86_64` |
+| Windows x86_64 | `phoson-cli-windows-x86_64.exe` |
+
+Download the asset for your platform, make it executable (Unix), and run:
+
+```bash
+chmod +x phoson-cli
+./phoson-cli --setup     # configure credentials, then just: phoson-cli
+```
+
+`--self-update` inside a binary points back to the Releases page
+(the binary is a one-file bundle with no package metadata to upgrade).
+
+
 ---
 
 ## 🛠️ Development setup
