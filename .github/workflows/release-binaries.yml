@@ -74,7 +74,13 @@ jobs:
         run: uv pip install pyinstaller
 
       - name: Build binary
-        run: uv run pyinstaller phoson_cli.spec --version=${{ steps.version.outputs.version }}
+        # The version is passed via PHOSON_VERSION (env), not a CLI
+        # flag: PyInstaller's own arg parser rejects unknown/unknown-
+        # valued flags (e.g. -v/--version is its "show version" flag)
+        # BEFORE the spec runs, so the spec reads os.environ instead.
+        run: uv run pyinstaller phoson_cli.spec
+        env:
+          PHOSON_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Inspect output
         shell: bash
