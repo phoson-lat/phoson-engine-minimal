@@ -614,3 +614,201 @@ async def test_pipe_input_ctrl_z_without_rewind_notifies(tmp_path) -> None:
         await app.app.run_async()
 
     assert len(app.sink.blocks) == blocks_before + 1  # one notice
+
+
+# ── Issue #108: Alt+<key> must not be read as Esc ─────────────────────────────
+# Many terminals encode Alt+<key> as ESC + <key> (Meta convention). For
+# Alt+Backspace the bytes are ``0x1b 0x7f``; the VT100 parser emits them as
+# ``escape`` + ``c-h`` in the SAME input batch, and the eager ``escape``
+# handler fires for the first key while ``c-h`` is still in the queue.
+# ``PhosonApp._is_prefixed_escape`` uses exactly that signal to tell a
+# deliberate Esc from a sequence prefix.
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_alt_backspace_idle_does_not_rewind(tmp_path) -> None:
+    """ESC+0x7f (Alt+Backspace) must NOT open the rewind picker (issue #108)."""
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    app.repl = _make_repl(tmp_path, "first", "second")
+    blocks_before = len(app.sink.blocks)
+
+    with create_pipe_input() as pipe:
+        app.app.input = pipe
+        app.app.output = DummyOutput()
+
+        with patch.object(app, "run_float_picker") as mock_pick:
+
+            async def drive():
+                await asyncio.sleep(0.02)
+                pipe.send_text("\x1b\x7f")  # Alt+Backspace (ESC + DEL)
+                await asyncio.sleep(0.05)
+                pipe.send_text("\x1b\x7f")  # second Alt+Backspace
+                await asyncio.sleep(0.3)
+                pipe.send_text("\x03")  # exit
+
+            asyncio.create_task(drive())
+            await app.app.run_async()
+
+        mock_pick.assert_not_called()
+        # No notification noise either (the prefix Esc is fully ignored).
+        assert len(app.sink.blocks) == blocks_before
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_alt_backspace_mid_run_does_not_cancel(tmp_path) -> None:
+    """ESC+0x7f while a run is in flight must NOT cancel it (issue #108,
+    the regression that made the bug critical)."""
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    app.repl = _make_repl(tmp_path, "first")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with (
+        patch.object(app.repl, "_run_agent", new=slow_run),
+        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        create_pipe_input() as pipe,
+    ):
+        app.app.input = pipe
+        app.app.output = DummyOutput()
+
+        async def drive():
+            await asyncio.sleep(0.02)
+            app._prompt_input.text = "go"
+            app.submit()
+            await started.wait()
+            pipe.send_text("\x1b\x7f")  # Alt+Backspace mid-run
+            await asyncio.sleep(0.2)
+            release.set()
+            await asyncio.sleep(0.2)
+            pipe.send_text("\x03")  # exit
+
+        asyncio.create_task(drive())
+        await app.app.run_async()
+
+    mock_cancel.assert_not_called()  # the Alt+Backspace prefix did NOT cancel
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_clean_esc_still_cancels_mid_run(tmp_path) -> None:
+    """Regression guard (#68 intact): a *clean* Esc (nothing after it in
+    the queue) still cancels an in-flight run immediately."""
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    app.repl = _make_repl(tmp_path, "first")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_run(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with (
+        patch.object(app.repl, "_run_agent", new=slow_run),
+        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        create_pipe_input() as pipe,
+    ):
+        app.app.input = pipe
+        app.app.output = DummyOutput()
+
+        async def drive():
+            await asyncio.sleep(0.02)
+            app._prompt_input.text = "go"
+            app.submit()
+            await started.wait()
+            pipe.send_text("\x1b")  # clean Esc (alone in its batch)
+            # A lone Esc via the pipe is held by the VT100 layer for
+            # ttimeoutlen (0.5 s) before delivery — wait past that so
+            # the cancel is observed while the run is still in flight.
+            await asyncio.sleep(0.65)
+            release.set()
+            await asyncio.sleep(0.2)
+            pipe.send_text("\x03")  # exit
+
+        asyncio.create_task(drive())
+        await app.app.run_async()
+
+    mock_cancel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_alt_x_idle_does_not_rewind(tmp_path) -> None:
+    """Any Alt-modified key (ESC + printable, here Alt+X) must behave the
+    same as Alt+Backspace: no cancel, no rewind (issue #108 generalizes
+    beyond Backspace)."""
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    app = _app_for(tmp_path)
+    app.repl = _make_repl(tmp_path, "first", "second")
+
+    with create_pipe_input() as pipe:
+        app.app.input = pipe
+        app.app.output = DummyOutput()
+
+        with patch.object(app, "run_float_picker") as mock_pick:
+
+            async def drive():
+                await asyncio.sleep(0.02)
+                pipe.send_text("\x1bx")  # Alt+X (ESC + x)
+                await asyncio.sleep(0.05)
+                pipe.send_text("\x1bx")  # second Alt+X
+                await asyncio.sleep(0.3)
+                pipe.send_text("\x03")  # exit
+
+            asyncio.create_task(drive())
+            await app.app.run_async()
+
+        mock_pick.assert_not_called()
+
+
+def test_is_prefixed_escape_uses_the_input_queue(tmp_path) -> None:
+    """Unit-level check of the prefix signal: a queued Meta-encoded key
+    (printable data) means the Esc was an Alt+<key> prefix; an empty
+    queue or a queued control-char key means a clean/deliberate Esc."""
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.key_binding.key_processor import KeyPress
+
+    app = _app_for(tmp_path)
+    # Fresh app: no queue → not prefixed.
+    assert app._is_prefixed_escape() is False
+
+    # Simulate Alt+Backspace: c-h with data \x7f (0x7F, in printable range).
+    app.app.key_processor.input_queue.append(KeyPress(Keys.ControlH, "\x7f"))
+    assert app._is_prefixed_escape() is True
+
+    # Simulate Alt+X: plain 'x' with data 'x' (0x78).
+    app.app.key_processor.input_queue.clear()
+    app.app.key_processor.input_queue.append(KeyPress("x", "x"))
+    assert app._is_prefixed_escape() is True
+
+    # Ctrl+C in queue (data \x03, below 0x20) → NOT prefixed.
+    app.app.key_processor.input_queue.clear()
+    app.app.key_processor.input_queue.append(KeyPress(Keys.ControlC, "\x03"))
+    assert app._is_prefixed_escape() is False
+
+    # Another Esc in queue (data \x1b, below 0x20) → NOT prefixed
+    # (this is the normal double-Esc case).
+    app.app.key_processor.input_queue.clear()
+    app.app.key_processor.input_queue.append(KeyPress(Keys.Escape, "\x1b"))
+    assert app._is_prefixed_escape() is False
+
+    # The internal _Flush sentinel alone is NOT a real key → not prefixed.
+    app.app.key_processor.input_queue.clear()
+    from prompt_toolkit.key_binding.key_processor import _Flush
+
+    app.app.key_processor.input_queue.append(_Flush)
+    assert app._is_prefixed_escape() is False
