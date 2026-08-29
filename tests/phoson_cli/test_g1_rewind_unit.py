@@ -94,11 +94,13 @@ def _landing_before(repl, text: str):
 # ── Controller primitives ────────────────────────────────────────────────────
 
 
-def test_jump_candidates_lists_user_turns_oldest_first(tmp_path) -> None:
+def test_jump_candidates_lists_user_turns_newest_first(tmp_path) -> None:
     repl = _make_repl(tmp_path, "first", "second", "third")
     candidates = repl._controller.jump_candidates()
+    # Newest first (issue #109): the most recent turn is the head of the
+    # list, so the picker's initial cursor sits on the latest turn.
+    assert [preview for _, preview in candidates] == ["third", "second"]
     # The root user turn is excluded (nothing to land on before it).
-    assert [preview for _, preview in candidates] == ["second", "third"]
     for node_id, _ in candidates:
         node = repl.tree.nodes[node_id]
         assert node.message.role == "user"
@@ -108,6 +110,60 @@ def test_jump_candidates_lists_user_turns_oldest_first(tmp_path) -> None:
 def test_jump_candidates_empty_when_nothing_to_rewind_to(tmp_path) -> None:
     repl = _make_repl(tmp_path, "first")
     assert repl._controller.jump_candidates() == []
+
+
+def test_jump_candidates_excludes_tool_result_nodes(tmp_path) -> None:
+    """Issue #109: tool results are stored with role "user" (content =
+    [ToolResultBlock]); they must NOT show up as "(empty message)" rows.
+    """
+    from phoson_llm.schemas import ToolResultBlock
+
+    repl = _make_repl(tmp_path, "first", "second")
+    controller = repl._controller
+
+    # Simulate what _tool_runner does: append a user-role node whose
+    # content is only a ToolResultBlock (no TextBlock).
+    tool_result_node = repl.tree.append(
+        repl.current_node_id,
+        Message(
+            role="user",
+            content=[
+                ToolResultBlock(tool_call_id="call_1", result="42"),
+            ],
+        ),
+    )
+    repl.current_node_id = tool_result_node.id
+    # And one more genuine user turn after the tool round-trip.
+    user3_id, _ = repl._append_user_turn(Message(role="user", content="third"))
+    reply3 = repl.tree.append(user3_id, Message(role="assistant", content="reply 3"))
+    repl.current_node_id = reply3.id
+
+    candidates = controller.jump_candidates()
+    previews = [preview for _, preview in candidates]
+    # Newest first, and NO "(empty message)" row for the tool result.
+    assert previews == ["third", "second"]
+    assert "(empty message)" not in previews
+    assert tool_result_node.id not in [node_id for node_id, _ in candidates]
+
+
+def test_jump_candidates_keeps_user_turn_with_empty_text(tmp_path) -> None:
+    """A genuine user turn with whitespace-only string content still
+    qualifies (it is a real user turn — the preview may be empty, but
+    the node is not a tool result)."""
+    repl = _make_repl(tmp_path, "first")
+    empty_user = repl.tree.append(
+        repl.current_node_id, Message(role="user", content="   ")
+    )
+    assistant_node = repl.tree.append(
+        empty_user.id, Message(role="assistant", content="ok")
+    )
+    repl.current_node_id = assistant_node.id
+
+    candidates = repl._controller.jump_candidates()
+    # "first" is the root (excluded); the whitespace turn is the only
+    # non-root genuine user turn.
+    assert [preview for _, preview in candidates] == ["(empty message)"]
+    assert candidates[0][0] == empty_user.id
 
 
 def test_jump_to_user_turn_lands_before_the_selected_turn(tmp_path) -> None:
