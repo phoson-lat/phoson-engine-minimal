@@ -462,7 +462,12 @@ class PhosonRepl:
             # Slash commands plus @file mentions (E3) — the same two
             # completers the full-screen app uses, so both front ends
             # behave identically.
-            completer=merge_completers([SlashCompleter(), PathCompleter()]),
+            completer=merge_completers(
+                [
+                    SlashCompleter(lambda: self._controller.command_catalog),
+                    PathCompleter(),
+                ]
+            ),
             complete_while_typing=True,
             reserve_space_for_menu=6,
             key_bindings=key_bindings,

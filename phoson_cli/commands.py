@@ -18,11 +18,12 @@ That's it; the dispatch table picks it up automatically.
 
 import os
 import re
+import asyncio
 import inspect
 from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
 from dataclasses import dataclass
-from collections.abc import Callable, Iterable, Awaitable
+from collections.abc import Callable, Iterable, Sequence, Awaitable
 
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import (
@@ -33,6 +34,7 @@ from prompt_toolkit.completion import (
     FuzzyCompleter,
 )
 
+from phoson_agent import Plugin, CliCommandSpec, CliCommandContext, CliCommandInvocation
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from .theme import VALID_NAMES, get_theme
@@ -86,6 +88,74 @@ class CommandSpec:
 
 
 CommandHandlerFn = Callable[["CommandHandler", "Command"], Awaitable[bool]]
+PluginCommandHandlerFn = Callable[
+    [CliCommandInvocation, CliCommandContext], Awaitable[bool]
+]
+
+
+@dataclass(frozen=True)
+class RegisteredPluginCommand:
+    """A validated plugin command bound to its loaded plugin instance."""
+
+    plugin_name: str
+    plugin: Plugin
+    spec: CliCommandSpec
+    handler: PluginCommandHandlerFn
+
+
+@dataclass(frozen=True)
+class CommandCatalog:
+    """Native and plugin commands available to one CLI session.
+
+    ``version`` changes whenever the controller rebuilds the agent runtime;
+    handlers/completers can safely refresh without retaining a closed plugin
+    instance. Native commands always appear before plugin commands.
+    """
+
+    specs: tuple[CommandSpec | CliCommandSpec, ...]
+    plugin_commands: dict[str, RegisteredPluginCommand]
+    version: int = 0
+
+
+class PluginCommandContext:
+    """Minimal host context given to a single plugin slash-command handler."""
+
+    def __init__(
+        self,
+        *,
+        plugin_name: str,
+        repl: "PhosonRepl",
+        host: CommandHost,
+    ) -> None:
+        self._plugin_name = plugin_name
+        self._repl = repl
+        self._host = host
+
+    @property
+    def plugin_name(self) -> str:
+        return self._plugin_name
+
+    @property
+    def cwd(self) -> Path:
+        return Path.cwd()
+
+    @property
+    def session_id(self) -> str:
+        return str(self._repl.tree.session_id)
+
+    @property
+    def ui(self):
+        """UI blocks/interactions are provided by the later PluginUiService cut."""
+        raise RuntimeError("Plugin UI interactions are not available yet")
+
+    def notify(self, kind: str, message: str) -> None:
+        printer = getattr(self._host, f"print_{kind}", None)
+        if printer is None:
+            self._host.print_error(
+                f"Plugin {self.plugin_name}: invalid notice {kind!r}"
+            )
+            return
+        printer(message)
 
 
 #: /help sections (IMPROVEMENTS.md C4): each command spec declares the
@@ -125,7 +195,9 @@ _CATEGORY_ORDER: Final[dict[str, int]] = {
 }
 
 
-def get_grouped_command_help() -> list[tuple[str, list[tuple[str, str]]]]:
+def get_grouped_command_help(
+    specs: Sequence[CommandSpec | CliCommandSpec] | None = None,
+) -> list[tuple[str, list[tuple[str, str]]]]:
     """Return ``/help`` entries grouped by category, in category order.
 
     Returns:
@@ -134,16 +206,20 @@ def get_grouped_command_help() -> list[tuple[str, list[tuple[str, str]]]]:
         :data:`HELP_CATEGORIES` are collected under an "Other" section.
     """
     grouped: dict[str, list[tuple[str, str]]] = {}
-    for spec in COMMAND_SPECS:
+    for spec in specs or COMMAND_SPECS:
         entry_name = spec.primary if len(spec.names) == 1 else " · ".join(spec.names)
         entry = (entry_name, spec.help)
-        category = next(
-            (
-                title
-                for title, names in HELP_CATEGORIES
-                if any(n in names for n in spec.names)
-            ),
-            "Other",
+        category = (
+            spec.category
+            if isinstance(spec, CliCommandSpec)
+            else next(
+                (
+                    title
+                    for title, names in HELP_CATEGORIES
+                    if any(n in names for n in spec.names)
+                ),
+                "Other",
+            )
         )
         grouped.setdefault(category, []).append(entry)
 
@@ -253,7 +329,80 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
 )
 
 
-# Flat set used by the slash-completer; the REPL imports this directly.
+def build_command_catalog(
+    plugins: Sequence[Plugin], *, version: int = 0
+) -> CommandCatalog:
+    """Build and validate the command catalog for one loaded plugin set.
+
+    Native names are permanently reserved. Plugin command aliases must be
+    unique globally; no "last plugin wins" policy is allowed because it makes
+    a user's active commands depend on installation order.
+    """
+    reserved = {name for spec in COMMAND_SPECS for name in spec.names}
+    seen = set(reserved)
+    specs: list[CommandSpec | CliCommandSpec] = list(COMMAND_SPECS)
+    registered: dict[str, RegisteredPluginCommand] = {}
+
+    for plugin in plugins:
+        try:
+            plugin_specs = plugin.get_commands()
+        except Exception as exc:
+            raise ValueError(
+                f"Plugin {plugin.name!r} failed while listing CLI commands: {exc}"
+            ) from exc
+        for spec in plugin_specs:
+            if not isinstance(spec, CliCommandSpec):
+                raise ValueError(
+                    f"Plugin {plugin.name!r} returned {type(spec).__name__} "
+                    "instead of CliCommandSpec"
+                )
+            if not spec.names or any(
+                not name.startswith("/") or " " in name or name == "/"
+                for name in spec.names
+            ):
+                raise ValueError(
+                    f"Plugin {plugin.name!r} command names must be non-empty "
+                    "slash commands without spaces"
+                )
+            if len(set(spec.names)) != len(spec.names):
+                raise ValueError(
+                    f"Plugin {plugin.name!r} repeats an alias in {spec.names!r}"
+                )
+            collision = next((name for name in spec.names if name in seen), None)
+            if collision is not None:
+                owner = (
+                    "a native command" if collision in reserved else "another plugin"
+                )
+                raise ValueError(
+                    f"Plugin {plugin.name!r} command {collision!r} "
+                    f"conflicts with {owner}"
+                )
+            handler = getattr(plugin, spec.handler, None)
+            if (
+                handler is None
+                or not callable(handler)
+                or not inspect.iscoroutinefunction(handler)
+            ):
+                raise ValueError(
+                    f"Plugin {plugin.name!r} handler {spec.handler!r} "
+                    "must be an async method"
+                )
+            command = RegisteredPluginCommand(
+                plugin_name=plugin.name,
+                plugin=plugin,
+                spec=spec,
+                handler=handler,
+            )
+            for name in spec.names:
+                seen.add(name)
+                registered[name] = command
+            specs.append(spec)
+
+    return CommandCatalog(tuple(specs), registered, version)
+
+
+# Flat set used by the legacy slash-completer API. A per-session catalog is
+# used when a controller has loaded community plugins.
 COMMANDS: Final[frozenset[str]] = frozenset(
     name for spec in COMMAND_SPECS for name in spec.names
 )
@@ -267,11 +416,17 @@ _CMD_META: Final[dict[str, str]] = {
 
 
 class SlashCompleter(Completer):
-    """Completes slash commands only when the buffer starts with ``/``.
+    """Complete slash commands from native specs or a live session catalog."""
 
-    Shared by both front ends (classic REPL and full-screen app) so the
-    completion list can never drift from ``COMMAND_SPECS``.
-    """
+    def __init__(
+        self, catalog_provider: Callable[[], CommandCatalog] | None = None
+    ) -> None:
+        self._catalog_provider = catalog_provider
+
+    def _specs(self) -> tuple[CommandSpec | CliCommandSpec, ...]:
+        if self._catalog_provider is None:
+            return COMMAND_SPECS
+        return self._catalog_provider().specs
 
     def get_completions(
         self, document: Document, complete_event: object
@@ -285,13 +440,14 @@ class SlashCompleter(Completer):
             return
 
         word = text.lower()
-        for cmd in sorted(COMMANDS):
+        metadata = {name: spec.help for spec in self._specs() for name in spec.names}
+        for cmd in sorted(metadata):
             if cmd.startswith(word):
                 yield Completion(
                     cmd,
                     start_position=-len(text),
                     display=cmd,
-                    display_meta=_CMD_META.get(cmd, ""),
+                    display_meta=metadata[cmd],
                 )
 
 
@@ -367,7 +523,9 @@ class PathCompleter(Completer):
             )
 
 
-def get_command_help() -> list[tuple[str, str]]:
+def get_command_help(
+    specs: Sequence[CommandSpec | CliCommandSpec] | None = None,
+) -> list[tuple[str, str]]:
     """Return ``(name, help)`` pairs in display order.
 
     Aliases share their primary command's help line.
@@ -377,7 +535,7 @@ def get_command_help() -> list[tuple[str, str]]:
             spec.primary if len(spec.names) == 1 else " · ".join(spec.names),
             spec.help,
         )
-        for spec in COMMAND_SPECS
+        for spec in specs or COMMAND_SPECS
     ]
 
 
@@ -431,6 +589,22 @@ class CommandHandler:
         self.repl = repl
         self.host = host if host is not None else RendererCommandHost(repl)
         self._dispatch: dict[str, CommandHandlerFn] = {}
+        self._catalog_version = -1
+        self._refresh_dispatch()
+
+    def _catalog(self) -> CommandCatalog:
+        controller = getattr(self.repl, "_controller", None)
+        catalog = getattr(controller, "command_catalog", None)
+        if isinstance(catalog, CommandCatalog):
+            return catalog
+        return build_command_catalog(())
+
+    def _refresh_dispatch(self) -> None:
+        """Refresh native and plugin dispatch when the engine has rebuilt."""
+        catalog = self._catalog()
+        if catalog.version == self._catalog_version:
+            return
+        self._dispatch = {}
         for spec in COMMAND_SPECS:
             method = getattr(self.__class__, spec.method, None)
             if method is None:
@@ -440,9 +614,37 @@ class CommandHandler:
                 )
             for name in spec.names:
                 self._dispatch[name] = method
+        for name, registered in catalog.plugin_commands.items():
+            self._dispatch[name] = self._make_plugin_handler(registered)
+        self._catalog_version = catalog.version
+
+    def _make_plugin_handler(
+        self, registered: RegisteredPluginCommand
+    ) -> CommandHandlerFn:
+        async def handle_plugin(_handler: "CommandHandler", cmd: Command) -> bool:
+            context = PluginCommandContext(
+                plugin_name=registered.plugin_name,
+                repl=self.repl,
+                host=self.host,
+            )
+            try:
+                return await registered.handler(
+                    CliCommandInvocation(name=cmd.name, args=cmd.args), context
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self.host.print_error(
+                    f"Plugin {registered.plugin_name!r} command {cmd.name} "
+                    f"failed: {exc}"
+                )
+                return True
+
+        return handle_plugin
 
     async def handle(self, cmd: Command) -> bool:
         """Execute ``cmd``. Return ``False`` if the REPL should exit."""
+        self._refresh_dispatch()
         handler = self._dispatch.get(cmd.name)
         if handler is None:
             self.host.print_error(f"Unknown command: {cmd.name}")
@@ -888,7 +1090,7 @@ class CommandHandler:
         return True
 
     async def _cmd_help(self, cmd: Command) -> bool:  # noqa: ARG002
-        grouped: HelpEntries = get_grouped_command_help()
+        grouped: HelpEntries = get_grouped_command_help(self._catalog().specs)
         self._r.print_help(grouped)
         return True
 

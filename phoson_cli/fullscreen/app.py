@@ -321,7 +321,7 @@ class PhosonApp:
             history=FileHistory(str(self._history_file)),
             completer=merge_completers(
                 [
-                    SlashCompleter(),
+                    SlashCompleter(lambda: self.repl._controller.command_catalog),
                     ModelArgCompleter(self.model_cache),
                     StaticArgCompleter(
                         ("/reasoning-effort ", "/effort "),

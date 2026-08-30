@@ -50,6 +50,7 @@ from .models import (
     resolve_context_window,
 )
 from ._session import SessionState, SessionMetrics
+from .commands import build_command_catalog
 from .attachments import AttachmentManager
 from .ui_protocols import AgentEventSink, ConfirmationService
 from .file_mentions import (
@@ -142,6 +143,11 @@ class SessionController:
         self.attachments = AttachmentManager()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
+        # Per-session plugin command catalog. It is rebuilt with the engine so
+        # handlers never retain references to a plugin instance just closed by
+        # a provider/model rebuild (I-110).
+        self.command_catalog = build_command_catalog(())
+        self._command_catalog_version = 0
         # Sub-agent model: explicit override or fallback to main model.
         self.subagent_model: str = config.subagent_model or config.model
 
@@ -355,6 +361,11 @@ class SessionController:
             middlewares=middlewares,
             plugins=plugins,
             max_iterations=self.config.max_iterations,
+        )
+        self._command_catalog_version += 1
+        self.command_catalog = build_command_catalog(
+            getattr(self.engine, "_loaded_plugins", []),
+            version=self._command_catalog_version,
         )
 
         # Inject runtime context for sub-agents.
