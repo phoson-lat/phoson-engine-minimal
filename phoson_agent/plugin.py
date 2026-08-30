@@ -9,6 +9,11 @@ from collections.abc import Callable
 from phoson_agent.models import AgentTool
 from phoson_agent.exceptions import PhosonPluginConfigError
 from phoson_agent.middleware import AgentMiddleware
+from phoson_agent.cli_extensions import (
+    CliCommandSpec,
+    ThemeExtension,
+    ToolRenderSpec,
+)
 
 
 class Plugin(ABC):
@@ -74,6 +79,36 @@ class Plugin(ABC):
         Called when the agent is shutting down.
         """
         pass
+
+    def get_commands(self) -> list[CliCommandSpec]:
+        """Return slash commands contributed to a compatible CLI host.
+
+        The default is empty so engine-only plugins stay fully compatible.
+        Commands are declarative metadata; a host resolves ``handler`` on
+        this loaded plugin instance and owns validation/dispatch.
+        """
+        return []
+
+    def get_tool_render_specs(self) -> list[ToolRenderSpec]:
+        """Return presentation metadata for tools owned by this plugin.
+
+        A host decides how to render the neutral specs.  Plugins must not
+        import a host UI toolkit merely to implement this optional hook.
+        """
+        return []
+
+    def get_theme_extension(self) -> ThemeExtension | None:
+        """Return one optional additional CLI theme, if the host supports it."""
+        return None
+
+    async def aclose(self) -> None:
+        """Asynchronously close plugin resources.
+
+        The default preserves the synchronous lifecycle contract by
+        delegating to :meth:`cleanup`.  Plugins that own async pools or
+        tasks may override this method; hosts should prefer it at shutdown.
+        """
+        self.cleanup()
 
 
 class PluginSpec:

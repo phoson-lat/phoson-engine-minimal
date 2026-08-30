@@ -44,6 +44,23 @@ from .exceptions import (
 from .middleware import AgentMiddleware, RetryMiddleware
 from .permissions import PermissionPolicy, ToolBlockedError, PermissionMiddleware
 from .plugin_loader import PluginRegistry, load_plugin, register_loader
+from .cli_extensions import (
+    Choice,
+    UiBlock,
+    TodoItem,
+    FormField,
+    NoticeBlock,
+    KeyValueBlock,
+    ProgressBlock,
+    TodoListBlock,
+    CliCommandSpec,
+    ThemeExtension,
+    ToolRenderSpec,
+    PluginUiService,
+    CliCommandContext,
+    InteractionResult,
+    CliCommandInvocation,
+)
 
 __all__ = [
     "AgentEngine",
@@ -54,6 +71,21 @@ __all__ = [
     "PluginSpec",
     "PluginLoader",
     "PluginRegistry",
+    "CliCommandSpec",
+    "CliCommandInvocation",
+    "CliCommandContext",
+    "ToolRenderSpec",
+    "ThemeExtension",
+    "PluginUiService",
+    "UiBlock",
+    "NoticeBlock",
+    "KeyValueBlock",
+    "TodoItem",
+    "TodoListBlock",
+    "ProgressBlock",
+    "Choice",
+    "FormField",
+    "InteractionResult",
     "load_plugin",
     "register_loader",
     "tool",

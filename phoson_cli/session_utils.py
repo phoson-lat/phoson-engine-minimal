@@ -175,18 +175,17 @@ def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
         return []
 
 
-async def close_plugins(plugins: list) -> None:
-    """Close plugin instances, preferring async ``aclose()`` when present.
+async def close_plugins(plugins: list[Plugin]) -> None:
+    """Close plugin instances through their formal async lifecycle hook.
 
-    Failures are logged, never raised — closing old resources must not
-    take down whatever is rebuilding them.
+    :class:`phoson_agent.Plugin` provides a default ``aclose()`` which
+    delegates to synchronous ``cleanup()``. Plugins that own async pools or
+    tasks override it. Failures are logged, never raised — closing old
+    resources must not take down whatever is rebuilding them.
     """
     for plugin in plugins:
         try:
-            if hasattr(plugin, "aclose"):
-                await plugin.aclose()
-            else:
-                plugin.cleanup()
+            await plugin.aclose()
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not close plugin %r",

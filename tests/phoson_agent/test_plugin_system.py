@@ -13,7 +13,10 @@ from phoson_agent import (
     AgentTool,
     PluginSpec,
     AgentEngine,
+    CliCommandSpec,
     PluginRegistry,
+    ThemeExtension,
+    ToolRenderSpec,
     AgentMiddleware,
     PhosonPluginLoadError,
     PhosonPluginConfigError,
@@ -63,6 +66,62 @@ class DummyPlugin(Plugin):
             pass
 
         return [TestMiddleware()]
+
+
+class TestPluginCliExtensionDefaults:
+    """The community-CLI hooks remain optional for existing plugins (I-110)."""
+
+    async def test_aclose_default_delegates_to_cleanup_once(self):
+        plugin = DummyPlugin()
+
+        await plugin.aclose()
+
+        assert plugin.cleaned_up is True
+
+    def test_cli_extension_hooks_default_to_empty(self):
+        plugin = DummyPlugin()
+
+        assert plugin.get_commands() == []
+        assert plugin.get_tool_render_specs() == []
+        assert plugin.get_theme_extension() is None
+
+    def test_plugin_can_expose_neutral_cli_extension_specs(self):
+        class CliPlugin(Plugin):
+            @property
+            def name(self) -> str:
+                return "cli-plugin"
+
+            def get_commands(self) -> list[CliCommandSpec]:
+                return [
+                    CliCommandSpec(
+                        names=("/plugin-status",),
+                        help="Show plugin status",
+                        handler="handle_status",
+                    )
+                ]
+
+            def get_tool_render_specs(self) -> list[ToolRenderSpec]:
+                return [
+                    ToolRenderSpec(
+                        tool_name="plugin_status",
+                        verb="checking status",
+                        icon="◌",
+                    )
+                ]
+
+            def get_theme_extension(self) -> ThemeExtension:
+                return ThemeExtension(
+                    name="plugin-night",
+                    description="Theme from the plugin",
+                    tokens={"accent": "cyan"},
+                )
+
+        plugin = CliPlugin()
+
+        assert plugin.get_commands()[0].primary == "/plugin-status"
+        assert plugin.get_tool_render_specs()[0].icon == "◌"
+        assert plugin.get_theme_extension() is not None
+        assert plugin.get_theme_extension().name == "plugin-night"  # type: ignore[union-attr]
 
 
 class TestPluginSpec:
