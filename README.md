@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="#-quick-start"><img src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" alt="Python" /></a>
+  <a href="https://pypi.org/project/phoson-engine-minimal/"><img src="https://img.shields.io/pypi/v/phoson-engine-minimal?color=FFD43B&logo=pypi&logoColor=white" alt="PyPI" /></a>
   <a href="#-installation"><img src="https://img.shields.io/badge/package_manager-uv-4B32C3" alt="uv" /></a>
   <a href="#-development-setup"><img src="https://img.shields.io/badge/lint-ruff-F4D03F" alt="ruff" /></a>
   <a href="#-run-checks-locally"><img src="https://img.shields.io/badge/tests-pytest-0EA5E9" alt="pytest" /></a>
@@ -89,10 +90,17 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | **Tool execution** | `@tool` decorator with JSON Schema definitions |
 | **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
 | **Branching sessions** | `ConversationTree` for non-linear conversation history |
-| **Interactive REPL** | CLI with streaming, session persistence, and model switching |
+| **Interactive CLI** | Full-screen TUI (default) + classic REPL: streaming, rewind, sessions, pickers |
+| **Sub-agents** | Parallel `agent`/`agents` tools with isolated context and per-agent models |
+| **Skills** | On-demand instruction packages indexed at one line; loaded via tool call |
+| **MCP** | Model Context Protocol servers as first-class tools (`/mcp`) |
+| **Plugins** | Official & community plugins: tools, slash commands, CLI look |
+| **Permissions** | Per-tool `allow`/`ask`/`deny` + allow-patterns, editable at runtime |
+| **Auto-compaction** | Structured handoff summaries keep long sessions inside the context window |
 | **Cost tracking** | Built-in pricing module for USD usage calculation |
 | **Prompt caching** | Cache-aware Anthropic & OpenRouter requests; cached-token metrics |
 | **Thinking support** | Native reasoning/thinking token handling (Anthropic & OpenAI o1) |
+| **Standalone binaries** | Prebuilt single-file releases for Linux, macOS and Windows (no Python) |
 
 ---
 
@@ -143,11 +151,16 @@ sequenceDiagram
 phoson-engine-minimal/
 ├── phoson_llm/           # LLM normalization layer (adapters + schemas + pricing)
 ├── phoson_agent/         # ReAct agent loop, tools, middleware, sessions
-├── phoson_cli/           # Interactive CLI (REPL) for agent sessions
+├── phoson_cli/           # Interactive CLI (TUI + classic REPL) for agent sessions
 ├── phoson_plugin_*/      # Official plugins (checkpoint, mcp, memory)
+├── examples/             # Runnable engine/plugin/MCP usage examples
+├── bench/                # Benchmarks (run_bench.py + tasks)
+├── scripts/              # Installers, uninstall and dev/bench scripts
+├── assets/               # README visuals (screenshots, demo GIFs, VHS tapes)
 ├── tests/                # Unit/integration tests for all layers
 ├── docs/api/             # Per-package API documentation
-├── .github/workflows/    # CI and security automation
+├── docs/cli/             # Deep-dive CLI documentation (keybindings, caching, …)
+├── .github/workflows/    # CI, release, binaries and security automation
 ├── ROADMAP.md            # Project roadmap
 └── pyproject.toml        # Project metadata, dependencies, tooling config
 ```
@@ -204,11 +217,11 @@ Stateless-by-run orchestration over message history with tool execution:
 
 Command-line interface for interactive agent sessions:
 
-- `PhosonRepl` — Interactive read-eval-print loop
-- **Commands:** `/exit`, `/quit`, `/clear`, `/new`, `/model`, `/tree`, `/sessions`, `/label`, `/help`
-- Real-time streaming responses
-- Session persistence and labeling
-- Multiple model switching
+- `PhosonApp` — Full-screen TUI (default) with scrollable chat pane, pickers and overlays
+- `PhosonRepl` — Classic line-by-line REPL (`--classic`), retained for debugging
+- ~30 slash commands (sessions, model/provider, compaction, MCP, permissions, metrics…) — see [Interactive CLI](#interactive-cli)
+- Real-time streaming responses, one-shot mode for scripts/CI
+- Session persistence, branching, and rewind
 
 ---
 
@@ -216,14 +229,10 @@ Command-line interface for interactive agent sessions:
 
 ```python
 from phoson_agent import AgentEngine
-from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm import build_chat
 from phoson_llm.schemas import Message, ModelConfig
 
-engine = AgentEngine(
-    chat=OpenAIChat(),
-    tools=[],
-    phoson_weight=1.2,
-)
+engine = AgentEngine(chat=build_chat("openai"))
 
 result = engine.run_sync(
     messages=[Message(role="user", content="Summarize this project in one line")],
@@ -362,14 +371,10 @@ Local servers (Ollama, LM Studio, vLLM) need no API key — just the right `base
 
 ```python
 from phoson_agent import AgentEngine
-from phoson_llm.chats.openai import OpenAIChat
+from phoson_llm import build_chat
 from phoson_llm.schemas import Message, ModelConfig
 
-engine = AgentEngine(
-    chat=OpenAIChat(),
-    tools=[],
-    phoson_weight=1.2,
-)
+engine = AgentEngine(chat=build_chat("openai"))
 
 result = engine.run_sync(
     messages=[Message(role="user", content="Summarize this project in one line")],
@@ -710,6 +715,8 @@ applicable), which vanishes when the turn settles. One-shot mode
 ## 🔒 CI and security workflows
 
 - `.github/workflows/ci.yml`: Format check, lint, smoke compile, and tests on PRs and pushes to `main`.
+- `.github/workflows/publish.yml`: Build sdist/wheel and publish to PyPI on release.
+- `.github/workflows/release-binaries.yml`: Build standalone `phoson-cli` binaries (Linux/macOS/Windows) attached to each GitHub release.
 - `.github/workflows/security.yml`: Dependency audit and secret scan on PRs, pushes to `main`, and weekly schedule.
 
 ---
