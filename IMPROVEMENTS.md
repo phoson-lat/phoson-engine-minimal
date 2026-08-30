@@ -14,7 +14,7 @@
 |----|-------|--------|-----------|----------|---------|--------|
 | **I-128** | [#128](https://github.com/phoson-lat/phoson-engine-minimal/issues/128) | Sin feedback en UI mientras el modelo compone la tool call (brecha silenciosa antes de la línea de tool-start) | **P1** | S-M | 🟠 Medio (percepción de congelamiento en tools largas) | ✅ Resuelto (v0.16.0) |
 | **I-119** | [#119](https://github.com/phoson-lat/phoson-engine-minimal/issues/119) | Cargar una conversación con attachments temporales borrados crash: `FileNotFoundError` en `file:///tmp/...` | **P1** | S | 🟠 Medio (bloquea reabrir sesiones) | ✅ Resuelto (v0.16.1) |
-| **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ⬜ Abierto |
+| **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ✅ Resuelto (v0.17.0, ext. a sub-agents) |
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ⬜ Abierto |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ⬜ Abierto |
 | **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ⬜ Abierto |
@@ -81,9 +81,10 @@
 ---
 
 ### I-127 — [Feature #127] Bash tool: timeout por invocación (hoy 30s hardcodeado)
-* **Estado:** ⬜ **Abierto**
-* **Área:** `phoson_cli/tools/bash.py`
+* **Estado:** ✅ **Resuelto (v0.17.0)**
+* **Área:** `phoson_cli/tools/bash.py`, `phoson_cli/tools/subagent.py`, `phoson_cli/tools/_timeouts.py` (nuevo), `phoson_agent/tool.py`, `docs/api/phoson_cli.md`
 * **Prioridad:** **P1** · **Esfuerzo:** S · **Impacto:** 🟠 Medio (mata builds/tests/installs legítimos)
+* **Resolución (resumen):** parámetro `timeout` por invocación en la tool `bash` (default 30 s, **sin tope máximo** por decisión del owner: entrenamiento/builds largos son legítimos; el escape ante un hang es cancelar el run con Esc). Extensiones: (a) el mismo control en `agent`/`agents` (omitido → default de config `subagent_timeout_seconds`, `>0` → valor, `0` → sin timeout, inválido → default + nota), y (b) fix en `phoson_agent/tool.py` — el schema perdía la descripción `Annotated` en unions `X | None`. Sanitización compartida en `phoson_cli/tools/_timeouts.sanitize_timeout()` (coerce strings numéricos, rechaza bool/negativos/NaN). Ver `docs/plans/I-127.md`.
 * **Problema:**
   1. `DEFAULT_TIMEOUT_SECONDS = 30.0` (`bash.py:22`). Todo comando se mata a los 30s con `Command timed out after 30s`.
   2. `_run_bash()` **ya acepta** `timeout: float` (línea 37) pero el wrapper `@tool bash` (líneas 85–92) no lo expone en el schema: el LLM solo ve `command` + `safe_mode` y no puede reintentar con más tiempo — solo re-ejecutar el mismo comando atascado o pedirle al usuario que lo corra a mano.
@@ -333,9 +334,6 @@
 
 ```
 Sprint Próximo (Robustez & confiabilidad)
-├── I-128 (Feedback en vivo mientras el modelo compone la tool call)
-├── I-119 (Crash al cargar sesión con attachments temporales borrados)
-├── I-127 (Timeout por invocación en la tool bash)
 └── I-112 (UserWarning duplicado a stderr + notice estilizado)
 
 Sprint Siguiente (Extensibilidad & Ecosistema)
@@ -344,6 +342,11 @@ Sprint Siguiente (Extensibilidad & Ecosistema)
 └── I-115 (Refresh del README + assets visuales)
 
 ───── Resueltos ─────
+
+Sprint Robustez & Confiabilidad
+├── I-128 (Feedback en vivo mientras el modelo compone la tool call) ✅ v0.16.0
+├── I-119 (Crash al cargar sesión con attachments temporales borrados) ✅ v0.16.1
+└── I-127 (Timeout por invocación en bash + sub-agents) ✅ v0.17.0
 
 Sprint Estabilidad de Contexto & Métricas
 ├── I-91 (Auto-compact gate + fallback 400) ✅ v0.13.5

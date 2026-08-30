@@ -75,7 +75,10 @@ def _json_schema_for_type(python_type: Any) -> tuple[dict[str, Any], str | None]
     if origin in (UnionType, typing.Union):
         args = [arg for arg in get_args(python_type) if arg is not type(None)]
         if len(args) == 1:
-            return _json_schema_for_type(args[0])
+            # Optional[X] (Annotated[X | None, "desc"]): keep the Annotated
+            # description when recursing into the single non-None variant.
+            schema, _ = _json_schema_for_type(args[0])
+            return schema, description
         # Multi-arg union: use anyOf with each variant's schema
         schemas = [_json_schema_for_type(a)[0] for a in args]
         return {"anyOf": schemas}, description

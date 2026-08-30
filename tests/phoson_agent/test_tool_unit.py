@@ -69,6 +69,14 @@ class TestJsonSchemaForType:
         assert schema == {"type": "string", "enum": ["x", "y"]}
         assert desc == "pick one"
 
+    def test_annotated_optional_preserves_description(self):
+        """Annotated[X | None, "hint"]: the None is dropped but the
+        description must survive (regression, I-127 — the sub-agent
+        ``timeout`` param relies on this)."""
+        schema, desc = _json_schema_for_type(Annotated[float | None, "secs hint"])
+        assert schema == {"type": "number"}
+        assert desc == "secs hint"
+
 
 # ── @tool decorator ──────────────────────────────────────────────────────────
 

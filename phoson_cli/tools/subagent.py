@@ -12,7 +12,7 @@ import copy
 import time
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Annotated
 from collections.abc import Callable
 
 from phoson_agent.tool import tool
@@ -29,6 +29,7 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.exceptions import PhosonProviderError
 from phoson_agent.exceptions import PhosonAgentError, PhosonMaxIterationsError
 
+from ._timeouts import sanitize_timeout
 from .subagent_panel import (
     AgentStatus,
     SubagentProgress,
@@ -509,12 +510,37 @@ _AGENT_INJECT = [
 ]
 _AGENTS_INJECT = _AGENT_INJECT + ["subagent_max_parallel"]
 
+#: Description the LLM sees for the ``timeout`` parameter (the @tool schema
+#: is built from the annotations, not the docstring).
+SUBAGENT_TIMEOUT_DESCRIPTION = (
+    "Optional hard timeout in seconds for the sub-agent run. Omit to use "
+    "the configured default (300s). Raise it for long-running tasks (no "
+    "maximum). 0 disables the timeout entirely."
+)
+
+
+def _resolve_subagent_timeout(
+    timeout: float | None, configured_default: float
+) -> tuple[float, str | None]:
+    """Resolve the effective per-invocation sub-agent timeout.
+
+    ``None`` (omitted by the model) keeps the configured default from
+    ``config.toml``/env — backward compatible. ``0`` is a valid override:
+    it disables the timeout entirely (the pre-existing config semantics
+    of ``subagent_timeout_seconds = 0``). Other invalid values fall back
+    to the configured default with a note for the model.
+    """
+    if timeout is None:
+        return configured_default, None
+    return sanitize_timeout(timeout, configured_default, allow_zero=True)
+
 
 @tool(inject=_AGENT_INJECT)
 async def agent(
     task: str,
     tools: list[str] | None = None,
     model: str | None = None,
+    timeout: Annotated[float | None, SUBAGENT_TIMEOUT_DESCRIPTION] = None,
     *,
     chat: BaseLLMChat,
     available_tools: dict[str, AgentTool],
@@ -525,10 +551,23 @@ async def agent(
     subagent_timeout_seconds: float = 300.0,
     on_subagent_progress: Any = None,
 ) -> str:
-    """Execute a task using a sub-agent with clean context."""
+    """Execute a task using a sub-agent with clean context.
+
+    Args:
+        task: The task to run in a sub-agent with clean context.
+        tools: Optional subset of tool names to grant the sub-agent.
+        model: Optional model override for the sub-agent.
+        timeout: Optional hard timeout in seconds for the run. Omit to
+            use the configured default (``subagent_timeout_seconds``);
+            ``0`` disables the timeout; no upper bound.
+    """
     selected, err = _select_tools(available_tools, tools)
     if err is not None:
         return err
+
+    effective_timeout, timeout_note = _resolve_subagent_timeout(
+        timeout, subagent_timeout_seconds
+    )
 
     # Live-metrics panel (E2): every call owns a fresh tracker — a run
     # may call this tool several times, and the panel must always show
@@ -544,7 +583,7 @@ async def agent(
             selected_tools=list(selected.values()),
             model=model or default_model,
             max_iterations=max_iterations,
-            timeout_seconds=subagent_timeout_seconds,
+            timeout_seconds=effective_timeout,
             fallback_model=main_model,
             progress=tracker,
             index=index,
@@ -552,7 +591,9 @@ async def agent(
     finally:
         _progress_notify(on_subagent_progress, None)
     if fallback_used:
-        return f"[fallback to {fallback_used}] {content}"
+        content = f"[fallback to {fallback_used}] {content}"
+    if timeout_note:
+        return f"{timeout_note}\n{content}"
     return content
 
 
@@ -561,6 +602,7 @@ async def agents(
     tasks: list[str],
     tools: list[str] | None = None,
     model: str | None = None,
+    timeout: Annotated[float | None, SUBAGENT_TIMEOUT_DESCRIPTION] = None,
     *,
     chat: BaseLLMChat,
     available_tools: dict[str, AgentTool],
@@ -572,13 +614,27 @@ async def agents(
     subagent_timeout_seconds: float = 300.0,
     on_subagent_progress: Any = None,
 ) -> str:
-    """Execute multiple tasks in parallel using sub-agents."""
+    """Execute multiple tasks in parallel using sub-agents.
+
+    Args:
+        tasks: The tasks to run in parallel sub-agents.
+        tools: Optional subset of tool names to grant the sub-agents.
+        model: Optional model override for the sub-agents.
+        timeout: Optional hard timeout in seconds applied to **every**
+            task in the batch. Omit to use the configured default
+            (``subagent_timeout_seconds``); ``0`` disables the timeout;
+            no upper bound.
+    """
     if not tasks:
         return "Error: No tasks provided."
 
     selected, err = _select_tools(available_tools, tools)
     if err is not None:
         return err
+
+    effective_timeout, timeout_note = _resolve_subagent_timeout(
+        timeout, subagent_timeout_seconds
+    )
 
     effective_model = model or default_model
     selected_tools_list = list(selected.values())
@@ -612,10 +668,10 @@ async def agents(
                 )
                 messages = [Message(role="user", content=task)]
                 config = ModelConfig(model=model_name)
-                if subagent_timeout_seconds > 0:
+                if effective_timeout > 0:
                     result = await asyncio.wait_for(
                         _stream_final(sub_engine, messages, config, on_event=_on_event),
-                        timeout=subagent_timeout_seconds,
+                        timeout=effective_timeout,
                     )
                 else:
                     result = await _stream_final(
@@ -652,7 +708,7 @@ async def agents(
                     "task": task,
                     "task_preview": preview,
                     "result": "",
-                    "error": f"timeout after {subagent_timeout_seconds:g}s",
+                    "error": f"timeout after {effective_timeout:g}s",
                 }
             except asyncio.CancelledError:
                 tracker.mark_error(live_index, "cancelled")
@@ -704,7 +760,7 @@ async def agents(
                         "task": task,
                         "task_preview": preview,
                         "result": "",
-                        "error": f"timeout after {subagent_timeout_seconds:g}s",
+                        "error": f"timeout after {effective_timeout:g}s",
                     }
                 except Exception as fallback_exc:
                     _LOGGER.debug(
@@ -764,4 +820,7 @@ async def agents(
                 )
             )
 
-    return "\n\n".join(output_parts)
+    output = "\n\n".join(output_parts)
+    if timeout_note:
+        return f"{timeout_note}\n{output}"
+    return output

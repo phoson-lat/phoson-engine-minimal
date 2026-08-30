@@ -293,14 +293,33 @@ tool.patch_file(
 entries = tool.list_dir(path="/path/to/dir")
 ```
 
-### BashTool
+### bash
+
+The bash tool is an `AgentTool` (see `phoson_agent.tool.tool`). It runs a
+single shell command, fully async (never blocks the event loop), and
+returns `stdout + stderr` combined, capped at 50 KB.
 
 ```python
-from phoson_cli.tools import BashTool
+from phoson_cli.tools import bash
 
-tool = BashTool()
-result = tool.run(args={"command": "ls -la"})
+# Invoke it the way the agent does: handler(args, context=...)
+result = await bash.handler(
+    {"command": "ls -la"},
+    context={"safe_mode": False, "bash_confirmation": None},
+)
 ```
+
+Parameters the model can set (JSON schema is built from the type
+annotations):
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `command` | string | — | The shell command to run (required). |
+| `timeout` | number | `30` | Hard timeout in seconds, **per invocation** (I-127). Raise it for long-running builds/tests/training — there is **no maximum**. Invalid values (`<=0`, non-numeric) fall back to 30 s with a note in the result. |
+
+`safe_mode` and `bash_confirmation` are injected by the front end (not set
+by the model): with `safe_mode=True` and no confirmation service available
+(one-shot / scripts) the command **fails closed** rather than hanging.
 
 ### SearchTool
 
@@ -345,14 +364,24 @@ auto-detection.
 Two tools: `agent` (single task, clean context) and `agents` (multiple
 tasks in parallel). Parallelism is bounded by `subagent_max_parallel`
 (a semaphore — the parent agent decides how many tasks to spawn, not how
-many LLM sessions may run at once), and each task is guarded by
-`subagent_timeout_seconds`.
+many LLM sessions may run at once), and each task is guarded by a
+timeout.
+
+Timeout semantics (I-127):
+
+- **Per invocation (model-set):** the optional `timeout` parameter.
+  Omit → uses the configured default; raise it for long-running tasks
+  (no upper bound); `0` disables the timeout entirely; invalid values
+  fall back to the configured default with a note in the result.
+- **Default (user-set):** `subagent_timeout_seconds` from `config.toml`
+  / `PHOSON_SUBAGENT_TIMEOUT` (default 300 s). It is injected into the
+  tools and is not part of the model-facing schema.
 
 ```python
 from phoson_cli.tools.subagent import agent, agents
 
 result = await agent.handler(
-    {"task": "Search for info"},
+    {"task": "Search for info", "timeout": 120.0},
     {"chat": chat, "available_tools": tools, "default_model": "gpt-4o",
      "max_iterations": 12, "safe_mode": False, "subagent_timeout_seconds": 300.0},
 )
