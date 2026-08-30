@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.17.0 (2026-08-29)
+
+### Feature
+
+- **cli**: timeout por invocación en la tool `bash` y en los sub-agents
+  (IMPROVEMENTS.md I-127, issue #127).
+
+  La tool `bash` mataba todo comando a los 30 s hardcodeados
+  (`DEFAULT_TIMEOUT_SECONDS`) y el LLM no podía subirlo: un
+  `pytest`/`pip install`/`docker build` — o un entrenamiento — que
+  tardaba >30 s moría con `Command timed out after 30s` y el agente solo
+  podía re-ejecutar el mismo comando atascado.
+
+  - **`bash`**: nuevo parámetro `timeout` en el schema del modelo
+    (default 30 s, **sin tope máximo** — la libertad para runs largos es
+    el requisito; el escape ante un hang es cancelar el run con Esc).
+    Invalid values (`<=0`, no numéricos) → fallback a 30 s con una nota
+    en el resultado; strings numéricos se aceptan en silencio.
+  - **`agent`/`agents`** (extensión acordada): el timeout del sub-agent
+    (default 300 s) antes solo se configuraba por
+    `config.toml`/`PHOSON_SUBAGENT_TIMEOUT` y era invisible al LLM. Ahora
+    ambos wrappers aceptan `timeout` por invocación: omitido → default de
+    config (backward compatible), `>0` → ese valor sin tope, `0` → sin
+    timeout (semántica preexistente de la config), inválido → default +
+    nota. Cierra el loop del entrenamiento: `agent(task=…,
+    timeout=14400)` + `bash(timeout=14400)` interno.
+  - **`_timeouts.sanitize_timeout()`** (nuevo, compartido): valida los
+    overrides del modelo (coerce strings numéricos; rechaza bools,
+    negativos, NaN, basura) y rinde `(effective, note)`.
+  - **`phoson_agent/tool.py`**: fix — `_json_schema_for_type` perdía la
+    descripción `Annotated` en unions opcionales de 1 arg
+    (`Annotated[float | None, "…"]` → schema sin descripción); ahora se
+    conserva (regresión cubierta en `test_tool_unit.py`).
+  - Docs: `docs/api/phoson_cli.md` — sección `BashTool` obsoleta
+    (documentaba una clase inexistente) reescrita con la API real;
+    `SubAgentTool` documenta las dos capas de timeout (por invocación vs
+    config).
+
+  Tests: schema de `bash`/`agent`/`agents` (timeout opcional `number`
+    con descripción, `required` intacto, injected sigue oculto), default
+    inalterado, override forward, sin tope (14400 respetado), sanitización
+    (negativo, 0, NaN, bool, `None`, `"abc"`, `"45"`), e2e reales
+    (timeout corto mata el sleep; budget amplio pasa), sub-agent con
+    config/override/`0`/inválido + timeout real contra chat lento, y 17
+    unit tests del sanitizer. Ver `docs/plans/I-127.md`.
+
 ## v0.16.1 (2026-08-29)
 
 ### Fix
