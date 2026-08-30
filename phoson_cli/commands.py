@@ -37,7 +37,7 @@ from prompt_toolkit.completion import (
 from phoson_agent import Plugin, CliCommandSpec, CliCommandContext, CliCommandInvocation
 from phoson_llm.schemas import REASONING_EFFORTS
 
-from .theme import VALID_NAMES, get_theme
+from .theme import get_theme, default_theme_registry
 from .config import (
     NO_CREDENTIAL_PROVIDERS,
     save_config,
@@ -984,6 +984,7 @@ class CommandHandler:
         """Show, pick, or set the color theme (IMPROVEMENTS.md E4)."""
         r = self._r
         current = self.repl.theme.name
+        theme_registry = getattr(self.repl, "theme_registry", default_theme_registry())
 
         arg = cmd.args.strip().lower()
         if not arg:
@@ -1005,14 +1006,17 @@ class CommandHandler:
             arg = result.theme_name
         elif arg == "list":
             r.print_info("Available themes:")
-            for name in VALID_NAMES:
+            for name in theme_registry.valid_names():
                 marker = "*" if name == current else " "
                 r.print_info(f" {marker} {name}")
             return True
 
-        theme = get_theme(arg)
+        theme = get_theme(arg, registry=theme_registry)
         if theme is None:
-            r.print_error(f"Unknown theme: {arg!r}  ·  use {', '.join(VALID_NAMES)}")
+            r.print_error(
+                f"Unknown theme: {arg!r}  ·  use "
+                f"{', '.join(theme_registry.valid_names())}"
+            )
             return True
 
         self.repl.config.theme = theme.name

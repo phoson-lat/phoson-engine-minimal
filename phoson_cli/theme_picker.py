@@ -22,7 +22,7 @@ from rich.columns import Columns
 from rich.console import Console
 from prompt_toolkit.formatted_text import ANSI, to_formatted_text
 
-from .theme import Theme, load_theme
+from .theme import Theme, ThemeRegistry, default_theme_registry
 from ._views import _PHOS_ART
 from .pickers import BasePicker, picker_style
 
@@ -55,12 +55,6 @@ class ThemePickerResult:
 
     theme_name: str | None = None
     cancelled: bool = False
-
-
-def _theme_by_name(name: str) -> Theme:
-    """Resolve a tier name. Only ever called with names from
-    :data:`_THEME_ROWS`, so the lookup cannot fail."""
-    return load_theme(name)
 
 
 def _banner_preview_renderable(theme: Theme):
@@ -130,6 +124,7 @@ def _render_token_strip(theme: Theme) -> list[tuple[str, str]]:
 
 def _render_frame(
     themes: tuple[Theme, ...],
+    rows: tuple[tuple[str, str], ...],
     current_name: str,
     selected: int,
     detected_name: str | None,
@@ -148,7 +143,7 @@ def _render_frame(
             else ("class:row.active" if is_current else "class:row")
         )
         marker = "▸" if is_selected else ("▶" if is_current else " ")
-        label, description = _THEME_ROWS[i]
+        label, description = rows[i]
         hints = []
         if is_current:
             hints.append("current")
@@ -185,6 +180,7 @@ def build_theme_picker(
     current_name: str,
     *,
     theme: "Theme | None" = None,
+    registry: ThemeRegistry | None = None,
     detected_name: str | None = None,
     on_done: Callable[[ThemePickerResult], None] | None = None,
     invalidate: Callable[[], None] | None = None,
@@ -200,14 +196,18 @@ def build_theme_picker(
         on_done: Float-mode result callback (see :class:`BasePicker`).
         invalidate: Float-mode repaint callback (see :class:`BasePicker`).
     """
-    themes: tuple[Theme, ...] = tuple(_theme_by_name(name) for name, _ in _THEME_ROWS)
+    active_registry = registry or default_theme_registry()
+    rows = active_registry.rows()
+    themes = tuple(active_registry.get(name) for name, _ in rows)
+    assert all(theme is not None for theme in themes)
+    themes = tuple(theme for theme in themes if theme is not None)
     state: dict[str, int] = {
         "selected": next((i for i, t in enumerate(themes) if t.name == current_name), 0)
     }
 
     picker: BasePicker[ThemePickerResult] = BasePicker(
         render=lambda: _render_frame(
-            themes, current_name, state["selected"], detected_name
+            themes, rows, current_name, state["selected"], detected_name
         ),
         style=picker_style(theme=theme),
         on_done=on_done,
@@ -231,11 +231,15 @@ async def pick_theme(
     current_name: str,
     *,
     theme: "Theme | None" = None,
+    registry: ThemeRegistry | None = None,
     detected_name: str | None = None,
 ) -> ThemePickerResult:
     """Run the theme picker as its own full-screen application (classic)."""
     return await build_theme_picker(
-        current_name, theme=theme, detected_name=detected_name
+        current_name,
+        theme=theme,
+        registry=registry,
+        detected_name=detected_name,
     ).run()
 
 

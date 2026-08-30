@@ -172,6 +172,7 @@ class RendererCommandHost:
         return await commands_mod.pick_theme(
             current_theme,
             theme=getattr(self.repl, "theme", None),
+            registry=getattr(self.repl, "theme_registry", None),
             detected_name=detected_theme,
         )
 

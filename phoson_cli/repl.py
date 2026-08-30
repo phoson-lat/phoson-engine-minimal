@@ -99,7 +99,10 @@ class PhosonRepl:
         self._config = config
         # Theme is resolved once at startup (env NO_COLOR/PHOSON_THEME, then
         # config.toml, then dark) and shared by every rendering site.
-        self.theme: Theme = load_theme(getattr(config, "theme", None))
+        # Plugin-provided themes cannot be known until the controller has
+        # loaded plugins. Start with a safe built-in tier, then resolve the
+        # configured theme against its per-session registry below.
+        self.theme: Theme = load_theme()
         self.renderer = Renderer(theme=self.theme)
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
@@ -121,6 +124,9 @@ class PhosonRepl:
                 if confirmation is _DEFAULT_CONFIRMATION
                 else confirmation
             ),
+        )
+        self.apply_theme(
+            load_theme(config.theme, registry=self._controller.theme_registry)
         )
 
     # ── Config / controller state ─────────────────────────────────────────
@@ -176,6 +182,11 @@ class PhosonRepl:
     @chat.setter
     def chat(self, value) -> None:
         self._controller.chat = value
+
+    @property
+    def theme_registry(self):
+        """Themes contributed by the currently loaded plugin set."""
+        return self._controller.theme_registry
 
     @property
     def tools(self):

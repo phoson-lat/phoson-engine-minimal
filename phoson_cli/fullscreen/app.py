@@ -52,7 +52,6 @@ from .keys import build_key_bindings, listing_for_config
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
 from ..theme import (
-    VALID_NAMES,
     Theme,
     load_theme,
     build_prompt_style,
@@ -207,7 +206,7 @@ class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
 
     def __init__(self, config: PhosonConfig) -> None:
-        self.theme = load_theme(getattr(config, "theme", None))
+        self.theme = load_theme()
         # Kept for _build_application (runs before self.repl exists): the
         # [keys] remap overrides (IMPROVEMENTS.md E6) come from the same
         # config object the shared REPL later wraps.
@@ -270,6 +269,7 @@ class PhosonApp:
             config, sink=self.sink, confirmation=FullScreenConfirmationService(self)
         )
         self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
+        self.apply_theme(load_theme(config.theme, registry=self.repl.theme_registry))
 
         self._banner_block = render_banner(
             provider=self.repl.config.provider,
@@ -333,8 +333,11 @@ class PhosonApp:
                         ("/provider ",),
                         lambda: enabled_providers_from_config(self.repl.config),
                     ),
-                    # /theme <tier> — the four tiers are a fixed set (E4).
-                    StaticArgCompleter(("/theme ",), list(VALID_NAMES)),
+                    # /theme <tier> — includes tiers contributed by plugins.
+                    StaticArgCompleter(
+                        ("/theme ",),
+                        lambda: list(self.repl.theme_registry.valid_names()),
+                    ),
                     # /skills <name> — discovered lazily per completion
                     # pass so a skill added mid-session shows up (G5).
                     StaticArgCompleter(("/skills ",), _skill_names),
@@ -441,8 +444,9 @@ class PhosonApp:
         self.theme = theme
         self.repl.apply_theme(theme)
         self.sink.theme = theme
-        if self._banner_block is not None:
-            index = self.sink.blocks.index(self._banner_block)
+        banner_block = getattr(self, "_banner_block", None)
+        if banner_block is not None:
+            index = self.sink.blocks.index(banner_block)
             self._banner_block = render_banner(
                 provider=self.repl.config.provider,
                 model=self.repl.current_model,

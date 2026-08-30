@@ -41,6 +41,7 @@ from phoson_agent.plugins.offload import OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
+from .theme import ThemeRegistry, build_theme_registry, default_theme_registry
 from .tools import build_tools, build_tools_dict
 from .config import COMPACT_MODES, PhosonConfig, build_chat, save_config
 from .models import (
@@ -149,6 +150,7 @@ class SessionController:
         # a provider/model rebuild (I-110).
         self.command_catalog = build_command_catalog(())
         self.tool_render_registry = ToolRenderRegistry({})
+        self.theme_registry: ThemeRegistry = default_theme_registry()
         self._command_catalog_version = 0
         # Sub-agent model: explicit override or fallback to main model.
         self.subagent_model: str = config.subagent_model or config.model
@@ -372,6 +374,7 @@ class SessionController:
         self.tool_render_registry = build_tool_render_registry(
             loaded_plugins, [tool.name for tool in self.engine.tools]
         )
+        self.theme_registry = build_theme_registry(loaded_plugins)
         set_tool_render_registry = getattr(self.sink, "set_tool_render_registry", None)
         if set_tool_render_registry is not None:
             set_tool_render_registry(self.tool_render_registry)

@@ -22,7 +22,10 @@ Invalid names warn and fall back to ``dark``.
 
 import os
 import warnings
-from dataclasses import dataclass
+from dataclasses import replace, dataclass
+from collections.abc import Mapping, Sequence
+
+from phoson_agent import Plugin, ThemeExtension
 
 # ── Token model ───────────────────────────────────────────────────────────────
 
@@ -256,6 +259,79 @@ _BY_NAME = {
 VALID_NAMES = tuple(sorted(_BY_NAME))
 
 
+@dataclass(frozen=True)
+class ThemeRegistry:
+    """Immutable built-in plus plugin-provided themes for one CLI session."""
+
+    themes: Mapping[str, Theme]
+    descriptions: Mapping[str, str]
+
+    def get(self, name: str) -> Theme | None:
+        return self.themes.get(str(name).strip().lower())
+
+    def valid_names(self) -> tuple[str, ...]:
+        return tuple(self.themes)
+
+    def rows(self) -> tuple[tuple[str, str], ...]:
+        return tuple((name, self.descriptions[name]) for name in self.themes)
+
+
+def default_theme_registry() -> ThemeRegistry:
+    """Return the immutable registry containing only the four shipped themes."""
+    return ThemeRegistry(
+        themes=_BY_NAME,
+        descriptions={
+            "dark": "default, purple on dark",
+            "light": "light background",
+            "ansi": "16-color SSH-safe",
+            "no-color": "plain text",
+        },
+    )
+
+
+def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
+    """Build a registry from one controller's loaded plugin instances."""
+    themes = dict(_BY_NAME)
+    descriptions = dict(default_theme_registry().descriptions)
+    known_tokens = set(Theme.__dataclass_fields__) - {"name"}
+
+    for plugin in plugins:
+        try:
+            extension = plugin.get_theme_extension()
+        except Exception as exc:
+            raise ValueError(
+                f"Plugin {plugin.name!r} failed while declaring its theme: {exc}"
+            ) from exc
+        if extension is None:
+            continue
+        if not isinstance(extension, ThemeExtension):
+            raise ValueError(
+                f"Plugin {plugin.name!r} returned {type(extension).__name__} "
+                "instead of ThemeExtension"
+            )
+        name = extension.name.strip().lower()
+        if not name or name in themes:
+            raise ValueError(
+                f"Plugin {plugin.name!r} theme {extension.name!r} is empty or conflicts"
+            )
+        invalid_tokens = set(extension.tokens) - known_tokens
+        if invalid_tokens:
+            raise ValueError(
+                f"Plugin {plugin.name!r} theme {name!r} has unknown tokens: "
+                f"{', '.join(sorted(invalid_tokens))}"
+            )
+        base = themes.get(extension.base)
+        if base is None:  # Literal is static-only; keep this defensive at runtime.
+            raise ValueError(
+                f"Plugin {plugin.name!r} theme {name!r} has invalid base "
+                f"{extension.base!r}"
+            )
+        themes[name] = replace(base, name=name, **dict(extension.tokens))
+        descriptions[name] = extension.description.strip() or "plugin theme"
+
+    return ThemeRegistry(themes=themes, descriptions=descriptions)
+
+
 # ── Resolution ────────────────────────────────────────────────────────────────
 
 
@@ -266,7 +342,9 @@ def _env_requests_no_color() -> bool:
     return os.environ.get("CLICOLOR", "") == "0"
 
 
-def load_theme(config_value: str | None = None) -> Theme:
+def load_theme(
+    config_value: str | None = None, *, registry: ThemeRegistry | None = None
+) -> Theme:
     """Resolve the active theme.
 
     Priority:
@@ -295,10 +373,12 @@ def load_theme(config_value: str | None = None) -> Theme:
     if not requested:
         return DARK
 
-    theme = _BY_NAME.get(requested)
+    active_registry = registry or default_theme_registry()
+    theme = active_registry.get(requested)
     if theme is None:
         warnings.warn(
-            f"Unknown theme {requested!r} — valid names: {', '.join(VALID_NAMES)}. "
+            f"Unknown theme {requested!r} — valid names: "
+            f"{', '.join(active_registry.valid_names())}. "
             "Falling back to 'dark'.",
             stacklevel=2,
         )
@@ -306,7 +386,7 @@ def load_theme(config_value: str | None = None) -> Theme:
     return theme
 
 
-def get_theme(name: str) -> Theme | None:
+def get_theme(name: str, *, registry: ThemeRegistry | None = None) -> Theme | None:
     """Look up a tier by name (case-insensitive, no env overrides).
 
     Unlike :func:`load_theme`, this is a *direct* lookup: the
@@ -314,7 +394,7 @@ def get_theme(name: str) -> Theme | None:
     ``/theme ansi`` yields the ANSI tier even when the environment would
     otherwise force plain output. Returns ``None`` for unknown names.
     """
-    return _BY_NAME.get(str(name).strip().lower())
+    return (registry or default_theme_registry()).get(name)
 
 
 def suggest_theme(

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, cast
 
 from phoson_agent.sessions.models import SessionMeta
 
-from ..theme import Theme
+from ..theme import Theme, ThemeRegistry
 from ..models import ModelOption
 from ..command_host import HelpEntry, HelpEntries, is_grouped_help
 from ..model_picker import ModelPickerResult
@@ -123,6 +123,13 @@ class FullScreenCommandHost:
         picker = build_theme_picker(
             current_theme,
             theme=self.app.theme,
+            registry=(
+                self.app.repl.theme_registry
+                if isinstance(
+                    getattr(self.app.repl, "theme_registry", None), ThemeRegistry
+                )
+                else None
+            ),
             detected_name=detected_theme,
         )
         return await self.app.run_float_picker(picker)
