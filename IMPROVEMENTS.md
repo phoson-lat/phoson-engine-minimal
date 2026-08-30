@@ -15,7 +15,7 @@
 | **I-128** | [#128](https://github.com/phoson-lat/phoson-engine-minimal/issues/128) | Sin feedback en UI mientras el modelo compone la tool call (brecha silenciosa antes de la línea de tool-start) | **P1** | S-M | 🟠 Medio (percepción de congelamiento en tools largas) | ✅ Resuelto (v0.16.0) |
 | **I-119** | [#119](https://github.com/phoson-lat/phoson-engine-minimal/issues/119) | Cargar una conversación con attachments temporales borrados crash: `FileNotFoundError` en `file:///tmp/...` | **P1** | S | 🟠 Medio (bloquea reabrir sesiones) | ✅ Resuelto (v0.16.1) |
 | **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ✅ Resuelto (v0.17.0, ext. a sub-agents) |
-| **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ⬜ Abierto |
+| **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ✅ Resuelto (v0.17.1) |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ⬜ Abierto |
 | **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ⬜ Abierto |
 | **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ⬜ Abierto |
@@ -100,16 +100,16 @@
 ---
 
 ### I-112 — [Bug #112] `UserWarning` de Python impreso a stderr además del warning estilizado del CLI
-* **Estado:** ⬜ **Abierto**
-* **Área:** `phoson_agent/plugins/context_window.py`, `phoson_cli/model_selector.py`, `phoson_cli/__main__.py`
+* **Estado:** ✅ **Resuelto (v0.17.1)**
+* **Área:** `phoson_cli/warnings_hook.py` (nuevo), `phoson_cli/__main__.py`, `phoson_cli/fullscreen/app.py`, `phoson_agent/plugins/context_window.py`, `phoson_llm/pricing.py`
 * **Prioridad:** **P2** · **Esfuerzo:** S · **Impacto:** 🟡 Medio (ruido visual, expone rutas internas en la TUI)
-* **Problema:** Cuando un soft-fail interno emite `warnings.warn(..., UserWarning)` (p. ej. modelo no encontrado en la lista del servidor vLLM), el usuario ve **dos** salidas: el notice estilizado compacto del CLI (`⚠ not_found — model id may be wrong — pick one with /model`) **y** el warning crudo de Python con archivo+línea a stderr (`.../context_window.py:136: UserWarning: vLLM /v1/models response did not include ...`).
-* **Causa raíz (verificada en código):** 6 sitios `warnings.warn` en `phoson_agent/plugins/context_window.py` (líneas 163, 170, 199, 254, 301, 315) y 1 en `phoson_cli/model_selector.py:62`; el hook `warnings.showwarning` por defecto de Python imprime a stderr sin que el CLI lo intercepte.
-* **Solución propuesta:**
-  - Instalar en el entrypoint del CLI un hook de warnings: re-rutear `warnings.showwarning` → `logger.warning` (que la CLI ya renderiza como notice estilizado) o suprimir la impresión para estas categorías internas — nunca stderr crudo.
-  - Alternativa equivalente: sustituir esos `warnings.warn` por `logger.warning` directamente.
+* **Problema:** Cuando un soft-fail interno emite `warnings.warn(..., UserWarning)` (p. ej. modelo no encontrado en la lista del servidor vLLM), el usuario ve **dos** salidas: el notice estilizado compacto del CLI **y** el warning crudo de Python con archivo+línea a stderr (`.../context_window.py:136: UserWarning: vLLM /v1/models response did not include ...`).
+* **Causa raíz (verificada en código):** en clásico/one-shot `main()` no instala ningún hook → el `warnings.showwarning` default imprime a stderr. Además los `logger.warning` de soft-fail caen por `logging.lastResort` a stderr; los 3 except de `context_window.py` emitían `warnings.warn` **y** `logger.warning` (doble). El fullscreen ya lo resolvía con `captureWarnings`+`NullHandler`.
+* **Resolución (resumen):** `phoson_cli/warnings_hook.py` instala dos hooks desde `main()` (`try/finally` restore): (1) `showwarning` → notice (stdout, sin `filename`/`lineno`); (2) handler de logging root para `phoson_*` `WARNING+` → mismo notice. El clásico apunta el printer a `Renderer.print_warn` (theme en vivo); one-shot usa el printer plano; fullscreen hace no-op vía `set_fullscreen_active` (el par `NullHandler`+`captureWarnings` se conserva). Dedup en `context_window.py` (se quita el `warnings.warn` redundante de los 3 except; el log del issue #23 se queda). `pricing.py` pierde el advice obsoleto de `filterwarnings`. Ver `docs/plans/I-112.md`.
 * **Criterio de listo:**
-  - Test de regresión (capfd): ante un fallo de resolución de context window, **nada** se escribe en stderr y el notice estilizado aparece una sola vez.
+  - ✅ Test de regresión (capfd): ante un fallo de resolución de context window, **nada** se escribe en stderr y el notice estilizado aparece una sola vez.
+  - ✅ Fullscreen intacto (delegación a `captureWarnings` + NullHandler, test existente verde).
+  - ✅ Dedup: un soft-fail = un notice. `uv run pytest` (1655) + ruff + pyright limpios.
 
 ---
 
@@ -333,10 +333,7 @@
 ## Roadmap sugerido de ataque
 
 ```
-Sprint Próximo (Robustez & confiabilidad)
-└── I-112 (UserWarning duplicado a stderr + notice estilizado)
-
-Sprint Siguiente (Extensibilidad & Ecosistema)
+Sprint Próximo (Extensibilidad & Ecosistema)
 ├── I-110 (Plugin system: look & commands del CLI)
 ├── I-126 (Plugin de monitores de larga duración)
 └── I-115 (Refresh del README + assets visuales)
@@ -346,7 +343,8 @@ Sprint Siguiente (Extensibilidad & Ecosistema)
 Sprint Robustez & Confiabilidad
 ├── I-128 (Feedback en vivo mientras el modelo compone la tool call) ✅ v0.16.0
 ├── I-119 (Crash al cargar sesión con attachments temporales borrados) ✅ v0.16.1
-└── I-127 (Timeout por invocación en bash + sub-agents) ✅ v0.17.0
+├── I-127 (Timeout por invocación en bash + sub-agents) ✅ v0.17.0
+└── I-112 (UserWarning duplicado a stderr + notice estilizado) ✅ v0.17.1
 
 Sprint Estabilidad de Contexto & Métricas
 ├── I-91 (Auto-compact gate + fallback 400) ✅ v0.13.5
