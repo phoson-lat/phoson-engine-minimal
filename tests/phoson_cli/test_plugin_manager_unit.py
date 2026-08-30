@@ -87,6 +87,31 @@ def test_install_uses_fresh_interpreter_for_post_install_entrypoints() -> None:
     assert config.plugins == ["entrypoint:demo"]
 
 
+def test_install_reinstalls_local_plugin_with_already_visible_entrypoint(
+    tmp_path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project.entry-points."phoson.plugins"]\ndemo = "pkg:create_plugin"\n',
+        encoding="utf-8",
+    )
+    config = PhosonConfig()
+
+    def runner(command, **_kwargs):
+        if command[1:2] == ["-c"]:
+            return SimpleNamespace(returncode=0, stdout='["demo"]\n', stderr="")
+        return SimpleNamespace(returncode=0, stdout="installed", stderr="")
+
+    with (
+        patch("phoson_cli.plugin_manager._entrypoint_names", return_value={"demo"}),
+        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
+        patch("phoson_cli.plugin_manager._save_lockfile"),
+        patch("phoson_cli.plugin_manager.save_config"),
+    ):
+        assert install_plugin(str(tmp_path), config, runner=runner) == "demo"
+
+    assert config.plugins == ["entrypoint:demo"]
+
+
 def test_disable_plugin_removes_only_target_and_persists() -> None:
     config = PhosonConfig(plugins=["entrypoint:one", "entrypoint:two"])
     with patch("phoson_cli.plugin_manager.save_config") as save:

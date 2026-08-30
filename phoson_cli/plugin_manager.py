@@ -108,6 +108,36 @@ def _entrypoint_names() -> set[str]:
     return {entry.name for entry in legacy}
 
 
+def _declared_local_entrypoints(source: str) -> set[str]:
+    """Read local-package entry points without importing its plugin code.
+
+    Reinstalling a local development package is idempotent: its entry point
+    may already be visible before ``uv pip install``, so an after-minus-before
+    delta alone cannot identify it. Its ``pyproject.toml`` is authoritative.
+    Remote/PyPI requirements intentionally return an empty set here.
+    """
+    path = Path(source).expanduser()
+    pyproject = path / "pyproject.toml" if path.is_dir() else None
+    if pyproject is None or not pyproject.is_file():
+        return set()
+    try:
+        raw = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise PluginManagerError(
+            f"Malformed plugin pyproject {pyproject}: {exc}"
+        ) from exc
+    project = raw.get("project", {})
+    entry_points = project.get("entry-points", {}) if isinstance(project, dict) else {}
+    group = (
+        entry_points.get("phoson.plugins", {}) if isinstance(entry_points, dict) else {}
+    )
+    if not isinstance(group, dict):
+        raise PluginManagerError(
+            f"Plugin pyproject {pyproject} has invalid phoson.plugins entry points"
+        )
+    return {str(name) for name in group}
+
+
 def _fresh_entrypoint_names(
     *, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
 ) -> set[str]:
@@ -167,14 +197,17 @@ def install_plugin(
         detail = (result.stderr or result.stdout).strip()
         raise PluginManagerError(f"Plugin installation failed: {detail or requirement}")
 
-    added = _fresh_entrypoint_names(runner=runner) - before
-    if len(added) != 1:
-        found = ", ".join(sorted(added)) or "none"
+    visible_after = _fresh_entrypoint_names(runner=runner)
+    declared_local = _declared_local_entrypoints(source)
+    added = visible_after - before
+    candidates = declared_local or added
+    if len(candidates) != 1 or not candidates <= visible_after:
+        found = ", ".join(sorted(candidates)) or "none"
         raise PluginManagerError(
-            "Installed package must expose exactly one new entry point in "
+            "Installed package must expose exactly one usable entry point in "
             f"'phoson.plugins' (found: {found})."
         )
-    name = added.pop()
+    name = candidates.pop()
     spec = f"entrypoint:{name}"
     if spec not in config.plugins:
         config.plugins.append(spec)
