@@ -374,13 +374,29 @@ class SessionController:
         )
         self._command_catalog_version += 1
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
-        self.command_catalog = build_command_catalog(
-            loaded_plugins, version=self._command_catalog_version
-        )
-        self.tool_render_registry = build_tool_render_registry(
-            loaded_plugins, [tool.name for tool in self.engine.tools]
-        )
-        self.theme_registry = build_theme_registry(loaded_plugins)
+        try:
+            self.command_catalog = build_command_catalog(
+                loaded_plugins, version=self._command_catalog_version
+            )
+            self.tool_render_registry = build_tool_render_registry(
+                loaded_plugins, [tool.name for tool in self.engine.tools]
+            )
+            self.theme_registry = build_theme_registry(loaded_plugins)
+        except Exception:
+            # AgentEngine has already initialized these plugins. Extension
+            # validation must not leak a pool/process/task just because a
+            # command, theme, or render spec is invalid during bootstrap.
+            for plugin in loaded_plugins:
+                try:
+                    plugin.cleanup()
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Could not clean up plugin %r after extension "
+                        "validation failure",
+                        getattr(plugin, "name", "?"),
+                        exc_info=True,
+                    )
+            raise
         set_tool_render_registry = getattr(self.sink, "set_tool_render_registry", None)
         if set_tool_render_registry is not None:
             set_tool_render_registry(self.tool_render_registry)

@@ -54,7 +54,9 @@ Options:
   --self-update        Check for and install CLI updates
   --uninstall          Uninstall phoson-cli
   --install-plugin <source>  Install and enable a community plugin (alias)
-  plugin <command>     Manage plugins: install, list, enable, disable, remove, doctor
+  -y, --yes            Skip the install confirmation (plugin install only)
+  plugin <command>     Manage plugins: install, list, enable, disable,
+                       remove, update, doctor
   -h, --help           Show this help and exit
 """
 
@@ -75,6 +77,7 @@ class CliOptions:
     max_turns: int | None = None
     task: str | None = None
     plugin_args: list[str] | None = None
+    assume_yes: bool = False
 
 
 def _fail(message: str) -> None:
@@ -115,7 +118,13 @@ def parse_args(argv: list[str]) -> CliOptions:
     while i < len(argv):
         arg = argv[i]
         if arg == "plugin":
-            options.plugin_args = argv[i + 1 :]
+            plugin_args = argv[i + 1 :]
+            if "--yes" in plugin_args or "-y" in plugin_args:
+                options.assume_yes = True
+                plugin_args = [
+                    value for value in plugin_args if value not in {"--yes", "-y"}
+                ]
+            options.plugin_args = plugin_args
             break
         if arg in {"-h", "--help"}:
             print(_USAGE)
@@ -128,6 +137,8 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.uninstall = True
         elif arg in {"--install", "--setup"}:
             options.setup = True
+        elif arg in {"-y", "--yes"}:
+            options.assume_yes = True
         elif arg == "--install-plugin":
             options.plugin_args = ["install", _take_value(argv, i, arg)]
             i += 1
@@ -253,7 +264,9 @@ def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> 
     print(f"Theme saved → {suggested}", file=sys.stderr)
 
 
-def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
+def _run_plugin_command(
+    args: list[str], config: PhosonConfig, *, assume_yes: bool = False
+) -> None:
     """Run a non-interactive community-plugin management command."""
     from phoson_cli.plugin_manager import (
         PluginManagerError,
@@ -282,14 +295,15 @@ def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
     if command == "install" and len(rest) == 1:
         source = rest[0]
         print(f"Installing plugin from {source!r}. Plugins execute Python code as you.")
-        try:
-            answer = input("Continue? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("Cancelled.")
-            return
-        if answer not in {"y", "yes"}:
-            print("Cancelled.")
-            return
+        if not assume_yes:
+            try:
+                answer = input("Continue? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("Cancelled.")
+                return
+            if answer not in {"y", "yes"}:
+                print("Cancelled.")
+                return
         try:
             name = install_plugin(source, config)
         except PluginManagerError as exc:
@@ -458,7 +472,7 @@ def _run_cli() -> None:
         except PhosonConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
-        _run_plugin_command(options.plugin_args, config)
+        _run_plugin_command(options.plugin_args, config, assume_yes=options.assume_yes)
         return
 
     if options.self_update:

@@ -16,6 +16,8 @@ from phoson_cli.plugin_manager import (
     _save_lockfile,
     disable_plugin,
     install_plugin,
+    _resolve_git_commit,
+    _pin_git_requirement,
     normalize_plugin_source,
 )
 
@@ -28,6 +30,18 @@ def test_parse_plugin_subcommand_and_install_alias(monkeypatch) -> None:
         "install",
         "github:org/example@v1",
     ]
+
+
+def test_parse_plugin_install_accepts_yes_before_or_after_subcommand(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+
+    before = parse_args(["--yes", "plugin", "install", "package==1"])
+    after = parse_args(["plugin", "install", "package==1", "--yes"])
+
+    assert before.assume_yes is True and before.plugin_args == ["install", "package==1"]
+    assert after.assume_yes is True and after.plugin_args == ["install", "package==1"]
 
 
 def test_parse_plugin_command_does_not_consume_non_tty_stdin(monkeypatch) -> None:
@@ -50,6 +64,26 @@ def test_parse_plugin_command_does_not_consume_non_tty_stdin(monkeypatch) -> Non
 )
 def test_normalize_plugin_source(source, expected) -> None:
     assert normalize_plugin_source(source) == expected
+
+
+def test_git_source_resolves_and_pins_an_immutable_commit() -> None:
+    commit = "a" * 40
+
+    def runner(command, **_kwargs):
+        assert command == [
+            "git",
+            "ls-remote",
+            "https://github.com/org/example.git",
+            "v1",
+        ]
+        return SimpleNamespace(
+            returncode=0, stdout=f"{commit}\trefs/tags/v1\n", stderr=""
+        )
+
+    assert _resolve_git_commit("github:org/example@v1", runner=runner) == commit
+    assert _pin_git_requirement("github:org/example@v1", commit) == (
+        f"git+https://github.com/org/example.git@{commit}"
+    )
 
 
 def test_normalize_plugin_source_rejects_bad_github_target() -> None:

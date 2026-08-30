@@ -58,7 +58,13 @@ def _save_lockfile(entries: list[dict[str, str]], path: Path | None = None) -> P
     lines: list[str] = ["# Installed community plugins; managed by phoson-cli.\n"]
     for entry in entries:
         lines.append("[[plugin]]\n")
-        for key in ("id", "source", "requirement", "installed_at"):
+        for key in (
+            "id",
+            "source",
+            "requirement",
+            "resolved_commit",
+            "installed_at",
+        ):
             value = entry.get(key)
             if value is not None:
                 lines.append(f"{key} = {_toml_string(value)}\n")
@@ -97,6 +103,57 @@ def normalize_plugin_source(source: str) -> str:
     if not source:
         raise PluginManagerError("Plugin source must not be empty")
     return source
+
+
+def _git_revision(source: str) -> str | None:
+    """Return an explicitly requested Git ref from a supported source."""
+    if source.startswith("github:"):
+        _repository, separator, revision = source.removeprefix("github:").partition("@")
+        return revision if separator and revision else None
+    if source.startswith("git+") or source.startswith("git:"):
+        _url, separator, revision = source.rpartition("@")
+        return revision if separator else None
+    return None
+
+
+def _resolve_git_commit(
+    source: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str | None:
+    """Resolve a Git source's requested ref to an immutable commit SHA."""
+    requirement = normalize_plugin_source(source)
+    if not requirement.startswith("git+"):
+        return None
+    url = requirement.removeprefix("git+")
+    url_without_revision, separator, _revision = url.rpartition("@")
+    if separator:
+        url = url_without_revision
+    revision = _git_revision(source) or "HEAD"
+    result = runner(
+        ["git", "ls-remote", url, revision], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise PluginManagerError(
+            f"Could not resolve Git plugin revision: {detail or source}"
+        )
+    first_line = next((line for line in result.stdout.splitlines() if line.strip()), "")
+    commit = first_line.split("\t", 1)[0].strip()
+    if len(commit) != 40 or any(
+        character not in "0123456789abcdef" for character in commit.lower()
+    ):
+        raise PluginManagerError(f"Could not resolve Git plugin revision: {source}")
+    return commit
+
+
+def _pin_git_requirement(source: str, commit: str | None) -> str:
+    """Replace a mutable Git ref in the install requirement with its SHA."""
+    requirement = normalize_plugin_source(source)
+    if commit is None:
+        return requirement
+    base, _separator, _revision = requirement.rpartition("@")
+    return f"{base or requirement}@{commit}"
 
 
 def _entrypoint_names() -> set[str]:
@@ -185,7 +242,8 @@ def install_plugin(
     obtain confirmation before invoking this operation unless an explicit
     non-interactive ``--yes`` mode was requested.
     """
-    requirement = normalize_plugin_source(source)
+    resolved_commit = _resolve_git_commit(source, runner=runner)
+    requirement = _pin_git_requirement(source, resolved_commit)
     before = _entrypoint_names()
     result = runner(
         ["uv", "pip", "install", "--python", sys.executable, requirement],
@@ -218,6 +276,7 @@ def install_plugin(
             "id": name,
             "source": source,
             "requirement": requirement,
+            **({"resolved_commit": resolved_commit} if resolved_commit else {}),
             "installed_at": datetime.now(UTC).isoformat(),
         }
     )

@@ -142,6 +142,37 @@ def test_controller_merges_configured_plugins_before_mcp(tmp_path) -> None:
     assert controller.engine._loaded_plugins == [community, mcp]
 
 
+def test_controller_cleans_initialized_plugins_when_extension_validation_fails(
+    tmp_path,
+) -> None:
+    class InvalidPlugin(Plugin):
+        def __init__(self) -> None:
+            self.cleaned = False
+
+        @property
+        def name(self) -> str:
+            return "invalid"
+
+        def get_commands(self):
+            from phoson_agent import CliCommandSpec
+
+            return [CliCommandSpec(names=("/help",), help="bad", handler="missing")]
+
+        def cleanup(self) -> None:
+            self.cleaned = True
+
+    plugin = InvalidPlugin()
+    config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
+    with (
+        patch("phoson_cli.controller.build_chat", return_value=MagicMock()),
+        patch("phoson_cli.controller.build_plugin_specs", return_value=[plugin]),
+        pytest.raises(ValueError, match="conflicts with a native command"),
+    ):
+        SessionController(config, FakeSink())
+
+    assert plugin.cleaned is True
+
+
 def test_controller_requires_no_ui_dependencies(tmp_path) -> None:
     import inspect
 
