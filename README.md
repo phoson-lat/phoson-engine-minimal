@@ -37,6 +37,7 @@
   - [`phoson_cli` — Interactive REPL](#phoson_cli--interactive-repl)
 - [🚀 Quick Start](#-quick-start)
 - [Installation](#-installation)
+  - [Standalone binaries (no Python required)](#standalone-binaries-no-python-required)
 - [Development setup](#-development-setup)
 - [Run checks locally](#-run-checks-locally)
 - [Environment variables](#-environment-variables)
@@ -426,10 +427,12 @@ def calculate(expression: str) -> str:
 ### Interactive CLI
 
 ```bash
-uv run phoson-cli
+uv run phoson-cli          # full-screen TUI (default)
+uv run phoson-cli --setup  # first-run wizard: credentials + defaults
 ```
 
-**One-shot mode** (no REPL, no session — for scripts and CI):
+**One-shot mode** (no REPL, no session — for scripts and CI): the final
+answer goes to stdout, exit code 0 on success / 1 on agent error.
 
 ```bash
 phoson-cli "fix the failing tests"     # positional task
@@ -437,279 +440,102 @@ phoson-cli -p "summarize this repo"    # --print flag
 echo "explain the CI failure" | phoson-cli   # piped stdin
 ```
 
-The final answer is printed to stdout; the exit code is 0 on success and
-1 on agent error.
-
-**Command-line flags** (one-off overrides for this run; they never touch
+**Command-line flags** (one-off overrides; they never touch
 `~/.phoson/config.toml`):
 
-```bash
-phoson-cli --version                 # print the version and exit
-phoson-cli --model openai/gpt-4o     # override the model
-phoson-cli --provider openai         # override the provider
-phoson-cli --theme light             # override the theme (dark|light|ansi|no-color)
-phoson-cli --max-turns 25            # override max_iterations for this run
-phoson-cli --classic                 # use the classic line-by-line REPL
-phoson-cli --no-fullscreen           # alias of --classic
-```
+| Flag | Effect |
+|------|--------|
+| `--model <id>` / `--provider <id>` | Override model / provider for this run |
+| `--theme <tier>` | Override theme: `dark`, `light`, `ansi`, `no-color` |
+| `--max-turns <n>` | Override max iterations for this run |
+| `-p, --print` | Print the final answer and exit (one-shot mode) |
+| `--classic` / `--no-fullscreen` | Use the classic line-by-line REPL |
+| `--setup` / `--install` | Run the setup wizard |
+| `--self-update` | Check for and install CLI updates (same flow as `/update`) |
+| `--uninstall` | Uninstall phoson-cli |
+| `--install-plugin <source>` | Install and enable a community plugin (alias for `plugin install`; `-y/--yes` skips the confirmation) |
+| `plugin <command>` | Manage plugins: `install`, `list`, `enable`, `disable`, `remove`, `update`, `doctor` |
+| `--version` / `-h, --help` | Print the version / usage and exit |
 
-The full-screen TUI is the default interactive front end. `--classic`
-launches the retained classic REPL (Rich scrollback, line-by-line
-streaming) — useful for debugging and on terminals without full-screen
-support. When `TERM` is unset or `dumb` on an interactive terminal, the
-classic REPL is selected automatically with a notice on stderr.
+The full-screen TUI is the default interactive front end; `--classic`
+launches the classic REPL (Rich scrollback) — useful for debugging and on
+terminals without full-screen support. When `TERM` is unset or `dumb`,
+the classic REPL is selected automatically.
 
-**Available commands:**
-- `/new` — Start a new session
-- `/model <name>` — Switch model
-- `/tree` — Show conversation tree
-- `/sessions` — List saved sessions
-- `/label <text>` — Label current node
-- `/theme` — Pick or set the color theme (live preview; `list` to list)
-- `/keys` — List key bindings and how to remap them
-- `/undo` — Undo the last turn (branch from before your last message)
-- `/skills` — List available skills (`/skills <name>` shows one's instructions)
-- `/update` — Check for and install CLI updates
-- `/help` — Show all commands
+**Slash commands** (type `/help` inside the REPL for the live list):
 
-**Self-update:** `phoson-cli --self-update` performs the same check/upgrade
-flow from outside the REPL (e.g. from a script).
+| Command | What it does |
+|---------|--------------|
+| `/new` (`/clear`) | Start a new session |
+| `/model`, `/provider`, `/subagent-model` | Unified pickers (or set directly) for the active model, provider, and sub-agent model |
+| `/reasoning-effort` (`/effort`) | Show or set reasoning effort: `low`…`max`, `off` |
+| `/sessions` | List saved sessions; load one by `#` or via picker |
+| `/resume <id>` | Resume a saved session (prefix match works) |
+| `/delete <id>` | Delete a session by id |
+| `/tree` | Show the conversation tree as ASCII |
+| `/label <text>` / `/title` | Label the current node / set a session title |
+| `/undo` | Undo the last turn (branch from before your last message) |
+| `/compact` | Preview + confirm compaction; `/compact on\|off` toggles auto-compaction |
+| `/attach` (`/attachments`) | Attach a file to the next message, or list pending attachments |
+| `/permissions` (`/perms`) | Show or change per-tool `allow`/`ask`/`deny` levels |
+| `/mcp` | Manage Model Context Protocol servers |
+| `/status`, `/env`, `/cost`, `/tokens`, `/steps` | Session metrics: provider/model/permissions, environment, running cost, token totals, step count |
+| `/theme` | Pick or set the color theme (live preview; `list` to list) |
+| `/keys` | List the key bindings and the `[keys]` remap syntax |
+| `/agents-md` | Show which AGENTS.md/CLAUDE.md memory files are loaded |
+| `/skills` | List available skills; `/skills <name>` shows one's instructions |
+| `/setup` | Run the initial setup wizard again |
+| `/update` (`/upgrade`) | Check for and install CLI updates |
+| `/help` | Show all commands |
+| `/exit` (`/quit`) | Exit the REPL |
 
-**Startup update check:** at launch the CLI checks PyPI in the
-background — at most once every 24 h (cache in
-`~/.phoson/last_update_check`; a failed check is retried on the next
-start). When a newer release exists it shows a dim one-line hint:
-`⬆ v0.8.1 available — /update` — in the TUI header (full-screen) or the
-prompt line (classic). It never blocks first paint, input, or a run,
-and one-shot mode is untouched. `/update` or `--self-update` install it.
+Plugins can register additional slash commands (see
+[docs/plugins.md](docs/plugins.md)).
 
-**Appearance:** `PHOSON_THEME=light|ansi|no-color` (or `theme = "..."` in
-`~/.phoson/config.toml`) switches the color tier; `NO_COLOR` / `CLICOLOR=0`
-always produce plain output (scripts, CI).
+**Behavior highlights** — one-line summaries; deep dives in
+[docs/cli/](docs/cli/index.md):
 
-**Themes (light/dark aware):** the first time you run `phoson-cli` without
-a saved theme, it asks your terminal for its default background color
-(`COLORFGBG` env when present, otherwise a ~150 ms OSC 11 probe that
-iTerm2, kitty, WezTerm, Alacritty, ghostty, VS Code and friends answer)
-and offers to save the matching tier — `light` or `dark` — as your
-default. If the terminal can't be classified it just doesn't ask.
-`/theme` opens a live-preview picker (the banner and every token
-rendered in the tier's own colors) in both front ends;
-`/theme <tier>` sets it directly and `/theme list` lists the four tiers.
-Switching applies immediately — no restart needed.
+- **Rewind** — double-`Esc` while idle jumps the conversation back to an
+  earlier message; `Ctrl+Z` undoes the jump → [docs/cli/rewind.md](docs/cli/rewind.md)
+- **Key bindings** — remappable via `[keys]` in `~/.phoson/config.toml`
+  (validated at startup); `Ctrl+T` toggles the live reasoning view →
+  [docs/cli/keybindings.md](docs/cli/keybindings.md)
+- **Text selection & links** — `Shift+Drag` selects chat text natively;
+  markdown links render as clickable OSC 8 hyperlinks →
+  [docs/cli/mouse-and-links.md](docs/cli/mouse-and-links.md)
+- **`@file` mentions** — type `@` and the composer fuzzy-filters repo
+  paths; on send, files are inlined (text) or become native media blocks
+  (images/audio/video/pdf), same as `/attach`.
+- **Prompt caching** — cacheable prefix by default (Anthropic
+  `cache_control` + OpenRouter sticky routing); cached tokens surface in
+  `/status` and `/tokens`, typically cutting long-session prompt cost
+  50–90% → [docs/cli/prompt-caching.md](docs/cli/prompt-caching.md)
+- **Permissions** — per-tool `allow`/`ask`/`deny` + allow-patterns in
+  `~/.phoson/permissions.json`; non-interactive runs fail closed →
+  [docs/cli/permissions.md](docs/cli/permissions.md)
+- **Project memory** — `AGENTS.md` (or `CLAUDE.md`) from the repo root to
+  your CWD is injected into the system prompt; `/agents-md` lists what
+  loaded → [docs/cli/agents-md.md](docs/cli/agents-md.md)
+- **Skills** — `SKILL.md` packages indexed at one line; the agent loads
+  the full body on demand without busting the prompt cache →
+  [docs/cli/skills.md](docs/cli/skills.md)
+- **Models config** — `~/.phoson/models.json` for model overrides and
+  non-sensitive provider settings; light/dark theme auto-detection →
+  [docs/cli/models-config.md](docs/cli/models-config.md)
+- **Auto-compaction** — structured handoff summaries keep long sessions
+  inside the context window; `/compact` previews before applying →
+  [docs/cli/compaction.md](docs/cli/compaction.md)
+- **UI** — scrollable chat pane, multiline composer, overlay pickers,
+  animated activity line (`Thinking… → Composing tool… →
+  Running tool…`) → [docs/cli/ui.md](docs/cli/ui.md)
 
-**Reasoning:** press `Ctrl+T` to toggle the live "thinking" view while a
-run is streaming, or to expand the full reasoning of the last turn after
-it finishes (persisted with the session, so it survives resume).
+**Self-update:** at launch the CLI checks PyPI in the background (at most
+once every 24 h). When a newer release exists it shows a dim one-line
+hint — `⬆ v0.x.y available — /update` — in the TUI header (full-screen)
+or the prompt line (classic). It never blocks first paint, input, or a
+run; one-shot mode is untouched. `/update` or `--self-update` install
+it.
 
-**Prompt caching:** long conversations re-send the whole history on every
-turn; phoson-cli keeps that prefix cacheable so providers can bill it at
-the (much cheaper) cache-read rate instead of full input price. It is on
-by default, no configuration needed:
-
-- **Anthropic** — each request carries ephemeral `cache_control`
-  breakpoints on the three stable parts of the prompt: the system prompt,
-  the tool list, and the end of the conversation history (which advances
-  as it grows). Cached usage shows up as `cache_creation` / `cache_read`
-  tokens.
-- **OpenRouter** — the conversation's session id is sent as
-  `session_id` (sticky routing) so OpenRouter pins you to one upstream
-  provider and its cache stays warm from the first turn; `anthropic/*`
-  models additionally opt into automatic caching. The adapter also
-  identifies itself as *phoson-cli* in OpenRouter's app rankings.
-
-The system prompt is deliberately a **stable prefix** (date + timezone,
-not a live clock) so it does not bust the cache between turns. Cached
-tokens accumulate in the session metrics and surface in `/status`
-(`cache  R read / W write`) and `/tokens` (`cache=Rr/Ww`). Cached reads
-cost 10–50% of the base input price, so a warm cache typically cuts
-long-session prompt cost by 50–90%. See `docs/api/phoson_llm.md` for
-per-provider details.
-
-**Key bindings (customizable):** the full-screen TUI's keys are
-remappable from the `[keys]` section of `~/.phoson/config.toml`
-(IMPROVEMENTS.md E6) — one line per action, each a prompt_toolkit key
-sequence (a list means "try in order", and `""` unbinds the action):
-
-```toml
-[keys]
-toggle_reasoning = "c-x"          # Ctrl+X instead of Ctrl+T
-line_up = ["s-up", "c-up"]        # list = precedence order
-submit = ""                       # unbind (use mouse / another key)
-```
-
-`/keys` lists the effective map (defaults or your remaps) plus the
-config syntax. Sequences are validated at startup: an unparseable key,
-an unknown action, or a sequence bound to two actions is a clear error
-before the UI opens — never a silent fallback. Remaps apply on the next
-start. The classic REPL's single global key (Ctrl+T) is fixed.
-
-**Rewind (double-Esc, full-screen TUI):** press `Esc` twice in quick
-succession while idle and a picker lists your earlier messages —
-select one to jump the conversation back to just before it, the same
-UX as Claude Code's double-Esc. The chat pane redraws up to that point,
-your composer is pre-filled with the selected message (edit it and
-press Enter to re-send), and `Ctrl+Z` undoes the jump, restoring the
-previous point (repeat it to undo several consecutive rewinds). The
-"undone" messages are not deleted — they remain as an abandoned branch
-in the conversation tree (still visible via `/tree`), and session
-cost/token totals stay cumulative (same contract as `/undo`). Precedence
-with the single-Esc run cancel is fixed: a lone `Esc` while a turn is
-running still cancels it immediately, and double-Esc is only interpreted
-when idle. The double-tap rides on whatever key `escape` is bound to —
-remapping `escape` in `[keys]` moves both the single-Esc cancel and the
-double-Esc rewind together (unbinding `escape` disables both); the jump
-undo `undo_jump` (default `Ctrl+Z`) is remappable on its own.
-
-**Selecting/copying chat text (full-screen TUI):** the chat pane sets
-`mouse_support=True` so the scroll wheel is handled by the app — this is
-a terminal-level mouse-tracking switch (xterm's own DECSET 1000/1002/1006
-modes), not something the app can opt out of selectively, and turning it
-on is what makes the terminal stop treating a plain click-drag as native
-text selection (every mouse-aware TUI — Claude Code, Pi, OpenCode — hits
-the same trade-off). Hold **Shift** while dragging to select text: this
-tells the *terminal itself* to ignore the app's mouse tracking for that
-gesture and fall back to its own native selection/copy, unaffected by
-whatever the app is doing (works in GNOME Terminal, iTerm2, Alacritty,
-WezTerm, Ghostty, kitty, Windows Terminal — check your terminal's docs if
-the modifier differs). The footer's `[Shift+Drag] Select text` hint is a
-reminder of this.
-
-**Clickable hyperlinks in responses:** Markdown links in assistant
-answers render as real OSC 8 terminal hyperlinks (`ESC ] 8 ; ; URL ESC \`)
-in both front ends — the same escape sequence Neovim, tmux and modern
-editors use. In a terminal that supports it (kitty, iTerm2, WezTerm,
-GNOME Terminal, Ghostty, Alacritty, Windows Terminal, …) the link text
-becomes clickable, typically with **Ctrl+click** (check your terminal's
-docs — the exact modifier follows the same convention as the
-`Shift+Drag` text-selection bypass above: it's the *terminal* that
-intercepts the gesture, not the app, so it isn't affected by
-`mouse_support=True` capturing the rest of the mouse for the scroll
-wheel).
-
-**`@file` mentions:** type `@` in the message and the composer offers
-repo paths (fuzzy-filtered as you type, with a size hint per file);
-selecting one inserts the path. On send, each `@mention` is expanded into
-the file's content so the model sees the actual file — text files are
-inlined, and images/audio/video/pdf become their native media blocks
-(same as `/attach`). Works in both the full-screen TUI and the classic
-REPL. `user@domain` emails and bare `@user` handles in prose are left
-alone.
-
-**Permissions:** control what each tool may do via `~/.phoson/permissions.json`:
-
-```json
-{
-  "levels": { "bash": "ask", "web_search": "deny" },
-  "allow_patterns": { "bash": ["git status", "pytest*", "uv *"] }
-}
-```
-
-Levels: `allow` (run freely), `ask` (confirm every call), `deny`. A matching
-allow-pattern runs without asking even under `ask`/`deny` — handy for safe
-subcommands. Inspect or change levels at runtime with `/permissions bash ask`
-(persisted immediately). Non-interactive contexts (one-shot mode, scripts)
-fail closed: an `ask`-level tool is refused instead of hanging.
-
-**Project memory:** drop an `AGENTS.md` in the repository root (or any
-directory between the root and your working directory) and its contents
-are injected into the agent's system prompt on every turn — no plugin or
-database needed. A global `~/.phoson/AGENTS.md` applies everywhere;
-`CLAUDE.md` is supported as an alias; `@path/to/file.md` lines import
-other files; content is capped at ~2000 tokens with a visible truncation
-marker and re-read every turn. `/agents-md` lists what was loaded.
-
-```markdown
-# AGENTS.md
-
-- Use ruff for lint/format and pytest for tests — never black.
-- Commit messages follow Conventional Commits.
-- Public APIs need type hints and docstrings.
-@docs/style-guide.md
-```
-
-**Skills (on-demand instructions):** a *skill* is a directory with a
-`SKILL.md` file — YAML frontmatter (`name` + `description`) followed by
-Markdown instructions, optionally next to bundled `scripts/` and
-`references/`. Unlike `AGENTS.md` (always in the prompt) or a tool
-(schema in every request), a skill costs **one line** while dormant: only
-its `name: description` is indexed in the system prompt, and the agent
-pulls the full body in with the `skill` tool when it decides the skill
-matches the task. On this repo's own skill that is **157 tokens indexed
-vs 2399 loaded — 15× cheaper** until it is actually needed, and because
-the body arrives as a *tool result* (not in the system prompt), loading a
-skill mid-session never invalidates the prompt cache.
-
-```
-.phoson/skills/code-reviewer/SKILL.md     # project skill (git-versionable)
-~/.phoson/skills/my-workflow/SKILL.md     # available in every repo
-```
-
-```markdown
----
-name: code-reviewer
-description: Use when the user asks to review a diff, a PR or a file for
-  bugs, security issues or style violations.
----
-
-# Code reviewer
-
-1. Run `git diff` to see the change.
-2. Check for N+1 queries, missing error handling, unvalidated input.
-3. Report findings grouped by severity.
-```
-
-Project skills shadow same-named global ones. `.agents/skills/` and
-`.claude/skills/` are also read, so a repo already set up for another
-agent harness works unchanged (same rationale as the `CLAUDE.md` alias).
-`/skills` lists what was discovered and `/skills <name>` prints a skill's
-full instructions. The `skill` tool only joins the registry when at least
-one skill exists — no skills, no added schema on any request.
-
-**Models file:** `~/.phoson/models.json` (optional) holds model overrides
-(context window, labels — user-defined models appear in `/model`) and
-non-sensitive provider settings (`default_model`, `base_url` for
-self-hosted/proxied endpoints). Model listings are always fetched live
-— a bare `/model` shows one unified picker of every configured provider
-(OpenRouter ordered by `agentic_index`), and a provider whose fetch
-fails is marked `unavailable` instead of silently degrading. API keys
-never live there; see
-[docs/api/phoson_cli.md](docs/api/phoson_cli.md).
-
-**Context management (long sessions):** when a session grows past a
-fraction of the model's context window, phoson compacts it automatically —
-older turns are replaced by a **structured handoff summary** (goal,
-completed work, key decisions, a distillation of the model's reasoning,
-open questions, next steps, constraints) so continuity survives long tasks.
-Captured reasoning from the summarized turns is folded into that summary,
-not dropped. You control it:
-- `/compact` previews what would be summarized and asks before applying it;
-  `/compact aggressive` previews a deeper cut.
-- `/compact on|off` toggles *automatic* compaction at runtime (persisted).
-- `~/.phoson/config.toml` `[defaults]` knobs: `compact_mode`
-  (`balanced`|`aggressive`|`off`), `compact_threshold` (fraction of the
-  window that triggers auto-compact), `compact_min_keep_messages` (recent
-  turns kept verbatim), and `offload_tool_outputs` / `offload_max_chars`
-  (large tool results — default >24 KB — are written to
-  `~/.phoson/compacted/` with only a head/tail preview kept in context).
-
-**UI:** the full-screen `prompt_toolkit` front end is the default interactive
-experience; it offers a persistent scrollable chat pane, multiline input
-(`Ctrl+J` inserts a newline, `Enter` sends), persistent input history
-(`~/.phoson/history.txt`, shared with the retained classic REPL), and
-`/model`/`/provider`/`/sessions` pickers and bash confirmation as overlay
-floats. The multiline composer wraps long pasted lines, takes only the
-height it needs (up to five lines), and scrolls internally after that cap. If
-a turn is already running, `Enter` keeps the draft and shows a warning; press
-`Esc` to cancel the active turn before sending it. While idle, press `Esc`
-twice to **rewind** the conversation to an earlier message (a picker lists
-your previous messages; the pane redraws to the chosen point and your
-composer is pre-filled with that message — `Ctrl+Z` undoes the jump); see
-[Key bindings (customizable)](#key-bindings-customizable) below. The chat
-also shows a transient animated activity line immediately after sending
-(`Thinking…` with rotating phrases, then `Streaming…` / `Running tool…` as
-applicable), which vanishes when the turn settles. One-shot mode
-(`phoson-cli "task"`) is always stdout-only.
 ---
 
 ## 🔒 CI and security workflows
