@@ -53,11 +53,12 @@ agent = AgentEngine(
 1. `AgentStartEvent` — Agent started
 2. `AgentTokenEvent` — Text token generated
 3. `AgentReasoningEvent` — Reasoning token (Anthropic/OpenAI o1)
-4. `AgentToolStartEvent` — Tool call started
-5. `AgentToolDoneEvent` — Tool call completed
-6. `AgentStepDoneEvent` — Step completed (LLM or tool)
-7. `AgentDoneEvent` — Agent finished (contains result)
-8. `AgentErrorEvent` — Error occurred
+4. `AgentToolComposingEvent` — The model is composing a tool call (throttled ~4/s)
+5. `AgentToolStartEvent` — Tool call started
+6. `AgentToolDoneEvent` — Tool call completed
+7. `AgentStepDoneEvent` — Step completed (LLM or tool)
+8. `AgentDoneEvent` — Agent finished (contains result)
+9. `AgentErrorEvent` — Error occurred
 
 ### AgentContext
 
@@ -278,12 +279,23 @@ All events inherit from `AgentEvent` which has `timestamp`.
 | `AgentStartEvent`      | `model`, `message_count`, `max_iterations`      |
 | `AgentTokenEvent`      | `content`                                       |
 | `AgentReasoningEvent`  | `content`                                        |
+| `AgentToolComposingEvent` | `index`, `tool_call_id` (always empty), `tool_name`, `args_chunk` (raw, partial JSON — do not parse) |
 | `AgentToolStartEvent`  | `index`, `tool_call_id`, `tool_name`, `args`, `label` |
 | `AgentToolDoneEvent`   | `index`, `tool_call_id`, `tool_name`, `result`, `error`, `duration_ms`, `label` |
 | `AgentStepDoneEvent`   | `step: RunStep`                                 |
 | `AgentDoneEvent`       | `result: AgentRunResult`                         |
 | `AgentErrorEvent`      | `message`, `code`, `retryable`                 |
 | `AgentSubagentResult`  | `index`, `task`, `result`, `cost_usd`, `credits`, `duration_ms`, `input_tokens`, `output_tokens`, `error` *(experimental — not yet emitted; subagent results currently travel as tool results)* |
+
+> **`AgentToolComposingEvent` notes:** emitted while the provider streams
+> tool-call deltas (OpenAI-compatible, Anthropic, Ollama), so consumers can
+> show a "⚙ writing file…" style indicator before the call executes. It is
+> **throttled leading-edge** (~250 ms between emissions, capped ~4/s): the
+> first non-empty args chunk and the first known `tool_name` always emit;
+> the rest are heartbeats. `tool_call_id` is always empty — the id only
+> exists once `AgentToolStartEvent` arrives; correlate by `index`.
+> `args_chunk` is a raw partial-JSON fragment: never parse it. Providers
+> that do not stream tool-call deltas (e.g. Gemini) simply never emit it.
 
 ## RunStep Model
 
@@ -329,7 +341,8 @@ from phoson_agent import (
     AgentEngine, AgentContext, tool, AgentTool,
     # Events
     AgentEvent, AgentStartEvent, AgentTokenEvent, AgentReasoningEvent,
-    AgentToolStartEvent, AgentToolDoneEvent, AgentStepDoneEvent,
+    AgentToolComposingEvent, AgentToolStartEvent, AgentToolDoneEvent,
+    AgentStepDoneEvent,
     AgentDoneEvent, AgentErrorEvent, AgentSubagentResult,
     # Middleware
     AgentMiddleware, RetryMiddleware,

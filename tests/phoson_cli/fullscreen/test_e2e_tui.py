@@ -23,6 +23,7 @@ from phoson_agent import (
     AgentTokenEvent,
     AgentToolDoneEvent,
     AgentToolStartEvent,
+    AgentToolComposingEvent,
 )
 from phoson_cli.theme import DARK
 from phoson_cli.config import PhosonConfig
@@ -397,3 +398,55 @@ def test_golden_snapshot_tool_card_done() -> None:
     assert "reading file" in rendered
     assert "src/main.py" in rendered
     assert "42ms" in rendered
+
+
+def test_golden_snapshot_composing_tool_call() -> None:
+    """Snapshot (I-128): model is mid-composing a tool call — the activity
+    line shows the verb before any start card exists."""
+    cache = BlockAnsiCache()
+    sink = FullScreenSink(on_invalidate=lambda: None, theme=DARK)
+    sink.on_user_message(
+        "write the config", Message(role="user", content="write the config")
+    )
+    sink.on_event(AgentStartEvent(model="test-model", message_count=1))
+    sink.on_event(
+        AgentToolComposingEvent(index=0, tool_name="write_file", args_chunk='{"path":')
+    )
+
+    rendered = render_chat(sink, width=60, cache=cache)
+    # The verb appears on the in-chat activity line...
+    assert "⚙ writing file…" in rendered
+    # ...while no start/done card has landed yet.
+    assert "src/" not in rendered
+    assert "42ms" not in rendered
+    assert "✓" not in rendered  # no done marker
+
+
+def test_golden_snapshot_composing_tool_call_after_streamed_text() -> None:
+    """Snapshot (I-128): the composing indicator follows the agent's streamed
+    text (continuation of the message), it does not lead above it, and the
+    model's trailing newline does not leave a blank-line gap."""
+    cache = BlockAnsiCache()
+    sink = FullScreenSink(on_invalidate=lambda: None, theme=DARK)
+    sink.on_user_message(
+        "write the config", Message(role="user", content="write the config")
+    )
+    sink.on_event(AgentStartEvent(model="test-model", message_count=1))
+    # Models end the paragraph with a trailing newline.
+    sink.on_event(AgentTokenEvent(content="Sure, I will draft it now.\n"))
+    sink.on_event(
+        AgentToolComposingEvent(index=0, tool_name="write_file", args_chunk='{"path":')
+    )
+
+    rendered = render_chat(sink, width=60, cache=cache)
+    assert "Sure, I will draft it now." in rendered
+    assert "⚙ writing file…" in rendered
+    # The indicator must sit BELOW the streamed text, not above it...
+    text_pos = rendered.index("Sure, I will draft it now.")
+    activity_pos = rendered.index("⚙ writing file…")
+    assert activity_pos > text_pos
+    # ...and on the very next rendered line (no blank gap from the
+    # trailing newline).
+    text_line = rendered[:text_pos].count("\n")
+    activity_line = rendered[:activity_pos].count("\n")
+    assert activity_line == text_line + 1

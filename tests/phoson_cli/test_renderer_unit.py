@@ -11,6 +11,7 @@ from phoson_agent.models import (
     AgentToolDoneEvent,
     AgentReasoningEvent,
     AgentToolStartEvent,
+    AgentToolComposingEvent,
 )
 from phoson_cli.renderer import Renderer, WaitingSpinner, SubagentSpinner
 
@@ -125,6 +126,83 @@ def test_renderer_tool_start_no_print() -> None:
     # But the spinner label should contain the tool name.
     assert "read_file" in renderer._spinner._label
 
+    renderer._spinner.stop()
+
+
+# ── _on_tool_composing (I-128) ───────────────────────────────────────────────
+
+
+def test_renderer_tool_composing_relabels_spinner_with_verb() -> None:
+    """Composing relabels the (already running) spinner to the tool verb."""
+    renderer, console = _renderer_with_capture()
+
+    with console.capture() as cap:
+        renderer._on_tool_start(
+            AgentToolStartEvent(tool_name="read_file", args={"path": "/tmp/x.txt"})
+        )
+        label_before_compose = renderer._spinner._label
+        renderer._on_tool_composing(
+            AgentToolComposingEvent(index=0, tool_name="write_file", args_chunk='{"p":')
+        )
+
+    assert cap.get() == ""  # composing must not print a line
+    assert renderer._spinner._label == "⚙  writing file…"
+    assert renderer._spinner._label != label_before_compose
+
+    renderer._spinner.stop()
+
+
+def test_renderer_tool_composing_starts_spinner_when_idle() -> None:
+    """Composing before any tool start still produces a verb spinner."""
+    renderer, _ = _renderer_with_capture()
+
+    renderer._on_tool_composing(
+        AgentToolComposingEvent(index=0, tool_name="bash", args_chunk='{"command":')
+    )
+
+    assert renderer._spinner._label == "⚙  running command…"
+    assert renderer._spinner._thread is not None
+    renderer._spinner.stop()
+
+
+def test_renderer_tool_composing_ignores_empty_name() -> None:
+    """Deltas can arrive before the tool name is known — no label change."""
+    renderer, _ = _renderer_with_capture()
+
+    renderer._on_tool_composing(
+        AgentToolComposingEvent(index=0, tool_name="", args_chunk='{"command":')
+    )
+
+    # No spinner thread was started by the nameless composing event.
+    assert renderer._spinner._thread is None
+
+
+def test_renderer_tool_composing_noop_while_live_streaming() -> None:
+    """When the Live panel is open, the text is the feedback — don't touch it."""
+    renderer, _ = _renderer_with_capture()
+    fake_live = object()
+    renderer._live = fake_live  # simulate an open Live streaming panel
+
+    renderer._on_tool_composing(
+        AgentToolComposingEvent(index=0, tool_name="bash", args_chunk='{"command":')
+    )
+
+    assert renderer._spinner._thread is None
+    assert renderer._spinner._label == ""
+    renderer._live = None
+
+
+def test_renderer_on_event_dispatches_composing() -> None:
+    """The public on_event() path routes composing to the spinner relabel."""
+    renderer, console = _renderer_with_capture()
+
+    with console.capture() as cap:
+        renderer.on_event(
+            AgentToolComposingEvent(index=0, tool_name="web_search", args_chunk='{"q":')
+        )
+
+    assert cap.get() == ""
+    assert renderer._spinner._label == "⚙  searching the web…"
     renderer._spinner.stop()
 
 

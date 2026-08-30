@@ -507,8 +507,8 @@ def _done_result() -> "AgentRunResult":
 
 
 def test_tick_activity_frame_frozen_while_streaming() -> None:
-    """I-84: while tokens are streaming (or a tool runs), the spinner glyph
-    is invisible churn — ticks return False and do not advance the frame."""
+    """I-84/I-128: streaming and subagents keep the glyph frozen (the text /
+    panel already move); thinking, composing, and tool-running animate it."""
     sink, _ = _make_sink()
     sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
 
@@ -517,17 +517,33 @@ def test_tick_activity_frame_frozen_while_streaming() -> None:
     assert sink.tick_activity_frame() is True
     assert sink.activity_frame() != first_frame
 
-    # Streaming: ticks are inert.
+    # Streaming: ticks are inert (the growing text is the feedback).
     sink.current_turn.content = "streamed"
     frame = sink.activity_frame()
     for _ in range(5):
         assert sink.tick_activity_frame() is False
     assert sink.activity_frame() == frame
 
-    # Tool-running: also inert.
+    # Composing (with text already present) still animates: the verb line
+    # is static, so the glyph keeps it from looking frozen (I-128).
+    sink.current_turn.composing_tool = "write_file"
+    assert sink.tick_activity_frame() is True
+
+    # Tool-running: the start card is static and the text is frozen, so
+    # without the glyph nothing would move during a long bash/build.
     sink.current_turn.content = ""
+    sink.current_turn.composing_tool = ""
     sink.current_turn.running_tool = True
+    frame = sink.activity_frame()
+    assert sink.tick_activity_frame() is True
+    assert sink.activity_frame() != frame
+
+    # Subagents: the panel animates itself, so the glyph stays frozen.
+    sink.current_turn.running_tool = False
+    sink.current_turn.subagent_tasks = ["inspect tests"]
+    frame = sink.activity_frame()
     assert sink.tick_activity_frame() is False
+    assert sink.activity_frame() == frame
 
     # Idle sink: no turn, no repaint.
     sink.current_turn = None

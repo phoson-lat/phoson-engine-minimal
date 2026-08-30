@@ -119,33 +119,54 @@ def render_chat(
     turn = sink.current_turn
     if turn is not None:
         console = _make_console(buf, width)
+        show_panel = bool(turn.content) or (
+            bool(turn.reasoning) and turn.show_reasoning
+        )
         # The indicator is deliberately inside the chat pane rather than the
         # header. It is transient: shown from Enter until completion/cancel,
         # including the provider-startup gap before AgentStartEvent arrives.
-        console.print(
-            render_activity_line(
-                sink.activity_text(), sink.activity_frame(), sink.theme
-            )
+        #
+        # While a tool call is being *composed* after some text has already
+        # streamed, the indicator follows the text instead of leading it
+        # (I-128): the "⚙ writing file…" line reads as a continuation of the
+        # agent's message, not a banner stuck above it. Models usually end
+        # the preceding paragraph with a trailing newline; with the
+        # indicator below, that newline would show up as a blank line gap,
+        # so the trailing newline(s) are dropped from the in-flight render
+        # only (the frozen transcript keeps the original text).
+        composing_after_panel = bool(turn.composing_tool) and show_panel
+        if composing_after_panel:
+            panel_content = turn.content
+            if panel_content.endswith("\n"):
+                panel_content = panel_content.rstrip("\n") or " "
+        else:
+            panel_content = turn.content
+        activity = render_activity_line(
+            sink.activity_text(), sink.activity_frame(), sink.theme
         )
+        if not composing_after_panel:
+            console.print(activity)
         # Do not show an empty assistant block alongside the activity line.
         # In particular, a provider can emit reasoning while the user has it
         # hidden: ``render_streaming_panel`` would then fall back to its own
         # ``Phoson / thinking...`` placeholder, duplicating the spinner above.
         # Render the assistant panel only for visible content or visible
         # reasoning; otherwise the activity line is the sole feedback.
-        if turn.content or (turn.reasoning and turn.show_reasoning):
+        if show_panel:
             # stream_plain=True while the turn is in flight: re-parsing
             # growing markdown every frame is the single hottest render path
             # (perf/render-cache). The frozen transcript gets real Markdown.
             console.print(
                 render_streaming_panel(
-                    turn.content,
+                    panel_content,
                     turn.reasoning,
                     turn.show_reasoning,
                     sink.theme,
                     stream_plain=True,
                 )
             )
+        if composing_after_panel:
+            console.print(activity)
         panel = sink.render_subagent_panel()
         if panel is not None:
             console.print(panel)
