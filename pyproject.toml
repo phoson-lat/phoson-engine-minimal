@@ -28,6 +28,7 @@ packages = [
     "phoson_plugin_checkpoint",
     "phoson_plugin_mcp",
     "phoson_plugin_memory",
+    "phoson_plugin_monitor",
 ]
 
 [project.scripts]
@@ -83,6 +84,7 @@ include = [
     "phoson_plugin_checkpoint",
     "phoson_plugin_mcp",
     "phoson_plugin_memory",
+    "phoson_plugin_monitor",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true
