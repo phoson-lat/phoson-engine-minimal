@@ -420,3 +420,26 @@ def test_golden_snapshot_composing_tool_call() -> None:
     assert "src/" not in rendered
     assert "42ms" not in rendered
     assert "✓" not in rendered  # no done marker
+
+
+def test_golden_snapshot_composing_tool_call_after_streamed_text() -> None:
+    """Snapshot (I-128): the composing indicator follows the agent's streamed
+    text (continuation of the message), it does not lead above it."""
+    cache = BlockAnsiCache()
+    sink = FullScreenSink(on_invalidate=lambda: None, theme=DARK)
+    sink.on_user_message(
+        "write the config", Message(role="user", content="write the config")
+    )
+    sink.on_event(AgentStartEvent(model="test-model", message_count=1))
+    sink.on_event(AgentTokenEvent(content="Sure, I will draft it now."))
+    sink.on_event(
+        AgentToolComposingEvent(index=0, tool_name="write_file", args_chunk='{"path":')
+    )
+
+    rendered = render_chat(sink, width=60, cache=cache)
+    assert "Sure, I will draft it now." in rendered
+    assert "⚙ writing file…" in rendered
+    # The indicator must sit BELOW the streamed text, not above it.
+    text_pos = rendered.index("Sure, I will draft it now.")
+    activity_pos = rendered.index("⚙ writing file…")
+    assert activity_pos > text_pos
