@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <img src="assets/tui.png" alt="Phoson CLI full-screen TUI" width="980" />
+</p>
+
+<p align="center">
   <a href="#-quick-start"><img src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" alt="Python" /></a>
   <a href="https://pypi.org/project/phoson-engine-minimal/"><img src="https://img.shields.io/pypi/v/phoson-engine-minimal?color=FFD43B&logo=pypi&logoColor=white" alt="PyPI" /></a>
   <a href="#-installation"><img src="https://img.shields.io/badge/package_manager-uv-4B32C3" alt="uv" /></a>
@@ -430,6 +434,13 @@ def calculate(expression: str) -> str:
 uv run phoson-cli          # full-screen TUI (default)
 uv run phoson-cli --setup  # first-run wizard: credentials + defaults
 ```
+
+<details>
+<summary><strong>▶ Phoson in action</strong> (one-shot: prompt → tool call → answer)</summary>
+
+<p align="center"><img src="assets/demo.gif" alt="Phoson CLI demo" width="980" /></p>
+
+</details>
 
 **One-shot mode** (no REPL, no session — for scripts and CI): the final
 answer goes to stdout, exit code 0 on success / 1 on agent error.
