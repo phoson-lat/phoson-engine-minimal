@@ -13,13 +13,24 @@ through engine context injection (``bash_confirmation``):
 """
 
 import asyncio
+from typing import Annotated
 
 from phoson_agent.tool import tool
 
+from ._timeouts import sanitize_timeout
 from ..ui_protocols import ConfirmationService
 
 MAX_BYTES = 50 * 1024
 DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: Description the LLM sees for the ``timeout`` parameter. The ``@tool``
+#: schema is built from the type annotations (not the docstring), so this
+#: ``Annotated`` string is how the parameter gets documented for the model.
+TIMEOUT_DESCRIPTION = (
+    "Hard timeout in seconds. Defaults to 30. Raise for long-running "
+    "builds/tests/training (no maximum). Make commands that would wait "
+    "for interactive input non-interactive first."
+)
 
 
 def _truncate(output: str) -> str:
@@ -86,8 +97,24 @@ async def _run_bash(
 @tool(inject=["safe_mode", "bash_confirmation"])
 async def bash(
     command: str,
+    timeout: Annotated[float, TIMEOUT_DESCRIPTION] = DEFAULT_TIMEOUT_SECONDS,
     safe_mode: bool = False,
     bash_confirmation: ConfirmationService | None = None,
 ) -> str:
-    """Execute a bash command and return stdout+stderr combined."""
-    return await _run_bash(command, safe_mode=safe_mode, confirmation=bash_confirmation)
+    """Execute a bash command and return stdout+stderr combined.
+
+    Args:
+        command: The shell command to execute.
+        timeout: Hard timeout in seconds (per-invocation override).
+            Defaults to 30s; raise it for long-running builds, tests or
+            training jobs (no upper bound). Invalid values fall back to
+            the default with a note in the result.
+        safe_mode: When True, confirm with the user before running
+            (injected by the front end, not set by the model).
+        bash_confirmation: Confirmation service injected by the front end.
+    """
+    value, note = sanitize_timeout(timeout, DEFAULT_TIMEOUT_SECONDS)
+    result = await _run_bash(
+        command, safe_mode=safe_mode, timeout=value, confirmation=bash_confirmation
+    )
+    return f"{note}\n{result}" if note else result
