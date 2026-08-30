@@ -262,26 +262,32 @@ class FullScreenSink:
     def tick_activity_frame(self) -> bool:
         """Advance the in-chat spinner; return whether a repaint is due.
 
-        Only the *thinking* phase animates (I-84): while tokens are
-        streaming, or a tool/subagent is running, the visible text or tool
-        card IS the feedback — the spinner glyph is invisible churn, and
-        its repaints are redundant with the streaming/tool events' own
-        (throttled) repaints. The thinking phrase rotates once per
-        ``_THINKING_PHRASE_TICKS`` ticks (~2.5 s) so a long wait reads as
-        progress rather than a frozen label.
+        The glyph animates in three phases and is frozen in two (I-84 CPU
+        budget):
+
+        Animates:
+        - *thinking* — the spinner is the only feedback; the phrase
+          rotates once per ``_THINKING_PHRASE_TICKS`` ticks (~2.5 s).
+        - *composing* (I-128) — the "⚙ writing file…" line is static text,
+          so the spinning glyph keeps a slow args generation from looking
+          frozen.
+        - *running tool* — the start card is static until the tool finishes
+          and the streamed text is already frozen, so without the glyph
+          nothing moves during a long ``bash``/build; the activity line is
+          the only feedback. The repaint is cheap (blocks are cached and
+          there is no streaming panel — ``content`` is empty), matching
+          the cost of the subagent panel animation.
+
+        Frozen:
+        - *streaming* — the growing text IS the feedback and the streaming
+          panel repaints on the token throttle already.
+        - *subagents* — the subagent panel animates itself via
+          ``tick_subagent_frame``; the spinner would be redundant churn.
         """
         turn = self.current_turn
         if turn is None:
             return False
-        # Composing animates too (I-128): the "⚙ writing file…" line is
-        # static text, so without the spinning glyph a slow args
-        # generation can still look frozen. Plain streaming keeps the
-        # spinner hidden: the growing text IS the feedback there.
-        if (
-            turn.running_tool
-            or turn.subagent_tasks
-            or (turn.content and not turn.composing_tool)
-        ):
+        if turn.subagent_tasks or (turn.content and not turn.composing_tool):
             return False
         turn.activity_frame += 1
         if turn.activity_frame % _THINKING_PHRASE_TICKS == 0:
