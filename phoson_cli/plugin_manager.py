@@ -1,7 +1,10 @@
 """Community plugin installation and configuration management (I-110)."""
 
 import sys
+import tomllib
 import subprocess
+from pathlib import Path
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from collections.abc import Callable
 from importlib.metadata import entry_points
@@ -13,6 +16,58 @@ from .config import PhosonConfig, PhosonConfigError, save_config
 
 class PluginManagerError(Exception):
     """A user-actionable plugin installation or management failure."""
+
+
+_LOCKFILE_NAME = "plugins.lock.toml"
+
+
+def _lockfile_path() -> Path:
+    return Path("~/.phoson").expanduser() / _LOCKFILE_NAME
+
+
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _load_lockfile(path: Path | None = None) -> list[dict[str, str]]:
+    """Read the private plugin install inventory; malformed data is actionable."""
+    file_path = path or _lockfile_path()
+    if not file_path.exists():
+        return []
+    try:
+        raw = tomllib.loads(file_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        raise PluginManagerError(
+            f"Malformed plugin lockfile {file_path}: {exc}"
+        ) from exc
+    entries = raw.get("plugin", [])
+    if not isinstance(entries, list) or not all(
+        isinstance(item, dict) for item in entries
+    ):
+        raise PluginManagerError(
+            f"Malformed plugin lockfile {file_path}: [[plugin]] expected"
+        )
+    return [{str(key): str(value) for key, value in item.items()} for item in entries]
+
+
+def _save_lockfile(entries: list[dict[str, str]], path: Path | None = None) -> Path:
+    """Persist a minimal, reviewable installation inventory."""
+    file_path = path or _lockfile_path()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = ["# Installed community plugins; managed by phoson-cli.\n"]
+    for entry in entries:
+        lines.append("[[plugin]]\n")
+        for key in ("id", "source", "requirement", "installed_at"):
+            value = entry.get(key)
+            if value is not None:
+                lines.append(f"{key} = {_toml_string(value)}\n")
+        lines.append("\n")
+    file_path.write_text("".join(lines), encoding="utf-8")
+    try:
+        file_path.chmod(0o600)
+    except OSError:  # pragma: no cover - non-POSIX filesystems
+        pass
+    return file_path
 
 
 @dataclass(frozen=True)
@@ -87,6 +142,16 @@ def install_plugin(
     if spec not in config.plugins:
         config.plugins.append(spec)
         save_config(config, only_fields={"plugins"})
+    entries = [entry for entry in _load_lockfile() if entry.get("id") != name]
+    entries.append(
+        {
+            "id": name,
+            "source": source,
+            "requirement": requirement,
+            "installed_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    _save_lockfile(entries)
     return name
 
 
@@ -125,6 +190,50 @@ def enable_plugin(plugin_id: str, config: PhosonConfig) -> None:
         save_config(config, only_fields={"plugins"})
 
 
+def update_plugin(
+    plugin_id: str,
+    config: PhosonConfig,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    """Reinstall a plugin from its recorded source and refresh its inventory.
+
+    Update is intentionally explicit and preserves the runtime plugin config.
+    A legacy/manual entry without lockfile provenance fails rather than guessing
+    a package source or upgrading an unrelated distribution.
+    """
+    if not any(_matches(spec, plugin_id) for spec in config.plugins):
+        raise PluginManagerError(f"Configured plugin not found: {plugin_id}")
+    entry = next(
+        (item for item in _load_lockfile() if item.get("id") == plugin_id), None
+    )
+    if entry is None:
+        raise PluginManagerError(
+            f"No recorded install source for plugin {plugin_id!r}; "
+            "reinstall it explicitly"
+        )
+    requirement = entry.get("requirement")
+    if not requirement:
+        raise PluginManagerError(
+            f"Plugin lockfile entry for {plugin_id!r} lacks a requirement"
+        )
+    result = runner(
+        ["uv", "pip", "install", "--upgrade", "--python", sys.executable, requirement],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise PluginManagerError(f"Plugin update failed: {detail or requirement}")
+    entries = _load_lockfile()
+    for item in entries:
+        if item.get("id") == plugin_id:
+            item["installed_at"] = datetime.now(UTC).isoformat()
+    _save_lockfile(entries)
+    return plugin_id
+
+
 def remove_plugin(plugin_id: str, config: PhosonConfig) -> None:
     """Remove a plugin from runtime configuration without deleting its package.
 
@@ -134,6 +243,9 @@ def remove_plugin(plugin_id: str, config: PhosonConfig) -> None:
     package manager after confirming no other plugin uses it.
     """
     disable_plugin(plugin_id, config)
+    _save_lockfile(
+        [entry for entry in _load_lockfile() if entry.get("id") != plugin_id]
+    )
 
 
 def doctor_plugin(plugin_id: str, config: PhosonConfig) -> Plugin:

@@ -11,6 +11,9 @@ from phoson_cli.plugin_manager import (
     PluginManagerError,
     enable_plugin,
     remove_plugin,
+    update_plugin,
+    _load_lockfile,
+    _save_lockfile,
     disable_plugin,
     normalize_plugin_source,
 )
@@ -70,6 +73,57 @@ def test_remove_plugin_is_a_safe_configuration_only_operation() -> None:
     with patch("phoson_cli.plugin_manager.save_config"):
         remove_plugin("demo", config)
     assert config.plugins == []
+
+
+def test_lockfile_round_trips_a_reviewable_install_inventory(tmp_path) -> None:
+    lockfile = tmp_path / "plugins.lock.toml"
+    entries = [
+        {
+            "id": "demo",
+            "source": "github:org/demo@v1",
+            "requirement": "git+https://github.com/org/demo.git@v1",
+            "installed_at": "2026-08-30T00:00:00+00:00",
+        }
+    ]
+
+    _save_lockfile(entries, lockfile)
+
+    assert _load_lockfile(lockfile) == entries
+    assert lockfile.stat().st_mode & 0o777 == 0o600
+
+
+def test_update_plugin_uses_locked_requirement_and_preserves_config(tmp_path) -> None:
+    config = PhosonConfig(plugins=["entrypoint:demo"])
+    lockfile = tmp_path / "plugins.lock.toml"
+    _save_lockfile(
+        [
+            {
+                "id": "demo",
+                "source": "github:org/demo@v1",
+                "requirement": "git+https://github.com/org/demo.git@v1",
+                "installed_at": "old",
+            }
+        ],
+        lockfile,
+    )
+    seen: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        seen.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch("phoson_cli.plugin_manager._lockfile_path", return_value=lockfile):
+        assert update_plugin("demo", config, runner=runner) == "demo"
+
+    assert seen[0][:5] == ["uv", "pip", "install", "--upgrade", "--python"]
+    assert seen[0][-1] == "git+https://github.com/org/demo.git@v1"
+    assert config.plugins == ["entrypoint:demo"]
+    assert _load_lockfile(lockfile)[0]["installed_at"] != "old"
+
+
+def test_update_plugin_requires_a_known_locked_source() -> None:
+    with pytest.raises(PluginManagerError, match="No recorded install source"):
+        update_plugin("demo", PhosonConfig(plugins=["entrypoint:demo"]))
 
 
 def test_enable_plugin_rejects_unknown_entrypoint() -> None:

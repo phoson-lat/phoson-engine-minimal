@@ -254,13 +254,17 @@ def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
         doctor_plugin,
         enable_plugin,
         remove_plugin,
+        update_plugin,
         disable_plugin,
         install_plugin,
         configured_plugins,
     )
 
     if not args:
-        _fail("plugin requires one of: install, list, enable, disable, doctor")
+        _fail(
+            "plugin requires one of: install, list, enable, disable, "
+            "remove, update, doctor"
+        )
     command, *rest = args
     if command == "list" and not rest:
         entries = configured_plugins(config)
@@ -287,7 +291,10 @@ def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
             return
         print(f"Installed and enabled plugin: {name}")
         return
-    if command in {"enable", "disable", "remove", "doctor"} and len(rest) == 1:
+    if (
+        command in {"enable", "disable", "remove", "update", "doctor"}
+        and len(rest) == 1
+    ):
         plugin_id = rest[0]
         try:
             if command == "enable":
@@ -299,6 +306,9 @@ def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
             elif command == "remove":
                 remove_plugin(plugin_id, config)
                 print(f"Removed plugin from configuration: {plugin_id}")
+            elif command == "update":
+                update_plugin(plugin_id, config)
+                print(f"Updated plugin: {plugin_id}")
             else:
                 plugin = doctor_plugin(plugin_id, config)
                 print(f"Plugin OK: {plugin.name} {plugin.version}")
