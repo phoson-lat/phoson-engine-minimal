@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.17.1 (2026-08-30)
+
+### Fix
+
+- **cli**: los `warnings.warn` de Python (soft-fails internos) ya no se
+  imprimen a stderr como warning crudo con archivo+línea — solo el notice
+  estilizado del CLI, una vez (IMPROVEMENTS.md I-112, issue #112).
+
+  Un soft-fail interno (p. ej. el contexto-window "el servidor vLLM no
+  lista el modelo", o un model-listing caído) producía **dos** salidas: el
+  notice estilizado `⚠ …` **y** el warning crudo de Python
+  (`.../context_window.py:NN: UserWarning: …`) a stderr, con rutas
+  internas y línea de código. Rompía la TUI y exponía paths.
+
+  - **`phoson_cli/warnings_hook.py`** (nuevo): dos hooks instalados por
+    `main()` para toda la run.
+    1. `warnings.showwarning` → notice (stdout, nunca stderr; se descarta
+       el `filename`/`lineno`, que es lo que expone paths).
+    2. Un `logging.Handler` en el root enruta los `logger.warning` de
+       `phoson_*` al mismo notice, en vez de que caigan por
+       `logging.lastResort` a stderr.
+  - **Canal de notice mutable**: el modo clásico apunta el printer a
+    `Renderer.print_warn` (theme en vivo; `/theme` lo re-punta) y el
+    one-shot se queda con el printer plano (script-friendly, nunca stderr).
+  - **Fullscreen**: `run_async` marca `set_fullscreen_active(True/False)`
+    alrededor del alt-screen para que los hooks sean no-op (un print fuera
+    del buffer rasgaría el render). El par `NullHandler`+`captureWarnings`
+    preexistente se conserva intacto.
+  - **`phoson_agent/plugins/context_window.py`**: dedup — los 3 except
+    (Ollama/OpenRouter/vLLM caídos) emitían `warnings.warn` **y**
+    `logger.warning` del mismo fallo; se elimina el `warnings.warn` (se
+    queda el log, que es la señal de trazabilidad del issue #23 y que dos
+    tests exigen vía `caplog`). El else-branch "modelo no listado" (el
+    repro del issue) conserva su único `warnings.warn`.
+  - **`phoson_llm/pricing.py`**: se retira el advice obsoleto
+    `filterwarnings('ignore', …)` del mensaje de `UnknownModelWarning`
+    (el hook gestiona la presentación).
+
+  Tests: `test_i112_stderr_regression.py` (capfd — nada en stderr + notice
+  una vez para el repro exacto de vLLM, server-caído dedup, model-listing
+  clásico, one-shot, y el hook activo durante `main`/restaurado en
+  `sys.exit`) y `test_warnings_hook_unit.py` (mute fullscreen, multi-línea
+  → 1 línea, `phoson_*` vs third-party, restore idempotente, printer
+  custom). Ver `docs/plans/I-112.md`.
+
 ## v0.17.0 (2026-08-29)
 
 ### Feature

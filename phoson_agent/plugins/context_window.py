@@ -167,11 +167,9 @@ class ContextWindowResolver:
                         stacklevel=2,
                     )
         except (httpx.HTTPError, ValueError) as exc:
-            warnings.warn(
-                f"Failed to fetch Ollama context window for {model!r}: {exc}",
-                UserWarning,
-                stacklevel=2,
-            )
+            # I-112: the styled notice channel (CLI warnings hook) renders the
+            # logger record — no separate warnings.warn, which would double-
+            # notify. The log record is also the issue-#23 traceability signal.
             logger.warning(
                 "Ollama context window lookup failed for %r; "
                 "falling back to default (%d tokens): %s",
@@ -251,11 +249,8 @@ class ContextWindowResolver:
                                 self._openrouter_cache[model] = val
                                 return val
         except (httpx.HTTPError, ValueError) as exc:
-            warnings.warn(
-                f"Failed to fetch OpenRouter context window for {model!r}: {exc}",
-                UserWarning,
-                stacklevel=2,
-            )
+            # I-112: notice channel renders this log record — no separate
+            # warnings.warn (would double-notify); log = issue-#23 trace.
             logger.warning(
                 "OpenRouter context window lookup failed for %r; "
                 "falling back to default (%d tokens): %s",
@@ -298,11 +293,8 @@ class ContextWindowResolver:
                                 self._vllm_cache[model] = val
                                 return val
         except (httpx.HTTPError, ValueError) as exc:
-            warnings.warn(
-                f"Failed to fetch vLLM context window for {model!r}: {exc}",
-                UserWarning,
-                stacklevel=2,
-            )
+            # I-112: notice channel renders this log record — no separate
+            # warnings.warn (would double-notify); log = issue-#23 trace.
             logger.warning(
                 "vLLM context window lookup failed for %r; "
                 "falling back to default (%d tokens): %s",
@@ -312,6 +304,9 @@ class ContextWindowResolver:
             )
         else:
             if ok and not found:
+                # I-112: server is up but the model id is missing — the
+                # warnings.warn is the single signal here (no paired log),
+                # so the CLI notice channel shows it once, styled.
                 warnings.warn(
                     f"vLLM /v1/models response did not include {model!r} "
                     f"with a max_model_len; using default "

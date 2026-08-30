@@ -47,6 +47,7 @@ from prompt_toolkit.key_binding.key_bindings import (
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
+from .. import warnings_hook
 from .keys import build_key_bindings, listing_for_config
 from .sink import FullScreenSink
 from ..repl import PhosonRepl
@@ -1231,17 +1232,20 @@ class PhosonApp:
         logging.getLogger().handlers.append(logging.NullHandler())
         logging.getLogger().propagate = False
         # ``warnings.warn(...)`` (context-window/model-listing fallbacks —
-        # e.g. vLLM's /v1/models not listing the configured model id)
-        # bypasses logging entirely and writes straight to stderr via
-        # ``warnings.showwarning``, corrupting the alt-screen mid-render.
-        # Route it through logging (→ the NullHandler above) for the
-        # duration of the session; ``main()`` restores the default
-        # showwarning on exit so classic-mode warnings are unaffected.
+        # e.g. vLLM's /v1/models not listing the configured model id) would
+        # otherwise hit the I-112 hook installed by ``main()`` and print a
+        # notice to stdout, tearing the alt-screen render. Mute the hook for
+        # the session; the NullHandler above absorbs the routed records.
+        # ``logging.captureWarnings(True)`` additionally swaps ``showwarning``
+        # for the duration of the run and restores ours on exit, so the
+        # classic-mode hook stays active after the TUI closes.
+        warnings_hook.set_fullscreen_active(True)
         logging.captureWarnings(True)
         try:
             await self.app.run_async()
         finally:
             logging.captureWarnings(False)
+            warnings_hook.set_fullscreen_active(False)
             await self.repl.shutdown()
 
 

@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 
+from phoson_cli import warnings_hook
 from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import (
     PhosonConfig,
@@ -336,7 +337,23 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
 
 
 def main() -> None:
-    """Run the Phoson CLI: interactive REPL, one-shot task, or setup."""
+    """Run the Phoson CLI: interactive REPL, one-shot task, or setup.
+
+    Installs the I-112 warnings hook for the whole run: internal soft-fail
+    warnings (context-window / model-listing fallbacks, invalid config values)
+    surface once, as a styled notice — never as a raw Python ``UserWarning``
+    with file + line on stderr. ``restore()`` runs in a ``finally`` so even the
+    ``sys.exit`` paths unwind it (``SystemExit`` fires ``finally``).
+    """
+    restore = warnings_hook.install()
+    try:
+        _run_cli()
+    finally:
+        restore()
+
+
+def _run_cli() -> None:
+    """The actual CLI body (pre-I-112 ``main``) — see :func:`main` wrapper."""
     options = parse_args(sys.argv[1:])
 
     if options.version:
@@ -416,7 +433,16 @@ def main() -> None:
                 file=sys.stderr,
             )
         repl = PhosonRepl(config)
-        asyncio.run(repl.run())
+        # I-112: point the warnings hook's printer at the themed renderer so
+        # notices match the front end's style (live theme; /theme re-points it).
+        # getattr keeps fakes without a renderer (tests) on the plain default.
+        renderer = getattr(repl, "renderer", None)
+        if renderer is not None:
+            warnings_hook.notice_printer = renderer.print_warn
+        try:
+            asyncio.run(repl.run())
+        finally:
+            warnings_hook.reset_notice_printer()
         return
 
     try:
