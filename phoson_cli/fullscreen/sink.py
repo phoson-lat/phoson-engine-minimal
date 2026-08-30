@@ -25,12 +25,14 @@ from phoson_agent import (
     AgentToolDoneEvent,
     AgentReasoningEvent,
     AgentToolStartEvent,
+    AgentToolComposingEvent,
 )
 from phoson_llm.schemas import Message
 
 from ..theme import Theme
 from ..animations import SPINNER_FRAMES
 from ..formatting import (
+    tool_verb,
     render_notice,
     render_history,
     render_done_line,
@@ -63,6 +65,12 @@ class CurrentTurn:
     reasoning: str = ""
     show_reasoning: bool = True
     running_tool: bool = False
+    # Tool name being *composed* by the LLM right now (I-128): set by
+    # AgentToolComposingEvent, cleared by AgentToolStartEvent. Rendered
+    # on the in-chat activity line ("⚙ writing file…") instead of the
+    # generic thinking phrases. Lives on the turn (not in ``blocks``) so
+    # a stream that dies mid-composing leaves no orphan line behind.
+    composing_tool: str = ""
     subagent_tasks: list[str] | None = None
     subagent_frame: int = 0
     # Live metrics for the sub-agent panel (E2): the per-call tracker the
@@ -180,6 +188,8 @@ class FullScreenSink:
             return "Online"
         if turn.subagent_tasks:
             return "Running subagents"
+        if turn.composing_tool:
+            return "Composing tool"
         if turn.running_tool:
             return "Running tool"
         if turn.content or turn.reasoning:
@@ -213,6 +223,7 @@ class FullScreenSink:
             or turn.reasoning
             or turn.running_tool
             or turn.subagent_tasks
+            or turn.composing_tool
         ):
             self.current_turn = None
             self._touch()
@@ -230,6 +241,10 @@ class FullScreenSink:
             return ""
         if turn.subagent_tasks:
             return "Running subagents…"
+        # Composing beats streaming: the model may have written text
+        # before the tool call, and the verb is the freshest signal.
+        if turn.composing_tool:
+            return f"⚙ {tool_verb(turn.composing_tool)}…"
         if turn.running_tool:
             return "Running tool…"
         if turn.content:
@@ -258,7 +273,15 @@ class FullScreenSink:
         turn = self.current_turn
         if turn is None:
             return False
-        if turn.content or turn.running_tool or turn.subagent_tasks:
+        # Composing animates too (I-128): the "⚙ writing file…" line is
+        # static text, so without the spinning glyph a slow args
+        # generation can still look frozen. Plain streaming keeps the
+        # spinner hidden: the growing text IS the feedback there.
+        if (
+            turn.running_tool
+            or turn.subagent_tasks
+            or (turn.content and not turn.composing_tool)
+        ):
             return False
         turn.activity_frame += 1
         if turn.activity_frame % _THINKING_PHRASE_TICKS == 0:
@@ -302,9 +325,24 @@ class FullScreenSink:
                     self.current_turn.reasoning += event.content
                     self._stream_event = True
 
+            case AgentToolComposingEvent():
+                # I-128: live feedback while the model still generates the
+                # call. Idempotent label update on the turn (the activity
+                # line re-renders from it); AgentToolStartEvent below
+                # replaces it with the real tool card. The trailing
+                # _touch() repaints — composing arrives throttled to
+                # ~4/s, so no extra cadence control is needed.
+                turn = self.current_turn
+                if turn is not None and event.tool_name:
+                    turn.composing_tool = event.tool_name
+
             case AgentToolStartEvent():
                 turn = self.current_turn
                 self._freeze_current_text(turn)
+                # The composing label is done: the start card (or subagent
+                # start line) is the feedback from here on (I-128).
+                if turn is not None:
+                    turn.composing_tool = ""
                 if event.tool_name in {"agent", "agents"}:
                     self.blocks.append(render_subagent_start_line(event, self.theme))
                     tasks = subagent_tasks_from_args(event.tool_name, event.args)
