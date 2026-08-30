@@ -1,6 +1,7 @@
 """Community plugin installation and configuration management (I-110)."""
 
 import sys
+import json
 import tomllib
 import subprocess
 from pathlib import Path
@@ -99,11 +100,47 @@ def normalize_plugin_source(source: str) -> str:
 
 
 def _entrypoint_names() -> set[str]:
+    """Return entry points visible to this already-running interpreter."""
     eps = entry_points()
     if hasattr(eps, "select"):
         return {entry.name for entry in eps.select(group="phoson.plugins")}
     legacy = eps.get("phoson.plugins", []) if hasattr(eps, "get") else []  # type: ignore[union-attr]
     return {entry.name for entry in legacy}
+
+
+def _fresh_entrypoint_names(
+    *, runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+) -> set[str]:
+    """Query entry points in a fresh interpreter after an installation.
+
+    ``importlib.metadata`` can cache distribution discovery for the process
+    that invoked ``uv pip install``. A child using that exact interpreter sees
+    the just-created ``*.dist-info/entry_points.txt`` reliably.
+    """
+    code = (
+        "import json\n"
+        "from importlib.metadata import entry_points\n"
+        "eps = entry_points()\n"
+        "items = eps.select(group='phoson.plugins') if hasattr(eps, 'select') "
+        "else eps.get('phoson.plugins', [])\n"
+        "print(json.dumps(sorted(ep.name for ep in items)))\n"
+    )
+    result = runner(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise PluginManagerError(
+            "Could not inspect plugin entry points after installation: "
+            f"{detail or sys.executable}"
+        )
+    try:
+        names = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PluginManagerError("Invalid entry-point inspection output") from exc
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise PluginManagerError("Invalid entry-point inspection output")
+    return set(names)
 
 
 def install_plugin(
@@ -130,7 +167,7 @@ def install_plugin(
         detail = (result.stderr or result.stdout).strip()
         raise PluginManagerError(f"Plugin installation failed: {detail or requirement}")
 
-    added = _entrypoint_names() - before
+    added = _fresh_entrypoint_names(runner=runner) - before
     if len(added) != 1:
         found = ", ".join(sorted(added)) or "none"
         raise PluginManagerError(

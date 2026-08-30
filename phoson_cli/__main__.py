@@ -152,6 +152,12 @@ def parse_args(argv: list[str]) -> CliOptions:
             task_parts.append(arg)
         i += 1
 
+    # Plugin management owns stdin itself (notably install confirmation).
+    # Do not consume a piped "y" as a one-shot agent task before the
+    # subcommand has a chance to read it.
+    if options.plugin_args is not None:
+        return options
+
     task = " ".join(task_parts) if task_parts else None
     if task is None:
         if not sys.stdin.isatty():

@@ -15,6 +15,7 @@ from phoson_cli.plugin_manager import (
     _load_lockfile,
     _save_lockfile,
     disable_plugin,
+    install_plugin,
     normalize_plugin_source,
 )
 
@@ -27,6 +28,16 @@ def test_parse_plugin_subcommand_and_install_alias(monkeypatch) -> None:
         "install",
         "github:org/example@v1",
     ]
+
+
+def test_parse_plugin_command_does_not_consume_non_tty_stdin(monkeypatch) -> None:
+    stdin = SimpleNamespace(isatty=lambda: False, read=lambda: "y\n")
+    monkeypatch.setattr("sys.stdin", stdin)
+
+    options = parse_args(["plugin", "install", "package==1"])
+
+    assert options.plugin_args == ["install", "package==1"]
+    assert options.task is None
 
 
 @pytest.mark.parametrize(
@@ -44,6 +55,36 @@ def test_normalize_plugin_source(source, expected) -> None:
 def test_normalize_plugin_source_rejects_bad_github_target() -> None:
     with pytest.raises(PluginManagerError, match="github:owner/repository"):
         normalize_plugin_source("github:not-valid")
+
+
+def test_install_uses_fresh_interpreter_for_post_install_entrypoints() -> None:
+    config = PhosonConfig()
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[1:2] == ["-c"]:
+            return SimpleNamespace(returncode=0, stdout='["demo"]\n', stderr="")
+        return SimpleNamespace(returncode=0, stdout="installed", stderr="")
+
+    with (
+        patch("phoson_cli.plugin_manager._entrypoint_names", return_value=set()),
+        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
+        patch("phoson_cli.plugin_manager._save_lockfile"),
+        patch("phoson_cli.plugin_manager.save_config"),
+    ):
+        assert install_plugin("package==1", config, runner=runner) == "demo"
+
+    assert calls[0][:5] == [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        __import__("sys").executable,
+    ]
+    assert calls[1][0] == __import__("sys").executable
+    assert calls[1][1] == "-c"
+    assert config.plugins == ["entrypoint:demo"]
 
 
 def test_disable_plugin_removes_only_target_and_persists() -> None:
