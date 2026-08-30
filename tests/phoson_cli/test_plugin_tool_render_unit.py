@@ -65,7 +65,7 @@ def test_renderer_and_fullscreen_sink_use_their_own_registry() -> None:
     sink.set_tool_render_registry(registry)
     sink.begin_activity()
     sink.on_event(event)
-    assert sink.activity_text() == "⚙ checking example…"
+    assert sink.activity_text() == "◌ checking example…"
 
 
 def test_tool_render_registries_do_not_leak_between_sessions() -> None:

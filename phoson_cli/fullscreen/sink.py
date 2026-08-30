@@ -33,6 +33,7 @@ from ..theme import Theme
 from ..animations import SPINNER_FRAMES
 from ..formatting import (
     ToolRenderRegistry,
+    tool_icon,
     tool_verb,
     render_notice,
     render_history,
@@ -250,7 +251,10 @@ class FullScreenSink:
         # Composing beats streaming: the model may have written text
         # before the tool call, and the verb is the freshest signal.
         if turn.composing_tool:
-            return f"⚙ {tool_verb(turn.composing_tool, self._tool_render_registry)}…"
+            return (
+                f"{tool_icon(turn.composing_tool, self._tool_render_registry)} "
+                f"{tool_verb(turn.composing_tool, self._tool_render_registry)}…"
+            )
         if turn.running_tool:
             return "Running tool…"
         if turn.content:
