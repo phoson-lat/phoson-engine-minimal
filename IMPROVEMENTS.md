@@ -18,7 +18,7 @@
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ✅ Resuelto (v0.17.1) |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ✅ Resuelto (v0.18.0) |
 | **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ⬜ Abierto |
-| **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ✅ Resuelto (v0.19.0) |
+| **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ✅ Resuelto (PR) |
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
@@ -155,7 +155,7 @@
 ---
 
 ### I-115 — [Docs #115] Refrescar README: contenido obsoleto, comprimir sección CLI, assets visuales
-* **Estado:** ✅ **Resuelto (v0.19.0)** — facts corregidos, sección CLI comprimida a tablas con deep dives en `docs/cli/`, y assets VHS reproducible (`assets/*.tape` → `demo.gif` + `tui.png`). Ver `docs/plans/I-115.md`.
+* **Estado:** ✅ **Resuelto (PR `i-115-refresh-readme`)** — facts corregidos, sección CLI comprimida a tablas con deep dives en `docs/cli/`, y assets VHS reproducible (`assets/*.tape` → `demo.gif` + `tui.gif`/`tui.png`). Ver `docs/plans/I-115.md`.
 * **Área:** `README.md`, `docs/cli/`, `docs/plans/I-115.md`, `assets/`
 * **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟢 Bajo (calidad/first impression de docs)
 * **Resolución (resumen):**
@@ -345,7 +345,7 @@ Sprint Próximo (Extensibilidad & Ecosistema)
 ───── Resueltos ─────
 
 Sprint Docs
-└── I-115 (Refresh del README + docs/cli/ + assets VHS) ✅ v0.19.0
+└── I-115 (Refresh del README + docs/cli/ + assets VHS) ✅ PR i-115-refresh-readme
 
 Sprint Robustez & Confiabilidad
 ├── I-128 (Feedback en vivo mientras el modelo compone la tool call) ✅ v0.16.0
