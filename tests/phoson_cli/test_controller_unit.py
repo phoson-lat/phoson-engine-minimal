@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from phoson_agent import Plugin
 from phoson_cli.config import PhosonConfig
 from phoson_llm.schemas import Message, TokenUsage
 from phoson_agent.models import (
@@ -117,6 +118,28 @@ def _done_event(answer="hello") -> AgentDoneEvent:
 
 
 # ── Conformance + construction ───────────────────────────────────────────────
+
+
+def test_controller_merges_configured_plugins_before_mcp(tmp_path) -> None:
+    class CommunityPlugin(Plugin):
+        @property
+        def name(self) -> str:
+            return "community"
+
+    community = CommunityPlugin()
+    mcp = CommunityPlugin()
+    config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
+    sink = FakeSink()
+
+    with (
+        patch("phoson_cli.controller.build_chat", return_value=MagicMock()),
+        patch(
+            "phoson_cli.controller.build_plugin_specs", return_value=[community, mcp]
+        ),
+    ):
+        controller = SessionController(config, sink)
+
+    assert controller.engine._loaded_plugins == [community, mcp]
 
 
 def test_controller_requires_no_ui_dependencies(tmp_path) -> None:

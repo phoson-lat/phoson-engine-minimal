@@ -59,7 +59,7 @@ from .file_mentions import (
 )
 from .session_utils import (
     close_plugins,
-    build_mcp_plugins,
+    build_plugin_specs,
     build_system_prompt,
 )
 from .permissions_store import build_permission_middleware
@@ -228,9 +228,9 @@ class SessionController:
 
     # ── Engine (re)construction ───────────────────────────────────────────
 
-    def _build_mcp_plugins(self) -> list[str | dict[str, Any] | Plugin]:
-        """MCP plugin specs for the current configuration."""
-        return build_mcp_plugins(self.config)
+    def _build_plugin_specs(self) -> list[str | dict[str, Any] | Plugin]:
+        """Community and optional MCP plugin specs for this configuration."""
+        return build_plugin_specs(self.config)
 
     async def _ask_permission(self, tool_name: str, args: dict) -> bool:
         """PermissionMiddleware ask-callback: consult the user.
@@ -337,7 +337,7 @@ class SessionController:
         self.summarizer.vllm_base_url = self._vllm_base_url()
         self._apply_context_config()
 
-        plugins = self._build_mcp_plugins()
+        plugins = self._build_plugin_specs()
 
         # Middleware order matters: offload rewrites tool results first
         # (so oversized outputs never reach the summarizer's context

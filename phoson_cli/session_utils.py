@@ -140,6 +140,17 @@ def build_system_prompt(
     )
 
 
+def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Combine configured community plugins and optional built-in MCP specs.
+
+    User-configured specs load first, followed by MCP. The order is stable so
+    tool/middleware ordering remains predictable and can be documented. Direct
+    ``Plugin`` instances remain available only through ``AgentEngine``'s API;
+    TOML config is intentionally restricted to strings and dictionaries.
+    """
+    return [*config.plugins, *build_mcp_plugins(config)]
+
+
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
     """Resolve the MCP plugin specs for a configuration.
 
@@ -180,12 +191,18 @@ async def close_plugins(plugins: list[Plugin]) -> None:
 
     :class:`phoson_agent.Plugin` provides a default ``aclose()`` which
     delegates to synchronous ``cleanup()``. Plugins that own async pools or
-    tasks override it. Failures are logged, never raised — closing old
-    resources must not take down whatever is rebuilding them.
+    tasks override it. The ``cleanup`` fallback keeps hosts compatible with
+    pre-I-110 third-party duck-typed plugins. Failures are logged, never
+    raised — closing old resources must not take down whatever is rebuilding
+    them.
     """
     for plugin in plugins:
         try:
-            await plugin.aclose()
+            aclose = getattr(plugin, "aclose", None)
+            if aclose is not None:
+                await aclose()
+            else:
+                plugin.cleanup()
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Could not close plugin %r",
@@ -194,4 +211,9 @@ async def close_plugins(plugins: list[Plugin]) -> None:
             )
 
 
-__all__ = ["build_mcp_plugins", "build_system_prompt", "close_plugins"]
+__all__ = [
+    "build_mcp_plugins",
+    "build_plugin_specs",
+    "build_system_prompt",
+    "close_plugins",
+]

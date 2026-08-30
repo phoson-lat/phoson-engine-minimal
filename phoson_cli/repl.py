@@ -57,6 +57,7 @@ from .ui_protocols import AgentEventSink, ConfirmationService
 from .session_utils import (  # noqa: F401
     close_plugins,
     build_mcp_plugins,
+    build_plugin_specs,
     build_system_prompt,
 )
 

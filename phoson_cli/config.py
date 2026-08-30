@@ -6,12 +6,13 @@ the LLM chat clients.
 """
 
 import os
+import re
 import shutil
 import tomllib
 import warnings
 from typing import Any, Final
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.grok import GrokChat
@@ -85,6 +86,11 @@ class PhosonConfig:
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
+    # Third-party engine/CLI plugin specifications. They use the same
+    # string/dict forms accepted by AgentEngine and are loaded in addition to
+    # the optional MCP plugin. Config-file entries are data only; direct Plugin
+    # instances remain an API-only AgentEngine feature.
+    plugins: list[str | dict[str, Any]] = field(default_factory=list)
     # Input-history file for the front ends. Not a persisted setting (not
     # loaded from / saved to config.toml) — overridable per run, mainly so
     # tests can point it at a temp file instead of the user's real history.
@@ -218,6 +224,51 @@ def _resolve_int(
     if env_var in os.environ:
         return _parse_int(os.environ[env_var], default, env_var=env_var)
     return int(fd.get(file_key, default))
+
+
+def _resolve_plugins(fd: dict[str, Any]) -> list[str | dict[str, Any]]:
+    """Validate plugin specs read from ``[defaults].plugins``.
+
+    Plugin configuration intentionally has no environment-variable override:
+    TOML is needed for structured per-plugin configuration, and accepting a
+    free-form serialized list from an environment variable would be ambiguous
+    and hard to audit.
+    """
+    value = fd.get("plugins", [])
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise PhosonConfigError("[defaults].plugins must be an array of plugin specs")
+
+    specs: list[str | dict[str, Any]] = []
+    for index, spec in enumerate(value):
+        if isinstance(spec, str):
+            if not spec.strip():
+                raise PhosonConfigError(
+                    f"[defaults].plugins[{index}] must not be an empty string"
+                )
+            specs.append(spec)
+            continue
+        if not isinstance(spec, dict):
+            raise PhosonConfigError(
+                f"[defaults].plugins[{index}] must be a string or inline table"
+            )
+        name = spec.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise PhosonConfigError(
+                f"[defaults].plugins[{index}] inline table requires a string 'name'"
+            )
+        plugin_config = spec.get("config", {})
+        if not isinstance(plugin_config, dict):
+            raise PhosonConfigError(
+                f"[defaults].plugins[{index}].config must be an inline table"
+            )
+        if set(spec) - {"name", "config"}:
+            raise PhosonConfigError(
+                f"[defaults].plugins[{index}] supports only 'name' and 'config'"
+            )
+        specs.append({"name": name, "config": plugin_config})
+    return specs
 
 
 def _resolve_float(
@@ -515,6 +566,7 @@ def load_config() -> PhosonConfig:
                 "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
             )
         ).expanduser(),
+        plugins=_resolve_plugins(fd),
         compact_mode=_resolve_str(
             "PHOSON_COMPACT_MODE", "compact_mode", fd, d.compact_mode
         ).lower(),
@@ -620,17 +672,40 @@ def save_config(
         except OSError:  # pragma: no cover - best-effort safety net
             pass
 
-    def _line(key: str, value: str | int | float | bool | None) -> str | None:
-        if value is None:
-            return None
+    def _toml_value(value: Any) -> str:
+        """Render the restricted TOML values managed by this CLI.
+
+        ``plugins`` needs an array of strings/inline tables. Keep this encoder
+        deliberately small and fail before writing for values TOML cannot
+        represent, rather than silently persisting Python ``repr`` output.
+        """
         if isinstance(value, bool):
-            rendered = "true" if value else "false"
-        elif isinstance(value, (int, float)):
-            rendered = str(value)
-        else:
-            escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-            rendered = f'"{escaped}"'
-        return f"{key} = {rendered}"
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, str):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        if isinstance(value, list):
+            return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+        if isinstance(value, dict):
+            rendered_items: list[str] = []
+            for item_key, item_value in value.items():
+                if not isinstance(item_key, str):
+                    raise PhosonConfigError("TOML inline-table keys must be strings")
+                rendered_key = (
+                    item_key
+                    if re.fullmatch(r"[A-Za-z0-9_-]+", item_key)
+                    else _toml_value(item_key)
+                )
+                rendered_items.append(f"{rendered_key} = {_toml_value(item_value)}")
+            return "{ " + ", ".join(rendered_items) + " }"
+        raise PhosonConfigError(
+            f"Cannot persist TOML value of type {type(value).__name__}"
+        )
+
+    def _line(key: str, value: Any) -> str | None:
+        return None if value is None else f"{key} = {_toml_value(value)}"
 
     enabled_providers = enabled_providers_from_config(config)
 
@@ -671,6 +746,7 @@ def save_config(
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
+        ("plugins", getattr(config, "plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),
         ("compact_threshold", getattr(config, "compact_threshold", None)),
         (

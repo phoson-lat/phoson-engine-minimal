@@ -143,6 +143,27 @@ async def test_run_oneshot_error_returns_1(capsys, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_oneshot_passes_configured_community_plugins(tmp_path) -> None:
+    captured: dict = {}
+
+    class _CapturingEngine(_FakeEngine):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            captured.update(kwargs)
+
+    with (
+        patch("phoson_cli.__main__.build_chat", return_value=_FakeChat()),
+        patch("phoson_cli.repl.build_plugin_specs", return_value=["entrypoint:demo"]),
+        patch("phoson_agent.AgentEngine", _CapturingEngine),
+    ):
+        rc = await _run_oneshot(
+            PhosonConfig(provider="ollama", sessions_dir=tmp_path), "do it"
+        )
+
+    assert rc == 0
+    assert captured["plugins"] == ["entrypoint:demo"]
+
+
 async def test_run_oneshot_injects_subagent_context(tmp_path) -> None:
     instance: dict = {}
 

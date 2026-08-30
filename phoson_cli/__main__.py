@@ -284,7 +284,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
     Returns 0 on success, 1 on error.
     """
     from phoson_agent import AgentEngine
-    from phoson_cli.repl import close_plugins, build_mcp_plugins, build_system_prompt
+    from phoson_cli.repl import close_plugins, build_plugin_specs, build_system_prompt
     from phoson_cli.tools import build_tools, build_tools_dict
     from phoson_llm.schemas import Message, ModelConfig
 
@@ -295,7 +295,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         engine = AgentEngine(
             chat=chat,
             tools=tools,
-            plugins=build_mcp_plugins(config),
+            plugins=build_plugin_specs(config),
             max_iterations=config.max_iterations,
         )
         # Same sub-agent runtime context as the interactive REPL.
