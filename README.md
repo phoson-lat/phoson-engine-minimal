@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/tui.png" alt="Phoson CLI full-screen TUI" width="980" />
+  <img src="assets/tui.gif" alt="Phoson CLI full-screen TUI" width="980" />
 </p>
 
 <p align="center">

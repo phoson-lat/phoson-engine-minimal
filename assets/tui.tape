@@ -30,17 +30,17 @@ Require uv
 
 Set Shell "bash"
 Set FontSize 18
-Set Width 1180
-Set Height 540
+Set Width 1600
+Set Height 900
 Set Theme "GruvboxDark"
 Set TypingSpeed 30ms
 
 Type "cd /tmp/phoson-demo && uv run --project $HOME/Documentos/Phoson/phoson-engine-minimal phoson-cli" Sleep 300ms  Enter
 Sleep 6s
 
-Type "Read hello.txt and tell me its content in one line." Sleep 150ms  Enter
+Type "Research about phoson-minimal-engine on Github" Sleep 150ms  Enter
 # Wait for: user turn, read_file tool card, assistant answer, idle prompt.
-Sleep 16s
+Sleep 30s
 
 # Expand the last turn's reasoning view for a richer screenshot.
 Ctrl+T
