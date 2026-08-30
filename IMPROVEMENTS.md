@@ -18,7 +18,7 @@
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ✅ Resuelto (v0.17.1) |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ✅ Resuelto (v0.18.0) |
 | **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ⬜ Abierto |
-| **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ⬜ Abierto |
+| **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ✅ Resuelto (PR) |
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
 | **I-89** | [#89](https://github.com/phoson-lat/phoson-engine-minimal/issues/89) | `/model` no persiste el provider junto con el modelo en `config.toml` | **P1** | S | 🟠 Medio (inconsistencia de config) | ✅ Resuelto (v0.13.7) |
@@ -155,9 +155,14 @@
 ---
 
 ### I-115 — [Docs #115] Refrescar README: contenido obsoleto, comprimir sección CLI, assets visuales
-* **Estado:** ⬜ **Abierto**
-* **Área:** `README.md`, `docs/`, `assets/`
+* **Estado:** ✅ **Resuelto (PR `i-115-refresh-readme`)** — facts corregidos, sección CLI comprimida a tablas con deep dives en `docs/cli/`, y assets VHS reproducible (`assets/*.tape` → `demo.gif` + `tui.gif`/`tui.png`). Ver `docs/plans/I-115.md`.
+* **Área:** `README.md`, `docs/cli/`, `docs/plans/I-115.md`, `assets/`
 * **Prioridad:** **P2** · **Esfuerzo:** M · **Impacto:** 🟢 Bajo (calidad/first impression de docs)
+* **Resolución (resumen):**
+  1. **Facts:** ejemplos sin `phoson_weight` arbitrario (`build_chat()`), features table +8 filas shipped (Sub-agents, Skills, MCP, Plugins, Permissions, Auto-compaction, Standalone binaries), repo map con `examples/`/`bench/`/`scripts/`/`assets/`/`docs/cli/`, CI con los 4 workflows reales, badge PyPI.
+  2. **Compresión:** "Interactive CLI" 290→~120 líneas: tabla de flags 1:1 con `_USAGE` (15 flags), tabla de comandos 1:1 con `COMMAND_SPECS` (35/35 nombres), 12 deep dives movidos (texto no reescrito) a `docs/cli/` con índice.
+  3. **Visual:** `assets/demo.tape`→`demo.gif` (one-shot real con tool call) y `assets/tui.tape`→`tui.gif`+`tui.png` (hero), generados con VHS contra vLLM local; `assets/README.md` documenta la receta (incl. el truco `env -i SHELL=/bin/bash` para capturar sin el prompt p10k del host).
+* **Verificación:** paridad comandos 35/35 y flags 15/15 (script de extracción, 0 faltantes); `vhs validate` OK; frames verificados (typing + salida del agente).
 * **Problema:** El README va desfasado (describe ~v0.13.8): lista ~11 comandos cuando la CLI tiene ~35 (faltan `/compact`, `/status`, `/cost`, `/tokens`, `/steps`, `/attach`, `/mcp`, `/permissions`, `/provider`, `/resume`, `/title`, `/delete`, `/env`, `/effort`, …), flags faltantes (`--uninstall`, `--install`), features shipped ausentes (Skills, Sub-agents, MCP, plugins, Permissions, compaction), y ~300 líneas de docs profundas que corresponden a `docs/`.
 * **Solución propuesta (3 fases del issue):**
   1. **Facts:** corregir desyncs (tabla de comandos, flags, features, repo map con `examples/`/`bench/`/`scripts/`/`assets/`, CI con `publish.yml`, badges PyPI, Quick Start sin `phoson_weight=1.2` arbitrario).
@@ -335,10 +340,12 @@
 ```
 Sprint Próximo (Extensibilidad & Ecosistema)
 ├── I-110 (Plugin system: look & commands del CLI)
-├── I-126 (Plugin de monitores de larga duración)
-└── I-115 (Refresh del README + assets visuales)
+└── I-126 (Plugin de monitores de larga duración)
 
 ───── Resueltos ─────
+
+Sprint Docs
+└── I-115 (Refresh del README + docs/cli/ + assets VHS) ✅ PR i-115-refresh-readme
 
 Sprint Robustez & Confiabilidad
 ├── I-128 (Feedback en vivo mientras el modelo compone la tool call) ✅ v0.16.0
