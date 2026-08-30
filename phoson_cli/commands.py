@@ -145,8 +145,8 @@ class PluginCommandContext:
 
     @property
     def ui(self):
-        """UI blocks/interactions are provided by the later PluginUiService cut."""
-        raise RuntimeError("Plugin UI interactions are not available yet")
+        """Controller-scoped UI service (or an explicit non-interactive port)."""
+        return self._repl._controller.plugin_ui
 
     def notify(self, kind: str, message: str) -> None:
         printer = getattr(self._host, f"print_{kind}", None)

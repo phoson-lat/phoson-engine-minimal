@@ -104,6 +104,7 @@ class FullScreenSink:
         self._tool_render_registry = ToolRenderRegistry({})
 
         self.blocks: list[object] = []
+        self._plugin_blocks: dict[str, object] = {}
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""
         # Args + transcript block of in-flight regular tool calls, keyed by
@@ -127,6 +128,33 @@ class FullScreenSink:
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Apply the active controller's isolated plugin visual specs."""
         self._tool_render_registry = registry
+
+    def publish_plugin_block(self, block_id: str, block: object) -> None:
+        """Append a plugin block, namespaced by the caller's stable id."""
+        self._plugin_blocks[block_id] = block
+        self.blocks.append(block)
+        self._touch()
+
+    def replace_plugin_block(self, block_id: str, block: object) -> None:
+        """Replace a plugin block in place so TODO/progress cards stay compact."""
+        previous = self._plugin_blocks.get(block_id)
+        self._plugin_blocks[block_id] = block
+        if previous is not None:
+            for index, candidate in enumerate(self.blocks):
+                if candidate is previous:
+                    self.blocks[index] = block
+                    self._touch()
+                    return
+        self.blocks.append(block)
+        self._touch()
+
+    def remove_plugin_block(self, block_id: str) -> None:
+        block = self._plugin_blocks.pop(block_id, None)
+        if block is not None:
+            self.blocks = [
+                candidate for candidate in self.blocks if candidate is not block
+            ]
+            self._touch()
 
     def _touch(self) -> None:
         self.dirty = True

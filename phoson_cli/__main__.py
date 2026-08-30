@@ -285,8 +285,10 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
     """
     from phoson_agent import AgentEngine
     from phoson_cli.repl import close_plugins, build_plugin_specs, build_system_prompt
+    from phoson_cli.theme import load_theme
     from phoson_cli.tools import build_tools, build_tools_dict
     from phoson_llm.schemas import Message, ModelConfig
+    from phoson_cli.plugin_ui import NonInteractivePluginUiService
 
     chat = build_chat(config)
     engine: AgentEngine | None = None
@@ -300,6 +302,9 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         )
         # Same sub-agent runtime context as the interactive REPL.
         engine.context.extra["safe_mode"] = config.safe_mode
+        engine.context.extra["plugin_ui"] = NonInteractivePluginUiService(
+            load_theme(config.theme)
+        )
         engine.context.extra["available_tools"] = build_tools_dict()
         engine.context.extra["default_model"] = config.subagent_model or config.model
         engine.context.extra["main_model"] = config.model

@@ -613,6 +613,16 @@ class Renderer:
         """Print an error message."""
         self.console.print(render_notice("error", message, self.theme))
 
+    def publish_plugin_block(self, block_id: str, block: object) -> None:  # noqa: ARG002
+        """Classic transcripts are append-only; publish the neutral plugin card."""
+        self.console.print(block)
+
+    def replace_plugin_block(self, block_id: str, block: object) -> None:  # noqa: ARG002
+        self.console.print(block)
+
+    def remove_plugin_block(self, block_id: str) -> None:  # noqa: ARG002
+        pass
+
     def print_history(self, messages: "list[Message]", tail: int | None = None) -> None:
         """Re-render a list of Message objects as a conversation replay.
 
@@ -727,6 +737,15 @@ class ClassicSink:
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Forward a controller-scoped visual registry to the renderer."""
         self._renderer.set_tool_render_registry(registry)
+
+    def publish_plugin_block(self, block_id: str, block: object) -> None:
+        self._renderer.publish_plugin_block(block_id, block)
+
+    def replace_plugin_block(self, block_id: str, block: object) -> None:
+        self._renderer.replace_plugin_block(block_id, block)
+
+    def remove_plugin_block(self, block_id: str) -> None:
+        self._renderer.remove_plugin_block(block_id)
 
     def on_subagent_progress(self, progress: object | None) -> None:
         """Feed the live panel with per-task metrics (E2).

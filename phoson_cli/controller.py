@@ -41,7 +41,12 @@ from phoson_agent.plugins.offload import OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
-from .theme import ThemeRegistry, build_theme_registry, default_theme_registry
+from .theme import (
+    ThemeRegistry,
+    load_theme,
+    build_theme_registry,
+    default_theme_registry,
+)
 from .tools import build_tools, build_tools_dict
 from .config import COMPACT_MODES, PhosonConfig, build_chat, save_config
 from .models import (
@@ -52,6 +57,7 @@ from .models import (
 )
 from ._session import SessionState, SessionMetrics
 from .commands import build_command_catalog
+from .plugin_ui import SinkPluginUiService
 from .formatting import ToolRenderRegistry, build_tool_render_registry
 from .attachments import AttachmentManager
 from .ui_protocols import AgentEventSink, ConfirmationService
@@ -381,6 +387,12 @@ class SessionController:
 
         # Inject runtime context for sub-agents.
         self.engine.context.extra["safe_mode"] = self.config.safe_mode
+        self.plugin_ui = SinkPluginUiService(
+            self.sink,
+            load_theme(self.config.theme, registry=self.theme_registry),
+            confirmation=self.confirmation,
+        )
+        self.engine.context.extra["plugin_ui"] = self.plugin_ui
 
         # Mirror the engine's tool schemas (built-in + plugin/MCP tools)
         # into the summarizer so the auto-compact gate counts the schema
