@@ -251,3 +251,167 @@ def test_tool_decorator_builds_array_schema_for_list_of_strings() -> None:
         },
         "required": ["items"],
     }
+
+
+# ---------------------------------------------------------------------------
+# I-127: per-invocation timeout on agent/agents
+# ---------------------------------------------------------------------------
+
+
+def _agent_ctx(**overrides) -> dict:
+    ctx = {
+        "chat": FakeSubagentChat(),
+        "available_tools": {"agent": agent, "agents": agents},
+        "default_model": "fake-demo-model",
+        "max_iterations": 2,
+        "safe_mode": False,
+        "subagent_timeout_seconds": 300.0,
+    }
+    ctx.update(overrides)
+    return ctx
+
+
+def test_agent_and_agents_schema_expose_optional_timeout() -> None:
+    for t in (agent, agents):
+        props = t.parameters["properties"]
+        required = t.parameters.get("required", [])
+        assert "timeout" in props
+        assert props["timeout"]["type"] == "number"
+        assert "timeout" not in required
+        desc = props["timeout"]["description"]
+        assert "300" in desc
+        assert "0 disables the timeout" in desc
+        # The injected config default must stay hidden from the LLM.
+        assert "subagent_timeout_seconds" not in props
+
+
+class _FakeRunOneSubagent:
+    """Records the timeout_seconds handed to _run_one_subagent."""
+
+    def __init__(self) -> None:
+        self.timeout_seconds: float | None = None
+
+    async def __call__(self, **kwargs) -> tuple[str, str | None]:
+        self.timeout_seconds = kwargs.get("timeout_seconds")
+        return f"done:{kwargs.get('task')}", None
+
+
+@pytest.mark.asyncio
+async def test_agent_omitted_timeout_uses_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    subagent_module = importlib.import_module("phoson_cli.tools.subagent")
+    fake = _FakeRunOneSubagent()
+    monkeypatch.setattr(subagent_module, "_run_one_subagent", fake)
+
+    out = await agent.handler({"task": "t"}, _agent_ctx(subagent_timeout_seconds=120.0))
+
+    assert out == "done:t"
+    assert fake.timeout_seconds == 120.0
+
+
+@pytest.mark.asyncio
+async def test_agent_explicit_timeout_overrides_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    subagent_module = importlib.import_module("phoson_cli.tools.subagent")
+    fake = _FakeRunOneSubagent()
+    monkeypatch.setattr(subagent_module, "_run_one_subagent", fake)
+
+    await agent.handler(
+        {"task": "train", "timeout": 14400}, _agent_ctx(subagent_timeout_seconds=120.0)
+    )
+
+    assert fake.timeout_seconds == 14400.0
+
+
+@pytest.mark.asyncio
+async def test_agent_zero_timeout_means_no_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    subagent_module = importlib.import_module("phoson_cli.tools.subagent")
+    fake = _FakeRunOneSubagent()
+    monkeypatch.setattr(subagent_module, "_run_one_subagent", fake)
+
+    out = await agent.handler(
+        {"task": "train", "timeout": 0}, _agent_ctx(subagent_timeout_seconds=120.0)
+    )
+
+    assert out == "done:train"
+    assert fake.timeout_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_agent_invalid_timeout_falls_back_to_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    subagent_module = importlib.import_module("phoson_cli.tools.subagent")
+    fake = _FakeRunOneSubagent()
+    monkeypatch.setattr(subagent_module, "_run_one_subagent", fake)
+
+    out = await agent.handler(
+        {"task": "t", "timeout": -5}, _agent_ctx(subagent_timeout_seconds=120.0)
+    )
+
+    assert fake.timeout_seconds == 120.0
+    assert out.startswith("Note: invalid timeout")
+    assert "done:t" in out
+
+
+@pytest.mark.asyncio
+async def test_agent_real_timeout_kills_slow_run() -> None:
+    """The override reaches the real asyncio.wait_for in _run_one_subagent."""
+
+    class SlowChat(BaseLLMChat):
+        async def stream(
+            self,
+            messages: list[Message],
+            config: ModelConfig,
+            tools: list | None = None,
+        ) -> AsyncIterator[LLMEvent]:
+            await asyncio.sleep(0.3)
+            yield LLMDoneEvent(content="too late", has_tool_calls=False)
+
+    out = await agent.handler(
+        {"task": "slow", "timeout": 0.05}, _agent_ctx(chat=SlowChat())
+    )
+    assert "Sub-agent timed out" in out
+
+
+@pytest.mark.asyncio
+async def test_agents_omitted_timeout_uses_configured_default() -> None:
+    """Fast tasks + default (300s) -> all succeed, no note."""
+    out = await agents.handler({"tasks": ["read A", "read B"]}, _agent_ctx())
+    assert "summary:read A" in out
+    assert "summary:read B" in out
+    assert "note" not in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_agents_explicit_timeout_kills_slow_tasks() -> None:
+    """A small per-invocation override applies to every task in the batch.
+
+    ``DelayedSubagentChat`` sleeps 0.05s for tasks containing 'PROJECT'
+    (0.01s otherwise) — 0.02s of budget kills both.
+    """
+    out = await agents.handler(
+        {"tasks": ["summarize PROJECT A", "summarize PROJECT B"], "timeout": 0.02},
+        _agent_ctx(chat=DelayedSubagentChat()),
+    )
+    assert out.count("timeout after") == 2
+    assert "note" not in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_agents_invalid_timeout_falls_back_with_note() -> None:
+    out = await agents.handler({"tasks": ["read A"], "timeout": "abc"}, _agent_ctx())
+    assert out.startswith("Note: invalid timeout")
+    assert "summary:read A" in out
