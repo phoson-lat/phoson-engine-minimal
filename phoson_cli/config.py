@@ -86,6 +86,11 @@ class PhosonConfig:
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
+    # Official monitor plugin (I-126): background watchers that wake the
+    # agent. Off by default because it runs long-lived tasks; state lives
+    # in monitors_data_dir.
+    enable_monitors: bool = False
+    monitors_data_dir: Path = Path("~/.phoson/monitors/").expanduser()
     # Third-party engine/CLI plugin specifications. They use the same
     # string/dict forms accepted by AgentEngine and are loaded in addition to
     # the optional MCP plugin. Config-file entries are data only; direct Plugin
@@ -566,6 +571,17 @@ def load_config() -> PhosonConfig:
                 "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
             )
         ).expanduser(),
+        enable_monitors=_resolve_bool(
+            "PHOSON_ENABLE_MONITORS", "enable_monitors", fd, d.enable_monitors
+        ),
+        monitors_data_dir=Path(
+            _resolve_str(
+                "PHOSON_MONITORS_DIR",
+                "monitors_data_dir",
+                fd,
+                str(d.monitors_data_dir),
+            )
+        ).expanduser(),
         plugins=_resolve_plugins(fd),
         compact_mode=_resolve_str(
             "PHOSON_COMPACT_MODE", "compact_mode", fd, d.compact_mode
@@ -746,6 +762,8 @@ def save_config(
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
+        ("enable_monitors", getattr(config, "enable_monitors", None)),
+        ("monitors_data_dir", str(getattr(config, "monitors_data_dir", ""))),
         ("plugins", getattr(config, "plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),
         ("compact_threshold", getattr(config, "compact_threshold", None)),

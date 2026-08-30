@@ -148,7 +148,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
     ``Plugin`` instances remain available only through ``AgentEngine``'s API;
     TOML config is intentionally restricted to strings and dictionaries.
     """
-    return [*config.plugins, *build_mcp_plugins(config)]
+    return [*config.plugins, *build_mcp_plugins(config), *build_monitor_plugins(config)]
 
 
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
@@ -183,6 +183,81 @@ def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
         warnings.warn(
             f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
         )
+        return []
+
+
+def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official monitor plugin specs (I-126).
+
+    Returns an empty list when monitors are disabled. Tries the in-tree
+    ``phoson_plugin_monitor`` first and returns a *pre-configured, fresh*
+    instance (the direct-``Plugin`` form, so the config is honored);
+    falls back to the path-based loader used during local development.
+
+    A fresh instance (never the module-level ``plugin`` singleton):
+    engine rebuilds close the old instance first and the singleton would
+    otherwise be double-configured and leak state between hosts.
+    """
+    if not config.enable_monitors:
+        return []
+
+    monitor_config = {
+        "data_dir": str(config.monitors_data_dir),
+    }
+
+    try:
+        from phoson_plugin_monitor import MonitorPlugin
+
+        instance = MonitorPlugin()
+        instance.configure(monitor_config)
+        return [instance]
+    except ImportError:
+        return [
+            {
+                "name": "path:./phoson_plugin_monitor/_plugin.py",
+                "config": monitor_config,
+            }
+        ]
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise monitor plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
+    """Return the loaded monitor plugin instance, if any.
+
+    Duck-typed on ``drain_pending_wakes`` so this works for both the
+    in-tree plugin and path-loaded development builds without importing
+    the package here.
+    """
+    for plugin in plugins:
+        if hasattr(plugin, "drain_pending_wakes"):
+            return plugin
+    return None
+
+
+async def drain_monitor_wakes(
+    plugin: Plugin | None, session_id: str | None
+) -> list[Any]:
+    """Consume pending monitor wakes for a session (host-side helper).
+
+    Returns an empty list when there is no plugin or nothing pending.
+    Failures are logged and swallowed: a broken wake queue must never
+    block a user turn.
+    """
+    if plugin is None:
+        return []
+    try:
+        # Duck-typed host hook (not part of the Plugin contract).
+        drain = getattr(plugin, "drain_pending_wakes", None)
+        if drain is None:
+            return []
+        drained = drain(session_id)
+        return list(drained or [])
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Could not drain monitor wakes", exc_info=True)
         return []
 
 

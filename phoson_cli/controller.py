@@ -70,8 +70,17 @@ from .session_utils import (
     close_plugins,
     build_plugin_specs,
     build_system_prompt,
+    drain_monitor_wakes,
+    find_monitor_plugin,
 )
 from .permissions_store import build_permission_middleware
+
+# The monitor plugin ships in the same wheel; the fallback keeps
+# source-only dev checkouts (package not installed) importable.
+try:
+    from phoson_plugin_monitor import render_wake_message
+except ImportError:  # pragma: no cover
+    render_wake_message = None
 
 #: Upper bound on messages replayed into the chat pane when resuming a
 #: session (#56). The full history is shown for any reasonable session;
@@ -443,6 +452,35 @@ class SessionController:
         # fails closed (one-shot / non-interactive front ends).
         self.engine.context.extra["bash_confirmation"] = self.confirmation
 
+        # Monitor plugin (I-126): inject a *provider* (callable), not a
+        # snapshot — new_session()/load_session() swap the tree without
+        # rebuilding the engine, so a static value would go stale. The
+        # register_monitor tool injects it via @tool(inject=...) and
+        # calls it at registration time.
+        self.engine.context.extra["session_id_provider"] = lambda: (
+            self._session.tree.session_id
+        )
+
+        # (Re)start any running monitors from disk: engine rebuilds
+        # (/model, /provider, /mcp) kill the previous instance's tasks,
+        # and a crash leaves them running on disk. Duck-typed so this
+        # stays a no-op when the plugin is not enabled.
+        monitor_plugin = find_monitor_plugin(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        )
+        if monitor_plugin is not None:
+            ensure = getattr(monitor_plugin, "ensure_started", None)
+            if ensure is not None:
+                try:
+                    asyncio.get_running_loop().create_task(
+                        ensure(),
+                        name="monitors:ensure_started",
+                    )
+                except RuntimeError:
+                    # No running loop (sync test/one-shot bootstrap): the
+                    # tools start tasks lazily on first use.
+                    pass
+
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
 
@@ -746,7 +784,30 @@ class SessionController:
                      an auth error produces an actionable warning.
         - cancelled: same as error (partial progress saved).
         """
-        user_message = self._build_user_message(user_input)
+        # Monitor plugin (I-126): fold pending monitor wakes for this
+        # session into the user message so the agent acts on findings in
+        # context. No-op when the plugin is disabled or nothing fired.
+        monitor_plugin = find_monitor_plugin(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        )
+        wake_events = await drain_monitor_wakes(
+            monitor_plugin, self._session.tree.session_id
+        )
+        effective_input = user_input
+        if wake_events:
+            if render_wake_message is not None:
+                header = render_wake_message(wake_events)
+            else:  # pragma: no cover — package always ships in the wheel
+                header = "[MONITOR EVENTS] " + "; ".join(
+                    f"{e.monitor} ({e.kind})" for e in wake_events
+                )
+            effective_input = header + "\n\n" + user_input
+            self.sink.notify(
+                "info",
+                f"{len(wake_events)} monitor wake(s) delivered with your message.",
+            )
+
+        user_message = self._build_user_message(effective_input)
         _node_id, path = self._append_user_turn(user_message)
         base_count = len(path)
 
@@ -761,7 +822,7 @@ class SessionController:
         # trigger the tree rebase in _finalize_run (I-91).
         self.summarizer.pop_compact_events()
 
-        self.sink.on_user_message(user_input, user_message)
+        self.sink.on_user_message(effective_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
         if reasoning_effort not in REASONING_EFFORTS:
