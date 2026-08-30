@@ -51,6 +51,7 @@ from .models import (
 )
 from ._session import SessionState, SessionMetrics
 from .commands import build_command_catalog
+from .formatting import ToolRenderRegistry, build_tool_render_registry
 from .attachments import AttachmentManager
 from .ui_protocols import AgentEventSink, ConfirmationService
 from .file_mentions import (
@@ -147,6 +148,7 @@ class SessionController:
         # handlers never retain references to a plugin instance just closed by
         # a provider/model rebuild (I-110).
         self.command_catalog = build_command_catalog(())
+        self.tool_render_registry = ToolRenderRegistry({})
         self._command_catalog_version = 0
         # Sub-agent model: explicit override or fallback to main model.
         self.subagent_model: str = config.subagent_model or config.model
@@ -363,10 +365,16 @@ class SessionController:
             max_iterations=self.config.max_iterations,
         )
         self._command_catalog_version += 1
+        loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
         self.command_catalog = build_command_catalog(
-            getattr(self.engine, "_loaded_plugins", []),
-            version=self._command_catalog_version,
+            loaded_plugins, version=self._command_catalog_version
         )
+        self.tool_render_registry = build_tool_render_registry(
+            loaded_plugins, [tool.name for tool in self.engine.tools]
+        )
+        set_tool_render_registry = getattr(self.sink, "set_tool_render_registry", None)
+        if set_tool_render_registry is not None:
+            set_tool_render_registry(self.tool_render_registry)
 
         # Inject runtime context for sub-agents.
         self.engine.context.extra["safe_mode"] = self.config.safe_mode

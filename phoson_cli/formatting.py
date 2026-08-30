@@ -13,6 +13,8 @@ import json
 import difflib
 import logging
 from typing import TYPE_CHECKING, Any, Final
+from dataclasses import dataclass
+from collections.abc import Sequence, Collection
 
 from rich import box
 from rich.rule import Rule
@@ -22,7 +24,9 @@ from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 
 from phoson_agent import (
+    Plugin,
     AgentDoneEvent,
+    ToolRenderSpec,
     AgentErrorEvent,
     AgentStartEvent,
     AgentToolDoneEvent,
@@ -327,6 +331,65 @@ _TOOL_VERBS: Final[dict[str, str]] = {
     "web_fetch": "fetching page",
 }
 
+
+@dataclass(frozen=True)
+class ToolRenderRegistry:
+    """Immutable per-session mapping of tool names to presentation specs."""
+
+    specs: dict[str, ToolRenderSpec]
+
+    def get(self, tool_name: str) -> ToolRenderSpec | None:
+        return self.specs.get(tool_name)
+
+
+def build_tool_render_registry(
+    plugins: Sequence[Plugin], tool_names: Collection[str]
+) -> ToolRenderRegistry:
+    """Validate visual specs contributed by the currently loaded plugins.
+
+    Built-in tools keep the visual treatment defined in this module. A plugin
+    may only style a tool it owns, which prevents dependencies from silently
+    changing the CLI's rendering of core tools.
+    """
+    native_names = set(_TOOL_VERBS) | {"agent", "agents"}
+    available = set(tool_names)
+    specs: dict[str, ToolRenderSpec] = {}
+    for plugin in plugins:
+        try:
+            plugin_specs = plugin.get_tool_render_specs()
+        except Exception as exc:
+            raise ValueError(
+                f"Plugin {plugin.name!r} failed while listing tool render specs: {exc}"
+            ) from exc
+        for spec in plugin_specs:
+            if not isinstance(spec, ToolRenderSpec):
+                raise ValueError(
+                    f"Plugin {plugin.name!r} returned {type(spec).__name__} "
+                    "instead of ToolRenderSpec"
+                )
+            if not spec.tool_name or spec.tool_name not in available:
+                raise ValueError(
+                    f"Plugin {plugin.name!r} render spec references unknown tool "
+                    f"{spec.tool_name!r}"
+                )
+            if spec.tool_name in native_names:
+                raise ValueError(
+                    f"Plugin {plugin.name!r} cannot override built-in tool "
+                    f"{spec.tool_name!r}"
+                )
+            if not spec.verb.strip() or not spec.icon.strip():
+                raise ValueError(
+                    f"Plugin {plugin.name!r} render spec for {spec.tool_name!r} "
+                    "requires non-empty verb and icon"
+                )
+            if spec.tool_name in specs:
+                raise ValueError(
+                    f"Multiple plugins define a render spec for {spec.tool_name!r}"
+                )
+            specs[spec.tool_name] = spec
+    return ToolRenderRegistry(specs)
+
+
 #: Max rendered diff lines before truncation with an explicit notice.
 _DIFF_MAX_LINES: Final[int] = 20
 #: Max lines of bash output echoed in the done card.
@@ -334,9 +397,20 @@ _BASH_PREVIEW_LINES: Final[int] = 6
 _INDENT: Final[str] = "      "
 
 
-def tool_verb(tool_name: str) -> str:
-    """Human action phrase for a tool name ("write_file" → "writing file")."""
-    return _TOOL_VERBS.get(tool_name, tool_name.replace("_", " "))
+def tool_verb(tool_name: str, registry: ToolRenderRegistry | None = None) -> str:
+    """Human action phrase for a tool, consulting an optional session registry."""
+    spec = registry.get(tool_name) if registry is not None else None
+    return (
+        spec.verb
+        if spec is not None
+        else _TOOL_VERBS.get(tool_name, tool_name.replace("_", " "))
+    )
+
+
+def tool_icon(tool_name: str, registry: ToolRenderRegistry | None = None) -> str:
+    """Tool headline glyph, defaulting to the built-in gear."""
+    spec = registry.get(tool_name) if registry is not None else None
+    return spec.icon if spec is not None else "⚙"
 
 
 def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
@@ -373,27 +447,37 @@ def unified_diff(
     return [line.rstrip("\n") for line in diff]
 
 
-def _card_header(tool_name: str, args: dict[str, Any], theme: Theme) -> Text:
+def _card_header(
+    tool_name: str,
+    args: dict[str, Any],
+    theme: Theme,
+    registry: ToolRenderRegistry | None = None,
+) -> Text:
     """The ``│ ⚙ <verb> · <detail>`` headline shared by start/done cards."""
     header = Text()
     header.append("  │ ", style=theme.accent_soft)
-    header.append("⚙ ", style=theme.accent_soft)
-    header.append(tool_verb(tool_name), style=f"bold {theme.accent}")
+    header.append(f"{tool_icon(tool_name, registry)} ", style=theme.accent_soft)
+    header.append(tool_verb(tool_name, registry), style=f"bold {theme.accent}")
     detail = tool_detail(tool_name, args)
     if detail:
         header.append(f"  ·  {detail}", style=theme.muted)
     return header
 
 
-def render_tool_start_line(event: AgentToolStartEvent, theme: Theme) -> Text:
+def render_tool_start_line(
+    event: AgentToolStartEvent,
+    theme: Theme,
+    registry: ToolRenderRegistry | None = None,
+) -> Text:
     """Compact "running tool" line for a regular (non-subagent) tool call."""
-    return _card_header(event.tool_name, event.args, theme)
+    return _card_header(event.tool_name, event.args, theme, registry)
 
 
 def render_tool_done_line(
     event: AgentToolDoneEvent,
     theme: Theme,
     args: dict[str, Any] | None = None,
+    registry: ToolRenderRegistry | None = None,
 ) -> RenderableType:
     """Result card for a finished regular (non-subagent) tool call.
 
@@ -407,7 +491,9 @@ def render_tool_done_line(
     summary for ``write_file``, first stdout lines for ``bash``.
     """
     call_args: dict[str, Any] = args or {}
-    parts: list[RenderableType] = [_card_header(event.tool_name, call_args, theme)]
+    parts: list[RenderableType] = [
+        _card_header(event.tool_name, call_args, theme, registry)
+    ]
 
     # Subagent tools without parseable metrics keep their dedicated
     # "✓ spawned" outcome line instead of a generic check.

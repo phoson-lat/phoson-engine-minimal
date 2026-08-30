@@ -38,12 +38,7 @@ from phoson_agent import (
 from phoson_cli.theme import Theme, load_theme
 from phoson_cli.animations import SPINNER_FRAMES
 from phoson_cli.formatting import (
-    tool_verb as _tool_verb,
-)
-from phoson_cli.formatting import (
-    tool_label as _tool_label,
-)
-from phoson_cli.formatting import (
+    ToolRenderRegistry,
     render_notice,
     render_history,
     render_done_line,
@@ -54,6 +49,15 @@ from phoson_cli.formatting import (
     render_reasoning_panel,
     render_streaming_panel,
     render_subagent_start_line,
+)
+from phoson_cli.formatting import (
+    tool_icon as _tool_icon,
+)
+from phoson_cli.formatting import (
+    tool_verb as _tool_verb,
+)
+from phoson_cli.formatting import (
+    tool_label as _tool_label,
 )
 from phoson_cli.formatting import (
     tool_args_preview as _args_preview,
@@ -262,6 +266,7 @@ class Renderer:
         # done events don't carry args, so the start event stashes them and
         # the done card pops them to render path/command detail + diffs.
         self._pending_tool_args: dict[str, dict] = {}
+        self._tool_render_registry = ToolRenderRegistry({})
 
         # ── Run-time context (reset on AgentStartEvent) ───────────────
         self._current_step: int = 0
@@ -275,6 +280,10 @@ class Renderer:
     def set_session(self, session_id: str) -> None:
         """Set the current session ID for display."""
         self.session_id = session_id
+
+    def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
+        """Apply the active controller's isolated plugin visual specs."""
+        self._tool_render_registry = registry
 
     # ── Public animation delegates ────────────────────────────────────────────
 
@@ -525,7 +534,10 @@ class Renderer:
         """
         if not event.tool_name or self._live is not None:
             return
-        self.start_waiting(f"⚙  {_tool_verb(event.tool_name)}…")
+        self.start_waiting(
+            f"{_tool_icon(event.tool_name, self._tool_render_registry)}  "
+            f"{_tool_verb(event.tool_name, self._tool_render_registry)}…"
+        )
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
         """Handle tool start: update spinner for regular tools, start subagent panel."""
@@ -559,7 +571,14 @@ class Renderer:
                 return
 
         start_args = self._pending_tool_args.pop(event.tool_call_id or "", None)
-        self.console.print(render_tool_done_line(event, self.theme, args=start_args))
+        self.console.print(
+            render_tool_done_line(
+                event,
+                self.theme,
+                args=start_args,
+                registry=self._tool_render_registry,
+            )
+        )
 
     def _on_done(self, event: AgentDoneEvent) -> None:
         """Render run summary line."""
@@ -704,6 +723,10 @@ class ClassicSink:
 
     def set_session(self, session_id: str) -> None:
         self._renderer.set_session(session_id)
+
+    def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
+        """Forward a controller-scoped visual registry to the renderer."""
+        self._renderer.set_tool_render_registry(registry)
 
     def on_subagent_progress(self, progress: object | None) -> None:
         """Feed the live panel with per-task metrics (E2).

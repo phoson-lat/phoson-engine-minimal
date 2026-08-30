@@ -32,6 +32,7 @@ from phoson_llm.schemas import Message
 from ..theme import Theme
 from ..animations import SPINNER_FRAMES
 from ..formatting import (
+    ToolRenderRegistry,
     tool_verb,
     render_notice,
     render_history,
@@ -99,6 +100,7 @@ class FullScreenSink:
         self.session_id: str | None = None
         self.dirty = True
         self.show_reasoning_default: bool = show_reasoning
+        self._tool_render_registry = ToolRenderRegistry({})
 
         self.blocks: list[object] = []
         self.current_turn: CurrentTurn | None = None
@@ -120,6 +122,10 @@ class FullScreenSink:
         # (I-83). Repeated failures overwrite it in place instead of
         # stacking panels; the next successful run start drops it.
         self._error_notice_idx: int | None = None
+
+    def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
+        """Apply the active controller's isolated plugin visual specs."""
+        self._tool_render_registry = registry
 
     def _touch(self) -> None:
         self.dirty = True
@@ -244,7 +250,7 @@ class FullScreenSink:
         # Composing beats streaming: the model may have written text
         # before the tool call, and the verb is the freshest signal.
         if turn.composing_tool:
-            return f"⚙ {tool_verb(turn.composing_tool)}…"
+            return f"⚙ {tool_verb(turn.composing_tool, self._tool_render_registry)}…"
         if turn.running_tool:
             return "Running tool…"
         if turn.content:
@@ -361,7 +367,9 @@ class FullScreenSink:
                     # The start line is live feedback. Keep its object so the
                     # complete card can replace it in-place rather than append
                     # another identical header (C1 regression #81).
-                    start_block = render_tool_start_line(event, self.theme)
+                    start_block = render_tool_start_line(
+                        event, self.theme, self._tool_render_registry
+                    )
                     self.blocks.append(start_block)
                     key = event.tool_call_id or f"index:{event.index}"
                     self._pending_tool_calls[key] = (dict(event.args), start_block)
@@ -388,7 +396,10 @@ class FullScreenSink:
                         pending if pending is not None else ({}, None)
                     )
                     done_block = render_tool_done_line(
-                        event, self.theme, args=start_args
+                        event,
+                        self.theme,
+                        args=start_args,
+                        registry=self._tool_render_registry,
                     )
                     if start_block is not None:
                         # Replace by identity: multiple parallel calls may
