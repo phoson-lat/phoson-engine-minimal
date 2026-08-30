@@ -33,9 +33,13 @@ from phoson_agent import (
     AgentToolDoneEvent,
     AgentReasoningEvent,
     AgentToolStartEvent,
+    AgentToolComposingEvent,
 )
 from phoson_cli.theme import Theme, load_theme
 from phoson_cli.animations import SPINNER_FRAMES
+from phoson_cli.formatting import (
+    tool_verb as _tool_verb,
+)
 from phoson_cli.formatting import (
     tool_label as _tool_label,
 )
@@ -469,6 +473,9 @@ class Renderer:
                 else:
                     self._update_live_streaming()
 
+            case AgentToolComposingEvent():
+                self._on_tool_composing(event)
+
             case AgentToolStartEvent():
                 self._stop_live_streaming()
                 self.flush_line()
@@ -505,6 +512,20 @@ class Renderer:
     def _on_start(self, event: AgentStartEvent) -> None:
         """Render session/model badge at the start of a run."""
         self.console.print(render_start_line(event, self.session_id, self.theme))
+
+    def _on_tool_composing(self, event: AgentToolComposingEvent) -> None:
+        """Handle tool composing: relabel the waiting spinner (I-128).
+
+        The classic front end has no persistent pane, so the feedback is
+        the spinner label: ``⚙  running command…`` while the model still
+        generates the call, upgraded to the full ``⚙  tool · args`` line
+        by :meth:`_on_tool_start` once the call lands. Skipped while the
+        Live streaming panel is open (the growing text is the feedback
+        there) and for deltas whose name is not known yet.
+        """
+        if not event.tool_name or self._live is not None:
+            return
+        self.start_waiting(f"⚙  {_tool_verb(event.tool_name)}…")
 
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
         """Handle tool start: update spinner for regular tools, start subagent panel."""
