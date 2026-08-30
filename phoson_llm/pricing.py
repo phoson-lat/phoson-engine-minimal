@@ -154,8 +154,7 @@ def calculate_cost(
     if entry is None:
         warnings.warn(
             f"No price entry for model {model!r}; cost will be reported as 0. "
-            "Add it to phoson_llm.pricing.PRICES or suppress with "
-            "warnings.filterwarnings('ignore', category=UnknownModelWarning).",
+            "Add it to phoson_llm.pricing.PRICES.",
             UnknownModelWarning,
             stacklevel=2,
         )
