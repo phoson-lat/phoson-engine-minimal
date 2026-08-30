@@ -129,11 +129,22 @@ def render_chat(
         # While a tool call is being *composed* after some text has already
         # streamed, the indicator follows the text instead of leading it
         # (I-128): the "⚙ writing file…" line reads as a continuation of the
-        # agent's message, not a banner stuck above it.
+        # agent's message, not a banner stuck above it. Models usually end
+        # the preceding paragraph with a trailing newline; with the
+        # indicator below, that newline would show up as a blank line gap,
+        # so the trailing newline(s) are dropped from the in-flight render
+        # only (the frozen transcript keeps the original text).
+        composing_after_panel = bool(turn.composing_tool) and show_panel
+        if composing_after_panel:
+            panel_content = turn.content
+            if panel_content.endswith("\n"):
+                panel_content = panel_content.rstrip("\n") or " "
+        else:
+            panel_content = turn.content
         activity = render_activity_line(
             sink.activity_text(), sink.activity_frame(), sink.theme
         )
-        if not (turn.composing_tool and show_panel):
+        if not composing_after_panel:
             console.print(activity)
         # Do not show an empty assistant block alongside the activity line.
         # In particular, a provider can emit reasoning while the user has it
@@ -147,14 +158,14 @@ def render_chat(
             # (perf/render-cache). The frozen transcript gets real Markdown.
             console.print(
                 render_streaming_panel(
-                    turn.content,
+                    panel_content,
                     turn.reasoning,
                     turn.show_reasoning,
                     sink.theme,
                     stream_plain=True,
                 )
             )
-        if turn.composing_tool and show_panel:
+        if composing_after_panel:
             console.print(activity)
         panel = sink.render_subagent_panel()
         if panel is not None:
