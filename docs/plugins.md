@@ -257,6 +257,7 @@ engine = AgentEngine(
 - `phoson_plugin_mcp`: integrates Model Context Protocol servers.
 - `phoson_plugin_checkpoint`: Postgres-backed `SessionStorage` with its own schema (`phoson_checkpoint_*`). See `phoson_plugin_checkpoint/README.md`.
 - `phoson_plugin_memory`: short-term (Redis, TTL) and long-term (Postgres) memory exposed as `memory_read`/`memory_write` tools (same `MemoryBackend` for both), plus a separate semantic tier (Qdrant) exposed as `memory_remember`/`memory_recall` — a different interface because it is similarity search, not exact lookup. See `phoson_plugin_memory/README.md`.
+- `phoson_plugin_monitor`: long-running monitors (`register_monitor`/`list_monitors`/`stop_monitor`) that outlive a run and re-activate the agent. Kinds: `interval`, `file` (path or glob, polled), `command`. Wakes go to a persistent queue (`data_dir`, default `~/.phoson/monitors/`) and optionally an `on_wake` callback; the CLI drains pending wakes into the next user turn. See `phoson_plugin_monitor/README.md` and `examples/monitor_wake_host.py`.
 
 ## Plugin Examples
 

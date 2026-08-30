@@ -17,7 +17,7 @@
 | **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ✅ Resuelto (v0.17.0, ext. a sub-agents) |
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ✅ Resuelto (v0.17.1) |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ✅ Resuelto (v0.18.0) |
-| **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ⬜ Abierto |
+| **I-126** | [#126](https://github.com/phoson-lat/phoson-engine-minimal/issues/126) | Nuevo plugin oficial: monitores de larga duración que reactivan al agente | **P2** | L | 🟢 Bajo (feature de roadmap) | ✅ Resuelto (v0.19.0) |
 | **I-115** | [#115](https://github.com/phoson-lat/phoson-engine-minimal/issues/115) | docs: refrescar README — contenido obsoleto, comprimir sección CLI, assets visuales | **P2** | M | 🟢 Bajo (calidad de docs) | ✅ Resuelto (PR) |
 | **I-91** | [#91](https://github.com/phoson-lat/phoson-engine-minimal/issues/91) | Context auto-compact gate subestima tokens & sin fallback en provider 400 | **P0** | M | 🔴 Crítico (bloquea sesiones largas) | ✅ Resuelto (v0.13.5) |
 | **I-88** | [#88](https://github.com/phoson-lat/phoson-engine-minimal/issues/88) | Costo/uso en cabecera no se actualiza en vivo + costo OpenRouter USD en $0 | **P0** | S | 🔴 Alto (visibilidad de costos) | ✅ Resuelto (v0.13.6) |
@@ -137,9 +137,18 @@
 ---
 
 ### I-126 — [Feature #126] Nuevo plugin oficial: monitores de larga duración que reactivan al agente
-* **Estado:** ⬜ **Abierto**
+* **Estado:** ✅ **Resuelto (v0.19.0, rama `feat/i126-monitors-plugin`)** — paquete `phoson_plugin_monitor/` con kinds `interval`/`file`/`command`, wake por cola persistente + `on_wake`, integración CLI opt-in (`enable_monitors`) y ejemplo host-side. Ver `docs/plans/I-126.md` y `phoson_plugin_monitor/README.md`.
 * **Área:** nuevo paquete `phoson_plugin_monitor/` (+ canal de wake en el host)
 * **Prioridad:** **P2** · **Esfuerzo:** L · **Impacto:** 🟢 Bajo (feature de roadmap; desbloquea parcialmente `phoson_http`)
+* **Resolución (resumen):**
+  - **Scaffold oficial:** `phoson_plugin_monitor/` (`_plugin.py`, `plugin = MonitorPlugin()` en `__init__.py`, `create_plugin()`, README, entrada en "Bundled plugins" de `docs/plugins.md`); empaquetado en la wheel (hatch) y tipado (pyright).
+  - **Tools:** `register_monitor(name, kind, spec)` (kind como enum JSON: `interval`/`file`/`command`), `list_monitors()`, `stop_monitor(name)` — schemas vía `@tool`, errores legibles para el LLM.
+  - **Kinds:** `interval` (una vez o periódico), `file` (path o glob, polling mtime+size, sin inotify), `command` (salida ≠ 0, timeout con kill del grupo de proceso, o cambio de output; registro gateado por permisos, ejecución unattended documentada).
+  - **Wake:** `wake.jsonl` persistente como source of truth (con `session_id` original) + `on_wake` opcional fire-and-forget; dedupe de fires idénticos y cap anti-storm por monitor. El CLI dreana los wakes pendientes en el próximo `run_turn` (header `[MONITOR EVENTS]` en el user message, notificado al sink) y `/monitors` lista estado/wakes pendientes (contrato I-110).
+  - **Persistencia/crash:** `monitors.json` + `wake.jsonl` en `data_dir` (default `~/.phoson/monitors/`), writes atómicos (tmp+fsync+replace), parse leniente. El disco es la verdad y las tareas async son caché: `aclose()`/crash no marcan `stopped`, y `ensure_started()` (llamada por el host tras cada rebuild de engine y lazy desde tools) resucita monitores `running`.
+  - **CLI (opt-in, core mínimo):** `enable_monitors`/`monitors_data_dir` en config (env `PHOSON_ENABLE_MONITORS`), `build_monitor_plugins()` en `session_utils.py` (in-tree → fallback `path:`), inyección de `session_id_provider` (callable, sobrevive a `new_session`/`load_session`) y drain en `run_turn` — todo duck-typed, cero cambios en `phoson_agent`.
+  - **Host example:** `examples/monitor_wake_host.py` — host embebido que reanuda la misma `ConversationTree` (`JsonlStorage`) al despertar.
+  - **Tests:** +87 (suite 1714→1801 passing): storage (round-trip, atomicidad, corrupción, cap), kinds con fake clock inyectado, plugin (schemas, lifecycle, resurrección, `/monitors`), e2e con `FakeToolChat` (el LLM registra, el monitor dispara, el host reanuda la misma sesión) e integración CLI (config, provider, drain, rebuild).
 * **Problema:** El engine es stateless por run: cuando `AgentEngine.run()` regresa, nada persiste ni se reprograma. No hay mecanismo first-class para "observa X y despiértame cuando pase Y" — hoy requiere host code hackeado.
 * **Solución propuesta (sigue el contrato `Plugin` de `docs/plugins.md`):**
   - **Tools** (`get_tools()`): `register_monitor(name, kind, spec)` (kinds: `interval`, `file`/`glob`, `command`, `http`), `list_monitors()`, `stop_monitor(name)`.
@@ -151,6 +160,7 @@
   - ≥2 kinds implementados (p. ej. `interval` + `file`) con schemas JSON vía `@tool`.
   - Mecanismo de wake elegido y documentado con ejemplo host-side en `examples/`.
   - Monitores y wake events persisten entre reinicios; tests unitarios con fakes + 1 integración (patrón skip-if-service-unavailable).
+  - Fuera de scope (follow-up): kind `http` (pendiente del daemon `phoson_http`), wake autónomo sin turno del usuario en la TUI, nodo de tree por wake, lock multi-proceso de `data_dir`.
 
 ---
 
@@ -338,11 +348,11 @@
 ## Roadmap sugerido de ataque
 
 ```
-Sprint Próximo (Extensibilidad & Ecosistema)
-├── I-110 (Plugin system: look & commands del CLI)
-└── I-126 (Plugin de monitores de larga duración)
-
 ───── Resueltos ─────
+
+Sprint Extensibilidad & Ecosistema
+├── I-110 (Plugin system: look & commands del CLI) ✅ v0.18.0
+└── I-126 (Plugin de monitores de larga duración) ✅ v0.19.0
 
 Sprint Docs
 └── I-115 (Refresh del README + docs/cli/ + assets VHS) ✅ PR i-115-refresh-readme

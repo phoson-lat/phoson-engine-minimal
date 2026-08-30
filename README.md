@@ -100,6 +100,7 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | **Skills** | On-demand instruction packages indexed at one line; loaded via tool call |
 | **MCP** | Model Context Protocol servers as first-class tools (`/mcp`) |
 | **Plugins** | Official & community plugins: tools, slash commands, CLI look |
+| **Monitors** | Long-running watchers (interval/file/command) that re-activate the agent on wake |
 | **Permissions** | Per-tool `allow`/`ask`/`deny` + allow-patterns, editable at runtime |
 | **Auto-compaction** | Structured handoff summaries keep long sessions inside the context window |
 | **Cost tracking** | Built-in pricing module for USD usage calculation |
@@ -157,7 +158,7 @@ phoson-engine-minimal/
 ├── phoson_llm/           # LLM normalization layer (adapters + schemas + pricing)
 ├── phoson_agent/         # ReAct agent loop, tools, middleware, sessions
 ├── phoson_cli/           # Interactive CLI (TUI + classic REPL) for agent sessions
-├── phoson_plugin_*/      # Official plugins (checkpoint, mcp, memory)
+├── phoson_plugin_*/      # Official plugins (checkpoint, mcp, memory, monitor)
 ├── examples/             # Runnable engine/plugin/MCP usage examples
 ├── bench/                # Benchmarks (run_bench.py + tasks)
 ├── scripts/              # Installers, uninstall and dev/bench scripts
