@@ -20,6 +20,34 @@ A **plugin** can provide:
 - **Tools**: functions the agent can call
 - **Middlewares**: hooks in the agent lifecycle
 - **Configuration**: customizable options
+- **CLI extensions**: slash commands, tool-card verbs/icons and one derived theme
+- **UI interactions**: neutral notices, data cards, TODO/progress blocks and confirmations through the host-provided `plugin_ui` service
+
+The UI contract is intentionally declarative: plugins return/use types from
+`phoson_agent.cli_extensions` and **must not** import Rich, prompt_toolkit or
+`phoson_cli` internals. Fullscreen and classic hosts render the same blocks;
+one-shot hosts return `InteractionResult(status="unavailable")` for questions
+and never read stdin implicitly.
+
+## Installing community plugins
+
+Use the plugin manager for packages published to PyPI or a trusted Git source:
+
+```bash
+phoson-cli plugin install "phoson-plugin-example==1.2.0"
+phoson-cli plugin install github:owner/repository@v1.2.0
+phoson-cli plugin list
+phoson-cli plugin disable example
+phoson-cli plugin enable example
+phoson-cli plugin doctor example
+```
+
+`phoson-cli --install-plugin <source>` is an alias for `plugin install`. GitHub
+shorthand is normalized to a standard `git+https://` requirement. Installation
+executes Python code with your user permissions, so inspect and pin sources to
+a release tag or commit. A plugin package must export an entry point in the
+existing `phoson.plugins` group. See `examples/PLUGIN_EXAMPLES.md` for a
+complete installable plugin.
 
 ## Quick Usage
 

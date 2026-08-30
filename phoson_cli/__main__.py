@@ -53,6 +53,8 @@ Options:
   --setup              Run the setup wizard
   --self-update        Check for and install CLI updates
   --uninstall          Uninstall phoson-cli
+  --install-plugin <source>  Install and enable a community plugin (alias)
+  plugin <command>     Manage plugins: install, list, enable, disable, remove, doctor
   -h, --help           Show this help and exit
 """
 
@@ -72,6 +74,7 @@ class CliOptions:
     theme: str | None = None
     max_turns: int | None = None
     task: str | None = None
+    plugin_args: list[str] | None = None
 
 
 def _fail(message: str) -> None:
@@ -111,6 +114,9 @@ def parse_args(argv: list[str]) -> CliOptions:
     i = 0
     while i < len(argv):
         arg = argv[i]
+        if arg == "plugin":
+            options.plugin_args = argv[i + 1 :]
+            break
         if arg in {"-h", "--help"}:
             print(_USAGE)
             sys.exit(0)
@@ -122,6 +128,9 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.uninstall = True
         elif arg in {"--install", "--setup"}:
             options.setup = True
+        elif arg == "--install-plugin":
+            options.plugin_args = ["install", _take_value(argv, i, arg)]
+            i += 1
         elif arg in {"--classic", "--no-fullscreen"}:
             options.classic = True
         elif arg in {"-p", "--print"}:
@@ -236,6 +245,68 @@ def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> 
     config.theme = suggested
     save_config(config, only_fields={"theme"})
     print(f"Theme saved → {suggested}", file=sys.stderr)
+
+
+def _run_plugin_command(args: list[str], config: PhosonConfig) -> None:
+    """Run a non-interactive community-plugin management command."""
+    from phoson_cli.plugin_manager import (
+        PluginManagerError,
+        doctor_plugin,
+        enable_plugin,
+        remove_plugin,
+        disable_plugin,
+        install_plugin,
+        configured_plugins,
+    )
+
+    if not args:
+        _fail("plugin requires one of: install, list, enable, disable, doctor")
+    command, *rest = args
+    if command == "list" and not rest:
+        entries = configured_plugins(config)
+        if not entries:
+            print("No community plugins configured.")
+        for entry in entries:
+            print(f"enabled  {entry.name}")
+        return
+    if command == "install" and len(rest) == 1:
+        source = rest[0]
+        print(f"Installing plugin from {source!r}. Plugins execute Python code as you.")
+        try:
+            answer = input("Continue? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("Cancelled.")
+            return
+        if answer not in {"y", "yes"}:
+            print("Cancelled.")
+            return
+        try:
+            name = install_plugin(source, config)
+        except PluginManagerError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return
+        print(f"Installed and enabled plugin: {name}")
+        return
+    if command in {"enable", "disable", "remove", "doctor"} and len(rest) == 1:
+        plugin_id = rest[0]
+        try:
+            if command == "enable":
+                enable_plugin(plugin_id, config)
+                print(f"Enabled plugin: {plugin_id}")
+            elif command == "disable":
+                disable_plugin(plugin_id, config)
+                print(f"Disabled plugin: {plugin_id}")
+            elif command == "remove":
+                remove_plugin(plugin_id, config)
+                print(f"Removed plugin from configuration: {plugin_id}")
+            else:
+                plugin = doctor_plugin(plugin_id, config)
+                print(f"Plugin OK: {plugin.name} {plugin.version}")
+                plugin.cleanup()
+        except PluginManagerError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+        return
+    _fail(f"invalid plugin command: {' '.join(args)}")
 
 
 def self_update() -> None:
@@ -363,6 +434,15 @@ def _run_cli() -> None:
 
     if options.version:
         print(f"phoson-cli {get_current_version()}")
+        return
+
+    if options.plugin_args is not None:
+        try:
+            config = load_config()
+        except PhosonConfigError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        _run_plugin_command(options.plugin_args, config)
         return
 
     if options.self_update:
