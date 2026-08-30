@@ -7,7 +7,8 @@ reproducible from the committed `.tape` files.
 | File | Tape | What it shows |
 |------|------|---------------|
 | `demo.gif` | [`demo.tape`](demo.tape) | One-shot mode: prompt → `read_file` tool call → final answer |
-| `tui.gif` / `tui.png` | [`tui.tape`](tui.tape) | Full-screen TUI mid-conversation (hero image) |
+| `tui.gif` | [`tui.tape`](tui.tape) | Full-screen TUI mid-conversation (animated hero) |
+| `tui.png` | (last frame of `tui.gif`) | Still of the same capture, kept as a lightweight alternative |
 
 ## Prerequisites
 
@@ -15,9 +16,9 @@ reproducible from the committed `.tape` files.
   release binary)
 - `ttyd` ≥ 1.7.2 on `$PATH` (release binary from
   [tsl0922/ttyd](https://github.com/tsl0922/ttyd/releases))
-- A working provider configured for `phoson-cli` (the committed images
+- A working provider configured for `phoson-cli` (the committed visuals
   were produced against a local vLLM)
-- `ffmpeg` (to extract the hero PNG)
+- `ffmpeg` (to extract `tui.png` from the final frame, optional)
 
 ## Regenerate
 
@@ -33,8 +34,9 @@ export VHS_ENV='env -i HOME="$HOME" SHELL=/bin/bash TERM=xterm-256color PATH="$(
 
 eval "$VHS_ENV vhs demo.tape"
 eval "$VHS_ENV vhs tui.tape"
-ffmpeg -sseof -0.5 -i tui.gif -frames:v 1 tui.png
+ffmpeg -sseof -0.5 -i tui.gif -frames:v 1 tui.png   # optional still
 ```
 
 The `Sleep` values in the tapes assume a sub-~12 s model run; bump them
-if your backend is slower.
+if your backend is slower (`tui.tape` uses a 30 s run for its research
+prompt).
