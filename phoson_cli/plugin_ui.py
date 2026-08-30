@@ -145,10 +145,23 @@ class SinkPluginUiService(PluginUiService):
     async def select(
         self, *, title: str, message: str, choices: list[Choice]
     ) -> InteractionResult:
-        # Selection/forms require a generic host picker. Returning an explicit
-        # result is safe for scripts and older frontends; they are expanded in
-        # a follow-up without changing this stable API.
-        return InteractionResult(status="unavailable")
+        select_plugin = getattr(self._confirmation, "select_plugin", None)
+        if select_plugin is None:
+            return InteractionResult(status="unavailable")
+        selected = await select_plugin(title, message, choices)
+        return (
+            InteractionResult(status="cancelled")
+            if selected is None
+            else InteractionResult(status="submitted", values={"choice": selected})
+        )
 
     async def form(self, *, title: str, fields: list[FormField]) -> InteractionResult:
-        return InteractionResult(status="unavailable")
+        form_plugin = getattr(self._confirmation, "form_plugin", None)
+        if form_plugin is None:
+            return InteractionResult(status="unavailable")
+        values = await form_plugin(title, fields)
+        return (
+            InteractionResult(status="cancelled")
+            if values is None
+            else InteractionResult(status="submitted", values=values)
+        )

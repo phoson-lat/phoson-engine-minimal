@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 from rich.console import Console
 
-from phoson_agent import TodoItem, ProgressBlock, TodoListBlock, InteractionResult
+from phoson_agent import (
+    Choice,
+    TodoItem,
+    FormField,
+    ProgressBlock,
+    TodoListBlock,
+    InteractionResult,
+)
 from phoson_cli.theme import DARK
 from phoson_cli.renderer import Renderer, ClassicSink
 from phoson_cli.plugin_ui import (
@@ -70,6 +77,29 @@ async def test_interactive_confirm_delegates_to_existing_confirmation_service() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_select_and_form_delegate_to_interactive_host_services() -> None:
+    confirmation = type(
+        "InteractionHost",
+        (),
+        {
+            "select_plugin": AsyncMock(return_value="two"),
+            "form_plugin": AsyncMock(return_value={"name": "Phos"}),
+        },
+    )()
+    ui = SinkPluginUiService(FullScreenSink(lambda: None, DARK), DARK, confirmation)
+
+    selected = await ui.select(
+        title="Choose", message="Pick one", choices=[Choice("two", "Two")]
+    )
+    submitted = await ui.form(title="Name", fields=[FormField("name", "Name")])
+
+    assert selected == InteractionResult(status="submitted", values={"choice": "two"})
+    assert submitted == InteractionResult(status="submitted", values={"name": "Phos"})
+    confirmation.select_plugin.assert_awaited_once()
+    confirmation.form_plugin.assert_awaited_once()
+
+
 async def test_non_interactive_ui_never_prompts_and_returns_unavailable(capsys) -> None:
     ui = NonInteractivePluginUiService(DARK)
 

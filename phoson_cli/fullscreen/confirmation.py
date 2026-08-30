@@ -11,6 +11,9 @@ mid-confirmation can't leave the tool call hanging forever.
 """
 
 from typing import TYPE_CHECKING
+from collections.abc import Sequence
+
+from phoson_agent import Choice, FormField
 
 if TYPE_CHECKING:
     from .app import PhosonApp
@@ -25,6 +28,16 @@ class FullScreenConfirmationService:
     async def confirm_bash(self, command: str) -> bool:
         """Ask whether ``command`` may run."""
         return await self.app.run_float_confirm(f"Run bash command? {command!r}")
+
+    async def select_plugin(
+        self, title: str, message: str, choices: Sequence[Choice]
+    ) -> str | None:
+        return await self.app.run_float_select(title, message, choices)
+
+    async def form_plugin(
+        self, title: str, fields: Sequence[FormField]
+    ) -> dict[str, str] | None:
+        return await self.app.run_float_form(title, fields)
 
 
 __all__ = ["FullScreenConfirmationService"]

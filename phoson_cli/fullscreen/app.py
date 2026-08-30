@@ -21,7 +21,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -31,7 +31,7 @@ from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
-from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.layout.layout import Layout, FocusableElement
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.data_structures import Point
@@ -45,6 +45,7 @@ from prompt_toolkit.key_binding.key_bindings import (
     merge_key_bindings,
 )
 
+from phoson_agent import Choice, FormField
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from .. import warnings_hook
@@ -811,7 +812,119 @@ class PhosonApp:
         finally:
             self._close_float(float_)
 
-    def _open_float(self, float_: Float, kb: KeyBindings, focus_target: Window) -> None:
+    async def run_float_select(
+        self, title: str, message: str, choices: Sequence[Choice]
+    ) -> str | None:
+        """Show a simple keyboard selector for a plugin interaction."""
+        if not choices:
+            return None
+        result_future: asyncio.Future[str | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        selected = 0
+        kb = KeyBindings()
+
+        def resolve(value: str | None) -> None:
+            if not result_future.done():
+                result_future.set_result(value)
+
+        def move(delta: int) -> None:
+            nonlocal selected
+            selected = (selected + delta) % len(choices)
+            self.app.invalidate()
+
+        kb.add("up")(lambda event: move(-1))  # noqa: ARG005
+        kb.add("down")(lambda event: move(1))  # noqa: ARG005
+        kb.add("c-p")(lambda event: move(-1))  # noqa: ARG005
+        kb.add("c-n")(lambda event: move(1))  # noqa: ARG005
+        kb.add("enter")(lambda event: resolve(choices[selected].id))  # noqa: ARG005
+        kb.add("escape")(lambda event: resolve(None))  # noqa: ARG005
+        kb.add("c-c")(lambda event: resolve(None))  # noqa: ARG005
+
+        def content() -> list[tuple[str, str]]:
+            lines = [
+                ("class:title", f"  {title}\n"),
+                ("class:header", f"  {message}\n"),
+            ]
+            for index, choice in enumerate(choices):
+                marker = "▸" if index == selected else " "
+                style = "class:row.selected" if index == selected else "class:row"
+                detail = f" — {choice.detail}" if choice.detail else ""
+                lines.append((style, f"  {marker} {choice.label}{detail}\n"))
+            lines.append(
+                ("class:footer", "  ↑/↓ navigate  ·  Enter select  ·  Esc cancel\n")
+            )
+            return lines
+
+        window = Window(
+            content=FormattedTextControl(content, focusable=True),
+            always_hide_cursor=True,
+        )
+        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
+        self._open_float(float_, kb, window)
+        try:
+            return await result_future
+        finally:
+            self._close_float(float_)
+
+    async def run_float_form(
+        self, title: str, fields: Sequence[FormField]
+    ) -> dict[str, str] | None:
+        """Collect a small plugin form in a modal, never exposing widgets to plugins."""
+        values: dict[str, TextArea] = {}
+        widgets = []
+        for field in fields:
+            area = TextArea(
+                text=field.default or "",
+                password=field.kind == "password",
+                height=1,
+                multiline=False,
+            )
+            values[field.id] = area
+            widgets.extend(
+                [
+                    Window(
+                        content=FormattedTextControl(f"  {field.label}\n"), height=1
+                    ),
+                    area,
+                ]
+            )
+        result_future: asyncio.Future[dict[str, str] | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        kb = KeyBindings()
+
+        def resolve() -> None:
+            result: dict[str, str] = {}
+            for field in fields:
+                value = values[field.id].text.strip()
+                if field.required and not value:
+                    return
+                if field.kind == "integer" and value:
+                    try:
+                        int(value)
+                    except ValueError:
+                        return
+                result[field.id] = value
+            if not result_future.done():
+                result_future.set_result(result)
+
+        kb.add("enter")(lambda event: resolve())  # noqa: ARG005
+        kb.add("escape")(lambda event: result_future.set_result(None))  # noqa: ARG005
+        kb.add("c-c")(lambda event: result_future.set_result(None))  # noqa: ARG005
+        body = HSplit(widgets)
+        float_ = Float(
+            content=Frame(body, title=title), left=4, right=4, top=4, bottom=4
+        )
+        self._open_float(float_, kb, next(iter(values.values()), self._prompt_input))
+        try:
+            return await result_future
+        finally:
+            self._close_float(float_)
+
+    def _open_float(
+        self, float_: Float, kb: KeyBindings, focus_target: FocusableElement
+    ) -> None:
         self._root_container.floats.append(float_)
         self._float_kb = kb
         self._active_float = float_
