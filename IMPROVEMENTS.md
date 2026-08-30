@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub con su prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis de causa raíz, solución propuesta y criterios de aceptación.
 >
-> **Estado de referencia:** v0.16.0 · 1582 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
+> **Estado de referencia:** v0.16.1 · 1600 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
 
 ---
 
@@ -13,7 +13,7 @@
 | ID | Issue | Título | Prioridad | Esfuerzo | Impacto | Estado |
 |----|-------|--------|-----------|----------|---------|--------|
 | **I-128** | [#128](https://github.com/phoson-lat/phoson-engine-minimal/issues/128) | Sin feedback en UI mientras el modelo compone la tool call (brecha silenciosa antes de la línea de tool-start) | **P1** | S-M | 🟠 Medio (percepción de congelamiento en tools largas) | ✅ Resuelto (v0.16.0) |
-| **I-119** | [#119](https://github.com/phoson-lat/phoson-engine-minimal/issues/119) | Cargar una conversación con attachments temporales borrados crash: `FileNotFoundError` en `file:///tmp/...` | **P1** | S | 🟠 Medio (bloquea reabrir sesiones) | ⬜ Abierto |
+| **I-119** | [#119](https://github.com/phoson-lat/phoson-engine-minimal/issues/119) | Cargar una conversación con attachments temporales borrados crash: `FileNotFoundError` en `file:///tmp/...` | **P1** | S | 🟠 Medio (bloquea reabrir sesiones) | ✅ Resuelto (v0.16.1) |
 | **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ⬜ Abierto |
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ⬜ Abierto |
 | **I-110** | [#110](https://github.com/phoson-lat/phoson-engine-minimal/issues/110) | Plugin system: extender look & commands del CLI, no solo el engine | **P2** | L | 🟡 Medio (extensibilidad/ecosistema) | ⬜ Abierto |
@@ -63,9 +63,10 @@
 ---
 
 ### I-119 — [Bug #119] Cargar una conversación con attachments temporales borrados crash
-* **Estado:** ⬜ **Abierto**
-* **Área:** `phoson_llm/chats/_openai_compatible.py`, `phoson_llm/utils.py`, `phoson_agent/plugins/summarizer.py`
+* **Estado:** ✅ **Resuelto (v0.16.1)**
+* **Área:** `phoson_llm/utils.py`, `phoson_llm/chats/_openai_compatible.py`, `phoson_llm/chats/anthropic.py`, `phoson_llm/chats/gemini.py`, `tests/phoson_llm/test_missing_attachment_unit.py`
 * **Prioridad:** **P1** · **Esfuerzo:** S · **Impacto:** 🟠 Medio (un crash que impide reabrir la sesión)
+* **Resolución (resumen):** `load_file_as_base64()` ahora retorna `str | None` (archivo ausente/ilegible → `logger.warning` + `None`, catch de `OSError`); los **6** call sites `file://` (OpenAI-compat: image+audio, Anthropic: image+document, Gemini: image+document) degradan el bloque a texto vía `missing_attachment_placeholder()` — p. ej. `[image no longer available: shot-accepted.png]` — mismo patrón que los placeholders de bloques no soportados existentes. Fuentes vivas (`file://` existente, `data:`, `https://`) no cambian. El bug estaba en 6 sitios, no 1: el traceback del issue era solo el de `ImageBlock` en OpenAI-compat. Ver `docs/plans/I-119.md`.
 * **Problema:**
   1. Enviar una imagen guardada en `/tmp` (p. ej. `file:///tmp/shot-accepted.png`) la persiste en la sesión como `ImageBlock` con esa URI `file://`.
   2. Al recargar la conversación (`--resume`/load), la re-conversión de mensajes para el próximo `llm.stream()` intenta re-leer el archivo, que el SO ya limpió → `FileNotFoundError` y **crash de carga de sesión** (traza: `summarizer._call_with_context_rescue` → `wrap_llm_call` → `_convert_content_block` → `load_file_as_base64`).

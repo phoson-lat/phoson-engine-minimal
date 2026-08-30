@@ -1,6 +1,9 @@
 import re
 import base64
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 #: Error code emitted when a provider rejects the request because the
 #: prompt exceeds the model's context window (HTTP 400 + message match).
@@ -78,7 +81,7 @@ def extract_context_window(message: str) -> int | None:
     return value if value > 0 else None
 
 
-def load_file_as_base64(path: str, media_type: str | None = None) -> str:
+def load_file_as_base64(path: str, media_type: str | None = None) -> str | None:
     """
     Reads a local file and encodes it to base64.
 
@@ -87,13 +90,50 @@ def load_file_as_base64(path: str, media_type: str | None = None) -> str:
         media_type (str | None): Optional MIME type. If not provided, it is guessed.
 
     Returns:
-        str: String formatted as 'data:<mime>;base64,<base64_data>'.
+        str | None: String formatted as 'data:<mime>;base64,<base64_data>' when the
+        file can be read. ``None`` (with a logged warning) when the file does not
+        exist or cannot be read — the caller should degrade the block to a visible
+        text placeholder instead of crashing (I-119: session attachments under
+        ``/tmp`` are wiped between runs, so persisted ``file://`` sources may be
+        gone by the time a conversation is reloaded).
     """
-    with open(path, "rb") as f:
-        data = f.read()
+    if not Path(path).is_file():
+        logger.warning(
+            "attachment file missing, degrading to text placeholder: %s", path
+        )
+        return None
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        logger.warning(
+            "attachment file unreadable (%s: %s), degrading to text placeholder",
+            type(exc).__name__,
+            path,
+        )
+        return None
     b64 = base64.b64encode(data).decode("ascii")
     mime = media_type or guess_mime(path)
     return f"data:{mime};base64,{b64}"
+
+
+def missing_attachment_placeholder(kind: str, path: str) -> str:
+    """
+    Builds the visible text that replaces a ``file://`` attachment whose file
+    no longer exists (I-119).
+
+    The placeholder keeps the file name so the model — and the user — can tell
+    *what* was attached even though the content is gone.
+
+    Args:
+        kind (str): Human-readable block kind ("image", "audio", "document").
+        path (str): The (missing) local path of the attachment.
+
+    Returns:
+        str: e.g. ``[image no longer available: shot-accepted.png]``.
+    """
+    name = Path(path).name or path
+    return f"[{kind} no longer available: {name}]"
 
 
 def guess_mime(path: str) -> str:

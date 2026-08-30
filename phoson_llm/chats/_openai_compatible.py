@@ -10,7 +10,6 @@ configure the client and provide a cost callback.
 
 import json
 import math
-import base64
 import warnings
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, NotRequired
 from dataclasses import field, dataclass
@@ -98,7 +97,7 @@ class _MessageDict(TypedDict):
 
 def _convert_content_block(block: "ContentBlock") -> JsonObject:
     """Converts a Phoson ContentBlock to OpenAI-compatible API format."""
-    from phoson_llm.utils import load_file_as_base64
+    from phoson_llm.utils import load_file_as_base64, missing_attachment_placeholder
     from phoson_llm.schemas import (
         TextBlock,
         AudioBlock,
@@ -116,6 +115,11 @@ def _convert_content_block(block: "ContentBlock") -> JsonObject:
         if source.startswith("file://"):
             path = source[7:]
             source = load_file_as_base64(path, block.media_type)
+            if source is None:
+                return {
+                    "type": "text",
+                    "text": missing_attachment_placeholder("image", path),
+                }
         return {
             "type": "image_url",
             "image_url": {
@@ -128,8 +132,13 @@ def _convert_content_block(block: "ContentBlock") -> JsonObject:
         source = block.source
         if source.startswith("file://"):
             path = source[7:]
-            with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("ascii")
+            data = load_file_as_base64(path)
+            if data is None:
+                return {
+                    "type": "text",
+                    "text": missing_attachment_placeholder("audio", path),
+                }
+            b64 = data.split(",", 1)[-1]
         else:
             b64 = source
         return {

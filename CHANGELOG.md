@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.16.1 (2026-08-29)
+
+### Fix
+
+- **llm**: cargar una sesión con attachments `file://` temporales ya
+  borrados (p. ej. `file:///tmp/shot-accepted.png`) deja de crashear la
+  conversión de mensajes con `FileNotFoundError`
+  (IMPROVEMENTS.md I-119, issue #119).
+
+  Al reabrir una conversación (`--resume`, reintento del summarizer), la
+  re-conversión para el próximo `llm.stream()` re-leía el archivo del
+  attachment sin chequear que siguiera vivo; los de `/tmp` no
+  sobreviven entre runs y la excepción propagaba fuera del stream.
+  `load_file_as_base64()` (`phoson_llm/utils.py`) ahora retorna
+  `str | None`: archivo ausente o ilegible → `logger.warning` +
+  `None` en vez de `open()` sin catcher. Los **seis** sitios que leen
+  `file://` (OpenAI-compatible: image + audio — este último usaba un
+  `open()` crudo, ahora por el helper compartido; Anthropic: image +
+  document; Gemini: image + document) degradan el bloque a texto
+  visible vía `missing_attachment_placeholder()`, p. ej.
+  `[image no longer available: shot-accepted.png]` — mismo patrón que
+  los placeholders de bloques no soportados que ya existían. Fuentes
+  vivas (`file://` existente, `data:`, `https://`) no cambian.
+
+  Tests: contrato nuevo (ausente/directorio/ilegible → `None` +
+  warning; shape del placeholder) y degradación por adapter, incluido
+  el criterio del issue — `_convert_messages` con una imagen muerta:
+  sin excepción, nada en stderr, placeholder presente. Ver
+  `docs/plans/I-119.md`.
+
 ## v0.16.0 (2026-08-29)
 
 ### Feature
