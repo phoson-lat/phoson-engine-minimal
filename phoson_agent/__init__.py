@@ -16,6 +16,7 @@ from .models import (
     AgentReasoningEvent,
     AgentSubagentResult,
     AgentToolStartEvent,
+    AgentToolComposingEvent,
 )
 from .plugin import Plugin, PluginSpec, PluginLoader
 from .context import AgentContext
@@ -64,6 +65,7 @@ __all__ = [
     "AgentTokenEvent",
     "AgentReasoningEvent",
     "AgentToolStartEvent",
+    "AgentToolComposingEvent",
     "AgentToolDoneEvent",
     "AgentStepDoneEvent",
     "AgentDoneEvent",

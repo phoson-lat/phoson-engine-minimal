@@ -16,8 +16,9 @@ live in :class:`phoson_agent.agent.AgentEngine`, which composes this
 loop with a :class:`ToolRunner`.
 """
 
+import time
 import datetime
-from collections.abc import AsyncIterator
+from collections.abc import Callable, AsyncIterator
 
 from phoson_llm.schemas import (
     Message,
@@ -30,6 +31,7 @@ from phoson_llm.schemas import (
     ToolUseBlock,
     LLMStartEvent,
     ToolCallEvent,
+    ToolCallDeltaEvent,
     ReasoningTokenEvent,
 )
 from phoson_agent.models import (
@@ -39,6 +41,7 @@ from phoson_agent.models import (
     AgentTokenEvent,
     AgentStepDoneEvent,
     AgentReasoningEvent,
+    AgentToolComposingEvent,
 )
 from phoson_agent._internals import (
     IterationCost,
@@ -51,6 +54,60 @@ from phoson_agent._internals import (
 from phoson_agent.exceptions import PhosonAgentError
 from phoson_agent.middleware import LLMCallNext
 from phoson_agent._tool_runner import ToolRunner, PrepareEventFn
+
+# Minimum wall time between :class:`AgentToolComposingEvent` emissions for
+# the same tool-call index (I-128). Leading-edge: the first non-empty args
+# chunk and the first known tool name always emit; anything in between is
+# a heartbeat capped to ~4 events/s. A 200-line ``write_file`` produces
+# hundreds of deltas — without this cap every delta would invalidate the
+# TUI.
+_COMPOSING_THROTTLE_S = 0.25
+
+
+class _ComposingTracker:
+    """Per-index composing state for one LLM stream (I-128).
+
+    Fresh per ``_consume_llm_stream`` call, so no state leaks between
+    iterations. ``_now`` is injectable so tests can drive the throttle
+    deterministically instead of sleeping.
+    """
+
+    def __init__(self, *, now: Callable[[], float] | None = None) -> None:
+        # Resolved at call time (not import time) so tests can patch
+        # ``phoson_agent._loop.time.monotonic`` with a fake clock.
+        self._now = now if now is not None else time.monotonic
+        self.known_name = ""
+        self.last_emit_at: float | None = None
+        self.last_name_emit_at: float | None = None
+
+    def should_emit(self, tool_name: str, args_chunk: str) -> bool:
+        """Decide whether this delta warrants a visible composing event.
+
+        Leading-edge rule: the first non-empty args chunk always emits, and
+        the first chunk that carries the tool name always emits (that is
+        when the label switches from "composing tool call…" to the real
+        verb). After that, further chunks only emit as a heartbeat once
+        ``_COMPOSING_THROTTLE_S`` has elapsed since the last emission —
+        enough to keep the indicator alive, capped to ~4 events/s.
+        """
+        if not args_chunk and not tool_name:
+            return False
+        now = self._now()
+        if tool_name and tool_name != self.known_name:
+            if self.last_name_emit_at is None:
+                return True
+            return now - self.last_name_emit_at >= _COMPOSING_THROTTLE_S
+        if self.last_emit_at is None:
+            return True
+        return now - self.last_emit_at >= _COMPOSING_THROTTLE_S
+
+    def record_emitted(self, tool_name: str) -> None:
+        """Mark that a composing event was just emitted for this delta."""
+        now = self._now()
+        self.last_emit_at = now
+        if tool_name and tool_name != self.known_name:
+            self.known_name = tool_name
+            self.last_name_emit_at = now
 
 
 class AgentLoop:
@@ -161,8 +218,11 @@ class AgentLoop:
 
         ``outcome`` is mutated in place with the aggregated tool calls,
         usage, done and error events; the loop yields the user-facing
-        token and reasoning events as they arrive.
+        token and reasoning events as they arrive. Tool-call deltas are
+        demoted to (throttled) ``AgentToolComposingEvent`` so front ends
+        get live feedback while the model composes the call (I-128).
         """
+        composing_trackers: dict[int, _ComposingTracker] = {}
         async for event in llm_call(history, config):
             if isinstance(event, TokenEvent):
                 yield await self._prepare_event(AgentTokenEvent(content=event.content))
@@ -170,6 +230,21 @@ class AgentLoop:
                 yield await self._prepare_event(
                     AgentReasoningEvent(content=event.content)
                 )
+            elif isinstance(event, ToolCallDeltaEvent):
+                tracker = composing_trackers.get(event.index)
+                if tracker is None:
+                    tracker = _ComposingTracker()
+                    composing_trackers[event.index] = tracker
+                if tracker.should_emit(event.tool_name, event.args_chunk):
+                    tracker.record_emitted(event.tool_name)
+                    yield await self._prepare_event(
+                        AgentToolComposingEvent(
+                            index=event.index,
+                            tool_call_id="",
+                            tool_name=event.tool_name,
+                            args_chunk=event.args_chunk,
+                        )
+                    )
             elif isinstance(event, ToolCallEvent):
                 outcome.tool_calls.append(event)
             elif isinstance(event, UsageEvent):

@@ -107,6 +107,40 @@ class AgentReasoningEvent(AgentEvent):
 
 
 @dataclass(kw_only=True)
+class AgentToolComposingEvent(AgentEvent):
+    """Event emitted while the LLM is still *composing* a tool call.
+
+    The provider streams tool-call deltas (``ToolCallDeltaEvent``) as the
+    model generates the call name and its JSON arguments; this event is
+    the agent-level signal that one of those deltas arrived, so front
+    ends can show live feedback (``⚙ writing file…``) during the often
+    long generation of large ``write_file``/``bash`` arguments instead of
+    sitting silent until :class:`AgentToolStartEvent` fires at execution
+    time (I-128).
+
+    Throttled leading-edge by the agent loop (~250 ms between emissions,
+    always including the first non-empty args chunk and the moment the
+    tool name becomes known).
+
+    Attributes:
+        index: Position of the tool call within the current LLM turn.
+        tool_call_id: Always empty — LLM deltas do not carry the id; it
+            is only known once the full :class:`AgentToolStartEvent`
+            arrives. Identity across composing events is by ``index``.
+        tool_name: Known once the name fragment has streamed; empty for
+            the very first args-only fragments.
+        args_chunk: Raw JSON fragment as streamed. **Opaque** — a partial
+            JSON string that must never be parsed; consumers only need
+            ``tool_name`` for the label.
+    """
+
+    index: int = 0
+    tool_call_id: str = ""
+    tool_name: str = ""
+    args_chunk: str = ""
+
+
+@dataclass(kw_only=True)
 class AgentToolStartEvent(AgentEvent):
     """Event emitted when a tool call starts."""
 
