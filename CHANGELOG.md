@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feature
+
+- **agent/cli**: feedback en vivo mientras el modelo compone la tool call
+  (IMPROVEMENTS.md I-128, issue #128).
+
+  El agente ya recibía `ToolCallDeltaEvent` por cada chunk de los
+  providers (OpenAI-compatible, Anthropic, Ollama) pero
+  `AgentLoop._consume_llm_stream()` los descartaba: en una `write_file`
+  de 200 líneas la UI se quedaba muda hasta que la tool empezaba a
+  ejecutarse. Ahora se emite el nuevo **`AgentToolComposingEvent`**
+  (exportado en `phoson_agent`), con throttle leading-edge de ~250 ms
+  (~4 eventos/s): el primer chunk de args y el primer nombre conocido
+  siempre se emiten; el resto son heartbeats. `args_chunk` es JSON
+  parcial y opaco (nunca parseable); `tool_call_id` viaja vacío
+  (solo existe al llegar `AgentToolStartEvent`); providers sin deltas
+  (p. ej. Gemini) simplemente no lo emiten.
+
+  - **Full-screen**: `CurrentTurn.composing_tool` alimenta la activity
+    line del pane (`⚙ writing file…`), el header muestra
+    `Composing tool` y la línea sigue animada durante la generación.
+    Al aterrizar la card de `AgentToolStartEvent` el label se limpia
+    (reemplazo in-place, sin duplicados ni líneas huérfanas — el estado
+    vive en el turno, no en `blocks`).
+  - **Clásico**: el spinner se relabelfea a `⚙ {verb}…` en
+    `_on_tool_composing()` (idempotente; se ignora si aún no hay nombre
+    o si el Live panel de streaming está abierto).
+  - Tests: throttle (tracker + demux + engine), orden composing →
+    `AgentToolStartEvent`, streams de solo texto/reasoning sin
+    composing, error a media composición sin ejecutar la tool, sink
+    fullscreen (activity line, header, animación, limpieza) y golden
+    ANSI, y spinner clásico (relabel, noop con Live abierto).
+
 ## v0.15.0 (2026-08-29)
 
 ### Fix
