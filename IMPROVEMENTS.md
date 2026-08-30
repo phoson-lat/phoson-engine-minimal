@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub con su prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis de causa raíz, solución propuesta y criterios de aceptación.
 >
-> **Estado de referencia:** v0.15.0 · 1554 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
+> **Estado de referencia:** v0.15.1 · 1582 tests passing · pyright 0 errors (propio; 1 preexistente en `phoson_llm/chats/gemini.py` por tipado de librería) · ruff clean.
 
 ---
 
@@ -12,7 +12,7 @@
 
 | ID | Issue | Título | Prioridad | Esfuerzo | Impacto | Estado |
 |----|-------|--------|-----------|----------|---------|--------|
-| **I-128** | [#128](https://github.com/phoson-lat/phoson-engine-minimal/issues/128) | Sin feedback en UI mientras el modelo compone la tool call (brecha silenciosa antes de la línea de tool-start) | **P1** | S-M | 🟠 Medio (percepción de congelamiento en tools largas) | ⬜ Abierto |
+| **I-128** | [#128](https://github.com/phoson-lat/phoson-engine-minimal/issues/128) | Sin feedback en UI mientras el modelo compone la tool call (brecha silenciosa antes de la línea de tool-start) | **P1** | S-M | 🟠 Medio (percepción de congelamiento en tools largas) | ✅ Resuelto (v0.15.1) |
 | **I-119** | [#119](https://github.com/phoson-lat/phoson-engine-minimal/issues/119) | Cargar una conversación con attachments temporales borrados crash: `FileNotFoundError` en `file:///tmp/...` | **P1** | S | 🟠 Medio (bloquea reabrir sesiones) | ⬜ Abierto |
 | **I-127** | [#127](https://github.com/phoson-lat/phoson-engine-minimal/issues/127) | Bash tool: timeout hardcodeado a 30s que el agente no puede subir ni bajar | **P1** | S | 🟠 Medio (mata builds/tests largos) | ⬜ Abierto |
 | **I-112** | [#112](https://github.com/phoson-lat/phoson-engine-minimal/issues/112) | Python `UserWarning` impreso a stderr además del warning estilizado del CLI | **P2** | S | 🟡 Medio (ruido visual, expone paths) | ⬜ Abierto |
@@ -36,9 +36,10 @@
 ## Detalle de Issues Abiertos y Plan de Acción
 
 ### I-128 — [Feature #128] Sin feedback en UI mientras el modelo compone la tool call
-* **Estado:** ⬜ **Abierto**
-* **Área:** `phoson_agent/_loop.py`, `phoson_agent/models.py`, `phoson_cli/fullscreen/sink.py`, `phoson_cli/renderer.py`, `phoson_cli/formatting.py`, `docs/api/phoson_agent.md`
+* **Estado:** ✅ **Resuelto (v0.15.1)**
+* **Área:** `phoson_agent/_loop.py`, `phoson_agent/models.py`, `phoson_cli/fullscreen/sink.py`, `phoson_cli/fullscreen/render.py`, `phoson_cli/renderer.py`, `phoson_cli/formatting.py`, `docs/api/phoson_agent.md`
 * **Prioridad:** **P1** · **Esfuerzo:** S-M · **Impacto:** 🟠 Medio (la UI parece congelada en tool calls con args largos)
+* **Resolución (resumen):** nuevo `AgentToolComposingEvent` (throttle leading-edge ~250 ms) emitido desde `_consume_llm_stream()`; fullscreen lo pinta en la activity line del pane (`⚙ writing file…`) siguiendo al texto ya streamado, con header `Composing tool`; clásico relabelfea el spinner a `⚙ {verb}…`. El glyph se anima en las fases thinking/composing/running-tool (la card start es estática hasta el done). Ver `docs/plans/I-128.md`.
 * **Problema:**
   1. Desde que el modelo empieza a emitir los deltas de una tool call hasta que la tool **empieza a ejecutarse**, no hay nada nuevo en la UI: el pane fullscreen se queda quieto (el header solo dice `thinking · step N/M` o `Streaming` residual, porque `running_tool` solo se marca con `AgentToolStartEvent`) y el clásico mantiene el último label del spinner. La línea de verbo (`⚙ writing file · <path>`) solo aparece con la tool call **completa** acumulada.
   2. En `write_file` con 200 líneas o un `bash` multi-línea, el usuario espera la generación completa de los args sin saber qué va a pasar (el verbo se desconoce hasta que el nombre termina de streamear, el detalle hasta que los args terminan).
