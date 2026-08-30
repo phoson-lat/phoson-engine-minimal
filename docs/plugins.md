@@ -42,8 +42,10 @@ phoson-cli plugin enable example
 phoson-cli plugin doctor example
 ```
 
-`phoson-cli --install-plugin <source>` is an alias for `plugin install`. GitHub
-shorthand is normalized to a standard `git+https://` requirement. Installation
+`phoson-cli --install-plugin <source>` is an alias for `plugin install`. Add
+`--yes` to intentionally skip its confirmation in automation. GitHub shorthand
+is normalized to a standard `git+https://` requirement and Git sources are
+resolved to a commit SHA recorded in `~/.phoson/plugins.lock.toml`. Installation
 executes Python code with your user permissions, so inspect and pin sources to
 a release tag or commit. A plugin package must export an entry point in the
 existing `phoson.plugins` group. See `examples/PLUGIN_EXAMPLES.md` for a

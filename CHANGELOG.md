@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.18.0 (2026-08-30)
+
+### Feature
+
+- **plugin platform**: community plugins can now extend the CLI without
+  modifying `phoson_cli`. The single `Plugin` contract adds optional
+  `get_commands()`, `get_tool_render_specs()`, `get_theme_extension()` and
+  async `aclose()` hooks, all backed by UI-neutral contracts in
+  `phoson_agent.cli_extensions` (I-110, issue #110).
+
+  - `config.toml` supports `plugins = [...]` and loads them alongside MCP in
+    classic, fullscreen and one-shot mode. Per-session registries provide
+    plugin slash commands in `/help`/completion, tool-card icon+verb, and
+    themes derived from the built-ins without global state leakage.
+  - `plugin_ui` lets plugin tools/commands publish notices, key/value cards,
+    TODO lists and progress; interactive hosts support confirm, select and
+    form interactions, while one-shot/CI safely returns `unavailable`.
+  - `phoson-cli plugin install|list|enable|disable|remove|update|doctor` and
+    `--install-plugin` manage community packages. GitHub/Git sources are
+    normalized and pinned to a resolved commit in `~/.phoson/plugins.lock.toml`;
+    `--yes` enables intentional automation. Installation validates entry points
+    in a fresh interpreter and supports idempotent local development installs.
+  - Added `examples/complete_cli_plugin/`, an installable end-to-end example
+    with a tool, command, custom card, theme, TODO/progress, selector/form and
+    async lifecycle hook. See `docs/plugins.md` and `docs/plans/I-110.md`.
+
+  Tests: plugin contracts, config/one-shot loading, command collision/dispatch
+  and completion, scoped render/theme registries, UI adapters, manager/lockfile
+  behavior, Git pinning, idempotent installs and a real isolated installation
+  smoke test.
+
 ## v0.17.1 (2026-08-30)
 
 ### Fix
