@@ -1,5 +1,6 @@
 """Unit tests for phoson_llm.utils."""
 
+import os
 import base64
 
 from phoson_llm.utils import (
@@ -9,6 +10,7 @@ from phoson_llm.utils import (
     load_file_as_base64,
     extract_context_window,
     is_context_length_error,
+    missing_attachment_placeholder,
 )
 
 
@@ -87,6 +89,73 @@ class TestLoadFileAsBase64:
         result = load_file_as_base64(str(f))
 
         assert result.startswith("data:image/png;base64,")
+
+    def test_missing_file_returns_none_and_warns(self, tmp_path, caplog):
+        """I-119: a wiped attachment must degrade, not crash."""
+        import logging
+
+        missing = tmp_path / "shot-accepted.png"
+
+        with caplog.at_level(logging.WARNING, logger="phoson_llm.utils"):
+            result = load_file_as_base64(str(missing))
+
+        assert result is None
+        assert "attachment file missing" in caplog.text
+        assert str(missing) in caplog.text
+
+    def test_directory_path_returns_none(self, tmp_path, caplog):
+        """I-119: a path that is a directory must also degrade gracefully."""
+        import logging
+
+        d = tmp_path / "folder"
+        d.mkdir()
+
+        with caplog.at_level(logging.WARNING, logger="phoson_llm.utils"):
+            result = load_file_as_base64(str(d))
+
+        assert result is None
+
+    def test_unreadable_file_returns_none_and_warns(self, tmp_path, caplog):
+        """I-119: an unreadable file (e.g. permission denied) must degrade too."""
+        import logging
+
+        f = tmp_path / "secret.png"
+        f.write_bytes(b"\x89PNG")
+        f.chmod(0o000)
+        try:
+            with caplog.at_level(logging.WARNING, logger="phoson_llm.utils"):
+                result = load_file_as_base64(str(f))
+            if os.geteuid() != 0:  # root bypasses file permissions
+                assert result is None
+                assert "unreadable" in caplog.text
+        finally:
+            f.chmod(0o644)
+
+
+class TestMissingAttachmentPlaceholder:
+    """I-119: the visible text that replaces a missing file:// attachment."""
+
+    def test_includes_kind_and_file_name(self):
+        assert (
+            missing_attachment_placeholder("image", "/tmp/shot-accepted.png")
+            == "[image no longer available: shot-accepted.png]"
+        )
+
+    def test_audio_and_document_kinds(self):
+        assert (
+            missing_attachment_placeholder("audio", "/tmp/voice.wav")
+            == "[audio no longer available: voice.wav]"
+        )
+        assert (
+            missing_attachment_placeholder("document", "/home/u/spec.pdf")
+            == "[document no longer available: spec.pdf]"
+        )
+
+    def test_path_without_basename_keeps_raw_path(self):
+        # Trailing-slash / root-ish paths have no name — fall back to raw path.
+        assert missing_attachment_placeholder("image", "/") == (
+            "[image no longer available: /]"
+        )
 
 
 class TestContextLengthError:

@@ -16,6 +16,7 @@ from phoson_llm.utils import (
     map_error_code,
     load_file_as_base64,
     is_context_length_error,
+    missing_attachment_placeholder,
 )
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
@@ -74,7 +75,13 @@ def _convert_content_block(block: ContentBlock) -> JsonObject:
         source = block.source
         if source.startswith("file://"):
             path = source[7:]
-            data = load_file_as_base64(path).split(",", 1)[-1]
+            data = load_file_as_base64(path)
+            if data is None:
+                return {
+                    "type": "text",
+                    "text": missing_attachment_placeholder("image", path),
+                }
+            data = data.split(",", 1)[-1]
             media = block.media_type or guess_mime(path)
             return {
                 "type": "image",
@@ -96,7 +103,13 @@ def _convert_content_block(block: ContentBlock) -> JsonObject:
         source = block.source
         if source.startswith("file://"):
             path = source[7:]
-            data = load_file_as_base64(path).split(",", 1)[-1]
+            data = load_file_as_base64(path)
+            if data is None:
+                return {
+                    "type": "text",
+                    "text": missing_attachment_placeholder("document", path),
+                }
+            data = data.split(",", 1)[-1]
             return {
                 "type": "document",
                 "source": {

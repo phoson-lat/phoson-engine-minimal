@@ -4,7 +4,10 @@ import os
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
-from phoson_llm.utils import load_file_as_base64
+from phoson_llm.utils import (
+    load_file_as_base64,
+    missing_attachment_placeholder,
+)
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -73,14 +76,26 @@ def _convert_block(types: Any, block: Any) -> Any:
         mime = block.media_type or "image/jpeg"
         source = block.source
         if source.startswith("file://"):
-            data = load_file_as_base64(source[7:]).split(",", 1)[-1]
+            path = source[7:]
+            data = load_file_as_base64(path)
+            if data is None:
+                return types.Part.from_text(
+                    text=missing_attachment_placeholder("image", path)
+                )
+            data = data.split(",", 1)[-1]
             return types.Part.from_bytes(data=data.encode("ascii"), mime_type=mime)
         # Hosted URI (gs:// or https://) — pass through as-is.
         return types.Part.from_uri(file_uri=source, mime_type=mime)
 
     if isinstance(block, DocumentBlock):
         if block.source.startswith("file://"):
-            data = load_file_as_base64(block.source[7:]).split(",", 1)[-1]
+            path = block.source[7:]
+            data = load_file_as_base64(path)
+            if data is None:
+                return types.Part.from_text(
+                    text=missing_attachment_placeholder("document", path)
+                )
+            data = data.split(",", 1)[-1]
             return types.Part.from_bytes(
                 data=data.encode("ascii"), mime_type="application/pdf"
             )
