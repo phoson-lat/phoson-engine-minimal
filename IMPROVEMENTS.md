@@ -114,8 +114,8 @@
 ---
 
 ### I-110 — [Feature #110] Plugin system: extender look & commands del CLI, no solo el engine
-* **Estado:** ⬜ **Abierto**
-* **Área:** `phoson_agent/plugin.py`, `phoson_cli/commands.py`, `phoson_cli/formatting.py`, `phoson_cli/theme.py`, `phoson_cli/config.py`, `phoson_cli/controller.py`
+* **Estado:** ✅ **Resuelto (pendiente de release)** — contrato único `Plugin` ampliado con hooks opcionales y tipos neutrales; `PhosonConfig.plugins` carga specs de comunidad + MCP en interactive/one-shot; catálogo por sesión para slash commands, completion y `/help`; cards de tools con icono/verbo aislados por controller; temas derivados por plugin; `plugin_ui` declarativo (bloques, confirm/select/form con degradación one-shot); y `phoson-cli plugin install|list|enable|disable|remove|update|doctor` con alias `--install-plugin`, inventario `plugins.lock.toml` y ejemplo instalable. Ver `docs/plans/I-110.md`.
+* **Área:** `phoson_agent/plugin.py`, `phoson_agent/cli_extensions.py`, `phoson_cli/commands.py`, `phoson_cli/formatting.py`, `phoson_cli/theme.py`, `phoson_cli/config.py`, `phoson_cli/controller.py`, `phoson_cli/plugin_manager.py`, `phoson_cli/plugin_ui.py`
 * **Prioridad:** **P2** · **Esfuerzo:** L · **Impacto:** 🟡 Medio (extensibilidad del producto)
 * **Problema:** El `Plugin` ABC extiende solo el **engine** (tools + middlewares). El look/commands del CLI están hardcodeados:
   1. `COMMAND_SPECS` en `commands.py` es una tupla estática — un `/my-command` requiere editar el source del CLI.

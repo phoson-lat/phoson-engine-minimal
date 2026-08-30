@@ -3,8 +3,10 @@
 from typing import Annotated
 
 from phoson_agent import (
+    Choice,
     Plugin,
     TodoItem,
+    FormField,
     ProgressBlock,
     TodoListBlock,
     CliCommandSpec,
@@ -67,9 +69,36 @@ class CommunityExamplePlugin(Plugin):
         self, command: CliCommandInvocation, context: CliCommandContext
     ) -> bool:
         context.notify("info", f"community-example active in {context.cwd}")
+        choice = await context.ui.select(
+            title="Community example",
+            message="Choose the next checklist state",
+            choices=(
+                Choice(id="ready", label="Ready", detail="Publish a completed status"),
+                Choice(id="later", label="Later", detail="Leave the checklist pending"),
+            ),
+        )
+        if choice.status != "submitted":
+            context.notify("warn", f"Selection {choice.status}.")
+            return True
+        details = await context.ui.form(
+            title="Community example",
+            fields=(FormField(id="note", label="Optional note", required=False),),
+        )
+        if details.status == "cancelled":
+            context.notify("warn", "Note entry cancelled.")
+            return True
+        note = details.values.get("note", "") if details.status == "submitted" else ""
         context.ui.replace(
             "status",
-            ProgressBlock("status", "Example plugin ready", 1, 1),
+            ProgressBlock(
+                "status",
+                "Example plugin ready"
+                if choice.values["choice"] == "ready"
+                else "Example deferred",
+                1,
+                1,
+                detail=note or None,
+            ),
         )
         return True
 

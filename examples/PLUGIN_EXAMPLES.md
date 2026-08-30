@@ -8,6 +8,7 @@ I-110 plugin contract from one `Plugin` subclass:
 - custom tool-card icon/verb;
 - the `example-neon` theme;
 - a `TodoListBlock` and `ProgressBlock` through `plugin_ui`;
+- a host-neutral selector and form through `plugin_ui`;
 - an explicit async `aclose()` lifecycle hook.
 
 Install it while developing from this repository:
@@ -24,6 +25,11 @@ Then select the contributed theme and use the command:
 /theme example-neon
 /example-status
 ```
+
+`/example-status` opens a selector and a small form in interactive hosts.
+Fullscreen uses modal Floats and the classic REPL uses a numbered prompt plus
+sequential fields. In one-shot/CI, interaction returns `unavailable` instead
+of reading stdin; the command reports that state and continues safely.
 
 A published plugin declares exactly one entry point in the existing
 `phoson.plugins` group:

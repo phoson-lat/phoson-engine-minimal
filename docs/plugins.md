@@ -347,7 +347,38 @@ class Plugin(ABC):
     def configure(self, config: dict[str, Any]) -> None: ...
     def initialize(self) -> None: ...
     def cleanup(self) -> None: ...
+    async def aclose(self) -> None: ...
+
+    # Optional CLI hooks. They return neutral data from
+    # phoson_agent.cli_extensions; do not import Rich/prompt_toolkit.
+    def get_commands(self) -> list[CliCommandSpec]: ...
+    def get_tool_render_specs(self) -> list[ToolRenderSpec]: ...
+    def get_theme_extension(self) -> ThemeExtension | None: ...
 ```
+
+### Community CLI and UI hooks
+
+A plugin can expose slash commands through `get_commands()`. `handler` is the
+name of an async method on the loaded plugin instance; native commands always
+win and command aliases must be globally unique. The handler receives a
+`CliCommandInvocation` and a narrow `CliCommandContext` (`cwd`, `session_id`,
+`notify()` and `ui`). It never receives a `Renderer`, `PhosonApp` or a
+prompt_toolkit widget.
+
+`get_tool_render_specs()` may contribute an icon and verb for a plugin-owned
+tool. Built-in tools cannot be overridden. `get_theme_extension()` contributes
+one immutable theme derived from `dark`, `light`, `ansi` or `no-color`; only
+known core tokens may be overridden.
+
+Tools and commands can use `context.ui` / an injected `plugin_ui` service to
+publish `NoticeBlock`, `KeyValueBlock`, `TodoListBlock` or `ProgressBlock`, or
+to await `confirm()`, `select()` and `form()`. Fullscreen and classic hosts
+adapt these requests natively. Non-interactive hosts never prompt and return
+`InteractionResult(status="unavailable")`; plugins must handle that result.
+
+Use stable, plugin-prefixed block IDs in shared sessions (for example,
+`"my-plugin:sync-progress"`) so independently authored plugins never replace
+one another's cards.
 
 ### PluginRegistry
 
