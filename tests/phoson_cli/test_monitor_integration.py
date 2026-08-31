@@ -191,12 +191,13 @@ class TestBuildMonitorPlugins:
         # sys.modules[name] = None makes `import phoson_plugin_monitor`
         # raise ImportError (dev-install scenario).
         monkeypatch.setitem(sys.modules, "phoson_plugin_monitor", None)
-        from phoson_cli.session_utils import _in_tree_monitor_plugin_path
+        from phoson_cli.session_utils import _in_tree_plugin_path
 
+        expected = _in_tree_plugin_path("phoson_plugin_monitor")
         specs = build_monitor_plugins(config)
         assert specs == [
             {
-                "name": f"path:{_in_tree_monitor_plugin_path()}",
+                "name": f"path:{expected}",
                 "config": {"data_dir": str(tmp_path / "mon")},
             }
         ]
@@ -216,11 +217,35 @@ class TestBuildMonitorPlugins:
         )
         monkeypatch.setitem(sys.modules, "phoson_plugin_monitor", None)
         monkeypatch.setattr(
-            "phoson_cli.session_utils._in_tree_monitor_plugin_path",
-            lambda: tmp_path / "nope" / "_plugin.py",
+            "phoson_cli.session_utils._in_tree_plugin_path",
+            lambda package: tmp_path / "nope" / "_plugin.py",
         )
         with pytest.warns(UserWarning, match="monitors disabled"):
             assert build_monitor_plugins(config) == []
+
+    def test_fallback_spec_is_shared_between_mcp_and_monitors(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The CWD-independent fallback is one helper for both plugins."""
+        from phoson_cli.session_utils import (
+            _in_tree_plugin_path,
+            _in_tree_fallback_spec,
+        )
+
+        # Present file -> absolute path spec.
+        specs = _in_tree_fallback_spec("phoson_plugin_mcp", {"a": 1}, "MCP disabled")
+        expected_name = f"path:{_in_tree_plugin_path('phoson_plugin_mcp')}"
+        assert specs == [{"name": expected_name, "config": {"a": 1}}]
+        # Missing file -> warn + [] (no crash).
+        monkeypatch.setattr(
+            "phoson_cli.session_utils._in_tree_plugin_path",
+            lambda package: tmp_path / "gone" / "_plugin.py",
+        )
+        with pytest.warns(UserWarning, match="MCP disabled"):
+            assert (
+                _in_tree_fallback_spec("phoson_plugin_mcp", {"a": 1}, "MCP disabled")
+                == []
+            )
 
 
 # ── controller wiring ──────────────────────────────────────────────────────────

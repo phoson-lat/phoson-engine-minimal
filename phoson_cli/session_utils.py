@@ -173,12 +173,7 @@ def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
         plugin.configure(mcp_config)
         return [plugin]
     except ImportError:
-        return [
-            {
-                "name": "path:./phoson_plugin_mcp/_plugin.py",
-                "config": mcp_config,
-            }
-        ]
+        return _in_tree_fallback_spec("phoson_plugin_mcp", mcp_config, "MCP disabled")
     except Exception as exc:
         warnings.warn(
             f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
@@ -218,22 +213,9 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
         instance.configure(monitor_config)
         return [instance]
     except ImportError:
-        # Absolute path (CWD-independent) to the in-tree package.
-        candidate = _in_tree_monitor_plugin_path()
-        if not candidate.exists():
-            warnings.warn(
-                "Monitor plugin package not importable and in-tree file not found "
-                f"at {candidate}; monitors disabled.",
-                UserWarning,
-                stacklevel=2,
-            )
-            return []
-        return [
-            {
-                "name": f"path:{candidate}",
-                "config": monitor_config,
-            }
-        ]
+        return _in_tree_fallback_spec(
+            "phoson_plugin_monitor", monitor_config, "monitors disabled"
+        )
     except Exception as exc:
         warnings.warn(
             f"Failed to initialise monitor plugin: {exc}", UserWarning, stacklevel=2
@@ -241,10 +223,37 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
         return []
 
 
-def _in_tree_monitor_plugin_path() -> Path:
-    """Absolute path of the in-tree monitor plugin file (fallback target)."""
+def _in_tree_plugin_path(package: str) -> Path:
+    """Absolute path of an in-tree plugin's ``_plugin.py`` (fallback target).
+
+    Anchored on this file (not the CWD) so it resolves the same no matter
+    where the CLI is launched from.
+    """
     root = Path(__file__).resolve().parent.parent
-    return root / "phoson_plugin_monitor" / "_plugin.py"
+    return root / package / "_plugin.py"
+
+
+def _in_tree_fallback_spec(
+    package: str, config: dict[str, Any], disabled_msg: str
+) -> list[str | dict[str, Any] | Plugin]:
+    """Build a path-based plugin spec for an in-tree package (ImportError).
+
+    Used when the in-tree package cannot be imported (e.g. an editable
+    install whose sibling folder is not on ``sys.path``). Returns an
+    *absolute* (CWD-independent) ``path:`` spec; if the in-tree file does
+    not exist either, a warning is emitted and an empty list is returned
+    so the engine never crashes on a missing optional plugin.
+    """
+    candidate = _in_tree_plugin_path(package)
+    if not candidate.exists():
+        warnings.warn(
+            f"{package} not importable and in-tree file not found "
+            f"at {candidate}; {disabled_msg}.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return []
+    return [{"name": f"path:{candidate}", "config": config}]
 
 
 def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
