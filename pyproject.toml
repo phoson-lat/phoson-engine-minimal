@@ -1,6 +1,6 @@
 [project]
 name = "phoson-engine-minimal"
-version = "0.18.0"
+version = "0.19.0"
 description = "Minimal Python runtime for the Phoson autonomous-agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,6 +28,7 @@ packages = [
     "phoson_plugin_checkpoint",
     "phoson_plugin_mcp",
     "phoson_plugin_memory",
+    "phoson_plugin_monitor",
 ]
 
 [project.scripts]
@@ -65,7 +66,7 @@ line-ending = "auto"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.18.0"
+version = "0.19.0"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
@@ -83,6 +84,7 @@ include = [
     "phoson_plugin_checkpoint",
     "phoson_plugin_mcp",
     "phoson_plugin_memory",
+    "phoson_plugin_monitor",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true

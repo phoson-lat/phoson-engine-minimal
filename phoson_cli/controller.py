@@ -70,8 +70,17 @@ from .session_utils import (
     close_plugins,
     build_plugin_specs,
     build_system_prompt,
+    drain_monitor_wakes,
+    find_monitor_plugin,
 )
 from .permissions_store import build_permission_middleware
+
+# The monitor plugin ships in the same wheel; the fallback keeps
+# source-only dev checkouts (package not installed) importable.
+try:
+    from phoson_plugin_monitor import render_wake_message
+except ImportError:  # pragma: no cover
+    render_wake_message = None
 
 #: Upper bound on messages replayed into the chat pane when resuming a
 #: session (#56). The full history is shown for any reasonable session;
@@ -151,6 +160,15 @@ class SessionController:
         self.attachments = AttachmentManager()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
+        # Serializes user turns with autonomous monitor-wake turns (I-126)
+        # so the single-flight engine is never hit by two concurrent runs.
+        self._turn_lock = asyncio.Lock()
+        # The autonomous wake loop task; started by the front end entry
+        # points once an event loop exists (None until then / when the
+        # monitor plugin is disabled).
+        self._monitor_wake_task: asyncio.Task | None = None
+        # Poll interval for the autonomous wake loop; tests shorten it.
+        self._wake_poll_seconds = 1.0
         # Per-session plugin command catalog. It is rebuilt with the engine so
         # handlers never retain references to a plugin instance just closed by
         # a provider/model rebuild (I-110).
@@ -443,6 +461,35 @@ class SessionController:
         # fails closed (one-shot / non-interactive front ends).
         self.engine.context.extra["bash_confirmation"] = self.confirmation
 
+        # Monitor plugin (I-126): inject a *provider* (callable), not a
+        # snapshot — new_session()/load_session() swap the tree without
+        # rebuilding the engine, so a static value would go stale. The
+        # register_monitor tool injects it via @tool(inject=...) and
+        # calls it at registration time.
+        self.engine.context.extra["session_id_provider"] = lambda: (
+            self._session.tree.session_id
+        )
+
+        # (Re)start any running monitors from disk: engine rebuilds
+        # (/model, /provider, /mcp) kill the previous instance's tasks,
+        # and a crash leaves them running on disk. Duck-typed so this
+        # stays a no-op when the plugin is not enabled.
+        monitor_plugin = find_monitor_plugin(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        )
+        if monitor_plugin is not None:
+            ensure = getattr(monitor_plugin, "ensure_started", None)
+            if ensure is not None:
+                try:
+                    asyncio.get_running_loop().create_task(
+                        ensure(),
+                        name="monitors:ensure_started",
+                    )
+                except RuntimeError:
+                    # No running loop (sync test/one-shot bootstrap): the
+                    # tools start tasks lazily on first use.
+                    pass
+
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
 
@@ -450,6 +497,16 @@ class SessionController:
         front end on shutdown) so no HTTP pools or MCP subprocesses
         outlive the session.
         """
+        # Stop the autonomous monitor wake loop first: it must not start
+        # a wake turn after the front end is gone. Monitors stay
+        # registered on disk and the next host resurrects them (I-126).
+        if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
+            self._monitor_wake_task.cancel()
+            try:
+                await self._monitor_wake_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        self._monitor_wake_task = None
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
         if plugins:
             await close_plugins(plugins)
@@ -745,8 +802,51 @@ class SessionController:
         - error:     partial history + reasoning persisted, saved, and
                      an auth error produces an actionable warning.
         - cancelled: same as error (partial progress saved).
+
+        Serialized against autonomous monitor-wake turns via
+        ``_turn_lock`` (the engine is single-flight).
         """
-        user_message = self._build_user_message(user_input)
+        async with self._turn_lock:
+            # Monitor plugin (I-126): fold any wakes that fired while the
+            # user was composing into THIS message (the autonomous wake loop
+            # only fires turns while idle, so at this point any pending wake
+            # belongs to the user's current turn).
+            monitor_plugin = find_monitor_plugin(
+                list(getattr(self.engine, "_loaded_plugins", []))
+            )
+            wake_events = await drain_monitor_wakes(
+                monitor_plugin, self._session.tree.session_id
+            )
+            if wake_events:
+                self.sink.notify(
+                    "info",
+                    f"{len(wake_events)} monitor wake(s) delivered with your message.",
+                )
+            return await self._execute_turn(user_input, wake_events, "user")
+
+    async def _execute_turn(
+        self,
+        user_input: str,
+        wake_events: list[Any] | None = None,
+        source: str = "user",
+    ) -> RunOutcome:
+        """Run one turn built from ``user_input`` (+ optional wake header).
+
+        ``source`` only names the trigger (``user`` or ``monitor``); the
+        sink sees both through the same ``on_user_message`` channel so the
+        front ends render autonomous wake turns exactly like typed ones.
+        """
+        effective_input = user_input
+        if wake_events:
+            if render_wake_message is not None:
+                header = render_wake_message(wake_events)
+            else:  # pragma: no cover — package always ships in the wheel
+                header = "[MONITOR EVENTS] " + "; ".join(
+                    f"{e.monitor} ({e.kind})" for e in wake_events
+                )
+            effective_input = header + "\n\n" + user_input
+
+        user_message = self._build_user_message(effective_input)
         _node_id, path = self._append_user_turn(user_message)
         base_count = len(path)
 
@@ -761,7 +861,7 @@ class SessionController:
         # trigger the tree rebase in _finalize_run (I-91).
         self.summarizer.pop_compact_events()
 
-        self.sink.on_user_message(user_input, user_message)
+        self.sink.on_user_message(effective_input, user_message)
 
         reasoning_effort = self.config.reasoning_effort
         if reasoning_effort not in REASONING_EFFORTS:
@@ -815,6 +915,104 @@ class SessionController:
             status="done",
             final_content=terminal_event.result.final_content,
         )
+
+    # ── Autonomous monitor wake (I-126) ──────────────────────────────────
+
+    def start_monitor_wake_loop(self) -> None:
+        """Start the autonomous wake loop (no-op when disabled/already up).
+
+        The loop is what *reactivates the agent while idle*: when a
+        monitor fires and no run is in flight, the pending wakes trigger
+        a turn of their own — no user message required. Front end entry
+        points call this once the event loop is running (the controller's
+        ``__init__`` runs before the loop in the classic REPL, where
+        tasks cannot be created yet).
+        """
+        if not self.config.enable_monitors:
+            return
+        if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
+            return
+        self._monitor_wake_task = asyncio.create_task(
+            self._monitor_wake_loop(),
+            name="monitors:wake-loop",
+        )
+
+    def _peek_pending_wakes(self, plugin: Plugin) -> list[Any]:
+        """Non-destructive peek at pending wakes for the current session."""
+        peek = getattr(plugin, "pending_wakes", None)
+        if peek is None:
+            return []  # plugin build without the non-destructive view
+        try:
+            return list(peek(self._session.tree.session_id) or [])
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Could not peek monitor wakes", exc_info=True)
+            return []
+
+    async def _monitor_wake_loop(self) -> None:
+        """Re-activate the agent from pending wakes while it is idle.
+
+        - While a run is in flight (``is_running``) or a user turn holds
+          ``_turn_lock``, the loop does nothing: wakes that arrive then
+          are drained by the user turn itself (``run_turn``).
+        - Otherwise each wake batch becomes an autonomous turn whose user
+          message is the ``[MONITOR EVENTS]`` header, so the front ends
+          render it like any typed turn.
+        - The drain happens *inside* the turn lock: if a user turn ran in
+          the meantime it already consumed the wakes and this tick is a
+          no-op. The loop is cancelled on shutdown.
+        """
+        while True:
+            try:
+                await self._wake_loop_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — a broken tick must never
+                # kill the loop: the next tick re-evaluates.
+                _LOGGER.warning("Monitor wake loop tick failed", exc_info=True)
+            await asyncio.sleep(self._wake_poll_seconds)
+
+    async def _wake_loop_tick(self) -> None:
+        """One poll of the autonomous wake loop (see the loop's docstring)."""
+        plugin = find_monitor_plugin(list(getattr(self.engine, "_loaded_plugins", [])))
+        if plugin is None or self.is_running:
+            return
+        if not self._peek_pending_wakes(plugin):
+            return
+        self.sink.notify(
+            "info",
+            "Monitor wake(s) received — waking the agent.",
+        )
+        async with self._turn_lock:
+            wake_events = await drain_monitor_wakes(
+                plugin, self._session.tree.session_id
+            )
+            if not wake_events:
+                return  # a user turn consumed them in the meantime
+            try:
+                await self._execute_turn("", wake_events, source="monitor")
+            except Exception:  # noqa: BLE001 — a broken wake turn
+                _LOGGER.warning("Autonomous monitor wake turn failed", exc_info=True)
+
+    def monitor_status(self) -> str | None:
+        """Short status string for active monitors, or ``None`` when none.
+
+        Thin host-side accessor: duck-typed on the monitor plugin's
+        optional ``monitor_status()`` hook so the front ends can surface
+        "monitors are running" in a header/prompt without importing the
+        package. In-memory only; safe to call on every paint.
+        """
+        plugin = find_monitor_plugin(list(getattr(self.engine, "_loaded_plugins", [])))
+        if plugin is None:
+            return None
+        status_fn = getattr(plugin, "monitor_status", None)
+        if status_fn is None:
+            return None
+        try:
+            return status_fn()
+        except Exception:  # noqa: BLE001 — a status probe must never
+            # break a paint; degrade to "no indicator".
+            _LOGGER.warning("monitor_status() failed", exc_info=True)
+            return None
 
     # ── Session / model management ────────────────────────────────────────
 

@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.19.0 (2026-08-30)
+
+### Feature
+
+- **monitor plugin (I-126, issue #126)**: new official plugin
+  `phoson_plugin_monitor` — long-running background monitors that outlive
+  the current agent run and re-activate the agent when their condition
+  fires.
+
+  - Tools: `register_monitor(name, kind, spec)`, `list_monitors()`,
+    `stop_monitor(name)`, with JSON schemas via `@tool` (kind is an enum:
+    `interval` | `file` | `command`).
+  - Kinds: `interval` (fire after/every N seconds), `file` (poll a path or
+    glob for creation / mtime+size change), `command` (run a shell command
+    on an interval; fire on non-zero exit, timeout, or changed output;
+    timeout kills the whole process group).
+  - Wake mechanism: every fire lands in a **persistent queue**
+    (`wake.jsonl` under `data_dir`, default `~/.phoson/monitors/`) as the
+    source of truth, carrying the original `session_id`; hosts may also
+    pass an `on_wake` callback for live re-activation.
+  - Persistence: `monitors.json` registry + wake queue survive process
+    restarts; the disk is the source of truth and in-memory tasks are
+    resurrected by `ensure_started()` (engine rebuilds, `/model`, restarts).
+  - CLI integration (opt-in): `enable_monitors = true` in `config.toml`
+    (or `PHOSON_ENABLE_MONITORS=1`). The CLI injects a
+    `session_id_provider` into the agent context, (re)starts monitors on
+    every engine rebuild, and drains pending wakes into the next user turn
+    (`[MONITOR EVENTS]` header, announced via the sink). While the agent
+    is **idle** a wake loop re-activates the agent on its own: fires
+    trigger an autonomous `[MONITOR EVENTS]` turn rendered like any user
+    turn; wakes arriving mid-run are folded into the user's next turn
+    instead. `/monitors` slash command lists state and pending wakes
+    (I-110 extension contract).
+  - Host example: `examples/monitor_wake_host.py` — a standalone embedded
+    host that resumes the same `ConversationTree` (`JsonlStorage`) when
+    woken. See `phoson_plugin_monitor/README.md` and
+    `docs/plans/I-126.md`.
+
+  Tests: storage round-trips/atomicity/corruption tolerance, kinds with an
+  injected fake clock (plus real-tick command tests), plugin lifecycle /
+  tools / wake path with fakes, an e2e run where a fake LLM registers a
+  monitor that fires and the host resumes the same session tree, and CLI
+  integration (config opt-in, session provider, drain, rebuild
+  resurrection).
+
 ## v0.18.0 (2026-08-30)
 
 ### Feature

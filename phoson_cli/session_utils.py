@@ -148,7 +148,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
     ``Plugin`` instances remain available only through ``AgentEngine``'s API;
     TOML config is intentionally restricted to strings and dictionaries.
     """
-    return [*config.plugins, *build_mcp_plugins(config)]
+    return [*config.plugins, *build_mcp_plugins(config), *build_monitor_plugins(config)]
 
 
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
@@ -173,16 +173,122 @@ def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
         plugin.configure(mcp_config)
         return [plugin]
     except ImportError:
-        return [
-            {
-                "name": "path:./phoson_plugin_mcp/_plugin.py",
-                "config": mcp_config,
-            }
-        ]
+        return _in_tree_fallback_spec("phoson_plugin_mcp", mcp_config, "MCP disabled")
     except Exception as exc:
         warnings.warn(
             f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
         )
+        return []
+
+
+def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official monitor plugin specs (I-126).
+
+    Returns an empty list when monitors are disabled. Tries the in-tree
+    ``phoson_plugin_monitor`` first and returns a *pre-configured, fresh*
+    instance (the direct-``Plugin`` form, so the config is honored);
+    falls back to the path-based loader used during local development.
+
+    A fresh instance (never the module-level ``plugin`` singleton):
+    engine rebuilds close the old instance first and the singleton would
+    otherwise be double-configured and leak state between hosts.
+
+    When the package cannot be imported (e.g. installed in editable mode
+    without the sibling folder), an *absolute* path spec pointing at the
+    in-tree ``phoson_plugin_monitor`` is returned instead. If that file
+    does not exist either, a warning is emitted and an empty list is
+    returned so the engine never crashes on a missing optional plugin.
+    """
+    if not config.enable_monitors:
+        return []
+
+    monitor_config = {
+        "data_dir": str(config.monitors_data_dir),
+    }
+
+    try:
+        from phoson_plugin_monitor import MonitorPlugin
+
+        instance = MonitorPlugin()
+        instance.configure(monitor_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_monitor", monitor_config, "monitors disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise monitor plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+def _in_tree_plugin_path(package: str) -> Path:
+    """Absolute path of an in-tree plugin's ``_plugin.py`` (fallback target).
+
+    Anchored on this file (not the CWD) so it resolves the same no matter
+    where the CLI is launched from.
+    """
+    root = Path(__file__).resolve().parent.parent
+    return root / package / "_plugin.py"
+
+
+def _in_tree_fallback_spec(
+    package: str, config: dict[str, Any], disabled_msg: str
+) -> list[str | dict[str, Any] | Plugin]:
+    """Build a path-based plugin spec for an in-tree package (ImportError).
+
+    Used when the in-tree package cannot be imported (e.g. an editable
+    install whose sibling folder is not on ``sys.path``). Returns an
+    *absolute* (CWD-independent) ``path:`` spec; if the in-tree file does
+    not exist either, a warning is emitted and an empty list is returned
+    so the engine never crashes on a missing optional plugin.
+    """
+    candidate = _in_tree_plugin_path(package)
+    if not candidate.exists():
+        warnings.warn(
+            f"{package} not importable and in-tree file not found "
+            f"at {candidate}; {disabled_msg}.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return []
+    return [{"name": f"path:{candidate}", "config": config}]
+
+
+def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
+    """Return the loaded monitor plugin instance, if any.
+
+    Duck-typed on ``drain_pending_wakes`` so this works for both the
+    in-tree plugin and path-loaded development builds without importing
+    the package here.
+    """
+    for plugin in plugins:
+        if hasattr(plugin, "drain_pending_wakes"):
+            return plugin
+    return None
+
+
+async def drain_monitor_wakes(
+    plugin: Plugin | None, session_id: str | None
+) -> list[Any]:
+    """Consume pending monitor wakes for a session (host-side helper).
+
+    Returns an empty list when there is no plugin or nothing pending.
+    Failures are logged and swallowed: a broken wake queue must never
+    block a user turn.
+    """
+    if plugin is None:
+        return []
+    try:
+        # Duck-typed host hook (not part of the Plugin contract).
+        drain = getattr(plugin, "drain_pending_wakes", None)
+        if drain is None:
+            return []
+        drained = drain(session_id)
+        return list(drained or [])
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Could not drain monitor wakes", exc_info=True)
         return []
 
 
