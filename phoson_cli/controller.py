@@ -993,6 +993,27 @@ class SessionController:
             except Exception:  # noqa: BLE001 — a broken wake turn
                 _LOGGER.warning("Autonomous monitor wake turn failed", exc_info=True)
 
+    def monitor_status(self) -> str | None:
+        """Short status string for active monitors, or ``None`` when none.
+
+        Thin host-side accessor: duck-typed on the monitor plugin's
+        optional ``monitor_status()`` hook so the front ends can surface
+        "monitors are running" in a header/prompt without importing the
+        package. In-memory only; safe to call on every paint.
+        """
+        plugin = find_monitor_plugin(list(getattr(self.engine, "_loaded_plugins", [])))
+        if plugin is None:
+            return None
+        status_fn = getattr(plugin, "monitor_status", None)
+        if status_fn is None:
+            return None
+        try:
+            return status_fn()
+        except Exception:  # noqa: BLE001 — a status probe must never
+            # break a paint; degrade to "no indicator".
+            _LOGGER.warning("monitor_status() failed", exc_info=True)
+            return None
+
     # ── Session / model management ────────────────────────────────────────
 
     def build_system_prompt(self) -> str:

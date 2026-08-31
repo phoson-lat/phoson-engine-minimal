@@ -228,6 +228,27 @@ class MonitorPlugin(Plugin):
         assert self._queue is not None
         return self._queue.pending(session_id)
 
+    def monitor_status(self) -> str | None:
+        """Short status string for active monitors, or ``None`` when none.
+
+        Optional duck-typed host hook (not part of the ``Plugin``
+        contract): a UI host calls it to surface "monitors are running" in
+        a header or prompt. It is in-memory only (no disk I/O), safe to
+        call on every paint, and UI-agnostic — it returns plain text, the
+        host decides where and how to render it (or to ignore it).
+        """
+        if self._store is None:
+            self.initialize()
+        assert self._store is not None
+        running = [m for m in self._store.list() if m.is_running]
+        if not running:
+            return None
+        shown = ", ".join(m.name for m in running[:4])
+        extra = len(running) - min(len(running), 4)
+        if extra > 0:
+            shown = f"{shown} +{extra}"
+        return f"⏳ {shown}"
+
     # ── CLI extension: /monitors ──────────────────────────────────────────
 
     def get_commands(self) -> list[CliCommandSpec]:

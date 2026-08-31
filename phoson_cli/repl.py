@@ -588,6 +588,11 @@ class PhosonRepl:
         # Token context indicator
         token_part = self._token_indicator()
 
+        # Active-monitors indicator (I-126): the plugin reports it via a
+        # duck-typed hook on the controller; shown dim in the prompt,
+        # alongside model/node/tokens. In-memory, safe on every prompt.
+        monitors_part = self._controller.monitor_status() or ""
+
         # Update-available hint (IMPROVEMENTS.md E5) — a dim, single-line
         # "⬆ v0.8.1 available — /update" slot appended to the prompt. It
         # appears as soon as the background PyPI check lands and never
@@ -603,6 +608,7 @@ class PhosonRepl:
             ("class:prompt.sep", attach_indicator),
             ("class:prompt.sep", "·"),
             ("class:prompt.tokens", token_part),
+            ("class:prompt.tokens", f" · {monitors_part}" if monitors_part else ""),
             ("class:prompt.bracket", "]"),
             ("class:prompt.arrow", " › "),
             ("class:prompt.update", update_part),

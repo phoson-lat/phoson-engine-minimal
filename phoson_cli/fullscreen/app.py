@@ -562,6 +562,11 @@ class PhosonApp:
         attachments = len(repl.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
         memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
+        # Active-monitors indicator (I-126): the plugin reports it via a
+        # duck-typed hook; the header is the single place for session
+        # facts, so it lives here (in-memory, safe on every paint).
+        monitors = repl._controller.monitor_status()
+        monitors_part = f" · {monitors}" if monitors else ""
         # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
         # very end of the header, shown as soon as the background PyPI
         # check lands and never blocking the paint. The shared REPL is
@@ -576,11 +581,13 @@ class PhosonApp:
             token_cost,
             attach_part,
             memory_part,
+            monitors_part,
             update_part,
             status,
         )
         if self._header_cache_key != key:
             self._header_cache_key = key
+            extras = f"{attach_part}{memory_part}{monitors_part}"
             self._header_cache = HTML(
                 '<style class="header"> phoson </style>'
                 '<style class="header_dim"> | </style>'
@@ -589,7 +596,7 @@ class PhosonApp:
                 f'<style class="header_dim">{cwd}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{token_cost}</style>'
-                f'<style class="header_dim">{attach_part}{memory_part}</style>'
+                f'<style class="header_dim">{extras}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{status}</style>'
                 f'<style class="header_dim">{update_part}</style>'

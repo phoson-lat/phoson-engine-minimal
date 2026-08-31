@@ -203,6 +203,59 @@ class TestRegister:
             await plugin.aclose()
 
 
+# ── monitor_status() host hook ─────────────────────────────────────────────────
+
+
+class TestMonitorStatus:
+    async def test_none_when_no_monitors(self, tmp_path: Path) -> None:
+        plugin = _make_plugin(tmp_path)
+        try:
+            assert plugin.monitor_status() is None
+        finally:
+            await plugin.aclose()
+
+    async def test_lists_running_monitors(self, tmp_path: Path) -> None:
+        plugin = _make_plugin(tmp_path)
+        try:
+            await _tools(plugin)["register_monitor"].handler(
+                {"name": "heartbeat", "kind": "interval", "spec": {"seconds": 5}},
+                _session_ctx(),
+            )
+            status = plugin.monitor_status()
+            assert status is not None
+            assert "heartbeat" in status
+            assert "⏳" in status
+        finally:
+            await plugin.aclose()
+
+    async def test_truncates_long_names(self, tmp_path: Path) -> None:
+        plugin = _make_plugin(tmp_path)
+        try:
+            register = _tools(plugin)["register_monitor"].handler
+            for i in range(6):
+                await register(
+                    {"name": f"m{i}", "kind": "interval", "spec": {"seconds": 5}},
+                    _session_ctx(),
+                )
+            status = plugin.monitor_status()
+            assert status is not None
+            assert "+2" in status  # 6 registered, 4 shown, +2 overflow
+        finally:
+            await plugin.aclose()
+
+    async def test_excludes_stopped(self, tmp_path: Path) -> None:
+        plugin = _make_plugin(tmp_path)
+        try:
+            await _tools(plugin)["register_monitor"].handler(
+                {"name": "a", "kind": "interval", "spec": {"seconds": 5}},
+                _session_ctx(),
+            )
+            await _tools(plugin)["stop_monitor"].handler({"name": "a"}, _session_ctx())
+            assert plugin.monitor_status() is None
+        finally:
+            await plugin.aclose()
+
+
 # ── Wake path ──────────────────────────────────────────────────────────────────
 
 
