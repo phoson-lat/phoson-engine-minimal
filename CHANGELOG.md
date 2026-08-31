@@ -39,6 +39,10 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     turn; wakes arriving mid-run are folded into the user's next turn
     instead. `/monitors` slash command lists state and pending wakes
     (I-110 extension contract).
+  - Status indicator: a neutral `monitor_status()` host hook reports the
+    active monitors, surfaced dim in the full-screen header and in the
+    classic prompt (`⏳ sensor-umbral, watchdog +2`), so the user can see
+    what is watching without asking.
   - Host example: `examples/monitor_wake_host.py` — a standalone embedded
     host that resumes the same `ConversationTree` (`JsonlStorage`) when
     woken. See `phoson_plugin_monitor/README.md` and
@@ -50,6 +54,18 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   monitor that fires and the host resumes the same session tree, and CLI
   integration (config opt-in, session provider, drain, rebuild
   resurrection).
+
+### Enhancements
+
+- **monitor plugin decoupling (I-126)**: the in-tree plugins now have zero
+  coupling to `phoson_cli` — no imports, no TUI stack, no reverse
+  references (verified by tests). `phoson_cli/__init__.py` re-exports
+  `PhosonRepl` lazily (PEP 562), so importing the UI-free
+  `phoson_cli.config` (what embedded hosts need) no longer drags in
+  `prompt_toolkit`. The in-tree plugin fallback for both MCP and monitors
+  is now CWD-independent (absolute path) and degrades to a warning instead
+  of crashing the engine when the package and the in-tree file are both
+  missing.
 
 ## v0.18.0 (2026-08-30)
 
