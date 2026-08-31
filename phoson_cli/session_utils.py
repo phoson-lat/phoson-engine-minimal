@@ -197,6 +197,12 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
     A fresh instance (never the module-level ``plugin`` singleton):
     engine rebuilds close the old instance first and the singleton would
     otherwise be double-configured and leak state between hosts.
+
+    When the package cannot be imported (e.g. installed in editable mode
+    without the sibling folder), an *absolute* path spec pointing at the
+    in-tree ``phoson_plugin_monitor`` is returned instead. If that file
+    does not exist either, a warning is emitted and an empty list is
+    returned so the engine never crashes on a missing optional plugin.
     """
     if not config.enable_monitors:
         return []
@@ -212,9 +218,19 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
         instance.configure(monitor_config)
         return [instance]
     except ImportError:
+        # Absolute path (CWD-independent) to the in-tree package.
+        candidate = _in_tree_monitor_plugin_path()
+        if not candidate.exists():
+            warnings.warn(
+                "Monitor plugin package not importable and in-tree file not found "
+                f"at {candidate}; monitors disabled.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return []
         return [
             {
-                "name": "path:./phoson_plugin_monitor/_plugin.py",
+                "name": f"path:{candidate}",
                 "config": monitor_config,
             }
         ]
@@ -223,6 +239,12 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
             f"Failed to initialise monitor plugin: {exc}", UserWarning, stacklevel=2
         )
         return []
+
+
+def _in_tree_monitor_plugin_path() -> Path:
+    """Absolute path of the in-tree monitor plugin file (fallback target)."""
+    root = Path(__file__).resolve().parent.parent
+    return root / "phoson_plugin_monitor" / "_plugin.py"
 
 
 def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:

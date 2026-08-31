@@ -5,6 +5,7 @@ session_id_provider injection, wake draining into the next user turn,
 and resurrection across engine rebuilds.
 """
 
+import sys
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -177,6 +178,49 @@ class TestBuildMonitorPlugins:
         assert specs[0]._data_dir == str(tmp_path / "mon")
         # Each call yields a fresh instance (no shared singleton state).
         assert build_monitor_plugins(config)[0] is not specs[0]
+
+    def test_import_error_falls_back_to_in_tree_path_spec(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        config = PhosonConfig(
+            provider="ollama",
+            model="m",
+            enable_monitors=True,
+            monitors_data_dir=tmp_path / "mon",
+        )
+        # sys.modules[name] = None makes `import phoson_plugin_monitor`
+        # raise ImportError (dev-install scenario).
+        monkeypatch.setitem(sys.modules, "phoson_plugin_monitor", None)
+        from phoson_cli.session_utils import _in_tree_monitor_plugin_path
+
+        specs = build_monitor_plugins(config)
+        assert specs == [
+            {
+                "name": f"path:{_in_tree_monitor_plugin_path()}",
+                "config": {"data_dir": str(tmp_path / "mon")},
+            }
+        ]
+        # Absolute, existing, and CWD-independent.
+        path = Path(specs[0]["name"].removeprefix("path:"))
+        assert path.is_absolute()
+        assert path.exists()
+
+    def test_import_error_and_missing_file_warns_and_returns_empty(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        config = PhosonConfig(
+            provider="ollama",
+            model="m",
+            enable_monitors=True,
+            monitors_data_dir=tmp_path / "mon",
+        )
+        monkeypatch.setitem(sys.modules, "phoson_plugin_monitor", None)
+        monkeypatch.setattr(
+            "phoson_cli.session_utils._in_tree_monitor_plugin_path",
+            lambda: tmp_path / "nope" / "_plugin.py",
+        )
+        with pytest.warns(UserWarning, match="monitors disabled"):
+            assert build_monitor_plugins(config) == []
 
 
 # ── controller wiring ──────────────────────────────────────────────────────────
