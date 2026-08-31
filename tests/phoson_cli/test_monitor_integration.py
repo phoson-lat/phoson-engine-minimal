@@ -9,6 +9,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from phoson_agent import Plugin
 from phoson_cli.config import PhosonConfig, load_config
 from phoson_llm.schemas import Message
@@ -313,6 +315,131 @@ class TestControllerWiring:
         controller, _ = _make_controller(tmp_path)
         assert find_monitor_plugin(controller.engine._loaded_plugins) is None
         assert "register_monitor" not in {t.name for t in controller.engine.tools}
+
+
+# ── autonomous wake loop (I-126) ─────────────────────────────────────────────
+
+
+async def _poll_until(predicate, timeout: float = 5.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            pytest.fail("condition not met before timeout")
+        await asyncio.sleep(0.02)
+
+
+def _content_text(message) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(b.text for b in content)
+
+
+class TestAutonomousWake:
+    async def test_wake_loop_disabled_creates_no_task(self, tmp_path) -> None:
+        controller, _ = _make_controller(tmp_path)
+        controller.start_monitor_wake_loop()
+        assert controller._monitor_wake_task is None
+
+    async def test_wake_loop_noop_when_no_wakes(self, tmp_path) -> None:
+        controller, _ = _make_controller(
+            tmp_path, enable_monitors=True, monitors_data_dir=tmp_path / "mon"
+        )
+        paths: list = []
+
+        async def stream(path, config):
+            paths.append(path)
+            yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+            yield _done_event("ok")
+
+        controller.engine.stream = stream
+        controller._wake_poll_seconds = 0.02
+        controller.start_monitor_wake_loop()
+        try:
+            assert controller._monitor_wake_task is not None
+            await asyncio.sleep(0.15)  # several ticks, nothing fires
+            assert paths == []
+        finally:
+            await controller.shutdown()
+        assert controller._monitor_wake_task is None
+
+    async def test_autonomous_wake_turn_while_idle(self, tmp_path) -> None:
+        """A monitor firing while idle must re-activate the agent by itself."""
+        controller, sink = _make_controller(
+            tmp_path, enable_monitors=True, monitors_data_dir=tmp_path / "mon"
+        )
+        plugin = find_monitor_plugin(controller.engine._loaded_plugins)
+        assert plugin is not None
+        paths: list = []
+
+        async def stream(path, config):
+            paths.append(path)
+            yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+            yield _done_event("ok")
+
+        controller.engine.stream = stream
+
+        # A monitor fired while the user was away.
+        session_id = controller.tree.session_id
+        plugin._queue.append(
+            WakeEvent.create(
+                "auto-watcher", "interval", session_id, {"interval_seconds": 5.0}
+            )
+        )
+        controller._wake_poll_seconds = 0.02
+        controller.start_monitor_wake_loop()
+        try:
+            await _poll_until(lambda: len(paths) >= 1)
+            # The autonomous turn's user message carries the wake header.
+            last_message = paths[-1][-1]
+            assert "[MONITOR EVENTS]" in _content_text(last_message)
+            assert "auto-watcher" in _content_text(last_message)
+            # The sink rendered it like a normal turn.
+            text, _ = sink.user_messages[-1]
+            assert "[MONITOR EVENTS]" in text
+            assert any("waking the agent" in msg for _, msg in sink.notifications)
+            # The queue was consumed by the autonomous turn.
+            assert plugin._queue.pending() == []
+        finally:
+            await controller.shutdown()
+
+    async def test_wake_loop_waits_for_inflight_run(self, tmp_path) -> None:
+        """Wakes arriving mid-run must not start a parallel run."""
+        controller, _ = _make_controller(
+            tmp_path, enable_monitors=True, monitors_data_dir=tmp_path / "mon"
+        )
+        plugin = find_monitor_plugin(controller.engine._loaded_plugins)
+        paths: list = []
+        release = asyncio.Event()
+
+        async def stream(path, config):
+            paths.append(path)
+            yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+            await release.wait()
+            yield _done_event("ok")
+
+        controller.engine.stream = stream
+        run_task = asyncio.create_task(controller.run_turn("q"))
+        await asyncio.sleep(0.05)  # run now in flight
+        assert controller.is_running
+
+        # A monitor fires while the run is in flight.
+        plugin._queue.append(
+            WakeEvent.create("later", "interval", controller.tree.session_id, {})
+        )
+        controller._wake_poll_seconds = 0.02
+        controller.start_monitor_wake_loop()
+        await asyncio.sleep(0.12)  # several ticks while in flight
+        assert len(paths) == 1  # the loop did NOT start a parallel run
+
+        release.set()
+        await run_task
+        # After the run ends, the pending wake triggers an autonomous turn.
+        await _poll_until(lambda: len(paths) >= 2)
+        assert "[MONITOR EVENTS]" in _content_text(paths[-1][-1])
+        await controller.shutdown()
 
 
 # ── session_utils helpers ──────────────────────────────────────────────────────

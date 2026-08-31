@@ -461,6 +461,11 @@ class PhosonRepl:
         # dimly ("⬆ v0.8.1 available — /update").
         self.start_update_check()
 
+        # Autonomous monitor wake loop (I-126): needs the running event
+        # loop, so it starts here (the controller __init__ runs before it
+        # in the classic REPL). No-op when enable_monitors is off.
+        self._controller.start_monitor_wake_loop()
+
         key_bindings = KeyBindings()
 
         @key_bindings.add("c-t")

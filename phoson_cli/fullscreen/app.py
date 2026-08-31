@@ -1336,6 +1336,10 @@ class PhosonApp:
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
         asyncio.create_task(self.session_cache.refresh(self.repl.storage))
+        # Autonomous monitor wake loop (I-126): the full-screen front end
+        # has its own event loop entry point (no PhosonRepl.run), so it
+        # starts the loop here. No-op when enable_monitors is off.
+        self.repl._controller.start_monitor_wake_loop()
         # Startup PyPI update check (IMPROVEMENTS.md E5): background, at
         # most one round trip per day, never blocks first paint. The hint
         # lands in the header as soon as the check settles; on_settle

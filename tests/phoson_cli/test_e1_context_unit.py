@@ -121,6 +121,8 @@ class _FakeSink:
 
 
 def _controller(turns: int, **cfg) -> SessionController:
+    import asyncio
+
     with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
         controller = SessionController.__new__(SessionController)
@@ -129,6 +131,7 @@ def _controller(turns: int, **cfg) -> SessionController:
         controller.attachments = MagicMock()
         controller.attachments.__bool__ = lambda self: False
         controller.attachments.__len__ = lambda self: 0
+        controller._turn_lock = asyncio.Lock()
         controller.summarizer = MagicMock()
         controller.summarizer.min_keep_messages = 4
         controller.summarizer.estimate_tokens = lambda msgs: sum(

@@ -217,6 +217,17 @@ class MonitorPlugin(Plugin):
         assert self._queue is not None
         return self._queue.consume([e.id for e in self._queue.pending(session_id)])
 
+    def pending_wakes(self, session_id: str | None) -> list[WakeEvent]:
+        """Non-destructive view of pending wakes (None = all sessions).
+
+        Used by the host's autonomous wake loop to *peek* before deciding
+        to re-activate the agent, so a skipped tick never consumes a fire.
+        """
+        if self._queue is None:
+            self.initialize()
+        assert self._queue is not None
+        return self._queue.pending(session_id)
+
     # ── CLI extension: /monitors ──────────────────────────────────────────
 
     def get_commands(self) -> list[CliCommandSpec]:

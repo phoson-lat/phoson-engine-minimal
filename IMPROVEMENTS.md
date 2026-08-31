@@ -144,7 +144,7 @@
   - **Scaffold oficial:** `phoson_plugin_monitor/` (`_plugin.py`, `plugin = MonitorPlugin()` en `__init__.py`, `create_plugin()`, README, entrada en "Bundled plugins" de `docs/plugins.md`); empaquetado en la wheel (hatch) y tipado (pyright).
   - **Tools:** `register_monitor(name, kind, spec)` (kind como enum JSON: `interval`/`file`/`command`), `list_monitors()`, `stop_monitor(name)` — schemas vía `@tool`, errores legibles para el LLM.
   - **Kinds:** `interval` (una vez o periódico), `file` (path o glob, polling mtime+size, sin inotify), `command` (salida ≠ 0, timeout con kill del grupo de proceso, o cambio de output; registro gateado por permisos, ejecución unattended documentada).
-  - **Wake:** `wake.jsonl` persistente como source of truth (con `session_id` original) + `on_wake` opcional fire-and-forget; dedupe de fires idénticos y cap anti-storm por monitor. El CLI dreana los wakes pendientes en el próximo `run_turn` (header `[MONITOR EVENTS]` en el user message, notificado al sink) y `/monitors` lista estado/wakes pendientes (contrato I-110).
+  - **Wake:** `wake.jsonl` persistente como source of truth (con `session_id` original) + `on_wake` opcional fire-and-forget. Dos vías de entrega en la CLI: (a) **turno del usuario** — `run_turn` dreana los wakes pendientes al inicio y los inyecta como header `[MONITOR EVENTS]` en el user message (visible en el transcript); (b) **wake autónomo** — un loop en el controller reactiva al agente **solo** cuando está idle: el fire dispara un turno `[MONITOR EVENTS]` por su cuenta, sin input del usuario (serializado con `_turn_lock` porque el engine es single-flight; wakes mid-run se pliegan al turno siguiente del usuario). `/monitors` lista estado/wakes pendientes (contrato I-110).
   - **Persistencia/crash:** `monitors.json` + `wake.jsonl` en `data_dir` (default `~/.phoson/monitors/`), writes atómicos (tmp+fsync+replace), parse leniente. El disco es la verdad y las tareas async son caché: `aclose()`/crash no marcan `stopped`, y `ensure_started()` (llamada por el host tras cada rebuild de engine y lazy desde tools) resucita monitores `running`.
   - **CLI (opt-in, core mínimo):** `enable_monitors`/`monitors_data_dir` en config (env `PHOSON_ENABLE_MONITORS`), `build_monitor_plugins()` en `session_utils.py` (in-tree → fallback `path:`), inyección de `session_id_provider` (callable, sobrevive a `new_session`/`load_session`) y drain en `run_turn` — todo duck-typed, cero cambios en `phoson_agent`.
   - **Host example:** `examples/monitor_wake_host.py` — host embebido que reanuda la misma `ConversationTree` (`JsonlStorage`) al despertar.
@@ -160,7 +160,7 @@
   - ≥2 kinds implementados (p. ej. `interval` + `file`) con schemas JSON vía `@tool`.
   - Mecanismo de wake elegido y documentado con ejemplo host-side en `examples/`.
   - Monitores y wake events persisten entre reinicios; tests unitarios con fakes + 1 integración (patrón skip-if-service-unavailable).
-  - Fuera de scope (follow-up): kind `http` (pendiente del daemon `phoson_http`), wake autónomo sin turno del usuario en la TUI, nodo de tree por wake, lock multi-proceso de `data_dir`.
+  - Fuera de scope (follow-up): kind `http` (pendiente del daemon `phoson_http`), nodo de tree por wake, lock multi-proceso de `data_dir`.
 
 ---
 

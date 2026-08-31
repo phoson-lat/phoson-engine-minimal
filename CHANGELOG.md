@@ -33,8 +33,12 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     (or `PHOSON_ENABLE_MONITORS=1`). The CLI injects a
     `session_id_provider` into the agent context, (re)starts monitors on
     every engine rebuild, and drains pending wakes into the next user turn
-    (`[MONITOR EVENTS]` header, announced via the sink). `/monitors`
-    slash command lists state and pending wakes (I-110 extension contract).
+    (`[MONITOR EVENTS]` header, announced via the sink). While the agent
+    is **idle** a wake loop re-activates the agent on its own: fires
+    trigger an autonomous `[MONITOR EVENTS]` turn rendered like any user
+    turn; wakes arriving mid-run are folded into the user's next turn
+    instead. `/monitors` slash command lists state and pending wakes
+    (I-110 extension contract).
   - Host example: `examples/monitor_wake_host.py` — a standalone embedded
     host that resumes the same `ConversationTree` (`JsonlStorage`) when
     woken. See `phoson_plugin_monitor/README.md` and

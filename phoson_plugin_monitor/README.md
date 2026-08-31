@@ -41,6 +41,11 @@ conversation tree. On top of the queue:
 - **Queue drain**: the Phoson CLI consumes pending wakes for the current
   session at the start of the next user turn and prepends them to the user
   message (`[MONITOR EVENTS] …`), so the agent acts on findings in context.
+- **Autonomous wake**: the interactive CLI (classic + full-screen) also
+  runs a wake loop — when a monitor fires while the agent is **idle**, the
+  pending wakes trigger a turn of their own (a `[MONITOR EVENTS]` user
+  message the agent acts on), with no user input required. Wakes that
+  arrive *mid-run* are folded into the user's next turn instead.
 
 See `examples/monitor_wake_host.py` for a standalone host that resumes the
 same `ConversationTree` from `JsonlStorage` when woken.
