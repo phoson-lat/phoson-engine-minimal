@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.22.0 (Unreleased)
+
+### Enhancements
+
+- **TUI reasoning collapsed to a muted line (T-3, #153)**: a finished
+  turn's scratchpad no longer renders as a large rounded reasoning Panel
+  competing with the answer. It collapses to a single dim `▸ thought Ns`
+  line (elapsed thinking time, from the first reasoning event). `Ctrl+T`
+  after the turn expands the full text *in place* — still with no box —
+  one-shot, like the classic REPL. The Panel render is kept for the classic
+  REPL, which prints the scratchpad. The live streaming view is unchanged.
+- **TUI composer as an object (T-4, #154)**: the composer no longer reads
+  like a shell prompt. It is wrapped in a single rounded `Frame` (the same
+  chrome the picker floats use); the old two-rule `─`/`—` sandwich around
+  the input is gone (one separator); the `❯` stays *inside* the box; and the
+  empty composer shows a dim placeholder (`Ask anything · @ files ·
+  / commands`) that disappears on the first keystroke. Newline stays
+  `Ctrl+J` (documented in the footer) — a portable Shift+Enter is out of
+  scope.
+
 ## v0.21.0 (2026-09-01)
 
 ### Features

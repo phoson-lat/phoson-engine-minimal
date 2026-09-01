@@ -42,10 +42,11 @@ from ..formatting import (
     render_user_turn,
     render_error_notice,
     render_tool_done_line,
-    render_reasoning_panel,
     render_streaming_panel,
     render_tool_start_line,
     subagent_tasks_from_args,
+    render_reasoning_expanded,
+    render_reasoning_collapsed,
     render_subagent_start_line,
 )
 from ..tools.subagent_panel import (
@@ -67,6 +68,10 @@ class CurrentTurn:
     content: str = ""
     reasoning: str = ""
     show_reasoning: bool = True
+    # T-3: monotonic-clock time the turn first emitted reasoning. Lets the
+    # collapsed ``thought Ns`` line report how long the model thought.
+    # None until the first AgentReasoningEvent.
+    reasoning_since: float | None = None
     running_tool: bool = False
     # Tool name being *composed* by the LLM right now (I-128): set by
     # AgentToolComposingEvent, cleared by AgentToolStartEvent. Rendered
@@ -112,6 +117,12 @@ class FullScreenSink:
         self._plugin_blocks: dict[str, object] = {}
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""
+        # T-3: the finalized collapsed-reasoning block for each finished
+        # turn, as (block, reasoning_text, expanded). The first entry is
+        # the *newest* turn. ``expand_reasoning`` replaces the matching
+        # collapsed line with the full text in place; once a turn is
+        # expanded, later Ctrl+T presses expand the next one.
+        self._reasoning_blocks: list[tuple[object, str, bool]] = []
         # Args + transcript block of in-flight regular tool calls, keyed by
         # tool_call_id (C1). Done events don't carry args, and the done card
         # REPLACES the start line so each call renders as exactly one card
@@ -412,6 +423,7 @@ class FullScreenSink:
                     message_count=event.message_count,
                     max_steps=event.max_iterations,
                     show_reasoning=self.show_reasoning_default,
+                    reasoning_since=None,
                 )
 
             case AgentTokenEvent():
@@ -421,6 +433,8 @@ class FullScreenSink:
 
             case AgentReasoningEvent():
                 if self.current_turn is not None:
+                    if self.current_turn.reasoning_since is None:
+                        self.current_turn.reasoning_since = time.monotonic()
                     self.current_turn.reasoning += event.content
                     self._stream_event = True
 
@@ -535,6 +549,7 @@ class FullScreenSink:
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
                 self._freeze_current_text(turn)
+                self._finalize_reasoning(turn)
                 self.current_turn = None
                 # The run succeeded: a previously failed retry is done,
                 # so the pending error notice disappears (I-83).
@@ -548,6 +563,8 @@ class FullScreenSink:
                 turn = self.current_turn
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
+                self._freeze_current_text(turn)
+                self._finalize_reasoning(turn)
                 self.current_turn = None
                 # Single-line notice, overwritten in place on each failed
                 # retry instead of stacking a panel per attempt (I-83).
@@ -592,6 +609,29 @@ class FullScreenSink:
         # and any later thinking episode counts from 0 again.
         turn.thinking_since = None
 
+    def _finalize_reasoning(self, turn: CurrentTurn | None) -> None:
+        """T-3: collapse a finished turn's reasoning into one muted line.
+
+        Called at every turn end (success, error, cancel). If the turn
+        produced reasoning, a single ``thought Ns`` line is appended to
+        the transcript (no ``Panel``) and recorded in
+        :attr:`_reasoning_blocks` so Ctrl+T can expand it *in place* later.
+        The elapsed seconds come from the first ``AgentReasoningEvent``;
+        when there is no timestamp the seconds are omitted.
+        """
+        if turn is None:
+            return
+        if not turn.reasoning:
+            return
+        elapsed: float | None = None
+        if turn.reasoning_since is not None:
+            elapsed = time.monotonic() - turn.reasoning_since
+        turn.reasoning_since = None
+        block = render_reasoning_collapsed(elapsed, self.theme)
+        self.blocks.append(block)
+        # Newest first: Ctrl+T expands the most recent un-expanded turn.
+        self._reasoning_blocks.insert(0, (block, turn.reasoning, False))
+
     def flush_line(self) -> None:
         """Freeze the in-flight turn (cancel/error paths before a terminal event).
 
@@ -606,6 +646,7 @@ class FullScreenSink:
             return
         self._last_reasoning = turn.reasoning
         self._freeze_current_text(turn)
+        self._finalize_reasoning(turn)
         self.current_turn = None
         self._touch()
 
@@ -626,9 +667,48 @@ class FullScreenSink:
         return self.current_turn.show_reasoning
 
     def expand_reasoning(self, reasoning: str) -> None:
-        """Ctrl+T post-turn: append a node's captured reasoning as a block."""
-        self.blocks.append(render_reasoning_panel(reasoning, self.theme))
-        self._touch()
+        """Ctrl+T post-turn: expand a collapsed reasoning line in place (T-3).
+
+        Finds the newest finished turn whose collapsed ``thought Ns`` line
+        has not yet been expanded and swaps that line for the full
+        reasoning text — in place, with **no** ``Panel``. A turn is
+        expanded at most once (the transcript is append-only, mirroring the
+        classic REPL's one-shot Ctrl+T). The *reasoning* argument is kept
+        for the classic-REPL call site; the full-screen path resolves the
+        text from its own :attr:`_reasoning_blocks` record.
+        """
+        for index, (block, text, expanded) in enumerate(self._reasoning_blocks):
+            if expanded:
+                continue
+            if block not in self.blocks:
+                # Transcript was cleared (Ctrl+L) or rebuilt (rewind): the
+                # collapsed line is gone, so this record is stale — skip.
+                continue
+            position = self.blocks.index(block)
+            self.blocks[position] = render_reasoning_expanded(
+                text if text else reasoning, self.theme
+            )
+            self._reasoning_blocks[index] = (
+                self.blocks[position],
+                text,
+                True,
+            )
+            self._touch()
+            return
+        # No unexpanded collapsed line was found. If we've already expanded
+        # reasoning this session this is the one-shot "nothing left to do"
+        # case (a repeat Ctrl+T) — a no-op. Only when nothing has been
+        # expanded yet (e.g. the transcript was rebuilt after a resume and
+        # the collapsed line is gone) do we append the full text in place
+        # style — still no Panel — so Ctrl+T after a resume still surfaces
+        # the node's reasoning.
+        if reasoning and not any(entry[2] for entry in self._reasoning_blocks):
+            self.blocks.append(render_reasoning_expanded(reasoning, self.theme))
+            self._touch()
+
+    def clear_reasoning_state(self) -> None:
+        """Drop the collapsed-line records (transcript cleared / rewound)."""
+        self._reasoning_blocks.clear()
 
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id

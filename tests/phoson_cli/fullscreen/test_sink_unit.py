@@ -262,6 +262,65 @@ def test_reasoning_is_captured_and_taken_once() -> None:
     assert sink.take_reasoning() == ""  # popped once
 
 
+def test_t3_finalized_reasoning_is_one_collapsed_line_not_a_panel() -> None:
+    """T-3: a finished turn's reasoning collapses to one muted ``thought Ns``
+    line — no rounded Panel/box — by default.
+    """
+    sink, _ = _make_sink()
+    sink.on_user_message("q", Message(role="user", content="q"))
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentReasoningEvent(content="weighing options, then deciding"))
+    result = AgentRunResult(final_content="final", history=[], input_messages=[])
+    sink.on_event(AgentDoneEvent(result=result))
+
+    text = _strip_ansi(render_chat(sink, width=80))
+    # The collapsed line is present, with the elapsed-second count.
+    assert "thought" in text
+    assert re.search(r"thought \d+s", text)
+    # No reasoning Panel box: rich rounded-border glyphs and a "reasoning"
+    # panel title must be absent from the transcript.
+    assert "┌" not in text
+    assert "reasoning" not in text.lower()
+    # It is a single line, not a boxed multi-line block: exactly one line
+    # mentions "thought".
+    assert len([ln for ln in text.splitlines() if "thought" in ln]) == 1
+
+
+def test_t3_ctrl_t_expands_collapsed_reasoning_in_place_without_a_panel() -> None:
+    """T-3: Ctrl+T (post-turn) swaps the collapsed ``thought Ns`` line for
+    the full reasoning text, in place, with no Panel — and the next Ctrl+T
+    has nothing left to expand (one-shot, like the classic REPL).
+    """
+    sink, _ = _make_sink()
+    sink.on_user_message("q", Message(role="user", content="q"))
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentReasoningEvent(content="deep thoughts about the problem"))
+    result = AgentRunResult(final_content="final", history=[], input_messages=[])
+    sink.on_event(AgentDoneEvent(result=result))
+
+    collapsed = _strip_ansi(render_chat(sink, width=80))
+    assert "deep thoughts about the problem" not in collapsed
+
+    before_blocks = len(sink.blocks)
+    sink.expand_reasoning("deep thoughts about the problem")
+
+    expanded = _strip_ansi(render_chat(sink, width=80))
+    # Full text now shows in place …
+    assert "deep thoughts about the problem" in expanded
+    # … replacing the collapsed line (no new block appended) …
+    assert len(sink.blocks) == before_blocks
+    # … still without a Panel box, and the collapsed "thought Ns" marker is
+    # gone (match the marker, not a substring of the reasoning text itself).
+    assert "┌" not in expanded
+    assert "reasoning" not in expanded.lower()
+    assert "▸" not in expanded
+    assert not re.search(r"thought \d+s", expanded)
+
+    # One-shot: a second Ctrl+T is a no-op (nothing left to expand).
+    sink.expand_reasoning("deep thoughts about the problem")
+    assert len(sink.blocks) == before_blocks
+
+
 def test_flush_line_finalizes_turn_on_cancel() -> None:
     """Regression: cancelling mid-stream must not leave a "thinking..."
 

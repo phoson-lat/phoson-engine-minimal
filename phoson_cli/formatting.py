@@ -46,7 +46,12 @@ logger = logging.getLogger("phoson.cli.errors")
 
 
 def render_reasoning_panel(reasoning: str, theme: Theme) -> Panel:
-    """Build the expanded reasoning panel (Ctrl+T post-turn)."""
+    """Build the expanded reasoning panel (Ctrl+T post-turn).
+
+    Kept for the classic REPL, which *prints* the full scratchpad. The
+    full-screen TUI does not use this box (T-3) — it shows a single
+    collapsed line instead; see :func:`render_reasoning_collapsed`.
+    """
     return Panel(
         Text(reasoning, style=theme.reasoning),
         title="reasoning",
@@ -55,6 +60,31 @@ def render_reasoning_panel(reasoning: str, theme: Theme) -> Panel:
         box=box.ROUNDED,
         padding=(0, 1),
     )
+
+
+def render_reasoning_collapsed(elapsed_s: float | None, theme: Theme) -> Text:
+    """T-3: one muted line for a turn's thinking — the collapsed default.
+
+    A finished turn's reasoning is metadata, not content: instead of a
+    large rounded ``Panel`` (see :func:`render_reasoning_panel`, kept for
+    the classic REPL) it renders as a single dim line, ``thought 8s``.
+    Ctrl+T expands it *in place* (:func:`render_reasoning_expanded`), with
+    no box.
+    """
+    if elapsed_s is None:
+        return Text("  ▸ thought", style=theme.muted_deep)
+    seconds = max(0, int(round(elapsed_s)))
+    return Text(f"  ▸ thought {seconds}s", style=theme.muted_deep)
+
+
+def render_reasoning_expanded(reasoning: str, theme: Theme) -> Text:
+    """T-3: the full reasoning text, shown in place (no panel / no box).
+
+    The in-place expansion of a collapsed ``thought Ns`` line. Indented
+    like the collapsed line and rendered in the theme's muted reasoning
+    color so it stays visibly secondary to the answer.
+    """
+    return Text(f"  {reasoning}", style=theme.reasoning)
 
 
 def render_activity_line(label: str, frame: str, theme: Theme) -> Text:
@@ -810,6 +840,8 @@ def format_token_indicator(used: int, window: int) -> str:
 
 __all__ = [
     "render_reasoning_panel",
+    "render_reasoning_collapsed",
+    "render_reasoning_expanded",
     "render_activity_line",
     "render_streaming_panel",
     "render_start_line",
