@@ -474,15 +474,22 @@ class PhosonApp:
         self.sink.theme = theme
         banner_block = getattr(self, "_banner_block", None)
         if banner_block is not None:
-            index = self.sink.blocks.index(banner_block)
-            self._banner_block = render_banner(
-                provider=self.repl.config.provider,
-                model=self.repl.current_model,
-                session_id=self.repl.tree.session_id,
-                theme=self.theme,
-                show_meta=False,
-            )
-            self.sink.blocks[index] = self._banner_block
+            try:
+                index = self.sink.blocks.index(banner_block)
+            except ValueError:
+                # The transcript was cleared (/clear) while the reference was
+                # held — the banner is no longer in the pane and a cleared
+                # transcript intentionally has none, so don't re-insert it.
+                self._banner_block = None
+            else:
+                self._banner_block = render_banner(
+                    provider=self.repl.config.provider,
+                    model=self.repl.current_model,
+                    session_id=self.repl.tree.session_id,
+                    theme=self.theme,
+                    show_meta=False,
+                )
+                self.sink.blocks[index] = self._banner_block
         self._apply_style()
         self._block_ansi_cache.clear(0)
         self._header_cache_key = None  # rebuild header for the new palette
@@ -1076,6 +1083,10 @@ class PhosonApp:
 
     def clear(self) -> None:
         self.sink.blocks.clear()
+        # The banner is dropped with the transcript (unlike rewind, which
+        # re-seeds it): forget the reference so a later apply_theme doesn't
+        # look for an object that no longer exists in the pane.
+        self._banner_block = None
         self.sink.drop_error_notice()
         self.sink.dirty = True
         self._auto_scroll = True

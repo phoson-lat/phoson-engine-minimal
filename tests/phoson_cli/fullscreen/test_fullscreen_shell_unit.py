@@ -433,6 +433,30 @@ def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
     assert app._chat_scroll_top == 0
 
 
+def test_theme_after_clear_does_not_crash_on_stale_banner(app: PhosonApp) -> None:
+    """/theme must not raise after /clear.
+
+    The app kept a reference to the banner block object; ``clear()``
+    drops the transcript without it, so the reference dangles and
+    ``sink.blocks.index(banner)`` raised ValueError → the command
+    dispatch loop crashed ("Group object ... is not in list").
+    """
+    from phoson_cli.theme import DARK
+
+    assert app._banner_block is not None
+    assert app._banner_block in app.sink.blocks
+
+    app.clear()
+    assert app._banner_block is None
+    assert app.sink.blocks == []
+
+    # The crash from the report: apply_theme looked for the stale banner.
+    app.apply_theme(DARK)
+    # A cleared transcript intentionally has no banner — not re-inserted.
+    assert app._banner_block is None
+    assert app.sink.blocks == []
+
+
 def test_ctrl_q_and_ctrl_c_request_exit_when_idle(app: PhosonApp) -> None:
     with patch.object(app.app, "exit") as mock_exit:
         _trigger(app, "c-q")
