@@ -1167,7 +1167,7 @@ wheels = [
 
 [[package]]
 name = "phoson-engine-minimal"
-version = "0.20.1"
+version = "0.20.2"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
