@@ -369,6 +369,18 @@ AWS_DEFAULT_REGION=us-east-1
 
 Local servers (Ollama, LM Studio, vLLM) need no API key — just the right `base_url`.
 
+### Runtime / CLI
+
+```env
+PHOSON_RUN_BUDGET_SECONDS=600   # one-shot wall-clock cap (s); 0 = unlimited
+```
+
+`PHOSON_RUN_BUDGET_SECONDS` caps the whole *run* in non-interactive mode
+(one-shot / piped stdin) — interactive runs have no such cap (`Esc` is the
+escape). When hit, the run exits cleanly with code **124**. It is a
+run-level budget, separate from the per-tool `bash` `timeout` (which
+I-127 deliberately left uncapped for interactive use).
+
 ---
 
 ## 💻 Usage examples
@@ -444,12 +456,18 @@ uv run phoson-cli --setup  # first-run wizard: credentials + defaults
 </details>
 
 **One-shot mode** (no REPL, no session — for scripts and CI): the final
-answer goes to stdout, exit code 0 on success / 1 on agent error.
+answer goes to stdout, exit code 0 on success / 1 on agent error /
+**124** when the run hits its wall-clock budget. Non-interactive runs
+carry the same Offload → Summarizer → Permission chain as the REPL, and
+an `ask`-level tool fails closed (refused, not run).
 
 ```bash
 phoson-cli "fix the failing tests"     # positional task
 phoson-cli -p "summarize this repo"    # --print flag
 echo "explain the CI failure" | phoson-cli   # piped stdin
+# Wall-clock budget for the whole run (one-shot only): default 600s,
+# 0 = unlimited. A hung command can't be escaped with Esc here.
+PHOSON_RUN_BUDGET_SECONDS=300 phoson-cli -p "long task"
 ```
 
 **Command-line flags** (one-off overrides; they never touch
@@ -523,7 +541,8 @@ Plugins can register additional slash commands (see
   `/status` and `/tokens`, typically cutting long-session prompt cost
   50–90% → [docs/cli/prompt-caching.md](docs/cli/prompt-caching.md)
 - **Permissions** — per-tool `allow`/`ask`/`deny` + allow-patterns in
-  `~/.phoson/permissions.json`; non-interactive runs fail closed →
+  `~/.phoson/permissions.json`; the policy applies to sub-agents and
+  one-shot runs too, and non-interactive runs fail closed →
   [docs/cli/permissions.md](docs/cli/permissions.md)
 - **Project memory** — `AGENTS.md` (or `CLAUDE.md`) from the repo root to
   your CWD is injected into the system prompt; `/agents-md` lists what

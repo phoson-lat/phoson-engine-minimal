@@ -354,27 +354,56 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
     """Run a single agent task and print the final content to stdout.
 
     No REPL, no session persistence — intended for scripts and CI.
-    Returns 0 on success, 1 on error.
+    Returns 0 on success, 1 on error, 124 when the run hits its
+    wall-clock budget (``PHOSON_RUN_BUDGET_SECONDS``; #141).
+
+    The one-shot engine carries the **same middleware chain** as the
+    interactive REPL (#174/F-02): Offload → Summarizer → Permission.
+    Without it the permissions policy, safe_mode and auto-compaction would
+    silently not apply to one-shot runs. Because one-shot is
+    non-interactive there is no confirmation callback, so an ``ask``-level
+    tool fails closed (refused) rather than hanging.
     """
+    import asyncio
+
     from phoson_agent import AgentEngine
     from phoson_cli.repl import close_plugins, build_plugin_specs, build_system_prompt
     from phoson_cli.theme import load_theme
     from phoson_cli.tools import build_tools, build_tools_dict
     from phoson_llm.schemas import Message, ModelConfig
     from phoson_cli.plugin_ui import NonInteractivePluginUiService
+    from phoson_cli.session_utils import (
+        build_offload,
+        build_summarizer,
+        build_middlewares,
+    )
+    from phoson_cli.permissions_store import build_permission_middleware
 
     chat = build_chat(config)
     engine: AgentEngine | None = None
     try:
         tools = build_tools()
+        # Same middleware chain as the REPL. One-shot has no confirmation
+        # service, so the permission gate fails closed for ``ask`` tools.
+        offload = build_offload(config)
+        summarizer = build_summarizer(config)
+        permission = build_permission_middleware(on_ask=None)
+        middlewares = build_middlewares(
+            config=config,
+            offload=offload,
+            summarizer=summarizer,
+            permission=permission,
+        )
         engine = AgentEngine(
             chat=chat,
             tools=tools,
+            middlewares=middlewares,
             plugins=build_plugin_specs(config),
             max_iterations=config.max_iterations,
         )
         # Same sub-agent runtime context as the interactive REPL.
         engine.context.extra["safe_mode"] = config.safe_mode
+        engine.context.extra["middlewares"] = middlewares
         engine.context.extra["plugin_ui"] = NonInteractivePluginUiService(
             load_theme(config.theme)
         )
@@ -391,14 +420,37 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         # has no live panel to feed (E2), and the final per-task metrics
         # still arrive in the tool output the model receives.
 
-        result = await engine.run(
-            [Message(role="user", content=task)],
-            ModelConfig(
-                model=config.model,
-                system=build_system_prompt(engine.tools),
-            ),
+        # Wall-clock budget for the whole run (#141): one-shot has no Esc,
+        # so a hung tool cannot be escaped interactively. ``0`` disables
+        # the budget (unlimited). The teardown in ``finally`` closes
+        # plugins and the chat client on the budget path too.
+        run_task = asyncio.ensure_future(
+            engine.run(
+                [Message(role="user", content=task)],
+                ModelConfig(
+                    model=config.model,
+                    system=build_system_prompt(engine.tools),
+                ),
+            )
         )
-        print(result.final_content)
+        budget = config.run_budget_seconds
+        if budget and budget > 0:
+            try:
+                result = await asyncio.wait_for(run_task, timeout=budget)
+            except TimeoutError:
+                # wait_for has already cancelled the task and reaped it;
+                # the teardown in ``finally`` still closes plugins + chat.
+                print(
+                    f"Error: run exceeded the {budget:g}s wall-clock budget "
+                    f"(PHOSON_RUN_BUDGET_SECONDS). "
+                    "Set it to 0 to disable the budget.",
+                    file=sys.stderr,
+                )
+                return 124
+        else:
+            result = await run_task
+        # Print an empty string (not ``None``) when there is no content.
+        print(result.final_content or "")
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)

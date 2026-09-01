@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fixes / Security
+
+- **Sub-agents and one-shot now run with the full middleware chain
+  (#174, F-01/F-02)**: previously the `agent`/`agents` tools and the
+  one-shot (`-p` / piped stdin) path built their `AgentEngine` without the
+  REPL's Offload → Summarizer → Permission chain, so a `deny`-level tool
+  was still invocable from a sub-agent, `bash` ran with `safe_mode=False`
+  and no confirmation, and one-shot runs skipped auto-compaction. The chain
+  construction now lives in a shared helper
+  (`session_utils.build_middlewares` / `build_summarizer` / `build_offload`):
+  sub-agents inherit the parent's middleware gate and a fresh context
+  carrying `safe_mode` / `bash_confirmation` / `plugin_ui`; one-shot
+  constructs the same chain (permission gate fails closed, since there is
+  no confirmation service).
+- **One-shot prints an empty string, not `None`, when there is no content**
+  (#174, F-02): `print(result.final_content or "")`.
+
+### Features
+
+- **Non-interactive wall-clock budget (#141, H-7)**: new
+  `PHOSON_RUN_BUDGET_SECONDS` (default `600`, `0` = unlimited) caps the
+  whole *run* in non-interactive mode — one-shot has no `Esc` to escape a
+  hung command. On budget the run exits cleanly with code **124** and a
+  clear message, closing plugins and the model client as usual. Interactive
+  mode is unchanged.
+
 ## v0.24.1 (2026-09-01)
 
 ### Fixes

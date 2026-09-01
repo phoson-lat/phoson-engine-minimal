@@ -37,8 +37,6 @@ from phoson_llm.schemas import (
     ToolDefinition,
 )
 from phoson_agent.sessions import JsonlStorage, ConversationTree
-from phoson_agent.plugins.offload import OffloadMiddleware
-from phoson_agent.plugins.summarizer import SummarizationMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .theme import (
@@ -67,7 +65,11 @@ from .file_mentions import (
     expand_file_mentions,
 )
 from .session_utils import (
+    build_offload,
     close_plugins,
+    vllm_base_url,
+    build_summarizer,
+    build_middlewares,
     build_plugin_specs,
     build_system_prompt,
     drain_monitor_wakes,
@@ -183,7 +185,7 @@ class SessionController:
         self._cw_resolver = ContextWindowResolver(
             ollama_base_url=config.ollama_base_url or "http://localhost:11434",
             openrouter_api_key=config.openrouter_api_key,
-            vllm_base_url=self._vllm_base_url(),
+            vllm_base_url=vllm_base_url(config),
         )
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
@@ -191,22 +193,12 @@ class SessionController:
         # Summarization middleware. The provider/model fields are kept in
         # sync with the active config every time ``_rebuild_engine`` runs;
         # the E1 context-management knobs (mode presets) are applied via
-        # ``_apply_context_config``.
-        self.summarizer = SummarizationMiddleware(
-            provider=config.provider,
-            model=config.model,
-            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
-            openrouter_api_key=config.openrouter_api_key,
-            vllm_base_url=self._vllm_base_url(),
-        )
+        # ``_apply_context_config``. Shared with the one-shot path
+        # (session_utils.build_summarizer) so both construct it identically.
+        self.summarizer = build_summarizer(config)
         # Offload middleware (IMPROVEMENTS.md E1): large tool outputs go
         # to disk and the context keeps head/tail + path.
-        self.offload = OffloadMiddleware(
-            max_chars=config.offload_max_chars,
-            head_chars=config.offload_head_chars,
-            tail_chars=config.offload_tail_chars,
-            output_dir=config.compacted_dir,
-        )
+        self.offload = build_offload(config)
         self._apply_context_config()
 
         # Per-tool permission gate (IMPROVEMENTS.md A1). ``ask``-level
@@ -215,6 +207,9 @@ class SessionController:
         self.permission_middleware = build_permission_middleware(
             on_ask=self._ask_permission,
         )
+        # Assembled in _rebuild_engine; retained so sub-agents inherit the
+        # gate via context.extra["middlewares"] (#174/F-01).
+        self._middlewares: list[AgentMiddleware] = []
 
         # Build the runtime (chat client, tools, plugins, engine).
         self._rebuild_engine()
@@ -318,13 +313,11 @@ class SessionController:
     def _vllm_base_url(self) -> str | None:
         """Effective vLLM base URL for context-window lookups.
 
-        Mirrors the resolution order used by :func:`build_chat`
-        (models.json override, then ``config.vllm_base_url``) so the
-        resolver queries the same server the chat client talks to.
-        ``None`` lets the resolver fall back to its own default.
+        Delegates to the shared :func:`session_utils.vllm_base_url` helper
+        so the REPL, one-shot and sub-agent paths all resolve the URL the
+        same way (models.json override, then ``config.vllm_base_url``).
         """
-        base_url = provider_settings(load_models_file(), "vllm").get("base_url")
-        return base_url or self.config.vllm_base_url
+        return vllm_base_url(self.config)
 
     def _apply_context_config(self) -> None:
         """Project the E1 context-management settings onto the middlewares.
@@ -402,15 +395,18 @@ class SessionController:
 
         plugins = self._build_plugin_specs()
 
-        # Middleware order matters: offload rewrites tool results first
-        # (so oversized outputs never reach the summarizer's context
-        # accounting), then the summarizer may compact, then the
-        # permission gate intercepts tool calls. Offload only joins the
-        # chain when ``offload_tool_outputs`` is enabled (E1).
-        middlewares: list[AgentMiddleware] = []
-        if self.config.offload_tool_outputs:
-            middlewares.append(self.offload)
-        middlewares.extend([self.summarizer, self.permission_middleware])
+        # Middleware chain via the shared helper (single source of truth
+        # for order/gating — offload first, then summarizer, then the
+        # permission gate, with offload gated on ``offload_tool_outputs``).
+        middlewares: list[AgentMiddleware] = build_middlewares(
+            config=self.config,
+            offload=self.offload,
+            summarizer=self.summarizer,
+            permission=self.permission_middleware,
+        )
+        # Retained so the sub-agent tools can hand the *same* chain to each
+        # sub-engine via ``context.extra["middlewares"]`` (#174/F-01).
+        self._middlewares = middlewares
 
         self.engine = AgentEngine(
             chat=self.chat,
@@ -489,6 +485,9 @@ class SessionController:
         # Interactive confirmations (safe_mode bash). None → the tool
         # fails closed (one-shot / non-interactive front ends).
         self.engine.context.extra["bash_confirmation"] = self.confirmation
+        # The middleware chain, handed to sub-agents so the permission gate
+        # applies to their tool calls too (#174/F-01).
+        self.engine.context.extra["middlewares"] = self._middlewares
 
         # Monitor plugin (I-126): inject a *provider* (callable), not a
         # snapshot — new_session()/load_session() swap the tree without
