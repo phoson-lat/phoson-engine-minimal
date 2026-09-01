@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.23.0 (Unreleased)
+
+### Features
+
+- **Command palette (Ctrl+P) + `!` shell (T-12, #162)**:
+  - *Command palette:* `Ctrl+P` opens a single fuzzy-searchable picker over
+    every native **and** plugin slash command (`/model`, `/theme`, `/sessions`,
+    …). `↑/↓` + `PageUp/Down` navigate, `enter` runs the selected command
+    (empty args, through the normal `/command` path), `esc` closes. It reuses
+    the shared fuzzy scorer and Float-hosting scaffolding, so it opens exactly
+    like the model/theme/session pickers.
+  - *`!` shell:* a line beginning with `!` runs the rest in the user's shell
+    instead of sending an agent turn. The command is gated by the same bash
+    permission policy the agent's tool uses — allow → runs, ask → the T-6
+    confirmation card (Yes / **Always** / No), deny → refused — and the output
+    enters the transcript as a normal bash tool card, so it reads identically
+    whether the agent or the user ran it. `/details` can re-collapse it like
+    any other finished tool call.
+
 ## v0.22.0 (2026-09-01)
 
 ### Enhancements

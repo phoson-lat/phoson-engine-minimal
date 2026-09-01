@@ -817,6 +817,13 @@ class PhosonApp:
         self._prompt_input.buffer.append_to_history()
         self._prompt_input.text = ""
         self._auto_scroll = True
+        # T-12: a leading "!" (with the rest non-blank) is a shell command,
+        # not an agent turn or a slash command.
+        if text.startswith("!") and text[1:].strip():
+            self._run_task = self.app.create_background_task(
+                self._run_bash_line(text[1:].strip())
+            )
+            return
         self._run_task = self.app.create_background_task(self._dispatch(text))
 
     def insert_newline(self) -> None:
@@ -903,6 +910,108 @@ class PhosonApp:
             if activity_active or subagents_active:
                 self.sink.dirty = True
                 self.app.invalidate()
+
+    # ── T-12: command palette + `!` bash ───────────────────────────────
+
+    def open_command_palette(self) -> None:
+        """Ctrl+P: open the command palette over every slash command (T-12).
+
+        The palette is a modal Float (like the model/theme pickers), so it
+        can be opened from a calm screen and its confirm dispatches the
+        chosen command through the normal ``/command`` path.
+        """
+        if self._active_float is not None:
+            return  # a picker/confirmation is already open
+        if self._is_run_in_flight():
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first.",
+            )
+            return
+        self.app.create_background_task(self._run_command_palette())
+
+    async def _run_command_palette(self) -> None:
+        from ..palette_picker import (
+            PaletteEntry,
+            PalettePickerResult,
+            build_command_palette,
+        )
+
+        catalog = self.repl._controller.command_catalog
+        entries: list[PaletteEntry] = []
+        for spec in catalog.specs:
+            display = " · ".join(spec.names) if len(spec.names) > 1 else spec.primary
+            entries.append(
+                PaletteEntry(
+                    name=spec.primary,
+                    display=display,
+                    help=spec.help,
+                )
+            )
+        if not entries:
+            self.sink.notify("info", "No commands available.")
+            return
+        picker = build_command_palette(entries, theme=self.theme)
+        result = await self.run_float_picker(picker)
+        if not isinstance(result, PalettePickerResult):
+            return
+        if result.cancelled or not result.command_name:
+            return
+        if self._is_run_in_flight():
+            # A run could have started while the float was open.
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first.",
+            )
+            return
+        await self._run_command(Command(name=result.command_name, args=""))
+
+    async def _run_bash_line(self, command: str) -> None:
+        """T-12: run a ``!``-prefixed shell command, respecting T-6 perms.
+
+        The command is gated by the same bash permission policy the agent's
+        bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
+        refused). The result is rendered as a normal bash tool card, so the
+        transcript reads identically whether the agent or the user ran it.
+        """
+        from ..tools.bash import _run_bash
+        from ..permissions_store import (
+            LEVEL_ASK,
+            LEVEL_DENY,
+            load_policy,
+        )
+
+        policy = load_policy()
+        decision = policy.check("bash", command)
+        if decision == LEVEL_DENY:
+            self.sink.add_bash_card(command, "", error="denied by permissions policy")
+            self.app.invalidate()
+            return
+        if decision == LEVEL_ASK:
+            allowed = await self.run_float_bash_card(
+                command,
+                on_always=lambda cmd: self.repl._controller._remember_bash_pattern(cmd),
+            )
+            if not allowed:
+                self.sink.add_bash_card(command, "", error="denied by the user")
+                self.app.invalidate()
+                return
+
+        started = time.monotonic()
+        result = await _run_bash(command)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Infra-level failures (spawn / timeout) are execution errors, not
+        # command output — render them as an ✗ card. A non-zero exit code
+        # still yields its stdout+stderr as the card body, matching how the
+        # agent's bash tool reports results.
+        low = result.strip().lower()
+        error = None
+        if low.startswith("command timed out") or low.startswith(
+            "failed to spawn shell"
+        ):
+            error = result.strip()
+        self.sink.add_bash_card(command, result, duration_ms=elapsed_ms, error=error)
+        self.app.invalidate()
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
 

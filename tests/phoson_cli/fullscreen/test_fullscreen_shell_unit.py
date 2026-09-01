@@ -1210,3 +1210,154 @@ def test_ctrl_e_binding_is_registered(app: PhosonApp) -> None:
 
     assert DEFAULT_KEY_BINDINGS["cycle_reasoning_effort"] == ["c-e"]
     _trigger(app, "c-e")  # raises KeyError if the binding were unregistered
+
+
+# ─── T-12: command palette (Ctrl+P) + `!` bash ───────────────────────────────
+
+
+def _set_palette_catalog(app: PhosonApp) -> None:
+    """Give the controller a command catalog with a known spec."""
+    from phoson_cli.commands import CommandSpec, CommandCatalog
+
+    app.repl._controller.command_catalog = CommandCatalog(
+        specs=(CommandSpec(("/help",), "Show this help", "_cmd_help"),),
+        plugin_commands={},
+    )
+
+
+async def test_t12_ctrl_p_opens_palette_and_dispatches_selected_command(
+    app: PhosonApp, monkeypatch
+) -> None:
+    _set_palette_catalog(app)
+    dispatched: list[str] = []
+
+    async def fake_run_command(cmd) -> None:
+        dispatched.append(cmd.name)
+
+    monkeypatch.setattr(app, "_run_command", fake_run_command)
+
+    # Fake the palette picker so we don't drive real Float + key input.
+    async def fake_run_float_picker(picker):
+        from phoson_cli.palette_picker import PalettePickerResult
+
+        return PalettePickerResult(command_name="/help")
+
+    monkeypatch.setattr(app, "run_float_picker", fake_run_float_picker)
+    started = asyncio.Event()
+
+    def fake_create_bg_task(coro):
+        started.set()
+        return asyncio.ensure_future(coro)
+
+    monkeypatch.setattr(app.app, "create_background_task", fake_create_bg_task)
+
+    _trigger(app, "c-p")
+    await started.wait()
+    await asyncio.sleep(0)
+    assert dispatched == ["/help"]
+
+
+async def test_t12_ctrl_p_is_a_noop_while_a_run_is_in_flight(app: PhosonApp) -> None:
+    app._run_task = MagicMock()
+    app._run_task.done.return_value = False
+    app.sink.blocks.clear()
+    try:
+        _trigger(app, "c-p")
+        await asyncio.sleep(0)
+        # The warn notification landed; no palette was opened (no float).
+        assert app._active_float is None
+        assert app.sink.blocks, "expected a warning notice"
+    finally:
+        app._run_task = None
+
+
+def test_t12_ctrl_p_binding_is_registered(app: PhosonApp) -> None:
+    target = "c-p"
+    for binding in app.app.key_bindings.bindings:
+        for k in binding.keys:
+            value = getattr(k, "value", str(k))
+            if str(value).lower() == target:
+                return
+    raise AssertionError("c-p is not bound to the command palette")
+
+
+async def test_t12_bang_prefix_runs_bash_not_agent(app: PhosonApp, monkeypatch) -> None:
+    from phoson_agent.permissions import PermissionPolicy
+
+    monkeypatch.setattr(
+        "phoson_cli.permissions_store.load_policy",
+        lambda *a, **k: PermissionPolicy(levels={"bash": "allow"}),
+    )
+    with (
+        patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)) as run,
+        patch(
+            "phoson_cli.tools.bash._run_bash",
+            new=AsyncMock(return_value="hello"),
+        ) as run_bash,
+    ):
+        app._prompt_input.text = "! echo hi"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    run_bash.assert_awaited_once_with("echo hi")
+    run.assert_not_awaited()
+    assert "echo hi" in _transcript(app)
+
+
+async def test_t12_bang_bash_ask_policy_denies_when_user_says_no(
+    app: PhosonApp, monkeypatch
+) -> None:
+    from phoson_agent.permissions import PermissionPolicy
+
+    monkeypatch.setattr(
+        "phoson_cli.permissions_store.load_policy",
+        lambda *a, **k: PermissionPolicy(levels={"bash": "ask"}),
+    )
+    with (
+        patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)) as run,
+        patch.object(app, "run_float_bash_card", new=AsyncMock(return_value=False)),
+        patch(
+            "phoson_cli.tools.bash._run_bash", new=AsyncMock(return_value="x")
+        ) as run_bash,
+    ):
+        app._prompt_input.text = "! echo hi"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    run.assert_not_awaited()
+    run_bash.assert_not_awaited()
+    assert "denied by the user" in _transcript(app)
+
+
+async def test_t12_bang_bash_deny_policy_blocks(app: PhosonApp, monkeypatch) -> None:
+    from phoson_agent.permissions import PermissionPolicy
+
+    monkeypatch.setattr(
+        "phoson_cli.permissions_store.load_policy",
+        lambda *a, **k: PermissionPolicy(levels={"bash": "deny"}),
+    )
+    with (
+        patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)),
+        patch("phoson_cli.tools.bash._run_bash", new=AsyncMock(return_value="x")) as rb,
+    ):
+        app._prompt_input.text = "! echo hi"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    rb.assert_not_awaited()
+    assert "denied by permissions policy" in _transcript(app)
+
+
+def _transcript(app: PhosonApp) -> str:
+    """Plain text of the chat pane (ANSI stripped)."""
+    import re
+    import shutil
+
+    from phoson_cli.fullscreen.render import render_chat
+
+    width = max(40, shutil.get_terminal_size((80, 24)).columns - 4)
+    text = render_chat(app.sink, width, None)
+    return re.sub(r"\x1b\[[0-9;]*m|\x1b\][^\x1b]*\x1b\\|[\x01\x02]", "", text)
