@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.21.0 (Unreleased)
+
+### Features
+
+- **`/about` — the Phoson wordmark on demand (T-1)**: with the banner out
+  of the transcript, the art has a home. `/about` renders the wordmark +
+  provider/model/session meta into the pane on demand (via
+  `print_renderable`, so both front ends show it) and is listed in `/help`
+  under Info.
+
+### Enhancements
+
+- **TUI chrome dried up (T-1 + T-2)**:
+  - *Banner removed from the transcript (T-1, #151):* the 17-line Phoson
+    wordmark is no longer injected into the chat sink on startup / theme
+    change / rewind. The header already carries provider/model/session,
+    and the idle pane now shows a one-line empty-state hint
+    (`@ files · / commands`) instead. The art stays available via `/about`.
+  - *No per-turn "Phoson" label (T-2, #152):* `render_streaming_panel`
+    drops the word "Phoson" before every answer — the reply renders as
+    bare Markdown (plus the dim reasoning line when shown).
+    `render_assistant_label` is removed.
+  - *Badge chips → gutters (T-2, #152):* `render_user_turn` (and the
+    matching user rows in `render_history`) use a `›` accent gutter
+    instead of a filled ` user ` chip; `render_start_line` drops the
+    filled ` assistant ` badge (the header already shows the model);
+    history assistant turns are bare Markdown with no `Rule` separator,
+    so replay reuses the live-turn primitives. The `session history`
+    header is a subtle muted label, not a badge.
+  - *Background-free badges (T-2, #152):* `badge_user` / `badge_assistant`
+    / `badge_history` lose their `on #…` backgrounds in the dark and light
+    themes.
+  - *Header (T-2, #152):* idle no longer shows "Online" (the permission
+    chip already conveys state); the cost figure only appears when > 0;
+    and there is no dangling ` | ` separator when the status is empty.
+
+`formatting.py` / `theme.py` are shared, so the classic REPL receives the
+same dry chrome. Tests: banner-seeding tests now assert an empty sink +
+the empty-state hint; the "Phoson" / "user" / badge assertions assert the
+gutter + bare Markdown; the two badge-background theme tests are replaced
+by a no-background SGR check; new `/about` tests.
+
 ## v0.20.2 (2026-08-31)
 
 ### Fix
