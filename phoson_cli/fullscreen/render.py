@@ -33,6 +33,61 @@ from ..formatting import render_activity_line, render_streaming_panel
 from ..hyperlinks import osc8_passthrough
 
 
+def _line_boundaries(s: str) -> list[int]:
+    """Char offsets where each visual line starts, for *s*.
+
+    ``bounds[k]`` is the character index of the first character of visual
+    line ``k`` (line 0 starts at 0). ``len(bounds) == s.count('\\n') + 1``
+    — one past the last line's start, i.e. the number of visual lines
+    prompt_toolkit's ``split_lines`` would produce over *s* (it splits on
+    ``\\n`` exactly like ``str.split``). A trailing newline therefore adds a
+    final boundary pointing at the end of the string (the empty trailing
+    line), matching ``split_lines`` which always yields a final line.
+
+    T-14 (#171): the chat pane is *windowed* — the full cached transcript
+    string is sliced at these boundaries so prompt_toolkit only ever sees
+    the visible window. Because Rich re-asserts each line's SGR state after
+    every newline, slicing at a line boundary and re-parsing yields the same
+    *visible text* per line as parsing the full string (see
+    ``test_t14_windowing_unit``); fragment boundaries at a slice edge can
+    differ cosmetically (a leading empty fragment) but render identically.
+    """
+    bounds: list[int] = [0]
+    i = 0
+    while True:
+        j = s.find("\n", i)
+        if j < 0:
+            break
+        bounds.append(j + 1)
+        i = j + 1
+    return bounds
+
+
+def windowed_slice(full_ansi: str, bounds: list[int], top: int, height: int) -> str:
+    """Slice *full_ansi* to visual lines ``[top, top+height)``.
+
+    *bounds* is ``_line_boundaries(full_ansi)``; ``bounds[k]`` is the start
+    offset of visual line ``k`` and ``len(bounds)`` is the number of visual
+    lines. Returns the substring from the start of line *top* to the start of
+    line ``top+height`` — or the end of the string when the window reaches the
+    last line (whose start is ``bounds[-1]`` and whose end is the string end,
+    not another boundary). The result is a contiguous run of complete visual
+    lines and re-parses to the same visible text as the full string's lines
+    ``top .. top+height-1``, so ``ANSI(...)`` on it is render-equivalent.
+    """
+    total = len(bounds)  # number of visual lines (each bounds[k] = line k's start)
+    if total <= 0 or height <= 0:
+        return ""
+    top = max(0, top)
+    if top >= total:
+        return ""
+    end_line = min(top + height, total)
+    start = bounds[top]
+    # The window's last line is the string's last line: extend to the end.
+    stop = bounds[end_line] if end_line < total else len(full_ansi)
+    return full_ansi[start:stop]
+
+
 def _make_console(buf: io.StringIO, width: int) -> Console:
     return Console(
         file=buf,
@@ -91,10 +146,20 @@ class BlockAnsiCache:
         self._width = width
 
 
-def render_chat(
+def render_chat_split(
     sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
-) -> str:
-    """Render the sink's transcript (history + in-flight turn) to ANSI text.
+) -> tuple[str, int]:
+    """Render the sink's transcript to ``(ansi_text, frozen_prefix_len)``.
+
+    *frozen_prefix_len* is the length of the **frozen** portion of the
+    rendered text — the concatenated immutable transcript blocks — before
+    the in-flight turn (activity line + streaming panel) is written. The
+    frozen portion never changes while a turn streams (only *appends* add
+    blocks), so the caller (``PhosonApp._render_chat``) can cache the
+    frozen part's line boundaries and re-scan only the small in-flight tail
+    per frame (T-14 follow-up: the per-frame line-bounds build becomes
+    O(visible) during streaming instead of O(transcript) — see
+    ``PhosonApp._compute_chat_bounds``).
 
     When *cache* is given (the app's steady-state path), immutable
     transcript blocks are rendered at most once per width; without it,
@@ -114,10 +179,14 @@ def render_chat(
         _make_console(buf, width).print(
             "  @ files  ·  / commands", style=sink.theme.muted_deep
         )
-        return buf.getvalue()
+        return buf.getvalue(), 0
 
     for block in sink.blocks:
         buf.write(cache.get_or_render(block, width))
+
+    # Length of the frozen prefix (all immutable blocks, written above).
+    # The in-flight turn appended below does not alter it while streaming.
+    prefix_len = buf.tell()
 
     turn = sink.current_turn
     if turn is not None:
@@ -174,7 +243,21 @@ def render_chat(
         if panel is not None:
             console.print(panel)
 
-    return buf.getvalue()
+    return buf.getvalue(), prefix_len
 
 
-__all__ = ["BlockAnsiCache", "render_chat"]
+def render_chat(
+    sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
+) -> str:
+    """Render the sink's transcript (history + in-flight turn) to ANSI text.
+
+    Backward-compatible wrapper around :func:`render_chat_split` for
+    callers that only need the text (tests, one-off renders). The
+    steady-state app path uses :func:`render_chat_split` directly so it can
+    cache the frozen prefix's line boundaries.
+    """
+    text, _ = render_chat_split(sink, width, cache)
+    return text
+
+
+__all__ = ["BlockAnsiCache", "render_chat", "render_chat_split"]
