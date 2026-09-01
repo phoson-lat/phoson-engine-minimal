@@ -1,6 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.0** (T-14 windowing + spinner fix merged en `84e44b7`) · 1908 tests pasados · ruff/pyright limpios.
+> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.1** (v0.24.0: T-14 windowing + spinner fix en `84e44b7`; v0.24.1: follow-up TUI F-41/42/44 en `df2fd70`) · 1908 tests pasados · ruff/pyright limpios.
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -15,7 +15,7 @@
 | Área | Estado |
 |---|---|
 | Look del TUI (T-1…T-13) | ✅ Todo shipped v0.20.0–v0.23.0. T-11 (ADR renderer) cerrado. |
-| Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). Follow-up #186 (F-41/42/44) en **PR #190** (abierto). T-15 (#172) pendiente. |
+| Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🔴 #174 (sub-agentes y one-shot sin permisos), #175 (`fnmatch` sobre comando completo), #183 (SSRF), #182 (`@import` fuera del repo). |
 | Loop | 🔴 #176 (compactación rompe pares), #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). |
@@ -32,7 +32,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 |---|---|---|---|---|---|---|
 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bench ignora `--model/--provider` | H-0 | — | — | ✅ **cerrado** | Fix en `f1b3d04` (main); verificado y cerrado el 2026-09-01. Deriva docs↔GitHub que #146 debería detectar. |
 | [#171](https://github.com/phoson-lat/phoson-engine-minimal/issues/171) | T-14 windowing del chat pane | T-14 | 🟠 perf | M | ✅ **cerrado** | Merged en PR #173 (`84e44b7`); F-40 corregido en `40c8022`. Follow-up F-41/42/44 en #186. |
-| [#186](https://github.com/phoson-lat/phoson-engine-minimal/issues/186) | TUI: ANSI/OSC crudo en bash, fingerprint sin generación, docstring O(visible) | F-41, F-42, F-44 | 🟠 | S | **A** (PR #190) | Follow-up de #171; misma zona de código. PR #190 abierto 2026-09-01: `Text.from_ansi` + strip OSC en `_bash_output_body`, `generation` en fingerprint de `_compute_chat_bounds`, docstring/CHANGELOG corregidos. 5 tests nuevos. |
+| [#186](https://github.com/phoson-lat/phoson-engine-minimal/issues/186) | TUI: ANSI/OSC crudo en bash, fingerprint sin generación, docstring O(visible) | F-41, F-42, F-44 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.1 (PR #190, `df2fd70`, cerrado 2026-09-01): `Text.from_ansi` + strip OSC en `_bash_output_body`, `generation` en fingerprint de `_compute_chat_bounds`, docstring/CHANGELOG corregidos. 5 tests nuevos. |
 | [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | **A** | Absorbe #141. Contradice "fail-closed en no-interactivo" de reporte-harness/IMPROVEMENTS. Prerrequisito de #129 slice 5. |
 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | **A** | Mismo PR que #174: el hueco es "one-shot sin controles", no solo sin tope de tiempo. |
 | [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | **A** | Bug del mecanismo actual; no espera a la taxonomía de #144. #169 lo heredaría. |
@@ -73,13 +73,13 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 
 Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar PRs de seguridad con PRs de look o perf.
 
-### Sprint A — v0.24.0 · corrección y seguridad (esta semana)
+### Sprint A — corrección y seguridad (v0.24.0 + v0.24.1)
 
 ```
 1. Mergear PR #173 (T-14 + fix F-40).                                        ✅ merged 84e44b7 (v0.24.0)
 2. Cerrar #138 en GitHub.                                                    ✅ hecho
 3. #186   TUI follow-up: strip de control codes en bash, generación en el
-          fingerprint, docstring/CHANGELOG.                                    ✅ PR #190 (abierto)
+          fingerprint, docstring/CHANGELOG.                                    ✅ shipped v0.24.1 (PR #190, df2fd70)
 4. #174 + #141   Fronteras: helper compartido de middlewares; sub-agentes
           heredan Permission + safe_mode + confirmation (fail-closed sin
           callback); one-shot construye Offload → Summarizer → Permission;
