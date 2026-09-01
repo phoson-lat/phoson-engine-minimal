@@ -48,6 +48,10 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     "scroll_end": ["end"],
     "clear": ["c-l"],
     "toggle_reasoning": ["c-t"],
+    # Ctrl+E cycles the reasoning effort off → low → medium → high →
+    # xhigh → max (mnemonic: E = effort). Ctrl+T stays the show/hide
+    # toggle for the reasoning block — the two are different axes.
+    "cycle_reasoning_effort": ["c-e"],
     "ctrl_d": ["c-d"],
     "paste_image": ["c-v"],
     "escape": ["escape"],
@@ -74,6 +78,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "scroll_end": "scroll_end",
     "clear": "clear",
     "toggle_reasoning": "toggle_reasoning",
+    "cycle_reasoning_effort": "cycle_reasoning_effort",
     "ctrl_d": "handle_ctrl_d",
     "paste_image": "paste_image",
     "escape": "handle_escape",

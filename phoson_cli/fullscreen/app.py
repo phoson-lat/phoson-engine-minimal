@@ -616,6 +616,16 @@ class PhosonApp:
             if perm_mode == "ask"
             else ' <style class="header_dim">· auto</style>'
         )
+        # Reasoning-effort chip (Ctrl+E): dim when off, accent with the
+        # level when set. Read straight from the in-memory config (the
+        # cycle mutates it before invalidating the cache below), so no
+        # throttle like the permission policy file read is needed.
+        effort = self.repl.config.reasoning_effort
+        effort_part = (
+            f' <style class="header">effort: {effort}</style>'
+            if effort in REASONING_EFFORTS
+            else ' <style class="header_dim">· effort off</style>'
+        )
 
         key = (
             model_provider,
@@ -627,6 +637,7 @@ class PhosonApp:
             update_part,
             status,
             perm_mode,
+            effort or "",  # None (off) and "" hash identically for cache-key purposes
         )
         if self._header_cache_key != key:
             self._header_cache_key = key
@@ -640,6 +651,7 @@ class PhosonApp:
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{token_cost}</style>'
                 f"{mode_part}"
+                f"{effort_part}"
                 f'<style class="header_dim">{extras}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{status}</style>'
@@ -1164,6 +1176,32 @@ class PhosonApp:
                 if new_mode == "ask"
                 else " — bash runs freely (per-tool rules: /permissions)"
             ),
+        )
+
+    def cycle_reasoning_effort(self) -> None:
+        """Ctrl+E: cycle the reasoning effort off → low → medium → high →
+        xhigh → max (wraps to off).
+
+        Mirrors the T-6 permission-mode cycle: the value lives on the
+        durable config (persisted like ``/reasoning-effort``), the run
+        picks it up at the *next* turn (the controller reads
+        ``config.reasoning_effort`` when building each run's ModelConfig),
+        the header chip refreshes immediately, and the user is told the
+        new state + how to set it explicitly. Ctrl+T stays the
+        show/hide toggle for the reasoning block — different axis.
+        """
+        current = self.repl.config.reasoning_effort
+        if current not in REASONING_EFFORTS:
+            current = None  # "off"
+        levels = (*REASONING_EFFORTS, None)
+        next_effort = levels[(levels.index(current) + 1) % len(levels)]
+        self.repl.config.reasoning_effort = next_effort
+        save_config(self.repl.config, only_fields={"reasoning_effort"})
+        self._header_cache_key = None  # rebuild the chip on the next frame
+        self.sink.notify(
+            "info",
+            f"Reasoning effort → {next_effort or 'off'}"
+            " · applies from the next turn (explicit: /reasoning-effort)",
         )
 
     def keys_listing(self) -> list[tuple[str, str]]:

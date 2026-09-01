@@ -1047,3 +1047,73 @@ async def test_run_async_captures_warnings_for_the_session_only(
     finally:
         warnings.showwarning = original_showwarning
         logging.captureWarnings(False)
+
+
+# ─── Reasoning-effort chip + Ctrl+E cycle ─────────────────────────────────────
+
+
+def _no_real_config_save(monkeypatch) -> list[tuple[object, dict]]:
+    """Keep the cycle's persistence out of the developer's real config.toml."""
+    from phoson_cli import fullscreen as fs
+
+    saved: list[tuple[object, dict]] = []
+    monkeypatch.setattr(
+        fs.app, "save_config", lambda config, **kwargs: saved.append((config, kwargs))
+    )
+    return saved
+
+
+def test_header_shows_effort_off_chip_by_default(app: PhosonApp) -> None:
+    app.repl.config.reasoning_effort = None
+    header = app._get_header_text().value
+    assert "effort off" in header
+
+
+def test_header_shows_effort_level_when_set(app: PhosonApp) -> None:
+    app.repl.config.reasoning_effort = "high"
+    header = app._get_header_text().value
+    assert "effort: high" in header
+    assert "effort off" not in header
+
+
+def test_ctrl_e_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
+    """Ctrl+E cycles off → low → … → max → off, persists, and repaints the
+    chip immediately (T-6 pattern). The run picks the value up at the next
+    turn, so no in-flight run is affected."""
+    from phoson_llm.schemas import REASONING_EFFORTS
+
+    saved = _no_real_config_save(monkeypatch)
+    app.repl.config.reasoning_effort = None
+
+    _trigger(app, "c-e")  # off → low
+    assert app.repl.config.reasoning_effort == "low"
+    assert "effort: low" in app._get_header_text().value
+    assert saved and saved[-1][1].get("only_fields") == {"reasoning_effort"}
+
+    for expected in ("medium", "high", "xhigh", "max"):
+        _trigger(app, "c-e")
+        assert app.repl.config.reasoning_effort == expected
+    assert REASONING_EFFORTS[-1] == "max"  # the cycle must cover them all in order
+
+    _trigger(app, "c-e")  # max → off (wraps)
+    assert app.repl.config.reasoning_effort is None
+    assert "effort off" in app._get_header_text().value
+
+
+def test_ctrl_e_does_not_touch_the_reasoning_visibility_toggle(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """Ctrl+E changes the *level*; Ctrl+T (toggle_reasoning) still owns the
+    show/hide axis — cycling effort must not flip the visibility default."""
+    _no_real_config_save(monkeypatch)
+    before = app.sink.show_reasoning_default
+    app.repl.config.reasoning_effort = None
+    _trigger(app, "c-e")
+    assert app.sink.show_reasoning_default is before
+
+
+def test_ctrl_e_binding_is_registered(app: PhosonApp) -> None:
+    from phoson_cli.fullscreen.keys import DEFAULT_KEY_BINDINGS
+
+    assert DEFAULT_KEY_BINDINGS["cycle_reasoning_effort"] == ["c-e"]
+    _trigger(app, "c-e")  # raises KeyError if the binding were unregistered

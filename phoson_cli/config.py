@@ -347,6 +347,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "scroll_end",
     "clear",
     "toggle_reasoning",
+    "cycle_reasoning_effort",
     "ctrl_d",
     "paste_image",
     "escape",
