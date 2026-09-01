@@ -602,7 +602,6 @@ def test_app_apply_theme_recolors_everything(monkeypatch) -> None:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("phoson_cli.controller.build_chat", lambda config: MagicMock())
         app = PhosonApp(PhosonConfig(provider="ollama"))
-        original_banner = app._banner_block
         assert app.theme is SYSTEM
 
         app.apply_theme(LIGHT)
@@ -610,9 +609,10 @@ def test_app_apply_theme_recolors_everything(monkeypatch) -> None:
     assert app.theme is LIGHT
     assert app.sink.theme is LIGHT
     assert app.repl.theme is LIGHT
-    # The banner block is re-rendered in place (same position, new object).
-    assert app.sink.blocks[0] is not original_banner
-    assert app.sink.blocks[0] is app._banner_block
+    # T-1: no banner block is ever in the sink, so apply_theme has no
+    # block to re-render in place — the transcript stays untouched.
+    assert app.sink.blocks == []
+    assert app._banner_block is None
     # ANSI cache dropped so the chat pane repaints.
     assert app._block_ansi_cache._width == 0
 
@@ -766,7 +766,6 @@ async def test_tui_theme_explicit_arg_recolors_app(tmp_path, monkeypatch) -> Non
                 history_file=tmp_path / "history.txt",
             )
         )
-        original_banner = app._banner_block
 
         app._prompt_input.text = "/theme light"
         app.submit()
@@ -777,9 +776,9 @@ async def test_tui_theme_explicit_arg_recolors_app(tmp_path, monkeypatch) -> Non
     assert app.theme is LIGHT
     assert app.repl.theme is LIGHT
     assert app.sink.theme is LIGHT
-    # The banner was re-rendered in place (same slot, new object).
-    assert app.sink.blocks[0] is app._banner_block
-    assert app._banner_block is not original_banner
+    # T-1: no banner is re-rendered in place — the transcript only gains
+    # the "Theme → light" notification.
+    assert app._banner_block is None
     assert saved == [("light", {"only_fields": {"theme"}})]
     assert app.app.style is not None
     # The "Theme → light" notification landed in the transcript.

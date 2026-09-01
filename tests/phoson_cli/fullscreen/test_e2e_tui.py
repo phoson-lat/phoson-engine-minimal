@@ -81,7 +81,10 @@ async def test_pipe_input_ctrl_l_clears_transcript(tmp_path) -> None:
             app = PhosonApp(config)
             app.app.input = pipe
             app.app.output = DummyOutput()
-            assert len(app.sink.blocks) > 0  # has welcome banner
+            # T-1: the sink starts empty (no banner). Add a notice so there
+            # is a block for Ctrl+L to clear.
+            app.sink.notify("info", "hello")
+            assert len(app.sink.blocks) == 1
 
             async def drive_app():
                 await asyncio.sleep(0.02)
@@ -330,7 +333,7 @@ def test_golden_snapshot_empty_transcript() -> None:
     cache = BlockAnsiCache()
     sink = FullScreenSink(on_invalidate=lambda: None, theme=DARK)
     rendered = render_chat(sink, width=60, cache=cache)
-    assert "Type a message and press Enter." in rendered
+    assert "/ commands" in rendered
     assert "\x1b[" in rendered  # ANSI styling present
 
 

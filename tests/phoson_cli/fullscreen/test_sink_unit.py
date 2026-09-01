@@ -476,7 +476,7 @@ def test_notify_and_attachments_append_blocks() -> None:
 
 def test_render_chat_placeholder_when_empty() -> None:
     sink, _ = _make_sink()
-    assert "Type a message" in render_chat(sink, width=80)
+    assert "/ commands" in render_chat(sink, width=80)
 
 
 # ── I-84: repaint throttling ─────────────────────────────────────────────────

@@ -59,7 +59,9 @@ from ..theme import (
     build_picker_style_dict,
 )
 from .render import BlockAnsiCache, render_chat
-from .._views import render_banner
+
+# render_banner is no longer imported here (T-1: the banner is not injected
+# into the sink). It is used by the /about command in commands.py.
 from ..config import (
     PhosonConfig,
     save_config,
@@ -295,14 +297,11 @@ class PhosonApp:
         self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
         self.apply_theme(load_theme(config.theme, registry=self.repl.theme_registry))
 
-        self._banner_block = render_banner(
-            provider=self.repl.config.provider,
-            model=self.repl.current_model,
-            session_id=self.repl.tree.session_id,
-            theme=self.theme,
-            show_meta=False,  # shown in the header instead — not twice
-        )
-        self.sink.blocks.append(self._banner_block)
+        # T-1: the banner is no longer injected into the sink. The header
+        # already carries provider/model/session; the art is available via
+        # /about. The empty-state hint in render_chat is the only thing
+        # the user sees before their first message.
+        self._banner_block = None
 
     # ── Layout ───────────────────────────────────────────────────────────
 
@@ -472,24 +471,6 @@ class PhosonApp:
         self.theme = theme
         self.repl.apply_theme(theme)
         self.sink.theme = theme
-        banner_block = getattr(self, "_banner_block", None)
-        if banner_block is not None:
-            try:
-                index = self.sink.blocks.index(banner_block)
-            except ValueError:
-                # The transcript was cleared (/clear) while the reference was
-                # held — the banner is no longer in the pane and a cleared
-                # transcript intentionally has none, so don't re-insert it.
-                self._banner_block = None
-            else:
-                self._banner_block = render_banner(
-                    provider=self.repl.config.provider,
-                    model=self.repl.current_model,
-                    session_id=self.repl.tree.session_id,
-                    theme=self.theme,
-                    show_meta=False,
-                )
-                self.sink.blocks[index] = self._banner_block
         self._apply_style()
         self._block_ansi_cache.clear(0)
         self._header_cache_key = None  # rebuild header for the new palette
@@ -1417,7 +1398,7 @@ class PhosonApp:
         )
 
     def _reset_transcript(self) -> None:
-        """Drop the transcript and its ANSI cache, re-seeding the banner.
+        """Drop the transcript and its ANSI cache.
 
         Rewind/undo-redraws (G1) rebuild the pane from the tree; the
         immutable-block cache must be dropped too, otherwise old
@@ -1426,14 +1407,7 @@ class PhosonApp:
         self.sink.blocks.clear()
         self.sink.drop_error_notice()
         self._block_ansi_cache.clear(0)
-        self._banner_block = render_banner(
-            provider=self.repl.config.provider,
-            model=self.repl.current_model,
-            session_id=self.repl.tree.session_id,
-            theme=self.theme,
-            show_meta=False,
-        )
-        self.sink.blocks.append(self._banner_block)
+        self._banner_block = None
         self.sink.dirty = True
         self.app.invalidate()
 
