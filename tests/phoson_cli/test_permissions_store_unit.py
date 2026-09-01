@@ -1,6 +1,7 @@
 """Tests for the CLI permission store and /permissions (A1 phase 1)."""
 
 import json
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from phoson_agent.permissions import LEVEL_ASK, LEVEL_DENY, PermissionPolicy
 from phoson_cli.permissions_store import (
     set_level,
+    glob_quote,
     add_pattern,
     load_policy,
     save_policy,
@@ -23,6 +25,19 @@ def policy_file(tmp_path, monkeypatch) -> Path:
     target = tmp_path / "permissions.json"
     monkeypatch.setattr(permissions_store, "DEFAULT_PERMISSIONS_FILE", target)
     return target
+
+
+def test_glob_quote_matches_exactly_via_fnmatch() -> None:
+    """T-6: a quoted command matches itself and nothing else — using the
+    same fnmatch the PermissionMiddleware applies to allow patterns."""
+
+    for command in ("rm -rf /tmp/x", "ls a[b] c", "echo *", "git ?status", "a[]b"):
+        pattern = glob_quote(command)
+        assert fnmatch.fnmatch(command, pattern), (command, pattern)
+        assert not fnmatch.fnmatch(command + "Z", pattern), (command, pattern)
+        # A plain glob would be dangerous: the quoted form must NOT act
+        # like one.
+        assert glob_quote("echo *") == "echo [*]"
 
 
 def test_load_policy_returns_empty_when_file_missing(policy_file) -> None:

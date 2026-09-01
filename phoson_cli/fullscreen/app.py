@@ -21,7 +21,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Awaitable
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -206,6 +206,21 @@ def _skill_names() -> list[str]:
         return []
 
 
+def _bash_card_rows(command: str) -> list[tuple[str, str]]:
+    """T-6: the permission card's content fragments (testable unit).
+
+    Title + the command in monospace + the three actions. The Float
+    wrapper (:meth:`PhosonApp.run_float_bash_card`) renders exactly
+    these rows, so the test suite asserts on this function.
+    """
+    return [
+        ("class:title", "  Run bash command?\n\n"),
+        ("class:prompt.model", f"  $ {command}\n"),
+        ("\n", ""),
+        ("class:footer", "  [y] Yes    [a] Always    [n] No / Esc\n"),
+    ]
+
+
 class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
 
@@ -236,6 +251,11 @@ class PhosonApp:
         # Header AGENTS.md indicator cache (see `_has_agents_md`).
         self._agents_md_cached: bool | None = None
         self._agents_md_checked_at: float = 0.0
+        # Header permission-mode chip cache (T-6): the policy file is only
+        # re-read at most once per second — the header repaints on every
+        # frame and must not stat the disk each time (I-84).
+        self._perm_mode_cached: str | None = None
+        self._perm_mode_checked_at: float = 0.0
         # Header HTML cache (I-84): rebuilt only when an input changes.
         self._header_cache_key: tuple[str, ...] | None = None
         self._header_cache = HTML("")
@@ -581,6 +601,14 @@ class PhosonApp:
         # front ends (the TUI starts it in ``run_async``).
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
+        # Permission-mode chip (T-6): always visible; the accent word for
+        # the *ask* state (confirmations are coming), dim for auto.
+        perm_mode = self._permission_mode()
+        mode_part = (
+            ' <style class="header">ask</style>'
+            if perm_mode == "ask"
+            else ' <style class="header_dim">· auto</style>'
+        )
 
         key = (
             model_provider,
@@ -591,6 +619,7 @@ class PhosonApp:
             monitors_part,
             update_part,
             status,
+            perm_mode,
         )
         if self._header_cache_key != key:
             self._header_cache_key = key
@@ -603,12 +632,31 @@ class PhosonApp:
                 f'<style class="header_dim">{cwd}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{token_cost}</style>'
+                f"{mode_part}"
                 f'<style class="header_dim">{extras}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{status}</style>'
                 f'<style class="header_dim">{update_part}</style>'
             )
         return self._header_cache
+
+    def _permission_mode(self) -> str:
+        """Current permission mode for the header chip (T-6).
+
+        ``ask`` when the durable policy puts bash on the ask level,
+        ``auto`` otherwise (allow is the default for unlisted tools).
+        The policy file is re-read at most once per second; Shift+Tab
+        (``cycle_permission_mode``) refreshes it immediately.
+        """
+        now = time.monotonic()
+        if self._perm_mode_cached is None or now - self._perm_mode_checked_at >= 1.0:
+            from ..permissions_store import load_policy
+
+            self._perm_mode_cached = (
+                "ask" if load_policy().levels.get("bash") == "ask" else "auto"
+            )
+            self._perm_mode_checked_at = now
+        return self._perm_mode_cached
 
     def _get_footer_text(self) -> HTML:
         """Contextual footer: at most three hints for the current state.
@@ -843,6 +891,62 @@ class PhosonApp:
         finally:
             self._close_float(float_)
 
+    async def run_float_bash_card(
+        self,
+        command: str,
+        *,
+        on_always: Callable[[str], Awaitable[None]] | None = None,
+    ) -> bool:
+        """T-6: the permission card — command in monospace, 3 actions.
+
+        ``y`` runs the command once; ``a`` runs it and remembers this
+        exact command as always-allowed (persisted by the caller through
+        ``on_always``); ``n``/Esc denies. Rendered as a proper card
+        (title + command body + action footer) instead of a generic
+        yes/no modal string.
+        """
+        result_future: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def resolve(answer: bool, always: bool = False) -> None:
+            if result_future.done():
+                return
+            if always and on_always is not None:
+                try:
+                    self.app.create_background_task(on_always(command))
+                except Exception:
+                    # The Application isn't tracking tasks (unit tests):
+                    # schedule the grant on the running loop instead.
+                    try:
+                        asyncio.get_running_loop().create_task(on_always(command))
+                    except RuntimeError:  # pragma: no cover - no loop at all
+                        pass
+            result_future.set_result(answer)
+
+        kb = KeyBindings()
+        kb.add("y")(lambda event: resolve(True))  # noqa: ARG005
+        kb.add("Y")(lambda event: resolve(True))  # noqa: ARG005
+        kb.add("a")(lambda event: resolve(True, always=True))  # noqa: ARG005
+        kb.add("A")(lambda event: resolve(True, always=True))  # noqa: ARG005
+        kb.add("n")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("N")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("escape")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("c-c")(lambda event: resolve(False))  # noqa: ARG005
+
+        window = Window(
+            content=FormattedTextControl(
+                lambda: _bash_card_rows(command),
+                focusable=True,
+            ),
+            always_hide_cursor=True,
+        )
+        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
+
+        self._open_float(float_, kb, window)
+        try:
+            return await result_future
+        finally:
+            self._close_float(float_)
+
     async def run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]
     ) -> str | None:
@@ -1017,6 +1121,39 @@ class PhosonApp:
             self.repl._expanded_reasoning.add(node_id)
             self.sink.expand_reasoning(str(reasoning))
             return
+
+    def cycle_permission_mode(self) -> None:
+        """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
+
+        The mode is the durable per-tool policy (``permissions.json``);
+        cycling it sets *bash*'s level, which is the tool the SOTA
+        harnesses gate by default. The header chip refreshes immediately
+        and the user is told the new state + how to fine-tune
+        per-tool with /permissions.
+        """
+        from ..permissions_store import LEVEL_ASK, set_level, load_policy, save_policy
+
+        policy = load_policy()
+        current = policy.levels.get("bash")
+        if current == LEVEL_ASK:
+            set_level(policy, "bash", "allow")
+            new_mode = "auto"
+        else:
+            set_level(policy, "bash", LEVEL_ASK)
+            new_mode = "ask"
+        save_policy(policy)
+        self._perm_mode_cached = new_mode
+        self._perm_mode_checked_at = time.monotonic()
+        self._header_cache_key = None  # rebuild the chip on the next frame
+        self.sink.notify(
+            "info",
+            f"Permission mode → {new_mode}"
+            + (
+                " — bash commands now confirm with Yes / Always / No"
+                if new_mode == "ask"
+                else " — bash runs freely (per-tool rules: /permissions)"
+            ),
+        )
 
     def keys_listing(self) -> list[tuple[str, str]]:
         """The effective key map for ``/keys`` (IMPROVEMENTS.md E6).

@@ -1,6 +1,6 @@
 """Tests for the ConfirmationService classic + full-screen implementations."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,24 +24,45 @@ def test_fullscreen_service_conforms_to_protocol() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fullscreen_confirm_bash_delegates_to_float_with_the_command() -> None:
+async def test_fullscreen_bash_uses_the_card_not_the_generic_modal() -> None:
+    """T-6: the controller routes bash through the card, not the
+    yes/no string — the card shows the command and an Always action."""
     fake_app = MagicMock()
+    fake_app.run_float_bash_card = AsyncMock(return_value=True)
     fake_app.run_float_confirm = AsyncMock(return_value=True)
 
-    result = await FullScreenConfirmationService(fake_app).confirm_bash("rm -rf /tmp/x")
+    service = FullScreenConfirmationService(fake_app)
+    result = await service.confirm_bash_command("rm -rf /tmp/x", on_always=AsyncMock())
 
     assert result is True
-    fake_app.run_float_confirm.assert_awaited_once()
-    (prompt,), _ = fake_app.run_float_confirm.call_args
-    assert "rm -rf /tmp/x" in prompt
+    fake_app.run_float_bash_card.assert_awaited_once_with(
+        "rm -rf /tmp/x", on_always=ANY
+    )
+    fake_app.run_float_confirm.assert_not_awaited()  # no generic modal
 
 
 @pytest.mark.asyncio
-async def test_fullscreen_confirm_bash_returns_false_when_float_declines() -> None:
+async def test_fullscreen_bash_card_decline_returns_false() -> None:
     fake_app = MagicMock()
-    fake_app.run_float_confirm = AsyncMock(return_value=False)
+    fake_app.run_float_bash_card = AsyncMock(return_value=False)
 
-    assert await FullScreenConfirmationService(fake_app).confirm_bash("ls") is False
+    result = await FullScreenConfirmationService(fake_app).confirm_bash_command(
+        "ls", on_always=None
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_classic_bash_command_falls_back_to_plain_confirm() -> None:
+    """The classic REPL has no card surface: confirm_bash_command reuses
+    the y/N prompt (persist patterns go through /permissions there)."""
+    with patch(
+        "phoson_cli.confirmation.PromptSession",
+        return_value=_patched_session("y"),
+    ):
+        assert (
+            await PromptToolkitConfirmationService().confirm_bash_command("ls") is True
+        )
 
 
 # ── PromptToolkitConfirmationService ─────────────────────────────────────────

@@ -52,6 +52,9 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     "paste_image": ["c-v"],
     "escape": ["escape"],
     "undo_jump": ["c-z"],
+    # Shift+Tab cycles the visible permission mode (T-6): ask → auto.
+    # prompt_toolkit parses "s-tab" to Keys.BackTab on every terminal.
+    "toggle_permission_mode": ["s-tab"],
     # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
     # classic roles (Ctrl+C also keeps its SIGINT handling elsewhere).
     "exit": ["c-q", "c-c"],
@@ -75,6 +78,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "paste_image": "paste_image",
     "escape": "handle_escape",
     "undo_jump": "undo_jump",
+    "toggle_permission_mode": "cycle_permission_mode",
     "exit": "request_exit",
 }
 

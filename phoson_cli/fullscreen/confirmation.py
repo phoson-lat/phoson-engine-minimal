@@ -11,7 +11,7 @@ mid-confirmation can't leave the tool call hanging forever.
 """
 
 from typing import TYPE_CHECKING
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence, Awaitable
 
 from phoson_agent import Choice, FormField
 
@@ -28,6 +28,19 @@ class FullScreenConfirmationService:
     async def confirm_bash(self, command: str) -> bool:
         """Ask whether ``command`` may run."""
         return await self.app.run_float_confirm(f"Run bash command? {command!r}")
+
+    async def confirm_bash_command(
+        self,
+        command: str,
+        *,
+        on_always: "Callable[[str], Awaitable[None]] | None" = None,
+    ) -> bool:
+        """T-6: the permission card — command in monospace, 3 actions.
+
+        y = run once · a = run and always allow this exact command
+        (persisted via ``on_always``) · n/Esc = deny.
+        """
+        return await self.app.run_float_bash_card(command, on_always=on_always)
 
     async def select_plugin(
         self, title: str, message: str, choices: Sequence[Choice]

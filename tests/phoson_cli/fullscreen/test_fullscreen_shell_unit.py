@@ -811,6 +811,109 @@ def test_footer_picker_state_shows_navigation_hints(app: PhosonApp) -> None:
         app._active_float = None
 
 
+# ─── T-6: permission-mode chip + confirmation card ────────────────────────────
+
+
+def _point_permissions_at(tmp_path, monkeypatch) -> Path:
+    from phoson_cli import permissions_store
+
+    target = tmp_path / "permissions.json"
+    monkeypatch.setattr(permissions_store, "DEFAULT_PERMISSIONS_FILE", target)
+    return target
+
+
+def test_header_shows_auto_mode_chip_by_default(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: idle chrome always shows the mode chip; no policy → auto."""
+    _point_permissions_at(tmp_path, monkeypatch)
+    header = app._get_header_text().value
+    assert "auto" in header
+    assert "ask" not in header
+
+
+def test_header_shows_ask_chip_when_policy_sets_bash_ask(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    from phoson_cli.permissions_store import (
+        LEVEL_ASK,
+        PermissionPolicy,
+        save_policy,
+    )
+
+    target = _point_permissions_at(tmp_path, monkeypatch)
+    save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), target)
+    app._perm_mode_cached = None  # drop any cached read
+
+    assert "ask" in app._get_header_text().value
+
+
+def test_shift_tab_cycles_permission_mode(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: Shift+Tab cycles ask → auto, persists, and repaints the chip."""
+    from phoson_cli.permissions_store import (
+        LEVEL_ASK,
+        PermissionPolicy,
+        load_policy,
+        save_policy,
+    )
+
+    target = _point_permissions_at(tmp_path, monkeypatch)
+    save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), target)
+
+    _trigger(app, "s-tab")  # ask → auto
+    assert load_policy().levels.get("bash") != LEVEL_ASK
+    assert "ask" not in app._get_header_text().value
+
+    _trigger(app, "s-tab")  # auto → ask
+    assert load_policy().levels.get("bash") == LEVEL_ASK
+    assert "ask" in app._get_header_text().value
+
+
+def test_bash_card_rows_show_command_and_always_action() -> None:
+    """T-6: the card shows the command (mono) + Yes / Always / No."""
+    from phoson_cli.fullscreen.app import _bash_card_rows
+
+    text = "".join(t for _style, t in _bash_card_rows("rm -rf /tmp/x"))
+    assert "rm -rf /tmp/x" in text
+    assert "Yes" in text
+    assert "Always" in text
+    assert "No" in text
+    # The command is styled in the monospace-ish prompt token style,
+    # not as a generic modal title.
+    assert ("class:prompt.model", "  $ rm -rf /tmp/x\n") in _bash_card_rows(
+        "rm -rf /tmp/x"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bash_card_always_resolves_and_notifies(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: pressing 'a' on the open card resolves True and runs the
+    on_always grant; the float closes afterwards."""
+    always_calls: list[str] = []
+
+    async def on_always(command: str) -> None:
+        always_calls.append(command)
+
+    task = asyncio.create_task(
+        app.run_float_bash_card("rm -rf /tmp/x", on_always=on_always)
+    )
+    await asyncio.sleep(0)  # let the float open
+    try:
+        assert app._active_float is not None
+        _trigger(app, "a")
+        assert (await task) is True
+        await asyncio.sleep(0)
+    finally:
+        if not task.done():
+            task.cancel()
+    assert always_calls == ["rm -rf /tmp/x"]
+    assert app._active_float is None  # the float closed on resolve
+
+
 def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:
     assert len(app.sink.blocks) == 1
     text = app._render_chat().value

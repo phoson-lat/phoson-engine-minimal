@@ -8,7 +8,7 @@ implementation. A full-screen front end can inject a modal-based
 service instead — no tool change required.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence, Awaitable
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -30,6 +30,19 @@ class PromptToolkitConfirmationService:
         except (EOFError, KeyboardInterrupt):
             return False
         return answer.strip().lower() in {"y", "yes"}
+
+    async def confirm_bash_command(
+        self,
+        command: str,
+        *,
+        on_always: "Callable[[str], Awaitable[None]] | None" = None,
+    ) -> bool:
+        """Classic front end: same y/N prompt (no card surface here).
+
+        *Always* needs the full-screen card (T-6) — in the classic REPL
+        the user can persist patterns with /permissions instead.
+        """
+        return await self.confirm_bash(command)
 
     async def select_plugin(
         self, title: str, message: str, choices: Sequence[Choice]

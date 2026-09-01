@@ -351,6 +351,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "paste_image",
     "escape",
     "undo_jump",
+    "toggle_permission_mode",
     "exit",
 )
 
