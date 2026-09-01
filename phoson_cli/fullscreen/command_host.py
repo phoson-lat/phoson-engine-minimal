@@ -90,6 +90,11 @@ class FullScreenCommandHost:
         its provider), instead of only pointing at inline autocomplete.
         Inline autocomplete (type ``/model <name>``) is still available
         and untouched — this just gives a bare ``/model`` a real picker.
+
+        ``unavailable`` (``(provider, error)`` for providers whose live
+        listing failed) is forwarded to the picker, which renders it as a
+        non-navigable ⚠ section — the classic host does the same. Without
+        it a failed listing silently disappeared from the TUI list.
         """
         if not models:
             self.print_info("No models available.")
@@ -100,6 +105,7 @@ class FullScreenCommandHost:
             models,
             current_model,
             current_provider=self.app.repl.config.provider,
+            unavailable=unavailable,
             page_size=12,
             theme=self.app.theme,
         )

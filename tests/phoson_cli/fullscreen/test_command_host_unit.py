@@ -93,6 +93,41 @@ async def test_pick_model_opens_unified_float_picker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pick_model_renders_unavailable_providers_section() -> None:
+    """#150: the full-screen host must forward ``unavailable`` to the
+    picker. A provider whose live listing failed should show a ⚠ row,
+    not silently disappear from the list (the classic host already did
+    this; the full-screen host dropped the parameter)."""
+    app = _FakeApp(picker_result=ModelPickerResult(model_id="gpt-4o"))
+    host = FullScreenCommandHost(app)
+    models = [ModelOption(id="gpt-4o", label="GPT-4o", provider="openai")]
+
+    await host.pick_model(
+        models,
+        "gpt-4o",
+        unavailable=[("groq", "Failed to fetch Groq models: ConnectError")],
+    )
+
+    app.run_float_picker.assert_awaited_once()
+    rendered = "".join(part for _style, part in app.seen_pickers[0]._render())
+    assert "groq" in rendered
+    assert "unavailable" in rendered
+    assert "ConnectError" in rendered
+
+
+@pytest.mark.asyncio
+async def test_pick_model_without_unavailable_renders_no_warning_section() -> None:
+    app = _FakeApp(picker_result=ModelPickerResult(model_id="gpt-4o"))
+    host = FullScreenCommandHost(app)
+    models = [ModelOption(id="gpt-4o", label="GPT-4o", provider="openai")]
+
+    await host.pick_model(models, "gpt-4o")
+
+    rendered = "".join(part for _style, part in app.seen_pickers[0]._render())
+    assert "unavailable" not in rendered
+
+
+@pytest.mark.asyncio
 async def test_pick_model_empty_returns_cancelled_without_float() -> None:
     app = _FakeApp()
     host = FullScreenCommandHost(app)
