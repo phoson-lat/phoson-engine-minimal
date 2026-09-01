@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.20.2 (Unreleased)
+
+### Fix
+
+- **Full-screen model picker silently dropped failed provider listings
+  (#150)**: the full-screen host's `pick_model` accepted the `unavailable`
+  list (providers whose live listing failed) but never forwarded it to the
+  picker, so in the TUI a provider with a failed listing disappeared from
+  the list without a ⚠ row — the list looked complete when it was not. The
+  classic REPL host already forwarded it; the full-screen host now does the
+  same, so failed listings render as the non-navigable
+  `⚠ provider — unavailable: error` section both front ends already had.
+  Completes the remaining point of #150 (the same-named-models collapse
+  was already fixed by the I-113 unified picker).
+
+Tests: `test_command_host_unit.py` (`test_pick_model_renders_unavailable_providers_section`
+regression — fails without the fix — and the no-`unavailable` counter-case).
+
 ## v0.20.1 (2026-08-31)
 
 ### Fix
