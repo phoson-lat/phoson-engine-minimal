@@ -33,6 +33,61 @@ from ..formatting import render_activity_line, render_streaming_panel
 from ..hyperlinks import osc8_passthrough
 
 
+def _line_boundaries(s: str) -> list[int]:
+    """Char offsets where each visual line starts, for *s*.
+
+    ``bounds[k]`` is the character index of the first character of visual
+    line ``k`` (line 0 starts at 0). ``len(bounds) == s.count('\\n') + 1``
+    — one past the last line's start, i.e. the number of visual lines
+    prompt_toolkit's ``split_lines`` would produce over *s* (it splits on
+    ``\\n`` exactly like ``str.split``). A trailing newline therefore adds a
+    final boundary pointing at the end of the string (the empty trailing
+    line), matching ``split_lines`` which always yields a final line.
+
+    T-14 (#171): the chat pane is *windowed* — the full cached transcript
+    string is sliced at these boundaries so prompt_toolkit only ever sees
+    the visible window. Because Rich re-asserts each line's SGR state after
+    every newline, slicing at a line boundary and re-parsing yields the same
+    *visible text* per line as parsing the full string (see
+    ``test_t14_windowing_unit``); fragment boundaries at a slice edge can
+    differ cosmetically (a leading empty fragment) but render identically.
+    """
+    bounds: list[int] = [0]
+    i = 0
+    while True:
+        j = s.find("\n", i)
+        if j < 0:
+            break
+        bounds.append(j + 1)
+        i = j + 1
+    return bounds
+
+
+def windowed_slice(full_ansi: str, bounds: list[int], top: int, height: int) -> str:
+    """Slice *full_ansi* to visual lines ``[top, top+height)``.
+
+    *bounds* is ``_line_boundaries(full_ansi)``; ``bounds[k]`` is the start
+    offset of visual line ``k`` and ``len(bounds)`` is the number of visual
+    lines. Returns the substring from the start of line *top* to the start of
+    line ``top+height`` — or the end of the string when the window reaches the
+    last line (whose start is ``bounds[-1]`` and whose end is the string end,
+    not another boundary). The result is a contiguous run of complete visual
+    lines and re-parses to the same visible text as the full string's lines
+    ``top .. top+height-1``, so ``ANSI(...)`` on it is render-equivalent.
+    """
+    total = len(bounds)  # number of visual lines (each bounds[k] = line k's start)
+    if total <= 0 or height <= 0:
+        return ""
+    top = max(0, top)
+    if top >= total:
+        return ""
+    end_line = min(top + height, total)
+    start = bounds[top]
+    # The window's last line is the string's last line: extend to the end.
+    stop = bounds[end_line] if end_line < total else len(full_ansi)
+    return full_ansi[start:stop]
+
+
 def _make_console(buf: io.StringIO, width: int) -> Console:
     return Console(
         file=buf,

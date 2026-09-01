@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.24.0 (Unreleased)
+
+### Perf
+
+- **Windowed chat pane (T-14, #171)**: the full-screen TUI no longer feeds the
+  whole transcript to prompt_toolkit every frame.
+
+  - *Bug: per-frame cost was O(transcript), not O(visible lines).* The chat
+    pane is one `FormattedTextControl` whose content was the **entire**
+    transcript; on every frame — spinner tick, streaming repaint, scroll, or
+    keystroke — ptk re-ran `to_formatted_text(ANSI)`, `tuple()+hash`, and
+    `split_lines` over the full fragment list (2–4× per frame). Measured at
+    ~500 turns that blocked the event loop for ~0.5–1 s per repaint, so the
+    spinner and 10 fps streaming throttle collapsed to <1 effective fps and
+    scroll/typing lagged — *only* in long sessions.
+  - *Window the pane.* The full transcript is cached once per width as a single
+    ANSI string plus its per-line boundaries; `PhosonApp._render_chat` hands
+    ptk only the visible slice (`windowed_slice`, O(visible)). Scrolling
+    re-slices the cached string rather than re-rendering, and the cursor is
+    pinned at `Point(0,0)` so the logical scroll stays unambiguous. Because
+    Rich re-asserts each line's SGR state after every newline, slicing at a
+    line boundary re-parses to the same visible text.
+  - *Scrollbar from the real transcript.* A `ChatScrollbarMargin` draws the
+    thumb from the full transcript's `total_lines`/`scroll_top` (the built-in
+    would fill the whole bar, since windowed content height equals the
+    viewport).
+  - *Measured* (`bench/bench_t14_windowing.py`, 1000 turns / ~15 k lines):
+    per-frame cost **609 ms → ~0.9 ms** (×640) and stays **flat** across 40→1000
+    turns (windowed fragment count constant at 1740 vs 1,036,000 full).
+  - *Verifiable on a real session.* `PHOSON_PERF=1` logs the per-frame
+    transcript char count and slice time, so the flat cost is checkable live.
+
 ## v0.23.0 (2026-09-01)
 
 ### Features
