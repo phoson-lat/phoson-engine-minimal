@@ -1089,6 +1089,7 @@ class PhosonApp:
 
     def clear(self) -> None:
         self.sink.blocks.clear()
+        self.sink.clear_reasoning_state()
         # The banner is dropped with the transcript (unlike rewind, which
         # re-seeds it): forget the reference so a later apply_theme doesn't
         # look for an object that no longer exists in the pane.
