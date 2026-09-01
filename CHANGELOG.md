@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.24.1 (Unreleased)
+
+### Fixes
+
+- **TUI: bash output no longer leaks raw control codes (F-42, #186)**:
+  `_bash_output_body` now strips OSC sequences (window titles such as
+  `\x1b]0;title\x07` emitted by `ls --color`, `git`, or scripts) and parses
+  the remainder with `Text.from_ansi`, so real colors become Rich styles
+  instead of stray `ESC` bytes that prompt_toolkit's `ANSI()` parser would
+  render as literal text in the transcript. A truncated CSI (torn stream)
+  is kept literally, which is safe.
+- **TUI: frozen-prefix line-bounds fingerprint now includes a cache
+  generation (F-41, #186)**: `BlockAnsiCache` carries a `generation`
+  counter bumped on every `clear()` (resize, `apply_theme`,
+  `_reset_transcript`), and it is the first element of the
+  `_compute_chat_bounds` fingerprint. Previously `(width, *id(block))`
+  alone would miss a cleared+refilled cache, so a theme with
+  differently-long escapes could hit stale cached bounds.
+- **TUI: "O(visible)" claim made precise (F-44, #186)**: the
+  `_compute_chat_bounds` docstring and the v0.24.0 changelog entry now
+  state exactly what the incremental bounds buy — the Python `str.find`
+  line-bounds loop runs over the in-flight tail only (O(visible) per dirty
+  frame); the transcript assembly and prefix copies still happen every
+  dirty frame but are C-speed `memcpy`.
+
 ## v0.24.0 (2026-09-01)
 
 ### Perf
@@ -39,9 +64,21 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     transcript char count and slice time, so the flat cost is checkable live.
   - *Incremental line-bounds.* `render_chat_split` reports the frozen prefix
     length and `PhosonApp._compute_chat_bounds` caches the frozen prefix's
-    per-line offsets against a `(width, *id(block))` fingerprint, re-scanning
-    only the small in-flight tail per dirty frame — so the per-frame
-    line-bounds build is also O(visible) during streaming (not O(transcript)).
+    per-line offsets against a `(cache generation, width, *id(block))`
+    fingerprint, re-scanning only the small in-flight tail per dirty frame.
+    Precisely: the per-frame *line-bounds build* (the Python `str.find` loop)
+    is O(visible) during streaming instead of O(transcript). The transcript
+    assembly itself still copies the frozen prefix into the windowed slice
+    each dirty frame, but those are C-speed `memcpy`, not the per-line Python
+    loop (F-44 — the earlier "O(visible)" claim was overstated).
+    The fingerprint includes the ANSI cache's *generation* (bumped on every
+    `clear`, e.g. `apply_theme`) so a theme change with differently-long
+    escapes cannot hit a stale bounds cache (F-41).
+  - *Bash bodies: no raw control codes.* `_bash_output_body` builds each line
+    with `Text.from_ansi`, so `ls --color`/`git` output and window-title
+    sequences (`\x1b]0;title\x07`) from `!cmd`/`bash` render as styled text
+    instead of leaking raw `ESC` bytes that ptk would print literally
+    (F-42).
 
 ### Fixes
 

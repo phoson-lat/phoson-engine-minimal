@@ -9,6 +9,7 @@ Keep this module dependency-free of console I/O: no ``Console``, no
 ``print``, no ``Live``, no threads.
 """
 
+import re
 import json
 import difflib
 import logging
@@ -689,16 +690,39 @@ def _write_summary_body(
     return [summary]
 
 
+#: Full OSC (operating-system command) sequences in raw command output —
+#: window titles (``\\x1b]0;title\\x07``), XTerm colors, etc. Bash stdout is
+#: the one place such bytes reach the transcript: ``Text.from_ansi`` only
+#: understands SGR, so an OSC would be kept as literal text and rendered
+#: through ``prompt_toolkit``'s ``ANSI()`` as visible garbage (F-42).
+#: Terminated by BEL (``\\x07``) or ST (``\\x1b\\\\``); the payload must not
+#: cross a newline or the next ESC.
+_OSC_RE = re.compile(r"\x1b\][^\x1b\x07\n]*(?:\x07|\x1b\\)")
+
+
 def _bash_output_body(result: str, theme: Theme) -> list[RenderableType]:
-    """First stdout/stderr lines for a finished bash call (timeouts included)."""
+    """First stdout/stderr lines for a finished bash call (timeouts included).
+
+    Bash output is terminal output: commands like ``ls --color``, ``git``,
+    or scripts that set the window title emit raw SGR and OSC escapes. The
+    card's ``Text`` must not carry the OSC ones — ``prompt_toolkit``'s
+    ``ANSI()`` parser would render ``\\x1b]0;title\\x07`` as literal text and
+    leave stray control bytes in the frozen transcript (F-42). The OSC
+    sequences are stripped and the remainder is parsed with
+    ``Text.from_ansi``, which keeps real colors as Rich styles; anything it
+    does not understand (e.g. a truncated CSI from a torn stream) stays
+    literal, which is safe.
+    """
     stripped = result.strip()
     if not stripped:
         return []
     out_lines = stripped.splitlines()
     shown = out_lines[:_BASH_PREVIEW_LINES]
-    rendered: list[RenderableType] = [
-        Text(f"{_INDENT}{line[:100]}", style=theme.text) for line in shown
-    ]
+    rendered: list[RenderableType] = []
+    for line in shown:
+        clean = _OSC_RE.sub("", line[:100])
+        line_text = Text.from_ansi(clean, style=theme.text)
+        rendered.append(Text(_INDENT, style=theme.text) + line_text)
     if len(out_lines) > _BASH_PREVIEW_LINES:
         rendered.append(
             Text(

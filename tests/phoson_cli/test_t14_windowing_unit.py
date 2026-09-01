@@ -351,6 +351,55 @@ def test_compute_chat_bounds_invalidates_on_block_change(tmp_path) -> None:
     assert app._full_ansi_bounds == _line_boundaries(app._full_ansi_text)
 
 
+def test_cache_generation_bumped_on_clear() -> None:
+    """F-41 (#186): the fingerprint of the frozen-prefix bounds cache includes
+    the block-ANSI cache's generation, which must bump on every ``clear`` —
+    otherwise a cleared+refilled cache (theme change, transcript reset) with
+    the same block ids but different escapes would hit stale bounds."""
+    from phoson_cli.fullscreen.render import BlockAnsiCache
+
+    cache = BlockAnsiCache()
+    gen0 = cache.generation
+    cache.clear(80)
+    assert cache.generation == gen0 + 1
+    cache.clear(0)
+    assert cache.generation == gen0 + 2
+
+
+def test_apply_theme_invalidates_frozen_bounds_cache(tmp_path) -> None:
+    """F-41 (#186): ``apply_theme`` clears the block ANSI cache, so the
+    frozen-prefix bounds must be rebuilt on the next frame — the fingerprint
+    changes even though the *same* block objects remain in the transcript
+    (their ids alone would not detect the cache invalidation, and a theme
+    with differently-long escapes would render different line counts)."""
+    from phoson_cli.theme import DARK, LIGHT
+
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 40)
+    _set_term(app, columns=120, lines=30)
+    app._render_chat()
+    fingerprint_before = app._frozen_ansi_ids
+    bounds_before = app._frozen_ansi_bounds
+    assert fingerprint_before is not None
+
+    app.apply_theme(LIGHT)
+    app._render_chat()
+
+    # The cache generation bump (via apply_theme → clear) changed the
+    # fingerprint, so the prefix bounds were rebuilt, not served from cache.
+    assert app._frozen_ansi_ids != fingerprint_before
+    assert app._frozen_ansi_bounds is not bounds_before
+    # And the rebuilt bounds are still correct.
+    assert app._full_ansi_bounds == _line_boundaries(app._full_ansi_text)
+
+    # Back to the original theme: same blocks again, but the generation has
+    # moved on, so this also rebuilds (no stale hit across two clears).
+    app.apply_theme(DARK)
+    app._render_chat()
+    assert app._frozen_ansi_bounds is not bounds_before
+    assert app._full_ansi_bounds == _line_boundaries(app._full_ansi_text)
+
+
 def test_render_chat_split_reports_frozen_prefix_length(tmp_path) -> None:
     """render_chat_split's prefix_len is the length of the frozen (no
     in-flight) transcript — it must equal the prefix that would render with
