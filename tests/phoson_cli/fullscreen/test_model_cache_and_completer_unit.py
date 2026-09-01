@@ -128,16 +128,24 @@ def test_model_dropdown_without_provider_map_keeps_plain_meta() -> None:
     assert _complete(completer, "/model gpt") == [("openai/gpt-4o", "")]
 
 
-def test_subagent_dropdown_does_not_show_provider() -> None:
-    """The sub-agent model always runs on the active provider — no tag."""
+def test_subagent_dropdown_shows_provider_like_model() -> None:
+    """Sub-agents run on the *active* provider's client (no provider
+    switch), so the dropdown must label which provider each row belongs
+    to — otherwise, on e.g. vllm, OpenRouter-catalog ids are indistinguishable
+    from local ones and a pick silently falls back to the main model.
+    """
     cache = ModelCache()
-    cache.model_ids = ["anthropic/claude-haiku-5"]
-    cache.model_providers = {"anthropic/claude-haiku-5": "anthropic"}
+    cache.model_ids = ["anthropic/claude-haiku-5", "Qwen3.8-27B-FP8"]
+    cache.model_providers = {
+        "anthropic/claude-haiku-5": "anthropic",
+        "Qwen3.8-27B-FP8": "vllm",
+    }
     completer = ModelArgCompleter(cache)
 
-    assert _complete(completer, "/subagent-model haiku") == [
-        ("anthropic/claude-haiku-5", "")
-    ]
+    assert dict(_complete(completer, "/subagent-model ")) == {
+        "anthropic/claude-haiku-5": "anthropic",
+        "Qwen3.8-27B-FP8": "vllm",
+    }
 
 
 def test_no_completions_outside_model_arg_context() -> None:
