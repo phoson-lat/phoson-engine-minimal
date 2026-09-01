@@ -212,6 +212,51 @@ class FullScreenSink:
             ]
             self._touch()
 
+    def add_bash_card(
+        self,
+        command: str,
+        result: str,
+        *,
+        duration_ms: int = 0,
+        error: str | None = None,
+    ) -> None:
+        """Append a completed bash tool card to the transcript (T-12 ``!``).
+
+        Reuses :func:`render_tool_done_line` with a synthetic
+        ``AgentToolDoneEvent`` so the card looks exactly like a real bash
+        tool call. The call is also recorded in ``_tool_calls`` so
+        ``/details`` can re-collapse/expand it like any other finished
+        tool.
+
+        Args:
+            command: The shell command that was run (shown in the header).
+            result: The combined stdout+stderr output.
+            duration_ms: Wall-clock duration of the run.
+            error: Set to a non-None string to render an ✗ card (e.g.
+                "denied by the user"). When set, ``result`` is ignored.
+        """
+        from phoson_agent.models import AgentToolDoneEvent
+
+        event = AgentToolDoneEvent(
+            tool_name="bash",
+            result=result,
+            error=error,
+            duration_ms=duration_ms,
+        )
+        args = {"command": command}
+        block = render_tool_done_line(
+            event,
+            self.theme,
+            args=args,
+            registry=self._tool_render_registry,
+            collapsed=not self.tool_details_shown,
+        )
+        self.blocks.append(block)
+        # Remember it so /details can re-render this card like any other
+        # finished tool call.
+        self._tool_calls.append((event, args, block))
+        self._touch()
+
     def _touch(self) -> None:
         self.dirty = True
         self._on_invalidate()

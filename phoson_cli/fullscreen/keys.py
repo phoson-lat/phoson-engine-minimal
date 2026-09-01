@@ -59,6 +59,10 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # Shift+Tab cycles the visible permission mode (T-6): ask → auto.
     # prompt_toolkit parses "s-tab" to Keys.BackTab on every terminal.
     "toggle_permission_mode": ["s-tab"],
+    # Ctrl+P opens the command palette (T-12): a single fuzzy picker over
+    # every slash command. Ctrl+P is free of the classic in-chat bindings
+    # (Ctrl+L clear, Ctrl+T reasoning, Ctrl+Z undo, …).
+    "command_palette": ["c-p"],
     # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
     # classic roles (Ctrl+C also keeps its SIGINT handling elsewhere).
     "exit": ["c-q", "c-c"],
@@ -84,6 +88,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "escape": "handle_escape",
     "undo_jump": "undo_jump",
     "toggle_permission_mode": "cycle_permission_mode",
+    "command_palette": "open_command_palette",
     "exit": "request_exit",
 }
 

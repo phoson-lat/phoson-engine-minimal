@@ -766,3 +766,29 @@ def test_tool_details_toggle_collapse_then_expand() -> None:
     expanded = _transcript_text(sink)
     assert "-b" in expanded
     assert "+c" in expanded
+
+
+# ─── T-12: `!` bash transcript card ──────────────────────────────────────────
+
+
+def test_t12_bash_card_renders_command_and_output() -> None:
+    sink, ticks = _make_sink()
+    before = len(sink.blocks)
+    sink.add_bash_card("ls -la", "total 42\nfile.py", duration_ms=12)
+    assert len(sink.blocks) == before + 1
+    assert ticks  # the insertion invalidated the pane
+    text = _transcript_text(sink)
+    # The command shows in the header, the output in the body.
+    assert "ls -la" in text
+    assert "total 42" in text
+    # It is recorded so /details can re-collapse it like any tool call.
+    assert sink._tool_calls, "bash card not remembered for /details"
+
+
+def test_t12_bash_card_error_renders_refusal_not_output() -> None:
+    sink, _ = _make_sink()
+    sink.add_bash_card("rm -rf /", "should not show", error="denied by the user")
+    text = _transcript_text(sink)
+    assert "rm -rf /" in text
+    assert "denied by the user" in text
+    assert "should not show" not in text  # error path ignores the result body

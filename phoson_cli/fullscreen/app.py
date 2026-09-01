@@ -12,6 +12,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 """
 
 import os
+import re
 import time
 import uuid
 import shutil
@@ -309,6 +310,11 @@ class PhosonApp:
         # active Float's own bindings run — see `_build_application`.
         self._active_float: Float | None = None
         self._float_kb: KeyBindings | None = None
+        # T-12: the palette opens as a background task, so ``_active_float``
+        # is only set when the task runs. This synchronous flag guards the
+        # window between two fast Ctrl+P presses so only one palette can
+        # be scheduled.
+        self._palette_open = False
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -817,6 +823,13 @@ class PhosonApp:
         self._prompt_input.buffer.append_to_history()
         self._prompt_input.text = ""
         self._auto_scroll = True
+        # T-12: a leading "!" (with the rest non-blank) is a shell command,
+        # not an agent turn or a slash command.
+        if text.startswith("!") and text[1:].strip():
+            self._run_task = self.app.create_background_task(
+                self._run_bash_line(text[1:].strip())
+            )
+            return
         self._run_task = self.app.create_background_task(self._dispatch(text))
 
     def insert_newline(self) -> None:
@@ -903,6 +916,132 @@ class PhosonApp:
             if activity_active or subagents_active:
                 self.sink.dirty = True
                 self.app.invalidate()
+
+    # ── T-12: command palette + `!` bash ───────────────────────────────
+
+    def open_command_palette(self) -> None:
+        """Ctrl+P: open the command palette over every slash command (T-12).
+
+        The palette is a modal Float (like the model/theme pickers), so it
+        can be opened from a calm screen and its confirm dispatches the
+        chosen command through the normal ``/command`` path.
+        """
+        if self._active_float is not None:
+            return  # a picker/confirmation is already open
+        if self._is_run_in_flight():
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first.",
+            )
+            return
+        if self._palette_open:
+            return  # a palette is already scheduled/animating open
+        self._palette_open = True
+        self.app.create_background_task(self._run_command_palette())
+
+    async def _run_command_palette(self) -> None:
+        """Host the palette as a background task with a synchronous guard.
+
+        ``_active_float`` is only set when the task actually runs (the
+        float is opened inside the task), so a fast second Ctrl+P before
+        the first task ticks would schedule a second palette and clobber
+        ``_active_float`` / ``_float_kb``. ``self._palette_open`` closes
+        that window; it is released in ``finally`` so a failure path
+        (e.g. no entries, exception) can't wedge the guard.
+        """
+        try:
+            await self._run_command_palette_inner()
+        finally:
+            self._palette_open = False
+
+    async def _run_command_palette_inner(self) -> None:
+        from ..palette_picker import (
+            PaletteEntry,
+            PalettePickerResult,
+            build_command_palette,
+        )
+
+        catalog = self.repl._controller.command_catalog
+        entries: list[PaletteEntry] = []
+        for spec in catalog.specs:
+            display = " · ".join(spec.names) if len(spec.names) > 1 else spec.primary
+            entries.append(
+                PaletteEntry(
+                    name=spec.primary,
+                    display=display,
+                    help=spec.help,
+                )
+            )
+        if not entries:
+            self.sink.notify("info", "No commands available.")
+            return
+        picker = build_command_palette(entries, theme=self.theme)
+        result = await self.run_float_picker(picker)
+        if not isinstance(result, PalettePickerResult):
+            return
+        if result.cancelled or not result.command_name:
+            return
+        if self._is_run_in_flight():
+            # A run could have started while the float was open.
+            self.sink.notify(
+                "warn",
+                "A turn is already running — press Esc to cancel it first.",
+            )
+            return
+        await self._run_command(Command(name=result.command_name, args=""))
+
+    async def _run_bash_line(self, command: str) -> None:
+        """T-12: run a ``!``-prefixed shell command, respecting T-6 perms.
+
+        The command is gated by the same bash permission policy the agent's
+        bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
+        refused). The result is rendered as a normal bash tool card, so the
+        transcript reads identically whether the agent or the user ran it.
+        """
+        from ..tools.bash import _run_bash
+        from ..permissions_store import (
+            LEVEL_ASK,
+            LEVEL_DENY,
+            load_policy,
+        )
+
+        policy = load_policy()
+        decision = policy.check("bash", command)
+        if decision == LEVEL_DENY:
+            self.sink.add_bash_card(command, "", error="denied by permissions policy")
+            self.app.invalidate()
+            return
+        if decision == LEVEL_ASK:
+            allowed = await self.run_float_bash_card(
+                command,
+                on_always=lambda cmd: self.repl._controller._remember_bash_pattern(cmd),
+            )
+            if not allowed:
+                self.sink.add_bash_card(command, "", error="denied by the user")
+                self.app.invalidate()
+                return
+
+        started = time.monotonic()
+        result = await _run_bash(command)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Infra-level failures (spawn / timeout) are execution errors, not
+        # command output — render them as an ✗ card. A non-zero exit code
+        # still yields its stdout+stderr as the card body, matching how the
+        # agent's bash tool reports results. These are matched by the exact
+        # one-line shapes ``_run_bash`` returns (anchored fullmatch), so a
+        # real command whose output merely *starts* with that phrase is not
+        # misclassified as an error.
+        stripped = result.strip()
+        error = (
+            stripped
+            if (
+                re.fullmatch(r"Command timed out after \d+s", stripped, re.IGNORECASE)
+                or re.fullmatch(r"Failed to spawn shell: .+", stripped, re.DOTALL)
+            )
+            else None
+        )
+        self.sink.add_bash_card(command, result, duration_ms=elapsed_ms, error=error)
+        self.app.invalidate()
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
 

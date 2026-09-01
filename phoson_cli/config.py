@@ -353,6 +353,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "escape",
     "undo_jump",
     "toggle_permission_mode",
+    "command_palette",
     "exit",
 )
 
