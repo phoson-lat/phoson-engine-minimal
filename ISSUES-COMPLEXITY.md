@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-08-31 · v0.19.0.
+> **Estado de referencia:** 2026-08-31 · v0.19.0 + rama `feat/tui-sprint-look-1` (T-6, T-7, T-8, T-9 resueltos, aún sin merge).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -12,35 +12,37 @@
 
 ## Resumen en una tabla (menor → mayor complejidad)
 
-| Orden | Issue | Título (corto) | Nivel |
-|-------|-------|----------------|-------|
-| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 |
-| 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 |
-| 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 |
-| 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 |
-| 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 |
-| 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 |
-| 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 |
-| 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 |
-| 9 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Run budget one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | 3 |
-| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash (bloqueado por T-4/T-6) | 3 |
-| 11 | [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) | T-6 — Chip de modo + card de confirmación | 3 |
-| 12 | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | T-7 — Tool cards (glifos/collapse/diff bg) | 3 |
-| 13 | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | T-8 — Tema `system` + JSON themes | 3 |
-| 14 | [#142](https://github.com/phoson-lat/phoson-engine-minimal/issues/142) | Doom-loop middleware | 3 |
-| 15 | [#143](https://github.com/phoson-lat/phoson-engine-minimal/issues/143) | Inyección de presupuesto al contexto | 3 |
-| 16 | [#146](https://github.com/phoson-lat/phoson-engine-minimal/issues/146) | Docs parity gate + fix de derivas | 3 |
-| 17 | [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | Plugin OTel (slice 1: trace-file JSON) | 3 |
-| 18 | [#147](https://github.com/phoson-lat/phoson-engine-minimal/issues/147) | `compact_context` tool | 3 |
-| 19 | [#134](https://github.com/phoson-lat/phoson-engine-minimal/issues/134) | Preserved thinking | 4 |
-| 20 | [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Set de evaluación + gate nightly (H-1) | 4 |
-| 21 | [#144](https://github.com/phoson-lat/phoson-engine-minimal/issues/144) | Permisos por intención (3 fases) | 4 |
-| 22 | [#145](https://github.com/phoson-lat/phoson-engine-minimal/issues/145) | Reasoning sandwich (bloqueado por #134 + #139) | 4 |
-| 23 | [#149](https://github.com/phoson-lat/phoson-engine-minimal/issues/149) | Handoff multi-sesión (diferido hasta #129) | 4 |
-| 24 | [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | 4 |
-| — | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | T-11 — ADR renderer (decisión, no código) | — |
-| — | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | T-10 — Hero tape (secuencial: tras look 0+1) | 1 |
-| — | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / lazy loading (hoy: "medir" vía #140) | — |
+*Estado (2026-08-31):* ✅ = resuelto en la rama `feat/tui-sprint-look-1` (commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6; aún sin merge a main) · 🔶 = parcial · 🔴 = abierto.
+
+| Orden | Issue | Título (corto) | Nivel | Estado |
+|-------|-------|----------------|-------|--------|
+| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | 🔴 |
+| 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
+| 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | 🔴 (bug confirmado en `bench/run_bench.py`) |
+| 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | 🔴 |
+| 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | 🔴 |
+| 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | 🔴 |
+| 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | 🔴 |
+| 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 | 🔴 |
+| 9 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Run budget one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | 3 | 🔴 |
+| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash (bloqueado por T-4/T-6) | 3 | 🔴 (T-6 ya resuelto; queda T-4) |
+| 11 | [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) | T-6 — Chip de modo + card de confirmación | 3 | ✅ `3c6325c` |
+| 12 | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | T-7 — Tool cards (glifos/collapse/diff bg) | 3 | ✅ `39ceac6` |
+| 13 | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | T-8 — Tema `system` + JSON themes | 3 | ✅ `8667562` |
+| 14 | [#142](https://github.com/phoson-lat/phoson-engine-minimal/issues/142) | Doom-loop middleware | 3 | 🔴 |
+| 15 | [#143](https://github.com/phoson-lat/phoson-engine-minimal/issues/143) | Inyección de presupuesto al contexto | 3 | 🔴 |
+| 16 | [#146](https://github.com/phoson-lat/phoson-engine-minimal/issues/146) | Docs parity gate + fix de derivas | 3 | 🔴 |
+| 17 | [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | Plugin OTel (slice 1: trace-file JSON) | 3 | 🔴 |
+| 18 | [#147](https://github.com/phoson-lat/phoson-engine-minimal/issues/147) | `compact_context` tool | 3 | 🔴 |
+| 19 | [#134](https://github.com/phoson-lat/phoson-engine-minimal/issues/134) | Preserved thinking | 4 | 🔴 |
+| 20 | [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Set de evaluación + gate nightly (H-1) | 4 | 🔶 (substrato `bench/` commitado: runner + 4 tasks; faltan el gate y el resto del set) |
+| 21 | [#144](https://github.com/phoson-lat/phoson-engine-minimal/issues/144) | Permisos por intención (3 fases) | 4 | 🔴 (T-6 resuelve el UI de permiso, no la taxonomía) |
+| 22 | [#145](https://github.com/phoson-lat/phoson-engine-minimal/issues/145) | Reasoning sandwich (bloqueado por #134 + #139) | 4 | 🔴 |
+| 23 | [#149](https://github.com/phoson-lat/phoson-engine-minimal/issues/149) | Handoff multi-sesión (diferido hasta #129) | 4 | 🔴 |
+| 24 | [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | 4 | 🔴 |
+| — | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | T-11 — ADR renderer (decisión, no código) | — | 🔶 (ADR escrito en `IMPROVEMENTS-TUI.md` §B; falta el acuerdo) |
+| — | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | T-10 — Hero tape (secuencial: tras look 0+1) | 1 | 🔴 (los assets actuales son de I-115, pre-sprint) |
+| — | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / lazy loading (hoy: "medir" vía #140) | — | 🔴 |
 
 ---
 
@@ -51,9 +53,10 @@
 - Un solo archivo, sin API nueva. El glifo braille se queda.
 - Criterio simple: snapshots sin "Pondering"/"Chewing"; la línea cambia cada segundo.
 
-### 2. [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) — T-9: Footer contextual
+### 2. [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) — T-9: Footer contextual ✅ *resuelto en la rama (`39ceac6`)*
 - 3 strings de hint por estado (idle/running/picker) en `_FOOTER_HINT` de `app.py`.
 - No cambia el layout. El trabajo real es quitar 5 atajos de la línea y moverlos a docs/`/keys`.
+- **Hecho:** `_FOOTER_HINT_IDLE`/`_RUNNING`/`_PICKER` en `fullscreen/app.py`, seleccionados por estado del app.
 
 ### 3. [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) — Bug del bench
 - El fix recomendado (config efímero vía env en el workspace del runner) **no toca el CLI**: solo `bench/run_bench.py` + README + modelo registrado en el JSON de resultados.
@@ -92,17 +95,20 @@
 - Dos piezas (fuzzy picker unificado + pipe a bash) sobre infra existente.
 - Complejidad *real* = complejidad propia + esperar: **bloqueado por T-4 y T-6** (si no, se construye sobre composer/permisos que van a cambiar).
 
-### 11. [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) — T-6: Chip de modo + card de confirmación
+### 11. [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) — T-6: Chip de modo + card de confirmación ✅ *resuelto en la rama (`3c6325c`)*
 - UI sobre `permissions_store` (ya sólido) + keybinding `Shift+Tab` + renderer de confirmación.
 - Toca permisos → debe ser PR propio, no mezclado con "secar el look".
+- **Hecho:** chip de modo siempre visible en header (re-lee la política ≤1/s), `cycle_permission_mode` en Shift+Tab, y card de confirmación de bash con 3 acciones (Yes / Always / No) vía `FullScreenConfirmationService`.
 
-### 12. [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) — T-7: Tool cards
+### 12. [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) — T-7: Tool cards ✅ *resuelto en la rama (`39ceac6`)*
 - 5 sub-features (glifos, collapse, diff bg, created/updated, OSC 8) todas en `formatting.py` + snapshots.
 - El más granular del nivel: conviene partirlo en 2 PRs (glifos+created/updated · collapse+diff bg).
+- **Hecho:** glifos por familia, collapse con `/details` + toggle, diff bg y marcado created/updated en `formatting.py`; los paths llevan OSC 8 real.
 
-### 13. [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) — T-8: Tema `system` + JSON
+### 13. [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) — T-8: Tema `system` + JSON ✅ *resuelto en la rama (`8667562`)*
 - Nuevo tier + loader JSON + **cambio de default**.
 - El riesgo es el cambio de default: afecta a toda la superficie visual de los 4 tiers existentes; hay que verificar `no-color`, `ansi` y el auto-detect de OSC 11.
+- **Hecho:** tier `system` como default (hereda fg/bg del terminal) + drop-in themes JSON en `~/.phoson/themes/` (`theme.py`).
 
 ### 14. [#142](https://github.com/phoson-lat/phoson-engine-minimal/issues/142) — Doom-loop middleware
 - El middleware es fácil (los hooks `on_before_tool`/`on_after_tool` ya existen).
@@ -177,20 +183,22 @@
 ```
 Fase 1 — quick wins (1 día c/u, sin riesgo)
   #155 (Thinking Ns)  #159 (footer)  #138 (bench fix)  #150 (picker)
+  #159 ✅ resuelto en la rama
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
   #151, #152  →  PR "chrome/transcript secos"
   #153, #154  →  PR "reasoning + composer"   (#155 ya va desde Fase 1)
 
 Fase 3 — sprint look 1 + fixes independientes
-  #159 ya va  ·  #156 (chip+card)  #157 (tool cards)  #158 (system theme)
+  #156 (chip+card) ✅  #157 (tool cards) ✅  #158 (system theme) ✅  — resueltos en la rama
   #141 (run budget)                →  engine fix independiente, no mezclar
 
 Fase 4 — la infra del harness (se alimentan entre sí)
+  #138 (bench fix) → bench/ ya commitado (runner + 4 tasks); falta arreglar --model/--provider
   #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)
   #161 (acuerdo del ADR, cuando toque)
   #160 (hero tape, recién con look 0+1 merged)
-  #162 (palette + ! bash, recién con #154 + #156)
+  #162 (palette + ! bash, recién con #154; #156 ya está)
 
 Fase 5 — cadena de reasoning
   #134 (preserved thinking)  →  #145 (sandwich)   [ambos miden contra #139]
