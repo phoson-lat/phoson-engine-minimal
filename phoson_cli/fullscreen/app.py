@@ -38,7 +38,11 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.containers import Float, HSplit, Window, FloatContainer
-from prompt_toolkit.layout.processors import Transformation
+from prompt_toolkit.layout.processors import (
+    Processor,
+    Transformation,
+    TransformationInput,
+)
 from prompt_toolkit.key_binding.key_bindings import (
     KeyBindings,
     DynamicKeyBindings,
@@ -152,7 +156,7 @@ _AGENTS_MD_CACHE_SECONDS = 5.0
 _INPUT_MAX_LINES = 5
 
 
-class _ComposerPlaceholderProcessor:
+class _ComposerPlaceholderProcessor(Processor):
     """Synchronous ``Processor`` that renders an empty-composer placeholder.
 
     ``TextArea`` has no ``placeholder=`` in this prompt_toolkit version, so
@@ -171,17 +175,21 @@ class _ComposerPlaceholderProcessor:
     def __init__(self, text: str) -> None:
         self._text = text
 
-    def apply_transformation(self, ti):
-        buffer = ti.buffer_control.buffer
+    def apply_transformation(
+        self, transformation_input: TransformationInput
+    ) -> Transformation:
+        buffer = transformation_input.buffer_control.buffer
         if (
             buffer.text == ""
             and buffer.document.cursor_position == 0
-            and ti.lineno == ti.document.line_count - 1
+            and transformation_input.lineno
+            == transformation_input.document.line_count - 1
         ):
             return Transformation(
-                fragments=ti.fragments + [("class:auto-suggestion", self._text)]
+                fragments=transformation_input.fragments
+                + [("class:auto-suggestion", self._text)]
             )
-        return Transformation(fragments=ti.fragments)
+        return Transformation(fragments=transformation_input.fragments)
 
 
 # Default persistent input-history file — the *same* file the classic REPL
