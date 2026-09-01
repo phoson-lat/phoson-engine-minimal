@@ -37,6 +37,23 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     turns (windowed fragment count constant at 1740 vs 1,036,000 full).
   - *Verifiable on a real session.* `PHOSON_PERF=1` logs the per-frame
     transcript char count and slice time, so the flat cost is checkable live.
+  - *Incremental line-bounds.* `render_chat_split` reports the frozen prefix
+    length and `PhosonApp._compute_chat_bounds` caches the frozen prefix's
+    per-line offsets against a `(width, *id(block))` fingerprint, re-scanning
+    only the small in-flight tail per dirty frame — so the per-frame
+    line-bounds build is also O(visible) during streaming (not O(transcript)).
+
+### Fixes
+
+- **Frozen in-chat spinner (regression from the windowing above)**: the
+  visible-slice cache only refreshed on `(top, height, total)` changes, but a
+  spinner tick repaints the *same* line count at the *same* window position
+  with a new glyph — so the cached fragment kept the old glyph and the braille
+  spinner appeared frozen. A `_chat_content_epoch` (bumped on every dirty
+  re-render) is now part of the slice-cache key, so a tick re-slices the
+  re-rendered transcript. Scrolling is unaffected (its `(top, height, total)`
+  and epoch are unchanged → still a cheap re-slice). `PHOSON_PERF` now also
+  logs `render_ms` (the dirty-frame re-render cost) alongside `slice_ms`.
 
 ## v0.23.0 (2026-09-01)
 
