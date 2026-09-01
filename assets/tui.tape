@@ -1,27 +1,27 @@
-# Phoson CLI hero tape — regenerates assets/tui.gif (I-115).
-# assets/tui.png (the README hero) is the last frame of tui.gif:
+# Phoson CLI hero tape — regenerates assets/tui.gif (T-10, #160).
+# assets/tui.png (the README hero still) is the last frame of tui.gif:
 #   ffmpeg -sseof -0.5 -i tui.gif -frames:v 1 tui.png
 #
-# Shows the full-screen TUI mid-conversation: chat pane with a completed
-# user turn, a read_file tool card, the assistant answer, and the idle
-# composer.
+# Shows the full-screen TUI mid-conversation: a completed user turn, a
+# patch_file tool card with its visible +/− diff (the harness at work,
+# not a research dump), the assistant answer, and the idle composer.
 #
-# Prereqs: vhs >= 0.10, ttyd >= 1.7.2 on $PATH, tmux, a working provider
-# (a local vLLM at the configured base_url works — this is how the
-# committed PNG was produced).
+# Prereqs: vhs >= 0.11, ttyd >= 1.7.2 on $PATH, uv, a working provider
+# (a local vLLM at the configured base_url works — the committed PNG was
+# produced this way).
 #
 # Setup:
-#   mkdir -p /tmp/phoson-demo && echo 'hello from phoson' > /tmp/phoson-demo/hello.txt
+#   mkdir -p /tmp/phoson-demo && printf '[server]\nhost = 0.0.0.0\nport = 8080\ndebug = false\n' > /tmp/phoson-demo/app.conf
 #
 # Render (from the assets/ directory). The env -i + SHELL=/bin/bash
 # wrapper keeps the capture clean of the host's login-shell prompt
-# (e.g. p10k/zsh):
+# (e.g. zsh/p10k):
 #   env -i HOME="$HOME" SHELL=/bin/bash TERM=xterm-256color \
 #     PATH="$(dirname $(command -v ttyd)):$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
 #     vhs tui.tape
 #   ffmpeg -sseof -0.5 -i tui.gif -frames:v 1 tui.png
 #
-# Timing: Sleep 16s assumes a sub-~12s model run on the configured
+# Timing: Sleep 20s assumes a sub-~10s model run on the configured
 # provider; bump it if your backend is slower.
 
 Output tui.gif
@@ -38,13 +38,10 @@ Set TypingSpeed 30ms
 Type "cd /tmp/phoson-demo && uv run --project $HOME/Documentos/Phoson/phoson-engine-minimal phoson-cli" Sleep 300ms  Enter
 Sleep 6s
 
-Type "Research about phoson-minimal-engine on Github" Sleep 150ms  Enter
-# Wait for: user turn, read_file tool card, assistant answer, idle prompt.
-Sleep 30s
-
-# Expand the last turn's reasoning view for a richer screenshot.
-Ctrl+T
-Sleep 1s
+Type "Update app.conf to use port 9090 and enable debug mode" Sleep 150ms  Enter
+# Wait for: user turn, patch_file tool card with its +/− diff, the
+# assistant answer, and the idle composer.
+Sleep 20s
 
 # Hold the frame for the still capture.
 Sleep 2s

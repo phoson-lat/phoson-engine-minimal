@@ -47,7 +47,7 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 | **T-7** | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | Tool cards: glifo por familia, collapse, diff con fondo, `created` vs `updated` | **P1** | M | 🟠 Las tools *son* el producto | ✅ Hecho (Sprint look 1): glifos 📖📂🖼/✍🪄/⌘/🔎🔗/📜 (cards + spinner clásico); diff `+`/`−` con fondo (tokens `diff_add_bg`/`diff_del_bg`); `write_file` dice Created/Updated; paths como OSC 8 `file://`; `/details` toggla el cuerpo colapsado en place |
 | **T-8** | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | Tema `system` (hereda fg/bg del terminal) + JSON en `~/.phoson/themes/` | **P1** | M | 🟠 Deja de pelearse con Gruvbox/Catppuccin | ✅ Hecho (Sprint look 1): tier `system` **default** sin `on #rrggbb` (accent = spinner/focus cyan); JSON drop-in en `~/.phoson/themes/*.json` (base + tokens, aparece en `/theme`); la pregunta light/dark de E4 queda obsoleta (el terminal ya resuelve) |
 | **T-9** | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | Footer contextual (3 hints) + scrollbar sin flechas | **P1** | S | 🟡 Discoverability real, no cheatsheet cortada | ✅ Hecho (Sprint look 1): footer 3-hints por estado (idle/running/picker); Shift+Drag → `/keys` + docs; scrollbar sin flechas |
-| **T-10** | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | Hero tape con un **diff**, no un research dump + Ctrl+T | **P2** | S | 🟡 El README vende el producto correcto | Sprint look 2 |
+| **T-10** | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | Hero tape con un **diff**, no un research dump + Ctrl+T | **P2** | S | 🟡 El README vende el producto correcto | ✅ Hecho (post-v0.23.0): hero regenerado con VHS 0.11 — tape `app.conf` (read → `patch_file` con diff `+/−` visible → respuesta → composer idle); sin ASCII, sin "Online", sin research dump; `tui.gif` 7.8 MB → 250 KB |
 | **T-12** | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | Command palette + `!` bash (gestos SOTA, no look puro) | **P2** | M | 🟡 Paridad de interacción con OpenCode/Claude | ✅ Hecho (v0.23.0): `Ctrl+P` abre picker fuzzy (native + plugin slash commands) reusando `model_picker._fuzzy_score` y el scaffolding de Float; `!cmd` corre en el shell gateado por la misma bash permission policy (ask → card T-6, `load_policy` re-leído en run-time) y el output entra como bash tool card normal (`add_bash_card`) |
 | **T-13** | *(nuevo, 2026-08-31)* | Chip de reasoning effort en header + `Ctrl+E` cicla `off→…→max` (patrón T-6) | **P1** | S | 🟡 La perilla existe (`/reasoning-effort`) pero no se ve ni se toca sin slash | ✅ Hecho (v0.20.0): chip `effort: high` / `· effort off` en header; `Ctrl+E` cicla y persiste (`save_config`), aplica al siguiente run; remapeable en `[keys]`, aparece en `/keys` |
 
@@ -150,11 +150,12 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 * **Solución:** 3 hints según estado. Idle: `enter send  ·  ctrl+j newline  ·  / commands`. Running: `esc cancel`. Picker: `enter  ·  esc`. Shift+Drag se queda en `docs/cli/mouse-and-links.md` y `/keys`. ScrollbarMargin sin flechas, o nada (el wheel ya funciona).
 * **Criterio de listo:** a 80 columnas el footer no se trunca. Test del hint idle vs running.
 
-### T-10 — Hero que vende un harness
+### T-10 — Hero que vende un harness ✅ *done (post-v0.23.0)*
 
 * **Área:** `assets/tui.tape` (prompt de research GitHub + Ctrl+T).
 * **Solución:** tape de un `patch_file` (diff visible) + composer idle. Sin ASCII, sin reasoning panel, sin “Official plugins”. Regenerar `tui.gif` / `tui.png` **después** de T-1…T-5.
 * **Criterio de listo:** el PNG del README muestra una tool card de edición, no un dump de markdown de GitHub.
+* **Hecho:** el hero viejo (era I-115, pre-sprint) mostraba un research dump de GitHub contra el chrome viejo ("Online", badges). Nuevo tape: `app.conf` de 4 líneas → prompt "Update app.conf to use port 9090 and enable debug mode" → `reading file` + `✎ editing file` con el diff `+/−` coloreado (T-7) → respuesta con el before/after → `▸ thought Ns` (T-3) → composer idle (T-4). El `Ctrl+T` de expandir reasoning quedó fuera: el diff ya es el foco y expandir el scratchpad en el hero añade ruido. Regenerado contra vLLM local con VHS 0.11 + ttyd 1.7.7 (wrapper `env -i` del `assets/README.md`); `tui.png` = último frame. Bonus: `demo.gif` (one-shot) también era pre-sprint y se refrescó con el mismo pipeline; `tui.gif` bajó de 7.8 MB a 250 KB al reducir el run de 30 s a ~10 s.
 
 ### T-12 — Gestos SOTA (después del look) ✅ *released (v0.23.0)*
 
@@ -254,7 +255,7 @@ Sprint look 1 (P1) — HECHO (2026-08-31, 4 commits)
   T-13 chip de reasoning effort + Ctrl+E  ✅ (patrón T-6)
 
 Sprint look 2
-  T-10 hero tape (después de 0+1, si no el GIF miente)
+  T-10 hero tape               ✅ (post-v0.23.0: `patch_file` + diff, VHS 0.11)
   T-12 palette + ! bash      ✅ (v0.23.0)
   T-11 se queda cerrado salvo que el look siga siendo el gap
 ```

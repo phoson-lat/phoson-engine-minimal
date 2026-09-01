@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-09-01 · v0.23.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados; v0.22.0: T-3/T-4 — #153, #154 cerrados; v0.23.0: T-12 — #162 cerrado).
+> **Estado de referencia:** 2026-09-01 · v0.23.0 + post-release (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados; v0.22.0: T-3/T-4 — #153, #154 cerrados; v0.23.0: T-12 — #162 cerrado; post-v0.23.0: T-10 — #160 cerrado, hero assets regenerados).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -41,7 +41,7 @@
 | 23 | [#149](https://github.com/phoson-lat/phoson-engine-minimal/issues/149) | Handoff multi-sesión (diferido hasta #129) | 4 | 🔴 |
 | 24 | [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | 4 | 🔴 |
 | — | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | T-11 — ADR renderer (decisión, no código) | — | 🔶 (ADR escrito en `IMPROVEMENTS-TUI.md` §B; falta el acuerdo) |
-| — | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | T-10 — Hero tape (secuencial: tras look 0+1) | 1 | 🔴 (los assets actuales son de I-115, pre-sprint) |
+| — | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | T-10 — Hero tape (secuencial: tras look 0+1) | 1 | ✅ post-v0.23.0 (hero = `patch_file` con diff + composer idle; regenerado con VHS 0.11; `tui.gif` 7.8 MB → 250 KB; `demo.gif` refrescado) |
 | — | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / lazy loading (hoy: "medir" vía #140) | — | 🔴 |
 
 ---
@@ -242,7 +242,7 @@
 | Issue | Tipo | Nota |
 |-------|------|------|
 | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) T-11 ADR | Decisión | El ADR ya está escrito (`IMPROVEMENTS-TUI.md` §B); falta el acuerdo del equipo. Solo se vuelve L si alguien fuerza cambiar de toolkit. |
-| [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) T-10 hero | Secuencial | S en sí (un VHS tape), pero el GIF miente si se hace antes que T-1…T-9. |
+| [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) T-10 hero | Secuencial | ✅ post-v0.23.0: hero regenerado — `patch_file` con diff visible + composer idle (VHS 0.11, vLLM local). `demo.gif` también refrescado. |
 | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) tool budget | Medición | Hoy es "instrumentar y mirar": sale gratis con #140. Feature solo si los datos lo justifican. Restricción crítica: no remover tools a mitad de sesión (KV-cache). |
 
 ---
@@ -264,7 +264,7 @@ Fase 3 — sprint look 1 + fixes independientes
 Fase 4 — la infra del harness (se alimentan entre sí)
   #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)   [#138 ✅ ya destraba el modelo fijo]
   #161 (acuerdo del ADR, cuando toque)
-  #160 (hero tape, recién con look 0+1 merged)
+  #160 (hero tape)   ✅ post-v0.23.0 (patch_file + diff, VHS 0.11; demo.gif refrescado)
   #162 (palette + ! bash)   ✅ v0.23.0 (PR #170; desbloqueado por #154 ✅ v0.22.0 y #156 ✅ v0.20.0)
 
 Fase 5 — cadena de reasoning
