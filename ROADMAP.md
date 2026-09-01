@@ -1,63 +1,168 @@
-# ROADMAP — phoson-engine-minimal
+# ROADMAP — phoson-engine-minimal / phoson-cli
 
-> Semana del 10 al 16 de agosto de 2026.
-> Contexto completo: `Phoson-Core` va a dejar de usar LangChain/LangGraph y correr sobre este engine. Ver [`Phoson-Core/ROADMAP.md`](../Phoson-Core/ROADMAP.md) para el lado espejo de esta migración.
-
----
-
-## Por qué esto importa ahora
-
-Phoson-Core necesita de este repo dos piezas que hoy no existen: **persistencia de sesión** (hoy usa `AsyncPostgresSaver` de LangGraph) y **memoria tiered** (hoy usa su propio `UnifiedMemory`, ya construido pero acoplado a Core). Ambas están en el roadmap OSS original como `phoson-plugin-checkpoint` (P1) y `phoson-plugin-memory` (P0), pero sin una línea de código todavía.
-
-Construirlas aquí no es solo requisito de migración — son exactamente las "Advanced Plugins" que `Business-Model.md` define como línea de ingreso propia (`$X/agente/mes`). Un solo esfuerzo cubre roadmap OSS + habilita migración + genera el producto pagado.
+> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.0** (T-14 windowing + spinner fix merged en `84e44b7`) · 1908 tests pasados · ruff/pyright limpios.
+>
+> **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
+>
+> **Qué cambia respecto al orden anterior:** se inserta un **Sprint A de corrección y seguridad** antes de la infraestructura del harness (H-1/H-2). Razón: la revisión final encontró bugs con reproducción determinista (permisos no adjuntos en sub-agentes y one-shot, compactación que rompe pares tool_use/tool_result, retry que nunca se ejecuta, `patch_file` sin unicidad) que no son hipótesis de harness y no necesitan un gate de no-regresión para justificarse. La regla "medido contra H-1" sigue aplicando a doom loops, sandwich, budget en contexto y compact tool.
+>
+> El ROADMAP anterior (semana 10–16 de agosto, migración de Phoson-Core a este engine) quedó **completo** y vive en git history (`git log --follow ROADMAP.md`).
 
 ---
 
-## Semana del 10 al 16 de agosto — cerrada
+## 1. Estado actual
 
-Los 4 ítems planeados quedaron hechos, más 2 adelantados desde "Bloqueado" (tiers Postgres y Qdrant de `phoson_plugin_memory`). Detalle completo abajo, sin tocar — es el registro de lo que se hizo y por qué.
+| Área | Estado |
+|---|---|
+| Look del TUI (T-1…T-13) | ✅ Todo shipped v0.20.0–v0.23.0. T-11 (ADR renderer) cerrado. |
+| Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). Follow-up #186 (F-41/42/44) en **PR #190** (abierto). T-15 (#172) pendiente. |
+| Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
+| Seguridad | 🔴 #174 (sub-agentes y one-shot sin permisos), #175 (`fnmatch` sobre comando completo), #183 (SSRF), #182 (`@import` fuera del repo). |
+| Loop | 🔴 #176 (compactación rompe pares), #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). |
+| ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). |
+| Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
 
-- [x] **Decidir la interfaz canónica de plugin.**
-  Hoy coexisten dos contratos: `Plugin` real en `phoson_agent/plugin.py` (sync: `configure/initialize/cleanup`) y `PhosonPlugin` async (`on_load/on_unload`) descrito en el roadmap externo pero nunca implementado. Elegir uno, documentarlo en `docs/plugins.md`, y dejar registrada la decisión (y el porqué) en este archivo.
-  **Criterio de listo:** `docs/plugins.md` refleja una sola interfaz sin ambigüedad.
-  **Decisión:** se mantiene `Plugin` (sync) como único contrato. `PhosonPlugin` async nunca tuvo implementación, loader, ni un solo plugin real que lo usara — `PluginRegistry`, `phoson_plugin_mcp` y todos los ejemplos ya asumen `Plugin`. La parte async que de verdad importa (pools de conexión, I/O) vive dentro de `initialize()`/`get_tools()`/tool handlers async, no en el lifecycle del propio plugin. Ver `docs/plugins.md#decisión-de-interfaz-canónica`. `phoson_plugin_checkpoint` y `phoson_plugin_memory` (ver abajo) son la prueba de que el contrato sync alcanza incluso para backends 100% async (Postgres, Redis).
+---
 
-- [x] **Scaffold de `phoson_plugin_checkpoint`.**
-  Implementación de `SessionStorage` (la ABC ya existe en `phoson_agent/sessions/`) respaldada en Postgres, con su propio esquema (no depender de tablas de Core). Debe soportar `save`/`load`/`list_sessions`/`delete` de forma async real (no `asyncio.to_thread` como `JsonlStorage`).
-  **Criterio de listo:** un test de integración que guarda y recupera un `ConversationTree` completo contra un Postgres real (docker-compose de test).
-  **Hecho:** `phoson_plugin_checkpoint/storage.py::PostgresStorage`, esquema propio (`phoson_checkpoint_sessions`/`phoson_checkpoint_nodes`), asyncpg puro (sin `to_thread`). 10 tests de integración en `tests/phoson_plugin_checkpoint/` contra Postgres real vía `docker-compose.test.yml` (se saltan, no fallan, si Postgres no está corriendo o `asyncpg` no está instalado).
+## 2. Tabla unificada de issues abiertos
 
-- [x] **Scaffold de `phoson_plugin_memory` — solo tier corto plazo (Redis).**
-  Extraer la forma (no necesariamente el código línea por línea) de `core/memory/unified.py::UnifiedMemory` de Phoson-Core: interfaz `MemoryBackend` + implementación Redis con TTL, expuesta como `get_tools()` (`memory_read`/`memory_write` como `AgentTool`, no `StructuredTool`).
-  Postgres (long-term) y Qdrant (semantic) quedan para la próxima semana — no bloquear el scaffold por cubrir los 3 tiers de una vez.
-  **Criterio de listo:** un agente de ejemplo en `examples/` usando memoria Redis end-to-end (reemplaza al ejemplo educativo actual en memoria de proceso).
-  **Hecho:** `phoson_plugin_memory/backend.py::MemoryBackend` + `redis_backend.py::RedisBackend`. `examples/plugin_example_memory.py` reescrito: dos `AgentEngine` separados donde el segundo lee lo que escribió el primero via Redis. Tests unitarios (backend fake) + integración (Redis real, mismo patrón skip-si-no-hay-servicio que checkpoint).
+Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-n` a `IMPROVEMENTS.md` / `IMPROVEMENTS-TUI.md`. Severidad: 🔴 alta · 🟠 media · 🟡 baja/perf/deuda. Esfuerzo: S/M/L.
 
-- [x] **Tier Postgres de `phoson_plugin_memory`** (adelantado desde "Bloqueado" — el scaffold Redis ya quedó estable).
-  Mismo `MemoryBackend`, ahora seleccionable vía `config: {"backend": "postgres", "dsn": "..."}` en `MemoryPlugin` (default sigue siendo `"redis"`). Esquema propio (`phoson_memory_entries`, namespaced por `namespace`), sin tocar tablas de `phoson_plugin_checkpoint` aunque compartan el mismo Postgres de test.
-  **Hecho:** `phoson_plugin_memory/postgres_backend.py::PostgresBackend`. Postgres no expira keys solo — TTL se enforce filtrando `expires_at` en cada lectura, con `purge_expired()` para limpiar filas vencidas (documentado como tarea periódica, no automática). 13 tests de integración nuevos en `tests/phoson_plugin_memory/test_postgres_backend.py` (incluye TTL real con `asyncio.sleep`, aislamiento por namespace, y `purge_expired`) + tests de selección de backend en `MemoryPlugin`.
+| Issue | Título corto | Origen | Sev. | Esf. | Sprint | Notas de cruce |
+|---|---|---|---|---|---|---|
+| [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bench ignora `--model/--provider` | H-0 | — | — | ✅ **cerrado** | Fix en `f1b3d04` (main); verificado y cerrado el 2026-09-01. Deriva docs↔GitHub que #146 debería detectar. |
+| [#171](https://github.com/phoson-lat/phoson-engine-minimal/issues/171) | T-14 windowing del chat pane | T-14 | 🟠 perf | M | ✅ **cerrado** | Merged en PR #173 (`84e44b7`); F-40 corregido en `40c8022`. Follow-up F-41/42/44 en #186. |
+| [#186](https://github.com/phoson-lat/phoson-engine-minimal/issues/186) | TUI: ANSI/OSC crudo en bash, fingerprint sin generación, docstring O(visible) | F-41, F-42, F-44 | 🟠 | S | **A** (PR #190) | Follow-up de #171; misma zona de código. PR #190 abierto 2026-09-01: `Text.from_ansi` + strip OSC en `_bash_output_body`, `generation` en fingerprint de `_compute_chat_bounds`, docstring/CHANGELOG corregidos. 5 tests nuevos. |
+| [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | **A** | Absorbe #141. Contradice "fail-closed en no-interactivo" de reporte-harness/IMPROVEMENTS. Prerrequisito de #129 slice 5. |
+| [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | **A** | Mismo PR que #174: el hueco es "one-shot sin controles", no solo sin tope de tiempo. |
+| [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | **A** | Bug del mecanismo actual; no espera a la taxonomía de #144. #169 lo heredaría. |
+| [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | **A** | Gap listado en la comparación SOTA. Quick win. |
+| [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | **B** | Antigravity §3.4 lo describía como correcto. Primer candidato a medir con #139. |
+| [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | **B** | Junto con #179 forman el PR de edit tool. |
+| [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | **B** | Antigravity la llamaba "robusta". **Bloquea #147.** |
+| [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | **B** | Antigravity §2.5 describía `RetryingChat` como activo. |
+| [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | **B** | Mismo camino que #134 (`_build_assistant_message`). |
+| [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | **B** | |
+| [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | **B** | Relacionado con #144 (trifecta letal). |
+| [#184](https://github.com/phoson-lat/phoson-engine-minimal/issues/184) | Sub-agentes sin system prompt; `agents` anunciado al hijo pero falla | F-23, F-24 | 🟠 | S | **B** | Toca la misma construcción del hijo que #174; puede ir en el mismo PR. |
+| [#185](https://github.com/phoson-lat/phoson-engine-minimal/issues/185) | Varios pequeños CLI: `/resume` tokens, `/compact` sin persistir, `_resolve_bool`, `/mcp config`, updater | F-34…F-38 | 🟡 | S | **B** | Cinco fixes independientes, un test por fila. |
+| [#181](https://github.com/phoson-lat/phoson-engine-minimal/issues/181) | Tools nativas `grep` y `glob` | F-21b | 🟠 | M | **C** | Hipótesis de harness: shippear con descripción cuidada y medir contra #139. |
+| [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | `phoson_plugin_otel` (trazas) | H-2 | 🔴 | M | **C** | Slice 1 (trace-file JSON) antes de #139. |
+| [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Eval set 15–25 tareas + gate nightly | H-1 | 🔴 | M | **C** | Incluir tareas de ancla ambigua, búsqueda en repo, compactación. Baseline = v0.24.0. |
+| [#172](https://github.com/phoson-lat/phoson-engine-minimal/issues/172) | T-15 FormattedText desde el renderer | T-15 | 🟡 perf | S-M | **C** | Después de #173. Antes de #187 para no chocar. |
+| [#134](https://github.com/phoson-lat/phoson-engine-minimal/issues/134) | Preserved thinking | I-134 | 🟠 | M | **D** | Confirmado en código. Prerrequisito de #145. |
+| [#145](https://github.com/phoson-lat/phoson-engine-minimal/issues/145) | Reasoning sandwich | H-5 | 🟠 | M | **D** | Hipótesis; medir contra #139. |
+| [#142](https://github.com/phoson-lat/phoson-engine-minimal/issues/142) | Doom loop detection | H-3 | 🟠 | S-M | **D** | Hipótesis; medir contra #139. |
+| [#143](https://github.com/phoson-lat/phoson-engine-minimal/issues/143) | Contexto ambiental (step N/M, tiempo, % ventana) | H-4 | 🟠 | S | **D** | Se alimenta del budget de #141. |
+| [#144](https://github.com/phoson-lat/phoson-engine-minimal/issues/144) | Permisos por intención + MCP hints + audit log | H-6 | 🔴 | M-L | **D** (Fase 2) · tras #139 (Fases 1+3) | #174/#175 son bugs del mecanismo actual y van antes. |
+| [#146](https://github.com/phoson-lat/phoson-engine-minimal/issues/146) | Paridad docs↔código↔GitHub en CI | H-8 | 🟡 | S-M | **E** | Añadir regla: "✅ resuelto" en docs ⇒ issue cerrado (caso #138). |
+| [#147](https://github.com/phoson-lat/phoson-engine-minimal/issues/147) | `compact_context()` controlada por el agente | H-9 | 🟡 | M | **E** | **Bloqueado por #176.** |
+| [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / carga diferida | H-11 | 🟡 | análisis | **E** | Con datos de #140. |
+| [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | I-129 | 🟡 | L | **E** (slices 1+2) | Requiere #141 y #174 resueltos (unattended sin controles). |
+| [#187](https://github.com/phoson-lat/phoson-engine-minimal/issues/187) | Refactor: extraer `ChatPane`/`HeaderModel`/floats/`RewindController` de `app.py` | F-45 | 🟡 | M | **E** | Después de #172. |
+| [#188](https://github.com/phoson-lat/phoson-engine-minimal/issues/188) | Adaptadores incompletos (Bedrock, Mistral, Gemini, Ollama) | F-50 · Antigravity §2.4 | 🟡 | M | **E** | Ollama `<think>` se relaciona con #134. |
+| [#189](https://github.com/phoson-lat/phoson-engine-minimal/issues/189) | Offload sin retención; Postgres O(N) por guardado | F-51, F-52 · Antigravity V-02/V-05 | 🟡 | S | **E** | |
+| [#149](https://github.com/phoson-lat/phoson-engine-minimal/issues/149) | Handoff multi-sesión | H-10 | 🟡 | L | Diferido | Cuando #129 slice 4 lo pida. |
+| [#169](https://github.com/phoson-lat/phoson-engine-minimal/issues/169) | Plugin SSH | externo | 🟡 | M | Diferido / externo | Requiere #175 antes para no heredar el bypass. |
 
-- [x] **Tier Qdrant (semántico) de `phoson_plugin_memory`** (adelantado desde "Bloqueado").
-  A diferencia de Postgres, no es el mismo `MemoryBackend` con otro storage: búsqueda semántica es "dame lo más parecido a X", no "dame el valor de la key X" — necesita una interfaz propia y una decisión de embedder (verificado con el usuario antes de tocar código: sin infraestructura de embeddings previa en el repo).
-  **Decisión de embedder:** `embed_fn` inyectable (`str -> list[float]`, sync o async), sin proveedor por default — evita meter una dependencia pesada (sentence-transformers) o atar el plugin a una API key de un proveedor específico. Mantiene el engine "minimal".
-  **Hecho:** `phoson_plugin_memory/semantic_backend.py::SemanticMemoryBackend` (interfaz nueva: `upsert`/`search`/`delete`/`close`, no extiende `MemoryBackend`) + `qdrant_backend.py::QdrantBackend`. Plugin separado, `semantic_plugin.py::SemanticMemoryPlugin`, expone `memory_remember`/`memory_recall` (no `memory_read`/`memory_write` — el contrato de tool es distinto). Validado contra un Qdrant real antes de escribir el código final: los IDs de punto deben ser UUID/entero, no string arbitrario (se deriva un UUID5 de `namespace:key`); coleccion se crea sola en el primer `upsert`, tamaño de vector inferido del embedding. 20 tests contra Qdrant real en `tests/phoson_plugin_memory/test_qdrant_backend.py` (ranking por similitud con un embedding de prueba determinista, sin modelo pesado) + `test_semantic_plugin.py`.
+**Hallazgos de la revisión sin issue propio** (se resuelven dentro de los anteriores o son notas): F-05 (confinamiento de rutas; decisión de producto, ver #180), F-08 (skills de checkout no confiable; nota en docs), F-15/F-16/F-17/F-19 (loop, menores; anotar en #178 si se atacan), F-18 (tools en paralelo; deuda, Sprint E), F-26 (encoding en `read_file`/`patch_file`; incluir en #179), F-30…F-33 (REPL clásico y rebuild; anotar en #185 si se atacan), F-53 (token drift; opinión, no medida).
 
-- [x] **Arreglar pooling de sesión en `phoson_plugin_mcp`.**
-  Hoy cada tool call reconecta y reinicializa la sesión MCP (`_execute_stdio/_execute_sse/_execute_http` en `_plugin.py`), incluso lanzando un subprocess nuevo para stdio. Cachear la sesión/conexión, no solo las definiciones de tools.
-  **Criterio de listo:** benchmark simple mostrando reducción de latencia en llamadas sucesivas a la misma tool MCP.
-  **Hecho:** `_get_session`/`_call_tool_on_cached_session` reemplazan `_execute_stdio/_execute_sse/_execute_http` — una sesión por servidor, cacheada en un `AsyncExitStack`, con auto-reconexión si la sesión cacheada falla. `scripts/benchmark_mcp_pooling.py` mide contra un servidor STDIO local real (`tests/phoson_plugin_mcp/fixtures/echo_server.py`, sin dependencia de red): **~11x** menos latencia en 10 llamadas sucesivas (991ms/call sin pooling → 91ms/call con pooling). 5 tests nuevos en `tests/phoson_plugin_mcp/test_session_pooling.py` contra el mismo servidor real. De paso se corrigió un bug de colisión de nombres (`tests/phoson_plugin_mcp/__init__.py` sombreaba el paquete real `phoson_plugin_mcp`, dejando sus 13 tests siempre en skip).
+---
 
-## Ahora
+## 3. Plan por sprints
 
-Phoson-Core ya está consumiendo estos plugins desde `PhosonAgentRuntime` (Fase 1 de su migración, ver su roadmap). Esta semana no hay trabajo nuevo planeado de este lado — el foco está en Core conectando MCP/memoria/sandbox. Si al hacerlo aparece un gap real en los plugins (no cosmético), se agrega aquí antes de tocarlo directamente desde Core.
+Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar PRs de seguridad con PRs de look o perf.
 
-Pendiente de definir: si el tema de sandboxes (ver discusión en curso en `Phoson-Core/ROADMAP.md`) termina necesitando algo del lado del engine (p. ej. un `phoson_plugin_sandbox` en vez de tools ad-hoc en Core), se decide y se agrega aquí — todavía no está resuelto.
+### Sprint A — v0.24.0 · corrección y seguridad (esta semana)
 
-## Bloqueado / sin fecha
+```
+1. Mergear PR #173 (T-14 + fix F-40).                                        ✅ merged 84e44b7 (v0.24.0)
+2. Cerrar #138 en GitHub.                                                    ✅ hecho
+3. #186   TUI follow-up: strip de control codes en bash, generación en el
+          fingerprint, docstring/CHANGELOG.                                    ✅ PR #190 (abierto)
+4. #174 + #141   Fronteras: helper compartido de middlewares; sub-agentes
+          heredan Permission + safe_mode + confirmation (fail-closed sin
+          callback); one-shot construye Offload → Summarizer → Permission;
+          PHOSON_RUN_BUDGET_SECONDS. (#184 puede ir aquí: misma construcción.) S-M
+5. #175   Allow-patterns: shlex + primer token; separadores → ask/deny;
+          match_args obligatorio.                                               S
+6. #167   BEL + OSC 9/777; config notify_on_completion.                         S
+```
 
-- `phoson_http` (modo daemon) — no es necesario para la migración de Core (que va a embeber el engine como librería, no como servicio separado). Queda pausado hasta que haya un caso de uso real que lo justifique.
+**Criterio de listo del sprint:** un tool en `deny` es rechazado desde un sub-agente y desde `-p` (test); `git *` no aprueba `git status; rm -rf /` (test); un run `-p` con tool colgado termina en el presupuesto con exit ≠ 0 (test).
 
-## Ver también
+### Sprint B — v0.25.0 · ACI y robustez del loop
 
-- [`Phoson-Core/ROADMAP.md`](../Phoson-Core/ROADMAP.md) — plan de migración del lado consumidor.
-- `TODO.md` — deuda técnica de calidad (no bloquea lo de arriba, pero conviene no perderla de vista: contrato de `ToolHandler`, mutación global de `sys.path` en el plugin loader).
+```
+1. #179 + #180   Edit tool seguro + read_file cat -n + caps + descripciones +
+          system prompt con guía de tools, git status y aviso de no confiable. M
+2. #176   Corte de compactación en fronteras seguras; resumen vacío aborta;
+          tools=[] en el call_next del resumen.                                 M
+3. #177   RetryingChat en build_chat; deprecar RetryMiddleware.                  S
+4. #178   stop_reason normalizado; except Exception en ToolRunner con backfill. S-M
+5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
+```
+
+**Criterio de listo:** compactación con `min_keep` cayendo en un `tool_result` produce historial válido (test); 429 antes del primer token se reintenta (test); `patch_file` con dos coincidencias falla sin escribir (test).
+
+### Sprint C — v0.26.0 · función de fitness
+
+```
+1. #181   grep + glob nativos.                                                  M
+2. #140   slice 1: trace-file JSON por run (run → step → tool_call).            M
+3. #139   bench/ a 15–25 tareas; baseline ≥3 corridas con modelo local fijo
+          sobre v0.24.0 ("sin ACI"); nightly que falla si tasa < baseline −
+          varianza. Primeros deltas a medir: #179/#180 y #181.                  M
+4. #172   T-15 FormattedText.                                                   S-M
+```
+
+### Sprint D — v0.27.0 · razonamiento y middleware (todo medido contra #139)
+
+```
+1. #134   Preserved thinking.                                                   M
+2. #145   Reasoning sandwich como hipótesis falsable.                           M
+3. #142   Doom loop detection.                                                  S-M
+4. #143   Contexto ambiental, alimentado por #141.                              S
+5. #144   Fase 2: readOnlyHint/destructiveHint de MCP como señal.               S-M
+```
+
+### Sprint E — v0.28.0+ · autonomía, análisis y deuda
+
+```
+1. #146   Gate docs↔código↔GitHub (incluye "✅ en docs ⇒ issue cerrado").       S-M
+2. #147   compact_context() (ya con #176 resuelto).                             M
+3. #148   Análisis de tokens de definiciones con datos de #140.                 análisis
+4. #129   Background agents slices 1+2.                                         M
+5. #187   Split de app.py (después de #172).                                    M
+6. #188   Adaptadores. #189 Offload/Postgres. F-18 gather de tools read-only.   M / S / S
+```
+
+### Diferido / externo
+
+- #149 handoff multi-sesión — cuando #129 slice 4 lo pida.
+- #144 Fases 1+3 — tras #139 con suite adversarial.
+- #169 plugin SSH — contribución externa bienvenida; después de #175.
+
+---
+
+## 4. Reglas del orden
+
+1. **Bugs no esperan al gate.** Sprints A y B se justifican con tests unitarios, no con el bench. Sprint D sí espera a #139.
+2. **Seguridad en PRs separados** (#174/#141, #175): tocan `permissions.py`, `subagent.py`, `__main__.py`. No mezclar con perf ni look.
+3. **#141 se resuelve dentro de #174.** Un solo PR construye la cadena de middlewares en one-shot y añade el budget.
+4. **#140 slice 1 antes que #139**, como ya decía `ISSUES-COMPLEXITY.md`.
+5. **#147 después de #176.** No exponer compactación al agente mientras el corte pueda producir un 400.
+6. **Cada pieza nueva de harness (Sprint D) declara la asunción sobre el modelo que la justifica**, para retirarla cuando expire (regla heredada de `reporte-harness.md`).
+7. **Al cerrar un issue, marcar ✅ aquí**, en `REVISION-FINAL-BY-FABLE.md` §2 si es F-*, y en `IMPROVEMENTS.md` si es H-*.
+
+---
+
+## 5. Ver también
+
+- `REVISION-FINAL-BY-FABLE.md` — hallazgos `F-nn` con archivo:línea, verificación y número de issue; cruce con los reportes previos.
+- `REVISION-BY-ANTIGRAVITY.md`, `reporte-harness.md` — revisiones anteriores (la primera sobre código, la segunda sobre docs).
+- `IMPROVEMENTS.md` — board de H-*/I-* con análisis por ítem.
+- `IMPROVEMENTS-TUI.md` — look del TUI (todo shipped) y ADR T-11.
+- `ISSUES-COMPLEXITY.md` — orden transversal previo; este ROADMAP lo reemplaza como cola de ataque.
+- `TODO.md` — índice histórico de decisiones anteriores a v0.10.
+- [`Phoson-Core/ROADMAP.md`](../Phoson-Core/ROADMAP.md) — lado consumidor de la migración (etapa cerrada).
