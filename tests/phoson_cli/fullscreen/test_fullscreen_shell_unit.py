@@ -337,6 +337,92 @@ async def test_input_window_reports_content_height_not_max(app: PhosonApp) -> No
     assert dim.max == 5
 
 
+def test_composer_is_wrapped_in_a_single_frame_not_two_rules(
+    app: PhosonApp,
+) -> None:
+    """T-4: the composer is a single rounded Frame, not the old
+    ``─`` / ``—`` two-rule sandwich around a bare shell prompt."""
+    from prompt_toolkit.widgets import Frame
+    from prompt_toolkit.layout.containers import HSplit, Window
+
+    # The composer is wrapped in a Frame whose body is the TextArea.
+    assert isinstance(app._composer_frame, Frame)
+    assert app._composer_frame.body is app._prompt_input
+
+    # The main HSplit (FloatContainer's content) hosts the Frame's internal
+    # container as a child — the bare TextArea window is NOT a direct child
+    # of the main HSplit anymore (it sits inside the Frame's border).
+    main_hsplit = app._root_container.content
+    assert isinstance(main_hsplit, HSplit)
+    composer_window = app._prompt_input.window
+    assert composer_window not in list(main_hsplit._all_children)
+    # The Frame's internal container (an HSplit) is a direct child.
+    assert any(isinstance(c, HSplit) for c in main_hsplit._all_children)
+
+    # The old bottom ``—`` rule is gone: among the main HSplit's direct
+    # Window children, exactly one rule-style Window remains — the single
+    # header separator. (The Frame's border windows are nested one level
+    # down, inside the Frame's internal HSplit, so they are not counted.)
+    direct_windows = [c for c in main_hsplit._all_children if isinstance(c, Window)]
+    rule_windows = [c for c in direct_windows if getattr(c, "char", None) in ("─", "—")]
+    assert len(rule_windows) == 1
+    assert rule_windows[0].char == "─"  # the header separator, not ``—``
+
+
+def test_composer_placeholder_shows_when_empty_and_hides_when_typed(
+    app: PhosonApp,
+) -> None:
+    """T-4: the empty composer renders the dim placeholder
+    ``Ask anything · @ files · / commands``; typing removes it."""
+    from types import SimpleNamespace
+
+    from phoson_cli.fullscreen.app import _ComposerPlaceholderProcessor
+
+    # The TextArea's buffer control carries a placeholder input processor.
+    placeholder = next(
+        (
+            p
+            for p in app._prompt_input.control.input_processors
+            if isinstance(p, _ComposerPlaceholderProcessor)
+        ),
+        None,
+    )
+    assert placeholder is not None
+
+    placeholder_text = "Ask anything  ·  @ files  ·  / commands"
+
+    def _render(text: str, cursor: int) -> str:
+        """Run the placeholder processor on a synthetic transformation input."""
+        fake_buffer = SimpleNamespace(
+            text=text, document=SimpleNamespace(cursor_position=cursor)
+        )
+        ti = SimpleNamespace(
+            buffer_control=SimpleNamespace(buffer=fake_buffer),
+            document=SimpleNamespace(cursor_position=cursor, line_count=1),
+            lineno=0,
+            fragments=[("", "")],
+        )
+        tr = placeholder.apply_transformation(ti)
+        return "".join(f[1] for f in tr.fragments)
+
+    # Empty buffer, cursor at 0 → the dim hint is appended …
+    empty = _render("", 0)
+    assert empty == placeholder_text
+    # … and it is styled as a muted auto-suggestion, not real content.
+    fake_buffer = SimpleNamespace(text="", document=SimpleNamespace(cursor_position=0))
+    ti = SimpleNamespace(
+        buffer_control=SimpleNamespace(buffer=fake_buffer),
+        document=SimpleNamespace(cursor_position=0, line_count=1),
+        lineno=0,
+        fragments=[("", "")],
+    )
+    tr = placeholder.apply_transformation(ti)
+    assert ("class:auto-suggestion", placeholder_text) in tr.fragments
+
+    # Once the user types, the placeholder vanishes.
+    assert _render("hello", 5) == ""
+
+
 async def test_up_arrow_recalls_previous_session_history(app: PhosonApp) -> None:
     """A2 criterio de listo: ↑ recalls the last message of the previous
     session after a restart.

@@ -38,6 +38,7 @@ from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
 from prompt_toolkit.layout.containers import Float, HSplit, Window, FloatContainer
+from prompt_toolkit.layout.processors import Transformation
 from prompt_toolkit.key_binding.key_bindings import (
     KeyBindings,
     DynamicKeyBindings,
@@ -149,6 +150,39 @@ _AGENTS_MD_CACHE_SECONDS = 5.0
 # Max height (in lines) the multiline input grows to before it scrolls
 # internally (IMPROVEMENTS.md A2).
 _INPUT_MAX_LINES = 5
+
+
+class _ComposerPlaceholderProcessor:
+    """Synchronous ``Processor`` that renders an empty-composer placeholder.
+
+    ``TextArea`` has no ``placeholder=`` in this prompt_toolkit version, so
+    the idle hint (``Ask anything · @ files · / commands``) is faked the ptk
+    way: an input processor appends the hint text on every render while the
+    buffer is empty and the cursor is at 0, and stops the moment the user
+    types. It is styled via the ``auto-suggestion`` class (a muted tone), so
+    it reads as a hint, not content — and, never becoming buffer text, it
+    can't be submitted.
+
+    An input *processor* (rather than the auto-suggestion mechanism) is used
+    because ptk's ``_async_suggester`` background task only fires on text
+    changes and would never populate the initial empty buffer.
+    """
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def apply_transformation(self, ti):
+        buffer = ti.buffer_control.buffer
+        if (
+            buffer.text == ""
+            and buffer.document.cursor_position == 0
+            and ti.lineno == ti.document.line_count - 1
+        ):
+            return Transformation(
+                fragments=ti.fragments + [("class:auto-suggestion", self._text)]
+            )
+        return Transformation(fragments=ti.fragments)
+
 
 # Default persistent input-history file — the *same* file the classic REPL
 # writes (see ``PhosonRepl.run``), so the two front ends share one history.
@@ -377,10 +411,22 @@ class PhosonApp:
                 ]
             ),
             complete_while_typing=True,
+            # T-4: the empty composer shows a dim placeholder ("Ask
+            # anything · @ files · / commands") instead of a bare shell
+            # prompt. prompt_toolkit's TextArea has no placeholder= here,
+            # so a synchronous input processor renders it while the buffer
+            # is empty (see _ComposerPlaceholderProcessor).
+            input_processors=[
+                _ComposerPlaceholderProcessor("Ask anything  ·  @ files  ·  / commands")
+            ],
             style="class:prompt_text",
         )
-
-        bottom_margin = Window(height=1, char="—", style="class:separator")
+        # T-4: the composer is an *object*, not a shell prompt. A single
+        # rounded Frame (one separator — the top rule above) replaces the
+        # old two-rule ``─``/``—`` sandwich; the ``❯`` stays *inside* the
+        # box as an in-composer cue, not a leading shell glyph. The same
+        # Frame the picker Floats use, so the chrome is one visual language.
+        self._composer_frame = Frame(body=self._prompt_input)
         # The footer is intentionally keyboard hints only — and contextual
         # (T-9): three hints for the current state, never a truncated
         # cheatsheet. Stable runtime facts live in the compact header,
@@ -394,8 +440,7 @@ class PhosonApp:
                 header_window,
                 self._chat_window,
                 separator_line,
-                self._prompt_input,
-                bottom_margin,
+                self._composer_frame,
                 footer_window,  # Now contains only keyboard hints
             ]
         )
@@ -451,9 +496,16 @@ class PhosonApp:
                 "separator": self.theme.pt_muted_deep,
                 "footer": self.theme.pt_muted_deep,
                 "prompt_text": self.theme.prompt_input,
+                # The composer's rounded Frame (T-4) and the picker Floats
+                # share the ``frame``/``frame.border``/``frame.label``
+                # classes, so one visual language covers all input chrome.
                 "frame": f"bg:{self.theme.completion_bg}",
                 "frame.border": self.theme.pt_accent,
                 "frame.label": f"bold {self.theme.pt_accent}",
+                # T-4: the empty-composer placeholder is a prompt_toolkit
+                # auto-suggestion, styled in a muted tone so it reads as a
+                # hint, not real content.
+                "auto-suggestion": self.theme.pt_muted_deep,
             }
         )
 
