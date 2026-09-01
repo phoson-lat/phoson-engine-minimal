@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-08-31 · v0.19.0 + rama `feat/tui-sprint-look-1` (T-6, T-7, T-8, T-9 resueltos, aún sin merge).
+> **Estado de referencia:** 2026-08-31 · v0.19.0 + rama `feat/tui-sprint-look-1` (T-5, T-6, T-7, T-8, T-9 resueltos, aún sin merge).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -16,7 +16,7 @@
 
 | Orden | Issue | Título (corto) | Nivel | Estado |
 |-------|-------|----------------|-------|--------|
-| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | 🔴 |
+| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | ✅ (rama `feat/tui-sprint-look-1`) |
 | 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
 | 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | 🔴 (bug confirmado en `bench/run_bench.py`) |
 | 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | 🔴 |
@@ -48,10 +48,11 @@
 
 ## Nivel 1 — Fixes chicos y aislados (cambios localizados, 1 PR)
 
-### 1. [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) — T-5: `Thinking 8s`
+### 1. [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) — T-5: `Thinking 8s` ✅ *resuelto en la rama*
 - Borrar `_THINKING_PHRASES` + timer monotónico en `fullscreen/sink.py`.
 - Un solo archivo, sin API nueva. El glifo braille se queda.
 - Criterio simple: snapshots sin "Pondering"/"Chewing"; la línea cambia cada segundo.
+- **Hecho:** `CurrentTurn.thinking_since` (monotónico) arma el episodio al entrar en thinking; `activity_text()` rinde `Thinking {int(elapsed)}s` — el número corre por reloj de pared, no por ticks (el glifo sigue animado vía `tick_activity_frame`). Cada tool start / freeze de streaming reinicia el episodio a 0 (el contador mide *la* espera actual, no el run). Frases y `_THINKING_PHRASE_TICKS` eliminados.
 
 ### 2. [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) — T-9: Footer contextual ✅ *resuelto en la rama (`39ceac6`)*
 - 3 strings de hint por estado (idle/running/picker) en `_FOOTER_HINT` de `app.py`.
@@ -182,8 +183,7 @@
 
 ```
 Fase 1 — quick wins (1 día c/u, sin riesgo)
-  #155 (Thinking Ns)  #159 (footer)  #138 (bench fix)  #150 (picker)
-  #159 ✅ resuelto en la rama
+  #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix)  #150 (picker)
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
   #151, #152  →  PR "chrome/transcript secos"

@@ -82,7 +82,11 @@ class CurrentTurn:
     # to the static "waiting" cells.
     subagent_progress: object | None = None
     activity_frame: int = 0
-    thinking_phrase_index: int = 0
+    # Monotonic-clock timestamp of when the turn entered its current
+    # *thinking* episode (T-5): rendered as "Thinking {n}s". None while
+    # the turn is in any other phase; re-armed on every re-entry so the
+    # counter restarts from 0 after a tool call or a streamed-text gap.
+    thinking_since: float | None = None
 
 
 class FullScreenSink:
@@ -307,10 +311,11 @@ class FullScreenSink:
     def activity_text(self) -> str:
         """Human-readable phase for the transient chat activity line.
 
-        The *thinking* phase rotates through ``_THINKING_PHRASES`` (one every
-        ``_THINKING_PHRASE_TICKS`` ticks) so a long wait reads as progress
-        rather than a frozen label. The other phases are informational and
-        stay fixed: they describe the real state, not a mood.
+        The *thinking* phase shows the elapsed wait (T-5): a real number
+        that ticks up every second instead of rotating through stock
+        phrases ("Pondering the problem…"), which read as decoration.
+        The other phases are informational and stay fixed: they describe
+        the real state, not a mood.
         """
         turn = self.current_turn
         if turn is None:
@@ -328,7 +333,11 @@ class FullScreenSink:
             return "Running tool…"
         if turn.content:
             return "Streaming…"
-        return _THINKING_PHRASES[turn.thinking_phrase_index % len(_THINKING_PHRASES)]
+        if turn.thinking_since is None:
+            # A fresh turn with no provider feedback yet: count from 0.
+            turn.thinking_since = time.monotonic()
+        elapsed = time.monotonic() - turn.thinking_since
+        return f"Thinking {int(elapsed)}s"
 
     def activity_frame(self) -> str:
         """Current spinner glyph for the active turn (empty when idle)."""
@@ -345,8 +354,9 @@ class FullScreenSink:
         budget):
 
         Animates:
-        - *thinking* — the spinner is the only feedback; the phrase
-          rotates once per ``_THINKING_PHRASE_TICKS`` ticks (~2.5 s).
+        - *thinking* — the spinner is the only feedback; it animates while
+          the "Thinking {n}s" label (T-5) piggybacks on the same repaints
+          and its seconds tick up on the wall clock.
         - *composing* (I-128) — the "✍ writing file…" line is static text,
           so the spinning glyph keeps a slow args generation from looking
           frozen.
@@ -369,8 +379,6 @@ class FullScreenSink:
         if turn.subagent_tasks or (turn.content and not turn.composing_tool):
             return False
         turn.activity_frame += 1
-        if turn.activity_frame % _THINKING_PHRASE_TICKS == 0:
-            turn.thinking_phrase_index += 1
         return True
 
     # ── AgentEventSink ───────────────────────────────────────────────────
@@ -428,6 +436,10 @@ class FullScreenSink:
                 # start line) is the feedback from here on (I-128).
                 if turn is not None:
                     turn.composing_tool = ""
+                    # T-5: whatever thinking episode ended with this tool
+                    # call is over — the next one (model generating after
+                    # the tool) counts from 0.
+                    turn.thinking_since = None
                 if event.tool_name in {"agent", "agents"}:
                     self.blocks.append(render_subagent_start_line(event, self.theme))
                     tasks = subagent_tasks_from_args(event.tool_name, event.args)
@@ -570,6 +582,9 @@ class FullScreenSink:
             return
         self.blocks.append(render_streaming_panel(turn.content, "", False, self.theme))
         turn.content = ""
+        # T-5: the waiting episode ended — streaming takes over the label,
+        # and any later thinking episode counts from 0 again.
+        turn.thinking_since = None
 
     def flush_line(self) -> None:
         """Freeze the in-flight turn (cancel/error paths before a terminal event).
@@ -675,22 +690,3 @@ __all__ = ["FullScreenSink", "CurrentTurn", "REPAINT_INTERVAL_SECONDS"]
 #: eye and cut ~40% of repaints). Token events coalesce into at most one
 #: scheduled repaint per interval.
 REPAINT_INTERVAL_SECONDS = 0.10
-
-# Rotating labels for the *thinking* phase of the activity line. Kept short
-# (they share one line with the spinner) and deliberately light on tone —
-# the goal is "still working" feedback, not decoration. Edit freely: this
-# list is the single source of truth.
-_THINKING_PHRASES = (
-    "Thinking…",
-    "Pondering the problem…",
-    "Reading between the lines…",
-    "Weighing the options…",
-    "Tracing the logic…",
-    "Chewing on that…",
-    "Mapping the next move…",
-    "Almost there…",
-)
-
-# How many activity ticks (~0.12 s each) per thinking-phrase rotation,
-# i.e. roughly one new phrase every 2.5 s.
-_THINKING_PHRASE_TICKS = 21
