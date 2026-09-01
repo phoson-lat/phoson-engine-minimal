@@ -64,7 +64,7 @@ from ..theme import (
     build_prompt_style,
     build_picker_style_dict,
 )
-from .render import BlockAnsiCache, render_chat, windowed_slice, _line_boundaries
+from .render import BlockAnsiCache, windowed_slice, _line_boundaries, render_chat_split
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
@@ -291,26 +291,45 @@ def _perf_logger_ready() -> None:
 
 
 def _chat_perf_log(
-    full_chars: int, total_lines: int, top: int, height: int, slice_ms: float
+    full_chars: int,
+    total_lines: int,
+    top: int,
+    height: int,
+    slice_ms: float,
+    render_ms: float = 0.0,
 ) -> None:
     """T-14 (#171): per-frame chat-pane cost, verifiable on a real session.
 
     Called only when ``PHOSON_PERF`` is set (see :data:`_PERF_LOGGING`).
-    ``slice_ms`` is the wall time of the ``windowed_slice`` that produced the
-    visible fragment — the step that used to be the O(transcript)
-    ``split_lines`` / ``tuple()+hash`` pass inside prompt_toolkit. The
-    flatness of this number across session lengths is the acceptance
-    criterion for the windowing work. The logger's handler is attached at
-    import time (below), so the steady-state call is a single ``.info``.
+
+    * ``slice_ms`` — the wall time of the ``windowed_slice`` that produced the
+      visible fragment, i.e. the step that used to be the O(transcript)
+      ``split_lines`` / ``tuple()+hash`` pass inside prompt_toolkit. Its
+      flatness across session lengths is the acceptance criterion for the
+      windowing work.
+    * ``render_ms`` — the wall time of the dirty-frame re-render
+      (``render_chat_split`` + the incremental bounds build) when the
+      transcript is dirty (a streamed token, a new block, a resize). 0.0 on
+      frames that only re-sliced (scroll). Its *bounds* component is
+      O(visible) (the frozen prefix's line offsets are cached; only the small
+      in-flight tail is re-scanned — see :meth:`PhosonApp._compute_chat_bounds`),
+      but it also includes re-rendering the frozen transcript, which is still
+      O(transcript); that term is the remaining cost to eliminate for a fully
+      O(visible) streaming frame (known follow-up).
+
+    The logger's handler is attached at import time (below), so the
+    steady-state call is a single ``.info``.
     """
     if not _PERF_LOGGING:
         return
     _PERF_LOGGER.info(
-        "perf chat-pane: full_chars=%d total_lines=%d top=%d height=%d slice_ms=%.3f",
+        "perf chat-pane: full_chars=%d total_lines=%d top=%d height=%d "
+        "render_ms=%.3f slice_ms=%.3f",
         full_chars,
         total_lines,
         top,
         height,
+        render_ms,
         slice_ms,
     )
 
@@ -403,9 +422,29 @@ class PhosonApp:
         # Rich re-asserts each line's SGR after every newline.
         self._full_ansi_text = ""
         self._full_ansi_bounds: list[int] = [0]
+        # T-14 follow-up: incremental line-bounds. The *frozen* prefix
+        # (concatenated immutable blocks) never changes while a turn streams —
+        # only the in-flight tail (activity line + streaming panel) grows. So
+        # `_compute_chat_bounds` caches the frozen prefix's line boundaries and
+        # re-scans only the small tail each dirty frame, making the per-frame
+        # line-bounds build O(visible) during streaming, not O(transcript).
+        # `_frozen_ansi_bounds` is invalidated against `_frozen_ansi_ids` (a
+        # (width, *id(block)) fingerprint): the transcript is append-only and
+        # every in-place block edit replaces the block with a *new* object (see
+        # sink), so a changed fingerprint means the frozen prefix changed and
+        # must be re-scanned.
+        self._frozen_ansi_bounds: list[int] = [0]
+        self._frozen_ansi_ids: tuple[int, ...] | None = None
+        # Bumped on every dirty re-render of the full transcript. The slice
+        # cache must refresh on it, not only on (top, height, total): a
+        # spinner tick repaints the *same* line count at the *same* window
+        # position, so without the epoch the cached fragment keeps the stale
+        # glyph and the in-chat spinner appears frozen.
+        self._chat_content_epoch = 0
         self._window_top = -1
         self._window_total = -1
         self._window_height = -1
+        self._window_epoch = -1
         self._windowed_ansi = ANSI("")
         # Immutable transcript blocks render to ANSI once per width (#perf).
         self._block_ansi_cache = BlockAnsiCache()
@@ -915,23 +954,74 @@ class PhosonApp:
         parts = cwd.parts
         return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
 
+    def _compute_chat_bounds(self, text: str, prefix_len: int, width: int) -> list[int]:
+        """Per-line char offsets for *text*, built incrementally (T-14 follow-up).
+
+        Returns the same list :func:`render._line_boundaries` would produce
+        over the whole string — ``bounds[k]`` = start of visual line ``k`` —
+        but without re-scanning the frozen prefix every frame. The transcript
+        is ``text[:prefix_len]`` (frozen, the concatenated immutable blocks)
+        + ``text[prefix_len:]`` (the in-flight tail: activity line, streaming
+        panel, subagent panel). While a turn streams, only the tail changes,
+        so the frozen prefix's line boundaries are cached and only the small
+        tail is re-scanned, then spliced on. This makes the *line-bounds
+        build* O(visible) per dirty frame during streaming, instead of
+        O(transcript).
+
+        The cache is invalidated when the frozen prefix changes: the
+        transcript is append-only, every in-place block edit replaces the
+        block with a *new* object (so its ``id`` changes), and a width change
+        re-renders every block — all captured by the ``(width, *id(b) for b in
+        blocks)`` fingerprint below. On a cache miss the prefix bounds are
+        rebuilt from the (C-speed) prefix scan.
+        """
+        prefix = text[:prefix_len]
+        tail = text[prefix_len:]
+        fingerprint = (
+            width,
+            *(id(block) for block in self.sink.blocks),
+        )
+        if fingerprint != self._frozen_ansi_ids:
+            self._frozen_ansi_bounds = _line_boundaries(prefix)
+            self._frozen_ansi_ids = fingerprint
+        # Splice: the prefix's lines, then the tail's lines. The frozen prefix
+        # ends in a newline (Rich re-asserts SGR + a \n after every line), so
+        # the tail always begins on a fresh visual line whose start offset
+        # coincides with the prefix's trailing-empty-line start; dropping
+        # ``tail_bounds[0]`` (=0, the prefix's last line) avoids double-counting
+        # it and shifts the tail's offsets by ``prefix_len``.
+        tail_bounds = _line_boundaries(tail)
+        if len(tail_bounds) == 1:
+            return self._frozen_ansi_bounds
+        return self._frozen_ansi_bounds + [prefix_len + b for b in tail_bounds[1:]]
+
     def _render_chat(self) -> ANSI:
         term_width = shutil.get_terminal_size((80, 24)).columns
         width = max(40, term_width - 4)
 
+        # render_ms: wall time of this frame's full re-render (0.0 when the
+        # frame only re-sliced an already-rendered transcript, e.g. scroll).
+        render_ms = 0.0
         if self.sink.dirty or width != self._last_width:
-            text = render_chat(self.sink, width, self._block_ansi_cache)
+            render_start = time.perf_counter()
+            text, prefix_len = render_chat_split(
+                self.sink, width, self._block_ansi_cache
+            )
             # T-14 (#171): cache the *full* transcript as one ANSI string.
             # Rich re-asserts each line's SGR state after every newline, so the
             # string can later be sliced at any line boundary (see
             # render._line_boundaries / windowed_slice) without corrupting
-            # styling. `_line_boundaries` produces exactly `count("\n") + 1`
-            # bounds, matching prompt_toolkit's `split_lines` line count.
+            # styling. `_compute_chat_bounds` builds the per-line char offsets
+            # incrementally: the frozen prefix's bounds are cached and only the
+            # small in-flight tail is re-scanned, so the full-string bounds
+            # match `count("\n") + 1` lines (matching ptk's `split_lines`).
             self._full_ansi_text = text
-            self._full_ansi_bounds = _line_boundaries(text)
+            self._full_ansi_bounds = self._compute_chat_bounds(text, prefix_len, width)
             self._total_chat_lines = max(1, len(self._full_ansi_bounds))
+            self._chat_content_epoch += 1
             self.sink.dirty = False
             self._last_width = width
+            render_ms = (time.perf_counter() - render_start) * 1e3
 
         height = self._get_visible_window_height()
         total = self._total_chat_lines
@@ -941,10 +1031,16 @@ class PhosonApp:
         # Slice out the visible window. Cache the result: scrolling (which
         # does NOT change the transcript) only changes `top`, so the slice is
         # O(visible) string work rather than an O(transcript) re-render.
+        # `_chat_content_epoch` must also be part of the key: dirty frames
+        # (spinner tick, streamed token) change the *content* at the same
+        # (top, height, total), and a same-position slice of the stale string
+        # would keep the old glyph — which is exactly what froze the
+        # in-chat spinner after the windowing landed.
         if (
             top != self._window_top
             or height != self._window_height
             or total != self._window_total
+            or self._chat_content_epoch != self._window_epoch
         ):
             slice_start = time.perf_counter()
             self._windowed_ansi = ANSI(
@@ -956,12 +1052,14 @@ class PhosonApp:
             self._window_top = top
             self._window_height = height
             self._window_total = total
+            self._window_epoch = self._chat_content_epoch
             _chat_perf_log(
                 full_chars=len(self._full_ansi_text),
                 total_lines=total,
                 top=top,
                 height=height,
                 slice_ms=slice_ms,
+                render_ms=render_ms,
             )
         return self._windowed_ansi
 

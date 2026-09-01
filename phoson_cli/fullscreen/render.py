@@ -146,10 +146,20 @@ class BlockAnsiCache:
         self._width = width
 
 
-def render_chat(
+def render_chat_split(
     sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
-) -> str:
-    """Render the sink's transcript (history + in-flight turn) to ANSI text.
+) -> tuple[str, int]:
+    """Render the sink's transcript to ``(ansi_text, frozen_prefix_len)``.
+
+    *frozen_prefix_len* is the length of the **frozen** portion of the
+    rendered text — the concatenated immutable transcript blocks — before
+    the in-flight turn (activity line + streaming panel) is written. The
+    frozen portion never changes while a turn streams (only *appends* add
+    blocks), so the caller (``PhosonApp._render_chat``) can cache the
+    frozen part's line boundaries and re-scan only the small in-flight tail
+    per frame (T-14 follow-up: the per-frame line-bounds build becomes
+    O(visible) during streaming instead of O(transcript) — see
+    ``PhosonApp._compute_chat_bounds``).
 
     When *cache* is given (the app's steady-state path), immutable
     transcript blocks are rendered at most once per width; without it,
@@ -169,10 +179,14 @@ def render_chat(
         _make_console(buf, width).print(
             "  @ files  ·  / commands", style=sink.theme.muted_deep
         )
-        return buf.getvalue()
+        return buf.getvalue(), 0
 
     for block in sink.blocks:
         buf.write(cache.get_or_render(block, width))
+
+    # Length of the frozen prefix (all immutable blocks, written above).
+    # The in-flight turn appended below does not alter it while streaming.
+    prefix_len = buf.tell()
 
     turn = sink.current_turn
     if turn is not None:
@@ -229,7 +243,21 @@ def render_chat(
         if panel is not None:
             console.print(panel)
 
-    return buf.getvalue()
+    return buf.getvalue(), prefix_len
 
 
-__all__ = ["BlockAnsiCache", "render_chat"]
+def render_chat(
+    sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
+) -> str:
+    """Render the sink's transcript (history + in-flight turn) to ANSI text.
+
+    Backward-compatible wrapper around :func:`render_chat_split` for
+    callers that only need the text (tests, one-off renders). The
+    steady-state app path uses :func:`render_chat_split` directly so it can
+    cache the frozen prefix's line boundaries.
+    """
+    text, _ = render_chat_split(sink, width, cache)
+    return text
+
+
+__all__ = ["BlockAnsiCache", "render_chat", "render_chat_split"]

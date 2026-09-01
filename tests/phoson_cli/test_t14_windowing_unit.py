@@ -282,6 +282,119 @@ def test_render_chat_is_cached_until_dirty(tmp_path) -> None:
     assert app.sink.dirty is False
 
 
+# ── T-14 incremental bounds (render_chat_split + _compute_chat_bounds) ─────────
+
+
+def _streaming_turn(app, content: str) -> None:
+    """Start an in-flight turn and set its streamed text (a dirty frame's tail)."""
+    app.sink.begin_activity()
+    app.sink.current_turn.content = content
+
+
+def test_compute_chat_bounds_matches_full_scan(tmp_path) -> None:
+    """The incremental builder returns exactly what a full `_line_boundaries`
+    scan would — across a frozen prefix + streaming tail, incl. a tail with no
+    trailing newline (which merges into the prefix's final line)."""
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 40)
+    _set_term(app, columns=120, lines=30)
+    for tail in ("", "more text\n", "more\ntext without trailing newline"):
+        _streaming_turn(app, tail)
+        app._render_chat()
+        expected = _line_boundaries(app._full_ansi_text)
+        assert app._full_ansi_bounds == expected, f"tail={tail!r}"
+        # Line count drives the scrollbar + windowing — must match ptk's.
+        assert app._total_chat_lines == len(expected)
+
+
+def test_compute_chat_bounds_caches_prefix_while_streaming(tmp_path) -> None:
+    """Streaming (same frozen blocks, growing tail) must reuse the cached
+    prefix bounds — the prefix is not re-scanned, which is what keeps the
+    per-frame line-bounds cost O(visible) instead of O(transcript)."""
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 60)
+    _set_term(app, columns=120, lines=30)
+    _streaming_turn(app, "first token\n")
+    app._render_chat()
+    prefix_bounds_before = app._frozen_ansi_bounds
+    ids_before = app._frozen_ansi_ids
+    assert ids_before is not None
+
+    # Stream more content: same blocks, only the tail grows.
+    for chunk in ("first\nsecond token\n", "first\nsecond\nthird line\n"):
+        app.sink.current_turn.content = chunk
+        app._render_chat()
+        # The frozen prefix's block set is unchanged → fingerprint matches →
+        # the cached prefix bounds object is reused (no re-scan).
+        assert app._frozen_ansi_ids == ids_before
+        assert app._frozen_ansi_bounds is prefix_bounds_before
+        # And the spliced result is still correct.
+        assert app._full_ansi_bounds == _line_boundaries(app._full_ansi_text)
+
+
+def test_compute_chat_bounds_invalidates_on_block_change(tmp_path) -> None:
+    """A new block changes the frozen prefix → the fingerprint changes → the
+    prefix bounds are rebuilt (a different object), and the result is correct."""
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 40)
+    _set_term(app, columns=120, lines=30)
+    _streaming_turn(app, "x\n")
+    app._render_chat()
+    prefix_before = app._frozen_ansi_bounds
+    ids_before = app._frozen_ansi_ids
+
+    # A new user message appends a block (frozen prefix grows).
+    app.sink.on_user_message("another", Message(role="user", content="another"))
+    app._render_chat()
+    assert app._frozen_ansi_ids != ids_before
+    assert app._frozen_ansi_bounds is not prefix_before
+    assert app._full_ansi_bounds == _line_boundaries(app._full_ansi_text)
+
+
+def test_render_chat_split_reports_frozen_prefix_length(tmp_path) -> None:
+    """render_chat_split's prefix_len is the length of the frozen (no
+    in-flight) transcript — it must equal the prefix that would render with
+    the current turn removed, so the app can cache its boundaries."""
+    from phoson_cli.fullscreen.render import render_chat_split
+
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 20)
+    _set_term(app, columns=120, lines=30)
+    # Idle: no in-flight turn → the whole transcript is the frozen prefix.
+    text, prefix_len = render_chat_split(app.sink, 120, app._block_ansi_cache)
+    assert prefix_len == len(text)
+
+
+def test_spinner_tick_refreshes_same_position_window(tmp_path) -> None:
+    """A spinner tick changes the glyph at the *same* (top, height, total):
+    the cached visible slice must re-slice the re-rendered transcript.
+
+    Regression: after the T-14 windowing, the slice cache only refreshed on
+    (top, height, total) changes, so a spinner tick (identical window shape,
+    same line count, new glyph) kept serving the stale fragment and the
+    in-chat spinner appeared frozen."""
+    app = _app_for(tmp_path)
+    _push_long_transcript(app, 60)  # longer than the 30-line window
+    _set_term(app, columns=120, lines=30)
+    app.sink.begin_activity()
+    app._render_chat()
+    first = app._windowed_ansi.value
+    assert app._window_top > 0  # auto-scrolled to the tail
+    frame_a = app.sink.activity_frame()
+    assert frame_a in first
+
+    # One spinner tick (what _tick_activity_indicators does): new glyph,
+    # same window position and line count.
+    assert app.sink.tick_activity_frame() is True
+    app.sink.dirty = True
+    frame_b = app.sink.activity_frame()
+    assert frame_b != frame_a
+    app._render_chat()
+
+    assert frame_b in app._windowed_ansi.value
+    assert frame_a not in app._windowed_ansi.value
+
+
 # ── ChatScrollbarMargin ─────────────────────────────────────────────────────────
 
 
