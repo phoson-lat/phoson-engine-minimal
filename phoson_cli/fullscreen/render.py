@@ -108,15 +108,22 @@ class BlockAnsiCache:
     to the block alongside its rendered text, so an id can never be
     matched against a different (recycled) object. A single ``Console``
     is reused across renders (it only carries the target buffer/width).
+
+    *generation* counts :meth:`clear` calls. Callers that fingerprint
+    cached *derivatives* of the entries (e.g. the app's frozen-prefix line
+    bounds, keyed by block ``id``) must include it: after a ``clear`` +
+    refill with a different theme/width the same ids may describe different
+    ANSI strings, and the ids alone would look unchanged (F-41).
     """
 
-    __slots__ = ("_entries", "_width", "_console", "_buf")
+    __slots__ = ("_entries", "_width", "_console", "_buf", "generation")
 
     def __init__(self) -> None:
         self._entries: dict[int, tuple[object, str]] = {}
         self._width: int = 0
         self._buf = io.StringIO()
         self._console: Console | None = None
+        self.generation: int = 0
 
     def get_or_render(self, block: object, width: int) -> str:
         """Return the cached ANSI string for *block*, rendering if needed."""
@@ -141,9 +148,14 @@ class BlockAnsiCache:
         return text
 
     def clear(self, width: int) -> None:
-        """Drop all entries (e.g. on terminal resize)."""
+        """Drop all entries (e.g. on terminal resize or a theme change).
+
+        Bumps :attr:`generation` so fingerprints of cached derivatives see
+        the invalidation even when the same block objects reappear.
+        """
         self._entries.clear()
         self._width = width
+        self.generation += 1
 
 
 def render_chat_split(

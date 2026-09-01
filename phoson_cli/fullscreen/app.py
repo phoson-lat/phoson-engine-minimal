@@ -434,6 +434,8 @@ class PhosonApp:
         # sink), so a changed fingerprint means the frozen prefix changed and
         # must be re-scanned.
         self._frozen_ansi_bounds: list[int] = [0]
+        # Fingerprint of the frozen prefix for _compute_chat_bounds:
+        # (cache generation, width, *id(block)) — see that method.
         self._frozen_ansi_ids: tuple[int, ...] | None = None
         # Bumped on every dirty re-render of the full transcript. The slice
         # cache must refresh on it, not only on (top, height, total): a
@@ -964,20 +966,34 @@ class PhosonApp:
         + ``text[prefix_len:]`` (the in-flight tail: activity line, streaming
         panel, subagent panel). While a turn streams, only the tail changes,
         so the frozen prefix's line boundaries are cached and only the small
-        tail is re-scanned, then spliced on. This makes the *line-bounds
-        build* O(visible) per dirty frame during streaming, instead of
-        O(transcript).
+        tail is re-scanned, then spliced on.
+
+        To be precise about what this buys (F-44): every dirty frame still
+        assembles the full transcript string and still copies
+        ``text[:prefix_len]`` / ``text[prefix_len:]`` — those are C-speed
+        ``memcpy``. The win is that the *line-bounds build* (a Python
+        ``str.find`` loop, i.e. one Python iteration per line) runs over the
+        tail only, so per dirty frame it is O(visible) instead of
+        O(transcript) during streaming.
 
         The cache is invalidated when the frozen prefix changes: the
         transcript is append-only, every in-place block edit replaces the
         block with a *new* object (so its ``id`` changes), and a width change
-        re-renders every block — all captured by the ``(width, *id(b) for b in
-        blocks)`` fingerprint below. On a cache miss the prefix bounds are
-        rebuilt from the (C-speed) prefix scan.
+        re-renders every block — all captured by the fingerprint below. On a
+        cache miss the prefix bounds are rebuilt from the (C-speed) prefix
+        scan.
+
+        The fingerprint also carries the block ANSI cache's *generation*
+        (bumped on every ``clear``): ``apply_theme`` and ``_reset_transcript``
+        drop the cache while the transcript may keep the same block objects,
+        and after a refill the same ids can describe different ANSI strings
+        (a theme with differently-long escapes), so ids alone would be a
+        stale fingerprint (F-41).
         """
         prefix = text[:prefix_len]
         tail = text[prefix_len:]
         fingerprint = (
+            self._block_ansi_cache.generation,
             width,
             *(id(block) for block in self.sink.blocks),
         )

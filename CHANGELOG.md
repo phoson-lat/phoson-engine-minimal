@@ -39,9 +39,21 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     transcript char count and slice time, so the flat cost is checkable live.
   - *Incremental line-bounds.* `render_chat_split` reports the frozen prefix
     length and `PhosonApp._compute_chat_bounds` caches the frozen prefix's
-    per-line offsets against a `(width, *id(block))` fingerprint, re-scanning
-    only the small in-flight tail per dirty frame — so the per-frame
-    line-bounds build is also O(visible) during streaming (not O(transcript)).
+    per-line offsets against a `(cache generation, width, *id(block))`
+    fingerprint, re-scanning only the small in-flight tail per dirty frame.
+    Precisely: the per-frame *line-bounds build* (the Python `str.find` loop)
+    is O(visible) during streaming instead of O(transcript). The transcript
+    assembly itself still copies the frozen prefix into the windowed slice
+    each dirty frame, but those are C-speed `memcpy`, not the per-line Python
+    loop (F-44 — the earlier "O(visible)" claim was overstated).
+    The fingerprint includes the ANSI cache's *generation* (bumped on every
+    `clear`, e.g. `apply_theme`) so a theme change with differently-long
+    escapes cannot hit a stale bounds cache (F-41).
+  - *Bash bodies: no raw control codes.* `_bash_output_body` builds each line
+    with `Text.from_ansi`, so `ls --color`/`git` output and window-title
+    sequences (`\x1b]0;title\x07`) from `!cmd`/`bash` render as styled text
+    instead of leaking raw `ESC` bytes that ptk would print literally
+    (F-42).
 
 ### Fixes
 

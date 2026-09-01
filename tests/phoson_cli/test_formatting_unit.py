@@ -175,6 +175,50 @@ def test_render_tool_done_line_error() -> None:
     assert "Permission denied" in output
 
 
+def test_bash_body_strips_osc_and_keeps_sgr_as_style() -> None:
+    """F-42 (#186): bash output carrying SGR + a window-title OSC must not
+    leak raw control bytes into the card. The SGR becomes a Rich *style*
+    (plain text is clean, a color terminal still colors the line), and the
+    OSC payload never appears as literal text."""
+    result = "ok\n\x1b[31mred line\x1b[0m\n\x1b]0;titled\x07titled line"
+    event = AgentToolDoneEvent(tool_name="bash", result=result, duration_ms=1)
+    renderable = render_tool_done_line(event, DARK, args={"command": "ls --color"})
+    from rich.console import Console as ColorConsole
+
+    plain = _render(renderable)
+    # The plain (no-color) render must be free of raw control bytes.
+    assert "red line" in plain
+    assert "\x1b" not in plain
+    # The OSC window-title sequence is stripped, not printed as "0;titled".
+    assert "0;titled" not in plain
+    assert "titled line" in plain
+
+    # A color terminal still colors the line (the SGR survived as a Rich
+    # style and re-emits as an SGR). The point is that the *text* carries the
+    # color as styling, not that the raw input bytes pass through — and,
+    # crucially, that the OSC payload is gone from the plain render above.
+    console = ColorConsole(highlight=False, width=100, color_system="truecolor")
+    with console.capture() as cap:
+        console.print(renderable)
+    color_out = cap.get()
+    assert "red line" in color_out
+    assert "0;titled" not in color_out
+
+
+def test_bash_body_truncated_csi_stays_plain() -> None:
+    """An *incomplete* escape (a truncated stream) is not a valid ANSI
+    sequence: ``Text.from_ansi`` keeps it, but the card must not *explode* —
+    the line still renders as text and the surrounding output is intact."""
+    event = AgentToolDoneEvent(
+        tool_name="bash", result="before\x1b[3\nafter", duration_ms=1
+    )
+    output = _render(
+        render_tool_done_line(event, DARK, args={"command": "cat /dev/pts/1"})
+    )
+    assert "after" in output
+    assert "✓" in output
+
+
 def test_render_done_line_shows_cost_and_steps() -> None:
     result = AgentRunResult(
         final_content="done",
