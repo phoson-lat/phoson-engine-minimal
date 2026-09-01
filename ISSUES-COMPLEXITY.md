@@ -40,7 +40,7 @@
 | 22 | [#145](https://github.com/phoson-lat/phoson-engine-minimal/issues/145) | Reasoning sandwich (bloqueado por #134 + #139) | 4 | 🔴 |
 | 23 | [#149](https://github.com/phoson-lat/phoson-engine-minimal/issues/149) | Handoff multi-sesión (diferido hasta #129) | 4 | 🔴 |
 | 24 | [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | 4 | 🔴 |
-| — | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | T-11 — ADR renderer (decisión, no código) | — | 🔶 (ADR escrito en `IMPROVEMENTS-TUI.md` §B; falta el acuerdo) |
+| — | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | T-11 — ADR renderer (decisión, no código) | — | ✅ 2026-09-01 (5 líneas de decisión aceptadas; #161 cerrado con disparadores observables: forma→inline si el scrollback es queja; OpenTUI solo si look=queja #1 + wheels nativas. T-1…T-9 merged = criterio 1 cumplido) |
 | — | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | T-10 — Hero tape (secuencial: tras look 0+1) | 1 | ✅ post-v0.23.0 (hero = `patch_file` con diff + composer idle; regenerado con VHS 0.11; `tui.gif` 7.8 MB → 250 KB; `demo.gif` refrescado) |
 | — | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / lazy loading (hoy: "medir" vía #140) | — | 🔴 |
 
@@ -241,7 +241,7 @@
 
 | Issue | Tipo | Nota |
 |-------|------|------|
-| [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) T-11 ADR | Decisión | El ADR ya está escrito (`IMPROVEMENTS-TUI.md` §B); falta el acuerdo del equipo. Solo se vuelve L si alguien fuerza cambiar de toolkit. |
+| [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) T-11 ADR | Decisión | ✅ Acordado (2026-09-01): las 5 líneas de `IMPROVEMENTS-TUI.md` §B aceptadas tal cual; #161 cerrado. Disparadores: complaints de scrollback/select → reabrir forma (inline/xli como glue); look=queja #1 + wheels nativas → spike OpenTUI. El lag en sesiones largas **no** se resuelve con cambio de renderer: se mide y optimiza aparte. |
 | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) T-10 hero | Secuencial | ✅ post-v0.23.0: hero regenerado — `patch_file` con diff visible + composer idle (VHS 0.11, vLLM local). `demo.gif` también refrescado. |
 | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) tool budget | Medición | Hoy es "instrumentar y mirar": sale gratis con #140. Feature solo si los datos lo justifican. Restricción crítica: no remover tools a mitad de sesión (KV-cache). |
 
@@ -263,7 +263,7 @@ Fase 3 — sprint look 1 + fixes independientes
 
 Fase 4 — la infra del harness (se alimentan entre sí)
   #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)   [#138 ✅ ya destraba el modelo fijo]
-  #161 (acuerdo del ADR, cuando toque)
+  #161 (acuerdo del ADR)        ✅ 2026-09-01 (5 líneas aceptadas; #161 cerrado; disparadores en el issue)
   #160 (hero tape)   ✅ post-v0.23.0 (patch_file + diff, VHS 0.11; demo.gif refrescado)
   #162 (palette + ! bash)   ✅ v0.23.0 (PR #170; desbloqueado por #154 ✅ v0.22.0 y #156 ✅ v0.20.0)
 

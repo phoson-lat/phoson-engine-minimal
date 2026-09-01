@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** la sección A es trabajo de dirección visual **sobre el stack actual** (Rich + prompt_toolkit). La sección B es la decisión de toolkit — no mezclarlas. Un P0 de look no justifica un rewrite del TUI.
 >
-> **Estado de referencia:** v0.20.0 · frontend default = `phoson_cli/fullscreen` (`prompt_toolkit.Application` + Rich→ANSI) · clásico retenido (`--classic` / `TERM=dumb`) · one-shot = stdout Rich.
+> **Estado de referencia:** v0.23.0 + post-release (T-1…T-13 done salvo el spike de OpenTUI, diferido por diseño) · frontend default = `phoson_cli/fullscreen` (`prompt_toolkit.Application` + Rich→ANSI) · clásico retenido (`--classic` / `TERM=dumb`) · one-shot = stdout Rich.
 >
 > **Criterio de toda la revisión:** modelo congelado, ¿el primer frame convencería a alguien que ya usa Claude Code o OpenCode? Hoy no. El engine y el glue de UI están por encima del look.
 
@@ -55,7 +55,7 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 
 | ID | GitHub | Título | Prioridad | Esfuerzo | Impacto | Decisión |
 |----|--------|--------|-----------|----------|---------|----------|
-| **T-11** | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | ADR de renderer: qué hacer con `prompt_toolkit` | **P2** | S (el ADR) / L (si se cambia) | 🟡 El techo estético a 12 meses | **Diferido.** Spike opcional *después* de T-1…T-9. Veredicto abajo: **quedarse**. |
+| **T-11** | [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161) | ADR de renderer: qué hacer con `prompt_toolkit` | **P2** | S (el ADR) / L (si se cambia) | 🟡 El techo estético a 12 meses | ✅ Acordado (2026-09-01, post-v0.23.0): las 5 líneas de decisión aceptadas; #161 cerrado. Disparadores observables: (1) forma → inline si el scrollback/select es queja de usuarios (re-considerar xli como glue), (2) OpenTUI si el look vuelve a ser queja #1 + se aceptan wheels nativos. T-1…T-9 merged = criterio 1 de OpenTUI cumplido. |
 
 ---
 
@@ -173,7 +173,13 @@ Command palette (`Ctrl+P` unifica `/model` `/theme` `/sessions` / slash) y `!` b
 
 ---
 
-## B. T-11 — ADR: ¿qué hacemos con `prompt_toolkit`?
+## B. T-11 — ADR: ¿qué hacemos con `prompt_toolkit`? ✅ *acordado (2026-09-01, post-v0.23.0; #161 cerrado)*
+
+> **Acuerdo:** las 5 líneas de decisión se aceptan tal cual (comentario en [#161](https://github.com/phoson-lat/phoson-engine-minimal/issues/161), 2026-09-01). El look se declara suficiente por ahora; el frente activo pasa a ser **desempeño en sesiones largas** (se trata aparte, no con cambio de renderer). **T-1…T-9 merged** (v0.21.0–v0.23.0) → el criterio 1 de OpenTUI se cumplió; quedan "look = queja #1" y "wheels nativas aceptadas".
+>
+> **Disparadores observables** (sustituyen "si el look sigue doliendo"):
+> 1. **Forma:** complaints de *seleccionar/copiar transcript* o *scrollback* → reabrir la forma (promover `--classic`/inline como default); entonces xli se reevalúa como *glue*, no renderer.
+> 2. **OpenTUI:** look = queja #1 documentada **y** wheels nativas aceptadas en `release-binaries.yml` → spike `docs/plans/T-11.md` (proto composer+markdown+diff, no rewrite).
 
 ### Contexto (verificado en código)
 
@@ -257,7 +263,7 @@ Sprint look 1 (P1) — HECHO (2026-08-31, 4 commits)
 Sprint look 2
   T-10 hero tape               ✅ (post-v0.23.0: `patch_file` + diff, VHS 0.11)
   T-12 palette + ! bash      ✅ (v0.23.0)
-  T-11 se queda cerrado salvo que el look siga siendo el gap
+  T-11 ADR renderer            ✅ (2026-09-01: 5 líneas acordadas, #161 cerrado; disparadores en §B)
 ```
 
 T-1…T-5 caben en un PR denso o en 2 (chrome/transcript vs composer/activity). T-6 toca permisos: no mezclarlo con el PR de “secar el look”.
