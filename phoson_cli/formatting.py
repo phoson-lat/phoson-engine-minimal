@@ -57,11 +57,6 @@ def render_reasoning_panel(reasoning: str, theme: Theme) -> Panel:
     )
 
 
-def render_assistant_label(theme: Theme) -> Text:
-    """The short colored label preceding assistant output ("Phoson")."""
-    return Text("Phoson", style=f"bold {theme.accent}")
-
-
 def render_activity_line(label: str, frame: str, theme: Theme) -> Text:
     """Build the transient in-chat activity indicator for an active turn.
 
@@ -83,18 +78,19 @@ def render_streaming_panel(
     theme: Theme,
     stream_plain: bool = False,
 ) -> Group:
-    """Build the assistant response block: a label, then plain content.
+    """Build the assistant response block: markdown content, no label.
 
-    No border/box — a colored "Phoson" label line directly above the
-    rendered Markdown, matching a plain chat-transcript look rather than
-    a bordered panel.
+    T-2: there is no per-turn "Phoson" signature — the answer renders as
+    bare Markdown (plus a dim reasoning line when shown), matching how a
+    human chat transcript reads rather than stamping a product name before
+    every reply.
 
     With ``stream_plain=True`` the content renders as un-parsed text:
     the cheap path used while tokens are still arriving (perf — see the
     comment on the fast path below). Frozen/finalized turns always get
     the full Markdown render.
     """
-    renderables: list[RenderableType] = [render_assistant_label(theme)]
+    renderables: list[RenderableType] = []
 
     if reasoning and show_reasoning:
         thinking_text = reasoning.strip() or "thinking..."
@@ -145,12 +141,13 @@ def render_streaming_panel(
 def render_start_line(
     event: AgentStartEvent, session_id: str | None, theme: Theme
 ) -> Text:
-    """Session/model badge shown at the start of a run."""
+    """Session/model line shown at the start of a run (T-2).
+
+    The filled `` assistant `` badge chip is gone — the header already
+    carries the model, so this is a plain ``model  session · msgs`` line.
+    """
     session = (session_id or "")[:8] or "—"
-    badge = Text(" assistant ", style=theme.badge_assistant)
     return Text.assemble(
-        badge,
-        Text("  ", style=theme.muted),
         Text(event.model, style=f"bold {theme.accent}"),
         Text(
             f"  session {session}  ·  {event.message_count} msgs",
@@ -268,9 +265,12 @@ def render_error_panel(event: AgentErrorEvent, theme: Theme) -> Panel:
 
 
 def render_user_turn(text: str, theme: Theme) -> Group:
-    """Render a user message with a lightweight badge + plain text."""
-    badge = Text(" user ", style=theme.badge_user)
-    return Group(badge, Text(f"  {text}", style=theme.text))
+    """Render a user message as a ``›`` gutter + plain text (T-2).
+
+    The filled `` user `` badge chip is gone — a thin accent gutter reads
+    as a chat speaker marker without the IM-style chip.
+    """
+    return Group(Text("›  ", style=theme.accent_soft), Text(text, style=theme.text))
 
 
 def render_notice(kind: str, message: str, theme: Theme) -> Text:
@@ -692,7 +692,7 @@ def render_history(
         items.append(Rule(f"{above} messages above", style=theme.muted_deep))
         messages = messages[-tail:]
 
-    items.append(Text(" session history ", style=theme.badge_history))
+    items.append(Text(" session history ", style=theme.muted))
 
     for msg in messages:
         role = getattr(msg, "role", "?")
@@ -706,18 +706,20 @@ def render_history(
                 isinstance(b, ToolResultBlock) for b in content
             ):
                 continue
-            items.append(Text(" user ", style=theme.badge_user))
+            # T-2: same › gutter as the live turn (render_user_turn), no
+            # filled badge — history replay reuses the live primitives.
+            items.append(Text("›  ", style=theme.accent_soft))
             if isinstance(content, str):
-                items.append(Text(f"  {content}", style=theme.text))
+                items.append(Text(content, style=theme.text))
             else:
                 for block in content:
                     if isinstance(block, TextBlock):
-                        items.append(Text(f"  {block.text}", style=theme.text))
+                        items.append(Text(block.text, style=theme.text))
 
         elif role == "assistant":
-            items.append(Text(" assistant ", style=theme.badge_assistant))
+            # T-2: bare Markdown, no " assistant " badge or Rule separator
+            # (matches render_streaming_panel, which no longer labels).
             if isinstance(content, str) and content.strip():
-                items.append(Rule(style=theme.muted_deep))
                 items.append(
                     Markdown(
                         content.strip(),
@@ -734,7 +736,6 @@ def render_history(
                 tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
                 combined = "\n".join(text_parts).strip()
                 if combined:
-                    items.append(Rule(style=theme.muted_deep))
                     items.append(
                         Markdown(
                             combined,
@@ -809,7 +810,6 @@ def format_token_indicator(used: int, window: int) -> str:
 
 __all__ = [
     "render_reasoning_panel",
-    "render_assistant_label",
     "render_activity_line",
     "render_streaming_panel",
     "render_start_line",

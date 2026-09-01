@@ -572,7 +572,13 @@ class PhosonApp:
         cost = repl.session_metrics.total_cost_usd
         model_provider = f"{repl.current_model} ({repl.config.provider})"
         cwd = self._short_cwd(Path.cwd())
-        token_cost = f"{self._token_indicator()} tok · ${cost:.4f}"
+        # T-2: cost only when > 0 — an idle/fresh session shows just the
+        # token count, not a $0.0000 that reads as noise.
+        token_cost = (
+            f"{self._token_indicator()} tok · ${cost:.4f}"
+            if cost > 0
+            else f"{self._token_indicator()} tok"
+        )
 
         attachments = len(repl.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
@@ -589,6 +595,14 @@ class PhosonApp:
         # front ends (the TUI starts it in ``run_async``).
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
+        # T-2: the idle status is empty (no "Online"); only show the
+        # separator when there is actually a live status to display.
+        status_part = (
+            f'<style class="header_dim"> | </style>'
+            f'<style class="header_dim">{status}</style>'
+            if status
+            else ""
+        )
         # Permission-mode chip (T-6): always visible; the accent word for
         # the *ask* state (confirmations are coming), dim for auto.
         perm_mode = self._permission_mode()
@@ -634,8 +648,7 @@ class PhosonApp:
                 f"{mode_part}"
                 f"{effort_part}"
                 f'<style class="header_dim">{extras}</style>'
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{status}</style>'
+                f"{status_part}"
                 f'<style class="header_dim">{update_part}</style>'
             )
         return self._header_cache

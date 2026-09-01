@@ -248,7 +248,10 @@ def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> No
     from phoson_cli.fullscreen.sink import CurrentTurn
 
     app.sink.current_turn = CurrentTurn(model="m", max_steps=10)
+    # T-2: idle shows no "Online" — and neither does an empty in-flight
+    # turn, which shows the thinking step instead.
     assert "Online" not in app._get_header_text().value
+    assert "thinking" in app._get_header_text().value
 
     app.sink.current_turn.content = "partial"
     assert "Streaming" in app._get_header_text().value
@@ -257,7 +260,9 @@ def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> No
     assert "Running tool" in app._get_header_text().value
 
     app.sink.current_turn = None
-    assert "Online" in app._get_header_text().value
+    # T-2: idle has no status word at all (the permission chip shows state).
+    assert "Online" not in app._get_header_text().value
+    assert "Streaming" not in app._get_header_text().value
 
 
 async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:

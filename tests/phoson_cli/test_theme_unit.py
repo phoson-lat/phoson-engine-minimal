@@ -260,21 +260,33 @@ def test_renderer_no_color_output_has_no_sgr_colors() -> None:
     assert "hello" in raw
 
 
-def test_renderer_light_theme_uses_light_badge() -> None:
+def test_renderer_user_turn_has_no_background_chip() -> None:
+    """T-2: the user turn is a › gutter, not a filled badge chip — no
+    background (48;…) SGR code in either theme."""
+    import re
+
     from phoson_cli.renderer import Renderer
 
-    def build(console):
-        Renderer(console=console, theme=LIGHT).print_user_turn("hello")
+    def _codes(theme):
+        def build(console):
+            Renderer(console=console, theme=theme).print_user_turn("hello")
 
-    # Light badge background #ddd0f0 = (221, 208, 240) as a truecolor SGR.
-    assert "48;2;221;208;240" in _render_to_raw(build)
+        raw = _render_to_raw(build)
+        codes = re.findall(r"\x1b\[(\d+(?:;\d+)*)m", raw)
+        return codes
+
+    # No background-color (48;) SGR code in either palette.
+    assert not any(c.startswith("48;") for c in _codes(LIGHT))
+    assert not any(c.startswith("48;") for c in _codes(DARK))
 
 
-def test_renderer_dark_theme_unchanged_look() -> None:
+def test_renderer_user_turn_shows_gutter_and_text() -> None:
+    """T-2: the user turn renders a › gutter followed by the message text."""
     from phoson_cli.renderer import Renderer
 
     def build(console):
         Renderer(console=console, theme=DARK).print_user_turn("hello")
 
-    # Dark badge background #23192f = (35, 25, 47) — the historical look.
-    assert "48;2;35;25;47" in _render_to_raw(build)
+    raw = _render_to_raw(build)
+    assert "›" in raw
+    assert "hello" in raw

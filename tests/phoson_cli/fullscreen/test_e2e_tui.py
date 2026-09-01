@@ -258,7 +258,7 @@ async def test_headless_full_agent_turn_lifecycle(tmp_path) -> None:
             await app._run_task
 
         rendered = app._render_chat().value
-        assert "user" in rendered
+        assert "›" in rendered
         assert "say hello" in rendered
         assert "Hello world!" in rendered
         assert app.sink.current_turn is None
@@ -346,9 +346,9 @@ def test_golden_snapshot_streaming_turn() -> None:
     sink.on_event(AgentTokenEvent(content="Streaming partial response..."))
 
     rendered = render_chat(sink, width=60, cache=cache)
-    assert "user" in rendered
+    assert "›" in rendered
     assert "check status" in rendered
-    assert "Phoson" in rendered
+    assert "Phoson" not in rendered
     assert "Streaming partial response..." in rendered
 
 
@@ -366,7 +366,7 @@ def test_golden_snapshot_error_notice() -> None:
     )
 
     rendered = render_chat(sink, width=60, cache=cache)
-    assert "user" in rendered
+    assert "›" in rendered
     assert "do work" in rendered
     # One-line notice with the actionable hint — no panel, no raw message.
     assert "⚠" in rendered
