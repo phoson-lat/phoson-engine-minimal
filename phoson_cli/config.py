@@ -84,6 +84,13 @@ class PhosonConfig:
     theme: str = "system"
     subagent_max_parallel: int = 4
     subagent_timeout_seconds: float = 300.0
+    # ── Wall-clock budget for non-interactive runs (#141 / H-7) ──────────
+    # One-shot / stdin-piped runs have no Esc to escape a hang, so they get
+    # a hard wall-clock cap at the *run* level (not the per-tool timeout,
+    # which I-127 deliberately left uncapped for interactive use). Default
+    # 600s; ``0`` disables the budget (unlimited) for those who want it.
+    # Interactive mode ignores this entirely — Esc remains the escape.
+    run_budget_seconds: float = 600.0
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
     # Official monitor plugin (I-126): background watchers that wake the
@@ -568,6 +575,12 @@ def load_config() -> PhosonConfig:
             fd,
             d.subagent_timeout_seconds,
         ),
+        run_budget_seconds=_resolve_float(
+            "PHOSON_RUN_BUDGET_SECONDS",
+            "run_budget_seconds",
+            fd,
+            d.run_budget_seconds,
+        ),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
         mcp_config_file=Path(
             _resolve_str(
@@ -763,6 +776,7 @@ def save_config(
         ("theme", getattr(config, "theme", None)),
         ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
+        ("run_budget_seconds", getattr(config, "run_budget_seconds", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
         ("enable_monitors", getattr(config, "enable_monitors", None)),

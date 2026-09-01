@@ -25,9 +25,11 @@ from phoson_agent.models import (
     AgentErrorEvent,
     AgentStepDoneEvent,
 )
+from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.exceptions import PhosonProviderError
 from phoson_agent.exceptions import PhosonAgentError, PhosonMaxIterationsError
+from phoson_agent.middleware import AgentMiddleware
 
 from ._timeouts import sanitize_timeout
 from .subagent_panel import (
@@ -71,6 +73,37 @@ def _clone_chat(chat: BaseLLMChat) -> BaseLLMChat:
     ``__init__`` or any dataclass post-init logic.
     """
     return copy.copy(chat)
+
+
+def _subagent_context(
+    *,
+    safe_mode: bool,
+    bash_confirmation: Any,
+    plugin_ui: Any,
+) -> AgentContext:
+    """Fresh :class:`AgentContext` for a sub-agent engine (#174/F-01).
+
+    Carries the runtime flags a sub-agent's tools need so they behave
+    identically to the parent's:
+
+    - ``safe_mode`` + the interactive ``bash_confirmation`` — F-01: before
+      this the sub-engine ran with an *empty* context, so ``bash`` saw
+      ``safe_mode=False`` and no confirmation even when the parent had them
+      set (the old ``# noqa: ARG001 — propagated via context`` claim was
+      false).
+    - ``plugin_ui`` — so plugin tools inside a sub-agent work.
+
+    The sub-agent *parameters* (``chat``, ``available_tools``, ...) are
+    deliberately NOT forwarded: nested sub-agents are a separate concern
+    (#184) and must not silently reuse the parent's chat client or tool
+    registry.
+    """
+    ctx = AgentContext()
+    ctx.extra["safe_mode"] = safe_mode
+    ctx.extra["bash_confirmation"] = bash_confirmation
+    if plugin_ui is not None:
+        ctx.extra["plugin_ui"] = plugin_ui
+    return ctx
 
 
 def _aggregate_tokens(steps: list) -> tuple[int, int]:
@@ -404,12 +437,22 @@ async def _run_one_subagent(
     fallback_model: str | None = None,
     progress: SubagentProgressTracker | None = None,
     index: int = 0,
+    middlewares: list[AgentMiddleware] | None = None,
+    safe_mode: bool = False,
+    bash_confirmation: Any = None,
+    plugin_ui: Any = None,
 ) -> tuple[str, str | None]:
     """Run a single sub-agent; return ``(final_content, fallback_used)``.
 
     ``fallback_used`` is the fallback model name when the configured
     ``model`` was unavailable and the task completed on ``fallback_model``
     (the main agent's model — known to work); ``None`` otherwise.
+
+    The sub-engine is built with the parent's **middleware chain**
+    (``middlewares``, #174/F-01) and a fresh context carrying the runtime
+    flags (``safe_mode``, ``bash_confirmation``, ``plugin_ui``) so the
+    permission gate, safe-mode bash and plugin tools apply to sub-agent
+    calls exactly as they do to the parent's.
 
     When ``progress`` is given (E2), the inner run's LLM steps are
     folded into ``progress`` as they complete so the parent's live
@@ -424,6 +467,12 @@ async def _run_one_subagent(
         sub_engine = AgentEngine(
             chat=_clone_chat(chat),
             tools=selected_tools,
+            middlewares=list(middlewares) if middlewares else [],
+            context=_subagent_context(
+                safe_mode=safe_mode,
+                bash_confirmation=bash_confirmation,
+                plugin_ui=plugin_ui,
+            ),
             max_iterations=max_iterations,
         )
         messages = [Message(role="user", content=task)]
@@ -507,6 +556,14 @@ _AGENT_INJECT = [
     "safe_mode",
     "subagent_timeout_seconds",
     "on_subagent_progress",
+    # #174/F-01: the parent's middleware gate (permission, at minimum) is
+    # handed to each sub-engine so a `deny`-level tool is refused from a
+    # sub-agent exactly as it is from the parent, and the runtime
+    # `bash_confirmation` / `plugin_ui` services are forwarded so `bash`
+    # (safe_mode) and plugin tools behave identically to the parent's.
+    "middlewares",
+    "bash_confirmation",
+    "plugin_ui",
 ]
 _AGENTS_INJECT = _AGENT_INJECT + ["subagent_max_parallel"]
 
@@ -547,9 +604,12 @@ async def agent(
     default_model: str,
     main_model: str | None = None,
     max_iterations: int,
-    safe_mode: bool = False,  # noqa: ARG001 — propagated via context
+    safe_mode: bool = False,
     subagent_timeout_seconds: float = 300.0,
     on_subagent_progress: Any = None,
+    middlewares: list[AgentMiddleware] | None = None,
+    bash_confirmation: Any = None,
+    plugin_ui: Any = None,
 ) -> str:
     """Execute a task using a sub-agent with clean context.
 
@@ -587,6 +647,10 @@ async def agent(
             fallback_model=main_model,
             progress=tracker,
             index=index,
+            middlewares=middlewares,
+            safe_mode=safe_mode,
+            bash_confirmation=bash_confirmation,
+            plugin_ui=plugin_ui,
         )
     finally:
         _progress_notify(on_subagent_progress, None)
@@ -609,10 +673,13 @@ async def agents(
     default_model: str,
     main_model: str | None = None,
     max_iterations: int,
-    safe_mode: bool = False,  # noqa: ARG001 — propagated via context
+    safe_mode: bool = False,
     subagent_max_parallel: int = 4,
     subagent_timeout_seconds: float = 300.0,
     on_subagent_progress: Any = None,
+    middlewares: list[AgentMiddleware] | None = None,
+    bash_confirmation: Any = None,
+    plugin_ui: Any = None,
 ) -> str:
     """Execute multiple tasks in parallel using sub-agents.
 
@@ -664,6 +731,12 @@ async def agents(
                 sub_engine = AgentEngine(
                     chat=_clone_chat(chat),
                     tools=selected_tools_list,
+                    middlewares=list(middlewares) if middlewares else [],
+                    context=_subagent_context(
+                        safe_mode=safe_mode,
+                        bash_confirmation=bash_confirmation,
+                        plugin_ui=plugin_ui,
+                    ),
                     max_iterations=max_iterations,
                 )
                 messages = [Message(role="user", content=task)]

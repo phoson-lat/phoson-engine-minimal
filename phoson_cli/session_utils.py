@@ -14,8 +14,13 @@ from pathlib import Path
 from datetime import UTC, datetime
 
 from phoson_agent import Plugin
+from phoson_agent.middleware import AgentMiddleware
+from phoson_agent.permissions import PermissionMiddleware
+from phoson_agent.plugins.offload import OffloadMiddleware
+from phoson_agent.plugins.summarizer import SummarizationMiddleware
 
 from .config import PhosonConfig
+from .models import load_models_file, provider_settings
 from .skills import discover_skills, render_skill_index
 from .agents_md import load_agents_md
 
@@ -317,9 +322,110 @@ async def close_plugins(plugins: list[Plugin]) -> None:
             )
 
 
+# ── Shared middleware chain (#174 / F-01, F-02) ──────────────────────────────
+#
+# The middleware chain (Offload → Summarizer → Permission) is the single
+# source of truth shared by every engine a host builds: the interactive
+# REPL (SessionController), the one-shot ``-p``/stdin path, and the
+# sub-agent engines spawned by the ``agent``/``agents`` tools. Centralizing
+# both the *construction* of the Offload/Summarizer middlewares and the
+# *assembly order* here is what prevents the two non-REPL paths from
+# silently drifting off the chain (the exact bug the final review flagged as
+# F-01/F-02: sub-agents and one-shot ran with *no* middlewares, so the
+# permissions policy, safe_mode and auto-compaction did not apply to them).
+
+
+def vllm_base_url(config: PhosonConfig) -> str | None:
+    """Effective vLLM base URL for context-window lookups.
+
+    Mirrors the resolution order used by :func:`build_chat` (models.json
+    override, then ``config.vllm_base_url``) so the summarizer's
+    context-window resolver queries the same server the chat client talks
+    to. ``None`` lets the resolver fall back to its own default.
+    """
+    base_url = provider_settings(load_models_file(), "vllm").get("base_url")
+    return base_url or config.vllm_base_url
+
+
+def build_summarizer(config: PhosonConfig) -> SummarizationMiddleware:
+    """Build the auto-compaction middleware for a configuration.
+
+    Shared by the REPL (``SessionController``) and the one-shot path so
+    both construct the summarizer identically. The E1 context-management
+    knobs (threshold / min-keep / auto-enabled from ``compact_mode``) are
+    applied here too, so a one-shot engine compacts at the same point the
+    REPL would; the controller may still re-project them at runtime via
+    :meth:`SessionController._apply_context_config` (e.g. ``/compact``).
+    """
+    summarizer = SummarizationMiddleware(
+        provider=config.provider,
+        model=config.model,
+        ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+        openrouter_api_key=config.openrouter_api_key,
+        vllm_base_url=vllm_base_url(config),
+    )
+    # E1 context-management knobs (same as SessionController._apply_context_config).
+    summarizer.threshold = config.compact_threshold
+    summarizer.min_keep_messages = config.compact_min_keep_messages
+    summarizer.auto_enabled = config.compact_mode != "off"
+    return summarizer
+
+
+def build_offload(config: PhosonConfig) -> OffloadMiddleware:
+    """Build the oversized-tool-output offload middleware for a configuration."""
+    return OffloadMiddleware(
+        max_chars=config.offload_max_chars,
+        head_chars=config.offload_head_chars,
+        tail_chars=config.offload_tail_chars,
+        output_dir=config.compacted_dir,
+    )
+
+
+def build_middlewares(
+    *,
+    config: PhosonConfig,
+    offload: OffloadMiddleware | None,
+    summarizer: SummarizationMiddleware | None,
+    permission: PermissionMiddleware,
+) -> list[AgentMiddleware]:
+    """Assemble the shared middleware chain for an :class:`AgentEngine`.
+
+    Single source of truth for the chain **order and gating**:
+
+    - **Offload** joins only when ``config.offload_tool_outputs`` is on (E1)
+      and an offload middleware is provided. It rewrites oversized tool
+      results first, so they never reach the summarizer's token accounting.
+    - **Summarizer** auto-compacts (when provided) after offload.
+    - **Permission** is always present — it is the security gate
+      (``deny``/``ask``/``allow`` + allow-patterns) and must never be
+      omitted for any engine, REPL, one-shot or sub-agent.
+
+    Args:
+        config: Source of the gating flags.
+        offload: Offload middleware to include (None, or the flag off,
+            excludes it from the chain).
+        summarizer: Summarization middleware to include (None excludes it).
+        permission: The permission gate — always appended.
+
+    Returns:
+        The ordered list to pass to ``AgentEngine(middlewares=...)``.
+    """
+    chain: list[AgentMiddleware] = []
+    if offload is not None and config.offload_tool_outputs:
+        chain.append(offload)
+    if summarizer is not None:
+        chain.append(summarizer)
+    chain.append(permission)
+    return chain
+
+
 __all__ = [
     "build_mcp_plugins",
+    "build_middlewares",
+    "build_offload",
     "build_plugin_specs",
+    "build_summarizer",
     "build_system_prompt",
     "close_plugins",
+    "vllm_base_url",
 ]
