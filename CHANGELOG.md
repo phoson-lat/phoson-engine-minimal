@@ -6,6 +6,106 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.20.0 (Unreleased)
+
+### Feature
+
+- **reasoning-effort header chip + `Ctrl+E` cycle (T-13)**: the
+  reasoning-effort knob existed (`/reasoning-effort <level>`) but was
+  invisible — the header never showed it and changing it required a slash
+  command. Now it follows the T-6 permission-mode pattern.
+
+  - The full-screen header shows the current level in the accent color
+    (`effort: high`) or a dim `· effort off` when unset, and repaints the
+    moment the value changes (read from the in-memory config, so the cycle
+    just invalidates the header cache — no throttle).
+  - `Ctrl+E` (mnemonic: *E* = effort; `Ctrl+T` stays the show/hide toggle
+    for the reasoning block) cycles `off → low → medium → high → xhigh →
+    max → off`, mutates `config.reasoning_effort` and persists it with
+    `save_config(only_fields={"reasoning_effort"})`.
+  - The value is read per-run when the controller builds each
+    `ModelConfig`, so it applies from the **next** turn — an in-flight run
+    keeps the level it started with.
+  - Table-driven: a new `cycle_reasoning_effort` action in
+    `DEFAULT_KEY_BINDINGS` + `KNOWN_KEY_ACTIONS`, so it is remappable from
+    the `[keys]` section of `config.toml` and listed in `/keys` with no
+    extra code.
+
+### Enhancements
+
+- **`Thinking {n}s` elapsed-seconds label (T-5)**: the *thinking* phase of
+  the in-chat activity line now shows the real wait (`Thinking 8s`) — whole
+  seconds on the monotonic clock — instead of rotating stock phrases
+  ("Pondering the problem… / Chewing on that…"). The counter runs on the
+  wall clock and piggybacks the existing activity-tick repaints (no new
+  timer, no extra CPU); it re-arms to 0 on each thinking episode (tool
+  start / streamed-text freeze), so it measures the current wait, not the
+  whole run. `_THINKING_PHRASES`, `_THINKING_PHRASE_TICKS` and the phrase
+  index are gone; the braille spinner and the other phase labels are
+  untouched. (IMPROVEMENTS-TUI T-5, issue #155)
+
+- **permission-mode chip + bash confirmation card (T-6)**: the header now
+  shows the durable permission mode at all times (`ask` in accent /
+  `· auto` dim), and `Shift+Tab` cycles it, persisting per-tool policy the
+  same way `/permissions` does. Bash commands in `ask` mode resolve through
+  a modal card with the command in monospace and **Yes / Always / No**
+  actions — `Always` persists a quoted-glob pattern, and Ctrl+C resolves
+  to *no* so a cancelled run never hangs mid-confirmation. The card is
+  injected through the `ConfirmationService` protocol, so no tool change is
+  required and the classic front end keeps its y/N prompt. (IMPROVEMENTS-TUI
+  T-6, issue #156)
+
+- **tool cards in the genre's language (T-7)**: tool cards now read as work,
+  not generic rows — a per-family glyph (📖 read / 📂 list / 🖼 image /
+  ✍ write / 🪄 edit / ⌘ bash / 🔎 search / 🔗 fetch / 📜 doc), a collapsible
+  body (toggle with `/details`, collapsed keeps the header + ✓/✗ + duration),
+  and `write_file`/`patch_file` show the diff with a `+`/`−` background and a
+  **Created** vs **Updated** label. File paths are emitted as real OSC 8
+  `file://` links that the full-screen bridge carries through intact.
+  (IMPROVEMENTS-TUI T-7, issue #157)
+
+- **`system` theme tier + JSON drop-in themes (T-8)**: a new `system` theme —
+  now the **default** — inherits the terminal's own fg/bg (no `on #rrggbb`),
+  so it stops fighting user terminals (Gruvbox, Catppuccin, …); the accent
+  token drives the spinner/focus. Users can also drop corrected or custom
+  themes into `~/.phoson/themes/*.json` (a `base` + token overrides), which
+  appear in `/theme`. The old light/dark question (E4) is obsoleted — the
+  terminal resolves it. (IMPROVEMENTS-TUI T-8, issue #158)
+
+- **contextual footer + arrow-free scrollbar (T-9)**: the footer shows three
+  hints per state (idle / running / picker open) instead of a long fixed
+  cheatsheet, and Shift+Drag scrolls while hinting `/keys` + the docs; the
+  chat scrollbar is position-only (no arrows). (IMPROVEMENTS-TUI T-9,
+  issue #159)
+
+- **precise types on the confirmation services**: `Awaitable` →
+  `Coroutine[Any, Any, None]` on the `ConfirmationService` protocol and both
+  front-end implementations (the runtime callback is always a coroutine
+  fn), and the full-screen sink's `_tool_calls` log now records the
+  `AgentToolDoneEvent` explicitly instead of `object`. Pyright reports 0
+  errors across `phoson_cli/`.
+
+### Fix
+
+- **`/theme` crash after `/clear` (stale banner reference)**: `/clear`
+  emptied the transcript while the app still held a reference to the banner
+  block object, so the next `/theme <t>` raised `ValueError` out of the
+  command dispatch loop (`Group object … is not in list`). `clear()` now
+  forgets the banner (a cleared transcript intentionally has none), and
+  `apply_theme` tolerates a missing banner instead of raising — the same
+  stale-reference guard the sink's `/details` toggle already used.
+
+Tests: `test_fullscreen_shell_unit.py` (reasoning-effort chip default/set,
+full `Ctrl+E` cycle + wrap + persist against a no-op `save_config`, and that
+cycling does not flip the `Ctrl+T` visibility toggle),
+`test_sink_unit.py` (elapsed-seconds label truncation, counter runs on the
+clock not the ticks, timer re-arms per thinking episode via real
+`AgentToolStartEvent`/`AgentToolDoneEvent` sequences, and the `/theme`-after-
+`/clear` regression), plus the T-6/T-7/T-8/T-9 suites. **1848 passed**
+(38 skipped), pyright 0 errors, ruff clean.
+
+---
+
 ## v0.19.0 (2026-08-30)
 
 ### Feature

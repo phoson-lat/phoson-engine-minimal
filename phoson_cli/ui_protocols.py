@@ -10,7 +10,8 @@ Keeping this protocol narrow is the point: anything the controller needs
 to *show* goes through it, so a new front end is a sink, not a fork.
 """
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+from collections.abc import Callable, Coroutine
 
 from phoson_agent import AgentEvent
 from phoson_llm.schemas import Message
@@ -77,6 +78,22 @@ class ConfirmationService(Protocol):
 
     async def confirm_bash(self, command: str) -> bool:
         """Ask whether ``command`` may run. False on cancel/EOF."""
+        ...
+
+    async def confirm_bash_command(
+        self,
+        command: str,
+        *,
+        on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
+    ) -> bool:
+        """Permission-mode confirmation card (T-6): the command in
+        monospace with **Yes / Always / No** actions.
+
+        ``on_always`` is invoked (with the command) when the user picks
+        *Always* — the front end persists the allow pattern. Front ends
+        without the richer card may not implement this; callers fall
+        back to :meth:`confirm_bash`. False on cancel/No.
+        """
         ...
 
 

@@ -48,8 +48,15 @@ class TestWriteFile:
 
         result = _write_file(path, "hello")
 
-        assert "Written" in result
+        assert "Created" in result  # T-7: created vs updated verb
         assert (tmp_path / "new.txt").read_text() == "hello"
+
+    def test_overwrite_says_updated(self, tmp_path):
+        path = str(tmp_path / "existing.txt")
+        (tmp_path / "existing.txt").write_text("old")
+
+        assert "Updated" in _write_file(path, "new")
+        assert "Updated" in _write_file(path, "newer")
 
     def test_creates_parent_directories(self, tmp_path):
         path = str(tmp_path / "a" / "b" / "c.txt")

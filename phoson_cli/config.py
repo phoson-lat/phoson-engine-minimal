@@ -81,7 +81,7 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
-    theme: str = "dark"
+    theme: str = "system"
     subagent_max_parallel: int = 4
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False
@@ -347,10 +347,12 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "scroll_end",
     "clear",
     "toggle_reasoning",
+    "cycle_reasoning_effort",
     "ctrl_d",
     "paste_image",
     "escape",
     "undo_jump",
+    "toggle_permission_mode",
     "exit",
 )
 

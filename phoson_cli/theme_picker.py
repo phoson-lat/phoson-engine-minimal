@@ -27,8 +27,12 @@ from ._views import _PHOS_ART
 from .pickers import BasePicker, picker_style
 
 #: (row label, one-line description) for each tier, in picker order.
+#: (row label, one-line description) for each built-in tier, in picker
+#: order. Drop-in JSON themes (~/.phoson/themes/, T-8) and plugin themes
+#: reach the picker through the registry, not this table.
 _THEME_ROWS: tuple[tuple[str, str], ...] = (
-    ("dark", "default, purple on dark"),
+    ("system", "default, inherits your terminal's colors"),
+    ("dark", "purple on dark"),
     ("light", "light background"),
     ("ansi", "16-color SSH-safe"),
     ("no-color", "plain text"),

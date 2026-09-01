@@ -108,6 +108,63 @@ def test_patch_card_renders_colored_diff_from_args() -> None:
     assert "✓" in output
 
 
+def test_patch_card_diff_lines_carry_a_background() -> None:
+    """T-7: +/− lines render with a subtle background, not just a prefix color."""
+    import io
+
+    done = AgentToolDoneEvent(
+        tool_name="patch_file", result="Replaced 1", duration_ms=9
+    )
+    card = render_tool_done_line(
+        done,
+        DARK,
+        args={"path": "f.py", "old_content": "a\nb\n", "new_content": "a\nc\n"},
+    )
+    buf = io.StringIO()
+    # force_terminal + truecolor: capture() would strip the SGR we're checking.
+    console = Console(
+        file=buf, force_terminal=True, color_system="truecolor", width=120
+    )
+    console.print(card)
+    output = buf.getvalue()
+    # Truecolor background introducer ("48;2;r;g;b" — or "48;5;n" in
+    # 256-color mode): the + and - lines must carry one (the DARK tier
+    # sets diff_add_bg/diff_del_bg).
+    assert "48;2" in output or "48;5" in output
+    raw_plus = next(
+        line for line in output.splitlines() if "+c" in line or "+a" in line
+    )
+    raw_minus = next(line for line in output.splitlines() if "-b" in line)
+    assert ("48;2" in raw_plus) or ("48;5" in raw_plus)
+    assert ("48;2" in raw_minus) or ("48;5" in raw_minus)
+
+
+def test_patch_card_diff_background_respects_the_theme() -> None:
+    """T-7: tiers without diff backgrounds (ansi) stay prefix-color only."""
+    import io
+
+    from phoson_cli.theme import ANSI
+
+    done = AgentToolDoneEvent(
+        tool_name="patch_file", result="Replaced 1", duration_ms=9
+    )
+    card = render_tool_done_line(
+        done,
+        ANSI,
+        args={"path": "f.py", "old_content": "a\nb\n", "new_content": "a\nc\n"},
+    )
+    buf = io.StringIO()
+    console = Console(
+        file=buf, force_terminal=True, color_system="truecolor", width=120
+    )
+    console.print(card)
+    output = buf.getvalue()
+    # The ANSI tier sets diff_add_bg/diff_del_bg="" → no background SGR.
+    assert "48;2" not in output and "48;5" not in output
+    # Prefix color still distinguishes +/- (bright_red/bright_green).
+    assert "-b" in output and "+c" in output
+
+
 def test_patch_card_truncates_long_diffs_with_a_notice() -> None:
     old = "\n".join(f"line {i}" for i in range(40)) + "\n"
     new = "\n".join(f"line {i}!" for i in range(40)) + "\n"
@@ -135,7 +192,7 @@ def test_patch_card_error_shows_error_not_diff() -> None:
 
 
 def test_write_card_summarizes_created_file_with_lines_and_size() -> None:
-    done = AgentToolDoneEvent(tool_name="write_file", result="Written", duration_ms=2)
+    done = AgentToolDoneEvent(tool_name="write_file", result="Created", duration_ms=2)
     output = _render(
         render_tool_done_line(
             done, DARK, args={"path": "src/new.py", "content": "a\nb\n"}
@@ -144,6 +201,58 @@ def test_write_card_summarizes_created_file_with_lines_and_size() -> None:
     assert "created src/new.py" in output
     assert "2 lines" in output
     assert "B" in output  # byte size shown
+
+
+def test_write_card_says_updated_on_overwrite() -> None:
+    """T-7: an overwrite must not be claimed as a creation."""
+    done = AgentToolDoneEvent(
+        tool_name="write_file", result="Updated: src/app.py (12 bytes)", duration_ms=2
+    )
+    output = _render(
+        render_tool_done_line(
+            done, DARK, args={"path": "src/app.py", "content": "x\ny\n"}
+        )
+    )
+    assert "updated src/app.py" in output
+    assert "created src/app.py" not in output
+
+
+def test_tool_icons_differ_per_family() -> None:
+    """T-7: one glyph for everything read as one action."""
+    from phoson_cli.formatting import tool_icon
+
+    assert tool_icon("read_file") != tool_icon("bash")
+    assert tool_icon("read_file") != tool_icon("write_file")
+    assert tool_icon("write_file") != tool_icon("patch_file")
+    assert tool_icon("web_fetch") != tool_icon("web_search")
+    assert tool_icon("unknown_tool") == "⚙"  # fallback stays the gear
+
+
+def test_tool_card_path_is_osc8_link() -> None:
+    """T-7: file paths in card headers are real OSC 8 file:// links."""
+    import io
+
+    from rich.console import Console
+
+    event = AgentToolStartEvent(tool_name="read_file", args={"path": "src/app.py"})
+    buf = io.StringIO()
+    # force_terminal like the app's production render: Rich only emits the
+    # OSC 8 escape when it believes a real terminal is on the other end.
+    console = Console(
+        file=buf,
+        force_terminal=True,
+        color_system="truecolor",
+        width=120,
+        highlight=False,
+    )
+    console.print(render_tool_start_line(event, DARK))
+    out = buf.getvalue()
+    assert "file://" in out
+    assert "src/app.py" in out
+    # The URI resolves relative paths against the cwd.
+    import os
+
+    assert os.path.abspath("src/app.py").replace("\\", "/") in out
 
 
 def test_write_card_error_has_no_summary_body() -> None:

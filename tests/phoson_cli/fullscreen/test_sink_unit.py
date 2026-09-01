@@ -5,6 +5,7 @@ Feeds synthetic AgentEvent sequences and asserts on the resulting
 running prompt_toolkit Application.
 """
 
+import re
 import datetime
 
 from phoson_cli.theme import DARK
@@ -25,6 +26,13 @@ from phoson_cli.fullscreen.sink import FullScreenSink
 from phoson_cli.fullscreen.render import render_chat
 
 UTC = datetime.UTC
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\][^\x1b]*\x1b\\|[\x01\x02]")
+
+
+def _strip_ansi(text: str) -> str:
+    """ANSI/SGR/OSC 8 stripped plain text (for counting fragments)."""
+    return _ANSI_RE.sub("", text)
 
 
 def _make_sink() -> tuple[FullScreenSink, list[int]]:
@@ -59,7 +67,7 @@ def test_activity_indicator_is_visible_before_the_first_agent_event() -> None:
     sink.begin_activity()
 
     assert sink.current_turn is not None
-    assert sink.activity_text() == "Thinking…"
+    assert sink.activity_text() == "Thinking 0s"
     first_frame = sink.activity_frame()
     assert sink.tick_activity_frame() is True
     assert sink.activity_frame() != first_frame
@@ -69,7 +77,7 @@ def test_activity_indicator_is_visible_before_the_first_agent_event() -> None:
 def test_activity_indicator_describes_the_live_turn_phase() -> None:
     sink, _ = _make_sink()
     sink.begin_activity()
-    assert sink.activity_text() == "Thinking…"
+    assert sink.activity_text() == "Thinking 0s"
 
     sink.current_turn.content = "hello"
     assert sink.activity_text() == "Streaming…"
@@ -81,43 +89,63 @@ def test_activity_indicator_describes_the_live_turn_phase() -> None:
     assert sink.activity_text() == "Running subagents…"
 
 
-def test_thinking_phase_rotates_through_phrases() -> None:
-    """The *thinking* label rotates through the phrase list so a long wait
-    reads as progress; other phases stay fixed."""
-    from phoson_cli.fullscreen.sink import (
-        _THINKING_PHRASES,
-        _THINKING_PHRASE_TICKS,
-    )
-
+def test_thinking_phase_counts_elapsed_seconds() -> None:
+    """T-5: the *thinking* label shows wall-clock elapsed seconds (truncated)
+    instead of rotating stock phrases, so a long wait reads as real time."""
     sink, _ = _make_sink()
     sink.begin_activity()
-    assert sink.activity_text() == _THINKING_PHRASES[0]
+    # A fresh episode starts at 0 seconds.
+    assert sink.activity_text() == "Thinking 0s"
+    assert sink.current_turn.thinking_since is not None
 
-    # Ticks below the rotation threshold keep the same phrase.
-    for _ in range(_THINKING_PHRASE_TICKS - 1):
-        sink.tick_activity_frame()
-    assert sink.activity_text() == _THINKING_PHRASES[0]
+    # Backdate the episode origin by 2.4 s → the counter reads 2 s
+    # (whole seconds, truncated).
+    sink.current_turn.thinking_since -= 2.4
+    assert sink.activity_text() == "Thinking 2s"
 
-    # Crossing the threshold advances to the next phrase (and wraps).
-    sink.tick_activity_frame()
-    assert sink.activity_text() == _THINKING_PHRASES[1]
-    for _ in range(len(_THINKING_PHRASES) - 1):
-        for _ in range(_THINKING_PHRASE_TICKS):
-            sink.tick_activity_frame()
-    assert sink.activity_text() == _THINKING_PHRASES[0]  # wrapped around
+    # It keeps counting from the same origin, not resetting on each read.
+    sink.current_turn.thinking_since -= 1.0  # now ~3.4 s elapsed
+    assert sink.activity_text() == "Thinking 3s"
+
+    # A fresh episode (thinking_since reset to None, as AgentToolStartEvent
+    # does) re-arms the counter from 0.
+    sink.current_turn.thinking_since = None
+    assert sink.activity_text() == "Thinking 0s"
 
 
-def test_thinking_phrases_do_not_rotate_out_of_the_thinking_phase() -> None:
+def test_thinking_timer_is_inert_outside_the_thinking_phase() -> None:
     """Once the turn is streaming / running a tool, the phase label is fixed
-    and the phrase index stops advancing."""
+    and the thinking counter is no longer consulted."""
     sink, _ = _make_sink()
     sink.begin_activity()
-    sink.current_turn.content = "hello"
+    assert sink.activity_text() == "Thinking 0s"  # arms the timer
 
+    # Streaming takes over: the fixed label survives any number of ticks.
+    sink.current_turn.content = "hello"
     for _ in range(10):
         sink.tick_activity_frame()
     assert sink.activity_text() == "Streaming…"
-    assert sink.current_turn.thinking_phrase_index == 0
+
+
+def test_thinking_timer_re_arms_for_each_thinking_episode() -> None:
+    """T-5: the "Thinking {n}s" counter measures the *current* wait, not the
+    whole run. A tool call ends the episode; the next one (model generating
+    after the result) starts from 0 again."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=10))
+    assert sink.activity_text() == "Thinking 0s"  # arms the episode timer
+    sink.current_turn.thinking_since -= 3.0  # ~3 s of pre-tool thinking
+    assert sink.activity_text() == "Thinking 3s"
+
+    # The tool start ends the episode (also freezes any streamed text).
+    sink.on_event(AgentToolStartEvent(tool_name="bash", args={"cmd": "pytest"}))
+    assert sink.current_turn.thinking_since is None
+    assert sink.activity_text() == "Running tool…"
+
+    # Tool done → the model thinks again: fresh episode, counting from 0.
+    sink.on_event(AgentToolDoneEvent(tool_name="bash", result="ok", duration_ms=5))
+    assert sink.activity_text() == "Thinking 0s"
+    assert sink.current_turn.thinking_since is not None
 
 
 def test_hidden_reasoning_does_not_duplicate_the_activity_spinner() -> None:
@@ -133,7 +161,7 @@ def test_hidden_reasoning_does_not_duplicate_the_activity_spinner() -> None:
 
     text = render_chat(sink, width=80)
 
-    assert "Thinking…" in text
+    assert "Thinking" in text
     assert "Phoson" not in text
     assert "thinking..." not in text
 
@@ -159,7 +187,7 @@ def test_start_token_done_builds_streaming_panel_then_finalizes() -> None:
     assert "Hello world" in text
     assert "1 step" in text
     # The in-chat spinner is transient, never part of finished scrollback.
-    assert "Thinking…" not in text
+    assert "Thinking" not in text
     assert "Streaming…" not in text
 
 
@@ -314,9 +342,12 @@ def test_parallel_tool_cards_replace_their_own_start_lines() -> None:
 
     assert len(sink.blocks) == 2
     text = render_chat(sink, width=80)
-    assert text.count("reading file") == 2
-    assert text.count("a.txt") == 1
-    assert text.count("b.txt") == 1
+    plain = _strip_ansi(text)
+    assert plain.count("reading file") == 2
+    # Count the header fragment, not the bare path: the path also appears
+    # inside its OSC 8 file:// link URI (T-7).
+    assert plain.count("·  a.txt") == 1
+    assert plain.count("·  b.txt") == 1
 
 
 def test_step_done_advances_counters() -> None:
@@ -550,26 +581,31 @@ def test_tick_activity_frame_frozen_while_streaming() -> None:
     assert sink.tick_activity_frame() is False
 
 
-def test_tick_activity_frame_phrase_rotation_stays_25s() -> None:
-    """I-84: tick cadence moved 0.12 s → 0.2 s, so the phrase-rotation tick
-    count moved 21 → 12 to keep roughly 2.5 s per phrase."""
-    from phoson_cli.fullscreen.app import _SUBAGENT_TICK_SECONDS
-    from phoson_cli.fullscreen.sink import (
-        _THINKING_PHRASES,
-        _THINKING_PHRASE_TICKS,
-    )
-
+def test_thinking_counter_runs_on_the_clock_not_on_ticks() -> None:
+    """T-5: the "Thinking {n}s" seconds come from the monotonic clock, not
+    from the spinner tick cadence. Ticks keep the braille glyph animating;
+    the counter must not jump (or stall) with them."""
     sink, _ = _make_sink()
     sink.begin_activity()
-    assert sink.activity_text() == _THINKING_PHRASES[0]
+    turn = sink.current_turn
+    assert turn is not None
+    assert sink.activity_text() == "Thinking 0s"  # arms the episode timer
+    origin = turn.thinking_since
+    assert origin is not None
 
-    for _ in range(_THINKING_PHRASE_TICKS):
-        sink.tick_activity_frame()
-    assert sink.activity_text() == _THINKING_PHRASES[1]
+    # Many fast ticks (would have rotated phrases at 21-tick intervals):
+    # the glyph advances, the label holds at 0 s — these loops run far
+    # shorter than one second of wall time.
+    frame = sink.activity_frame()
+    for _ in range(5):
+        assert sink.tick_activity_frame() is True
+    assert sink.activity_frame() != frame
+    assert sink.activity_text() == "Thinking 0s"
 
-    # The rotation period stays in the 2–3 s band.
-    rotation_seconds = _THINKING_PHRASE_TICKS * _SUBAGENT_TICK_SECONDS
-    assert 2.0 <= rotation_seconds <= 3.0
+    # 1.3 s of elapsed time (backdated, deterministic): the label reads
+    # 1 s even though no ticks happened in between.
+    turn.thinking_since = origin - 1.3
+    assert sink.activity_text() == "Thinking 1s"
 
 
 def test_repaint_intervals_match_target_fps() -> None:
@@ -616,3 +652,51 @@ def test_error_notice_still_immediate_with_stream_event_flag() -> None:
 
     assert len(ticks) == 1  # immediate, not throttled
     assert sink._stream_event is False  # flag not latched
+
+
+# ─── T-7: collapsed tool cards + /details toggle ─────────────────────────────
+
+
+def _transcript_text(sink: FullScreenSink) -> str:
+    return render_chat(sink, 120)
+
+
+def _finish_patch_call(sink: FullScreenSink) -> None:
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="patch_file",
+            tool_call_id="c1",
+            args={"path": "f.py", "old_content": "a\nb\n", "new_content": "a\nc\n"},
+        )
+    )
+    sink.on_event(
+        AgentToolDoneEvent(
+            tool_name="patch_file", result="ok", duration_ms=5, tool_call_id="c1"
+        )
+    )
+
+
+def test_tool_card_expanded_by_default_with_details_marker() -> None:
+    sink, _ = _make_sink()
+    _finish_patch_call(sink)
+    text = _transcript_text(sink)
+    assert "-b" in text  # diff body visible
+    assert "/details" in text  # the card offers the toggle
+
+
+def test_tool_details_toggle_collapse_then_expand() -> None:
+    sink, ticks = _make_sink()
+    _finish_patch_call(sink)
+
+    ticks.clear()
+    assert sink.set_tool_details() is False  # first toggle collapses
+    collapsed = _transcript_text(sink)
+    assert "-b" not in collapsed  # body hidden
+    assert "+c" not in collapsed
+    assert len(ticks) == 1  # the re-render invalidates
+
+    assert sink.set_tool_details() is True  # and back
+    expanded = _transcript_text(sink)
+    assert "-b" in expanded
+    assert "+c" in expanded

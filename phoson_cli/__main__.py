@@ -23,7 +23,6 @@ from phoson_cli.config import (
     PhosonKeyBindingsError,
     build_chat,
     load_config,
-    save_config,
     has_configured_provider,
 )
 from phoson_cli.updater import get_current_version, perform_self_update
@@ -46,7 +45,7 @@ Options:
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
-  --theme <tier>       Override the theme: dark, light, ansi, no-color
+  --theme <tier>       Override the theme: system, dark, light, ansi, no-color
   --max-turns <n>      Override max_iterations for this run
   --classic            Use the classic line-by-line REPL
   --no-fullscreen      Alias for --classic
@@ -222,46 +221,19 @@ def _should_use_classic(options: CliOptions) -> bool:
 def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> None:
     """First-run light/dark theme suggestion (IMPROVEMENTS.md E4).
 
-    Only when the user has never set a theme (no ``PHOSON_THEME`` env, no
-    ``theme`` in config.toml) and no ``--theme`` flag was passed for this
-    run. Detection is a bounded ~150 ms OSC 11 probe after the
-    COLORFGBG check; any terminal that cannot be classified simply skips
-    the question. The answer is persisted, so this fires at most once.
-    Runs before the front end is built, so the new theme applies
-    immediately (banner included).
+    Since T-8 the default tier is ``system`` — it inherits the terminal's
+    own colors, so there is nothing to suggest or ask. Kept as a no-op
+    for the flag/env plumbing; a persisted ``dark``/``light`` choice from
+    before T-8 still applies as-is.
     """
     if options.theme is not None:
         return
-    from phoson_cli.theme import suggest_theme
     from phoson_cli.config import has_persisted_theme
-    from phoson_cli.terminal_theme import detect_terminal_theme
 
     if has_persisted_theme():
         return
-    suggested = suggest_theme(
-        detected_light=detect_terminal_theme(),
-        has_persisted=False,
-    )
-    if suggested is None:
-        return
-    print(
-        f"\nYour terminal looks like a {suggested} background.",
-        file=sys.stderr,
-    )
-    try:
-        answer = (
-            input("Save the " + suggested + " theme as your default? [Y/n] ")
-            .strip()
-            .lower()
-        )
-    except (EOFError, KeyboardInterrupt):
-        print(file=sys.stderr)
-        return
-    if answer in {"n", "no"}:
-        return
-    config.theme = suggested
-    save_config(config, only_fields={"theme"})
-    print(f"Theme saved → {suggested}", file=sys.stderr)
+    # T-8: the system tier resolves light/dark in the terminal itself.
+    return
 
 
 def _run_plugin_command(

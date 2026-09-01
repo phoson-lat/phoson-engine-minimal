@@ -17,7 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 
 from phoson_cli.config import PhosonConfig
-from phoson_cli.fullscreen.app import _FOOTER_HINT, PhosonApp
+from phoson_cli.fullscreen.app import (
+    _FOOTER_HINT_IDLE,
+    _FOOTER_HINT_PICKER,
+    _FOOTER_HINT_RUNNING,
+    PhosonApp,
+)
 
 
 def _trigger(app: PhosonApp, key: str) -> None:
@@ -428,6 +433,30 @@ def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
     assert app._chat_scroll_top == 0
 
 
+def test_theme_after_clear_does_not_crash_on_stale_banner(app: PhosonApp) -> None:
+    """/theme must not raise after /clear.
+
+    The app kept a reference to the banner block object; ``clear()``
+    drops the transcript without it, so the reference dangles and
+    ``sink.blocks.index(banner)`` raised ValueError → the command
+    dispatch loop crashed ("Group object ... is not in list").
+    """
+    from phoson_cli.theme import DARK
+
+    assert app._banner_block is not None
+    assert app._banner_block in app.sink.blocks
+
+    app.clear()
+    assert app._banner_block is None
+    assert app.sink.blocks == []
+
+    # The crash from the report: apply_theme looked for the stale banner.
+    app.apply_theme(DARK)
+    # A cleared transcript intentionally has no banner — not re-inserted.
+    assert app._banner_block is None
+    assert app.sink.blocks == []
+
+
 def test_ctrl_q_and_ctrl_c_request_exit_when_idle(app: PhosonApp) -> None:
     with patch.object(app.app, "exit") as mock_exit:
         _trigger(app, "c-q")
@@ -753,16 +782,160 @@ def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None
     assert "📎" not in app._get_header_text().value
 
 
-def test_footer_is_keyboard_hints_only(app: PhosonApp) -> None:
-    """Stable runtime facts belong to the header and are never duplicated below."""
+def test_footer_is_contextual_and_never_truncates(app: PhosonApp) -> None:
+    """T-9: the footer shows at most three state-dependent hints.
+
+    Idle vs running vs picker each get their own short line, and none of
+    them is long enough to truncate at 80 columns (the old 8-shortcut
+    cheatsheet was). Stable runtime facts belong to the header and are
+    never duplicated below.
+    """
     header = app._get_header_text().value
 
     assert app.repl.config.provider in header
     assert app.repl.current_model in header
     assert app.repl.tree.session_id[:8] not in header
-    assert "Send" in _FOOTER_HINT
-    assert app.repl.config.provider not in _FOOTER_HINT
-    assert app.repl.current_model not in _FOOTER_HINT
+    assert app.repl.config.provider not in _FOOTER_HINT_IDLE
+    assert app.repl.current_model not in _FOOTER_HINT_IDLE
+    for hint in (_FOOTER_HINT_IDLE, _FOOTER_HINT_RUNNING, _FOOTER_HINT_PICKER):
+        assert len(hint) <= 50  # comfortably inside 80 columns
+
+    # Idle (default): the send/newline/commands hints.
+    footer = app._get_footer_text().value
+    assert "enter send" in footer
+    assert "ctrl+j" in footer
+    assert "/ commands" in footer
+    # The old cheatsheet is gone from the footer.
+    assert "Shift+Drag" not in footer
+    assert "PgUp" not in footer
+
+
+def test_footer_running_state_shows_cancel_hint(app: PhosonApp) -> None:
+    """T-9: while a turn is in flight the footer is just `esc cancel`."""
+    app._run_task = MagicMock()
+    app._run_task.done.return_value = False
+    try:
+        footer = app._get_footer_text().value
+        assert "esc cancel" in footer
+        assert "enter send" not in footer
+    finally:
+        app._run_task = None
+
+
+def test_footer_picker_state_shows_navigation_hints(app: PhosonApp) -> None:
+    """T-9: with a Float open (picker/confirmation) the footer is `enter · esc`."""
+    sentinel = object()
+    app._active_float = sentinel
+    try:
+        footer = app._get_footer_text().value
+        assert "enter" in footer
+        assert "esc" in footer
+        assert "enter send" not in footer
+    finally:
+        app._active_float = None
+
+
+# ─── T-6: permission-mode chip + confirmation card ────────────────────────────
+
+
+def _point_permissions_at(tmp_path, monkeypatch) -> Path:
+    from phoson_cli import permissions_store
+
+    target = tmp_path / "permissions.json"
+    monkeypatch.setattr(permissions_store, "DEFAULT_PERMISSIONS_FILE", target)
+    return target
+
+
+def test_header_shows_auto_mode_chip_by_default(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: idle chrome always shows the mode chip; no policy → auto."""
+    _point_permissions_at(tmp_path, monkeypatch)
+    header = app._get_header_text().value
+    assert "auto" in header
+    assert "ask" not in header
+
+
+def test_header_shows_ask_chip_when_policy_sets_bash_ask(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    from phoson_cli.permissions_store import (
+        LEVEL_ASK,
+        PermissionPolicy,
+        save_policy,
+    )
+
+    target = _point_permissions_at(tmp_path, monkeypatch)
+    save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), target)
+    app._perm_mode_cached = None  # drop any cached read
+
+    assert "ask" in app._get_header_text().value
+
+
+def test_shift_tab_cycles_permission_mode(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: Shift+Tab cycles ask → auto, persists, and repaints the chip."""
+    from phoson_cli.permissions_store import (
+        LEVEL_ASK,
+        PermissionPolicy,
+        load_policy,
+        save_policy,
+    )
+
+    target = _point_permissions_at(tmp_path, monkeypatch)
+    save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), target)
+
+    _trigger(app, "s-tab")  # ask → auto
+    assert load_policy().levels.get("bash") != LEVEL_ASK
+    assert "ask" not in app._get_header_text().value
+
+    _trigger(app, "s-tab")  # auto → ask
+    assert load_policy().levels.get("bash") == LEVEL_ASK
+    assert "ask" in app._get_header_text().value
+
+
+def test_bash_card_rows_show_command_and_always_action() -> None:
+    """T-6: the card shows the command (mono) + Yes / Always / No."""
+    from phoson_cli.fullscreen.app import _bash_card_rows
+
+    text = "".join(t for _style, t in _bash_card_rows("rm -rf /tmp/x"))
+    assert "rm -rf /tmp/x" in text
+    assert "Yes" in text
+    assert "Always" in text
+    assert "No" in text
+    # The command is styled in the monospace-ish prompt token style,
+    # not as a generic modal title.
+    assert ("class:prompt.model", "  $ rm -rf /tmp/x\n") in _bash_card_rows(
+        "rm -rf /tmp/x"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bash_card_always_resolves_and_notifies(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """T-6: pressing 'a' on the open card resolves True and runs the
+    on_always grant; the float closes afterwards."""
+    always_calls: list[str] = []
+
+    async def on_always(command: str) -> None:
+        always_calls.append(command)
+
+    task = asyncio.create_task(
+        app.run_float_bash_card("rm -rf /tmp/x", on_always=on_always)
+    )
+    await asyncio.sleep(0)  # let the float open
+    try:
+        assert app._active_float is not None
+        _trigger(app, "a")
+        assert (await task) is True
+        await asyncio.sleep(0)
+    finally:
+        if not task.done():
+            task.cancel()
+    assert always_calls == ["rm -rf /tmp/x"]
+    assert app._active_float is None  # the float closed on resolve
 
 
 def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:
@@ -874,3 +1047,73 @@ async def test_run_async_captures_warnings_for_the_session_only(
     finally:
         warnings.showwarning = original_showwarning
         logging.captureWarnings(False)
+
+
+# ─── Reasoning-effort chip + Ctrl+E cycle ─────────────────────────────────────
+
+
+def _no_real_config_save(monkeypatch) -> list[tuple[object, dict]]:
+    """Keep the cycle's persistence out of the developer's real config.toml."""
+    from phoson_cli import fullscreen as fs
+
+    saved: list[tuple[object, dict]] = []
+    monkeypatch.setattr(
+        fs.app, "save_config", lambda config, **kwargs: saved.append((config, kwargs))
+    )
+    return saved
+
+
+def test_header_shows_effort_off_chip_by_default(app: PhosonApp) -> None:
+    app.repl.config.reasoning_effort = None
+    header = app._get_header_text().value
+    assert "effort off" in header
+
+
+def test_header_shows_effort_level_when_set(app: PhosonApp) -> None:
+    app.repl.config.reasoning_effort = "high"
+    header = app._get_header_text().value
+    assert "effort: high" in header
+    assert "effort off" not in header
+
+
+def test_ctrl_e_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
+    """Ctrl+E cycles off → low → … → max → off, persists, and repaints the
+    chip immediately (T-6 pattern). The run picks the value up at the next
+    turn, so no in-flight run is affected."""
+    from phoson_llm.schemas import REASONING_EFFORTS
+
+    saved = _no_real_config_save(monkeypatch)
+    app.repl.config.reasoning_effort = None
+
+    _trigger(app, "c-e")  # off → low
+    assert app.repl.config.reasoning_effort == "low"
+    assert "effort: low" in app._get_header_text().value
+    assert saved and saved[-1][1].get("only_fields") == {"reasoning_effort"}
+
+    for expected in ("medium", "high", "xhigh", "max"):
+        _trigger(app, "c-e")
+        assert app.repl.config.reasoning_effort == expected
+    assert REASONING_EFFORTS[-1] == "max"  # the cycle must cover them all in order
+
+    _trigger(app, "c-e")  # max → off (wraps)
+    assert app.repl.config.reasoning_effort is None
+    assert "effort off" in app._get_header_text().value
+
+
+def test_ctrl_e_does_not_touch_the_reasoning_visibility_toggle(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """Ctrl+E changes the *level*; Ctrl+T (toggle_reasoning) still owns the
+    show/hide axis — cycling effort must not flip the visibility default."""
+    _no_real_config_save(monkeypatch)
+    before = app.sink.show_reasoning_default
+    app.repl.config.reasoning_effort = None
+    _trigger(app, "c-e")
+    assert app.sink.show_reasoning_default is before
+
+
+def test_ctrl_e_binding_is_registered(app: PhosonApp) -> None:
+    from phoson_cli.fullscreen.keys import DEFAULT_KEY_BINDINGS
+
+    assert DEFAULT_KEY_BINDINGS["cycle_reasoning_effort"] == ["c-e"]
+    _trigger(app, "c-e")  # raises KeyError if the binding were unregistered

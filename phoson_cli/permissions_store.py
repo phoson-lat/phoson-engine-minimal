@@ -133,6 +133,20 @@ def add_pattern(policy: PermissionPolicy, tool: str, pattern: str) -> None:
         patterns.append(pattern)
 
 
+def glob_quote(text: str) -> str:
+    """Quote ``text`` so it matches *literally* as an allow pattern (T-6).
+
+    Allow patterns are fnmatch globs; "always allow this exact command"
+    therefore stores the command with its metacharacters turned into
+    literal single-character classes (fnmatch has no backslash escape):
+    ``*``→``[*]``, ``?``→``[?]``, ``[``→``[[]``, ``]``→``[]]``.
+    The quoted pattern matches exactly the original string and nothing
+    else.
+    """
+    _table = str.maketrans({"*": "[*]", "?": "[?]", "[": "[[]", "]": "[]]"})
+    return text.translate(_table)
+
+
 def remove_pattern(policy: PermissionPolicy, tool: str, pattern: str) -> bool:
     """Remove an allow pattern. Returns False when it was not present."""
     patterns = policy.allow_patterns.get(tool, [])
@@ -171,6 +185,7 @@ __all__ = [
     "MATCH_ARGS",
     "add_pattern",
     "build_permission_middleware",
+    "glob_quote",
     "load_policy",
     "remove_pattern",
     "save_policy",

@@ -22,3 +22,12 @@ start. The classic REPL's single global key (Ctrl+T) is fixed.
 Press `Ctrl+T` to toggle the live "thinking" view while a run is
 streaming, or to expand the full reasoning of the last turn after it
 finishes (persisted with the session, so it survives resume).
+
+## Reasoning effort cycle
+
+Press `Ctrl+E` to cycle the reasoning effort
+`off → low → medium → high → xhigh → max → off`. The header shows the
+current level (`effort: high`, dim `· effort off` when unset), the value
+is persisted like `/reasoning-effort`, and it applies from the *next*
+turn — an in-flight run keeps the level it started with. `Ctrl+E` only
+changes the *level*; `Ctrl+T` owns the show/hide axis.

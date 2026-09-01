@@ -38,6 +38,8 @@ enough to carry it through intact; verified end-to-end against a real
 """
 
 import re
+from pathlib import Path
+from urllib.parse import quote
 
 #: OSC 8 open (``ESC ] 8 ; params ; URI ST``) or close (``ESC ] 8 ; ; ST``)
 #: sequence. ``ST`` (string terminator) is matched as the canonical
@@ -57,6 +59,19 @@ def osc8_passthrough(ansi_text: str) -> str:
     text. A no-op on text with no hyperlinks.
     """
     return _OSC8_RE.sub(lambda m: "\x01" + m.group(0) + "\x02", ansi_text)
+
+
+def file_uri(path: str) -> str:
+    """OSC 8 ``file://`` URI for a path (T-7 tool-card links).
+
+    Relative paths are resolved against ``Path.cwd()`` first — a
+    ``file://src/app.py`` that doesn't exist is a dead link. Spaces and
+    other non-ASCII-safe characters are percent-encoded.
+    """
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = Path.cwd() / resolved
+    return "file://" + quote(str(resolved), safe="/")
 
 
 __all__ = ["osc8_passthrough"]

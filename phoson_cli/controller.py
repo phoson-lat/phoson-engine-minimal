@@ -267,16 +267,45 @@ class SessionController:
         return build_plugin_specs(self.config)
 
     async def _ask_permission(self, tool_name: str, args: dict) -> bool:
-        """PermissionMiddleware ask-callback: consult the user.
+        """PermissionMiddleware ask-callback: consult the user (T-6).
 
-        Uses the front end's bash-style confirmation for the familiar
-        yes/no interaction. Without a confirmation service (one-shot),
-        fails closed — the middleware already handles the None case.
+        Bash calls get the permission card (command + Yes / Always /
+        No); "Always" persists a pattern for that exact command, so the
+        same call never asks twice. Other tools keep the generic
+        summary prompt.
         """
         if self.confirmation is None:
             return False
+        if tool_name == "bash":
+            command = str(args.get("command") or "")
+            card = getattr(self.confirmation, "confirm_bash_command", None)
+            if card is not None:
+                return await card(
+                    command,
+                    on_always=lambda cmd: self._remember_bash_pattern(cmd),
+                )
+            return await self.confirmation.confirm_bash(command)
         summary = self._summarize_args_for_confirm(tool_name, args)
         return await self.confirmation.confirm_bash(summary)
+
+    async def _remember_bash_pattern(self, command: str) -> None:
+        """Persist "always allow this exact command" (T-6 card, [a]).
+
+        The pattern is the *quoted* command: it is matched as a glob, so
+        quoting is the simplest exact-match. Session-scoped grants are
+        not used — the durable policy is what the header chip and
+        /permissions show.
+        """
+        from .permissions_store import (
+            glob_quote,
+            add_pattern,
+            load_policy,
+            save_policy,
+        )
+
+        policy = load_policy()
+        add_pattern(policy, "bash", glob_quote(command))
+        save_policy(policy)
 
     @staticmethod
     def _summarize_args_for_confirm(tool_name: str, args: dict) -> str:

@@ -21,7 +21,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Coroutine
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -109,11 +109,14 @@ from .session_cache import SessionListCache
 # Advertising it in the footer (rather than only in a docstring) is the
 # fix: the terminal already does the work, the hint just needs to be
 # discoverable.
-_FOOTER_HINT = (
-    '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
-    "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [Shift+Drag] Select text  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
-)
+#
+# The footer itself is *contextual* (T-9): at most three hints for the
+# current state, so it never truncates at 80 columns. The full cheatsheet
+# (scroll, reasoning, paste image, clear, rewind, exit, Shift+Drag) lives
+# in ``/keys`` and ``docs/cli/mouse-and-links.md`` — not on every frame.
+_FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
+_FOOTER_HINT_RUNNING = "esc cancel"
+_FOOTER_HINT_PICKER = "enter  ·  esc"
 
 # How often the subagent panel animation frame advances while active.
 # Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
@@ -203,6 +206,21 @@ def _skill_names() -> list[str]:
         return []
 
 
+def _bash_card_rows(command: str) -> list[tuple[str, str]]:
+    """T-6: the permission card's content fragments (testable unit).
+
+    Title + the command in monospace + the three actions. The Float
+    wrapper (:meth:`PhosonApp.run_float_bash_card`) renders exactly
+    these rows, so the test suite asserts on this function.
+    """
+    return [
+        ("class:title", "  Run bash command?\n\n"),
+        ("class:prompt.model", f"  $ {command}\n"),
+        ("\n", ""),
+        ("class:footer", "  [y] Yes    [a] Always    [n] No / Esc\n"),
+    ]
+
+
 class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
 
@@ -233,6 +251,11 @@ class PhosonApp:
         # Header AGENTS.md indicator cache (see `_has_agents_md`).
         self._agents_md_cached: bool | None = None
         self._agents_md_checked_at: float = 0.0
+        # Header permission-mode chip cache (T-6): the policy file is only
+        # re-read at most once per second — the header repaints on every
+        # frame and must not stat the disk each time (I-84).
+        self._perm_mode_cached: str | None = None
+        self._perm_mode_checked_at: float = 0.0
         # Header HTML cache (I-84): rebuilt only when an input changes.
         self._header_cache_key: tuple[str, ...] | None = None
         self._header_cache = HTML("")
@@ -294,7 +317,9 @@ class PhosonApp:
             wrap_lines=False,
             always_hide_cursor=True,
             get_vertical_scroll=self._get_effective_scroll,
-            right_margins=[ScrollbarMargin(display_arrows=True)],
+            # T-9: the scrollbar is position-only — the wheel/PgUp already
+            # work, so the clickable arrows were dead chrome.
+            right_margins=[ScrollbarMargin(display_arrows=False)],
         )
         self._chat_window._mouse_handler = self._on_chat_mouse
 
@@ -357,10 +382,12 @@ class PhosonApp:
         )
 
         bottom_margin = Window(height=1, char="—", style="class:separator")
-        # The footer is intentionally keyboard hints only. Stable runtime
-        # facts live in the compact header, avoiding duplicated UI chrome.
+        # The footer is intentionally keyboard hints only — and contextual
+        # (T-9): three hints for the current state, never a truncated
+        # cheatsheet. Stable runtime facts live in the compact header,
+        # the full key map in /keys.
         footer_window = Window(
-            content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
+            content=FormattedTextControl(self._get_footer_text), height=1
         )
 
         main_container = HSplit(
@@ -447,15 +474,22 @@ class PhosonApp:
         self.sink.theme = theme
         banner_block = getattr(self, "_banner_block", None)
         if banner_block is not None:
-            index = self.sink.blocks.index(banner_block)
-            self._banner_block = render_banner(
-                provider=self.repl.config.provider,
-                model=self.repl.current_model,
-                session_id=self.repl.tree.session_id,
-                theme=self.theme,
-                show_meta=False,
-            )
-            self.sink.blocks[index] = self._banner_block
+            try:
+                index = self.sink.blocks.index(banner_block)
+            except ValueError:
+                # The transcript was cleared (/clear) while the reference was
+                # held — the banner is no longer in the pane and a cleared
+                # transcript intentionally has none, so don't re-insert it.
+                self._banner_block = None
+            else:
+                self._banner_block = render_banner(
+                    provider=self.repl.config.provider,
+                    model=self.repl.current_model,
+                    session_id=self.repl.tree.session_id,
+                    theme=self.theme,
+                    show_meta=False,
+                )
+                self.sink.blocks[index] = self._banner_block
         self._apply_style()
         self._block_ansi_cache.clear(0)
         self._header_cache_key = None  # rebuild header for the new palette
@@ -574,6 +608,24 @@ class PhosonApp:
         # front ends (the TUI starts it in ``run_async``).
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
         status = self.sink.status_text()
+        # Permission-mode chip (T-6): always visible; the accent word for
+        # the *ask* state (confirmations are coming), dim for auto.
+        perm_mode = self._permission_mode()
+        mode_part = (
+            ' <style class="header">ask</style>'
+            if perm_mode == "ask"
+            else ' <style class="header_dim">· auto</style>'
+        )
+        # Reasoning-effort chip (Ctrl+E): dim when off, accent with the
+        # level when set. Read straight from the in-memory config (the
+        # cycle mutates it before invalidating the cache below), so no
+        # throttle like the permission policy file read is needed.
+        effort = self.repl.config.reasoning_effort
+        effort_part = (
+            f' <style class="header">effort: {effort}</style>'
+            if effort in REASONING_EFFORTS
+            else ' <style class="header_dim">· effort off</style>'
+        )
 
         key = (
             model_provider,
@@ -584,6 +636,8 @@ class PhosonApp:
             monitors_part,
             update_part,
             status,
+            perm_mode,
+            effort or "",  # None (off) and "" hash identically for cache-key purposes
         )
         if self._header_cache_key != key:
             self._header_cache_key = key
@@ -596,12 +650,49 @@ class PhosonApp:
                 f'<style class="header_dim">{cwd}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{token_cost}</style>'
+                f"{mode_part}"
+                f"{effort_part}"
                 f'<style class="header_dim">{extras}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{status}</style>'
                 f'<style class="header_dim">{update_part}</style>'
             )
         return self._header_cache
+
+    def _permission_mode(self) -> str:
+        """Current permission mode for the header chip (T-6).
+
+        ``ask`` when the durable policy puts bash on the ask level,
+        ``auto`` otherwise (allow is the default for unlisted tools).
+        The policy file is re-read at most once per second; Shift+Tab
+        (``cycle_permission_mode``) refreshes it immediately.
+        """
+        now = time.monotonic()
+        if self._perm_mode_cached is None or now - self._perm_mode_checked_at >= 1.0:
+            from ..permissions_store import load_policy
+
+            self._perm_mode_cached = (
+                "ask" if load_policy().levels.get("bash") == "ask" else "auto"
+            )
+            self._perm_mode_checked_at = now
+        return self._perm_mode_cached
+
+    def _get_footer_text(self) -> HTML:
+        """Contextual footer: at most three hints for the current state.
+
+        Replaces the fixed 8-shortcut cheatsheet (T-9), which truncated at
+        80 columns. The hints are deliberately short so the line survives
+        narrow terminals; the full key map is ``/keys``, and the
+        Shift+Drag text-selection note lives in
+        ``docs/cli/mouse-and-links.md`` (and /keys).
+        """
+        if self._active_float is not None:
+            hint = _FOOTER_HINT_PICKER
+        elif self._is_run_in_flight():
+            hint = _FOOTER_HINT_RUNNING
+        else:
+            hint = _FOOTER_HINT_IDLE
+        return HTML(f'<style class="footer">{hint}</style>')
 
     def _has_agents_md(self) -> bool:
         """Whether any AGENTS.md/CLAUDE.md memory file applies here.
@@ -819,6 +910,62 @@ class PhosonApp:
         finally:
             self._close_float(float_)
 
+    async def run_float_bash_card(
+        self,
+        command: str,
+        *,
+        on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+    ) -> bool:
+        """T-6: the permission card — command in monospace, 3 actions.
+
+        ``y`` runs the command once; ``a`` runs it and remembers this
+        exact command as always-allowed (persisted by the caller through
+        ``on_always``); ``n``/Esc denies. Rendered as a proper card
+        (title + command body + action footer) instead of a generic
+        yes/no modal string.
+        """
+        result_future: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def resolve(answer: bool, always: bool = False) -> None:
+            if result_future.done():
+                return
+            if always and on_always is not None:
+                try:
+                    self.app.create_background_task(on_always(command))
+                except Exception:
+                    # The Application isn't tracking tasks (unit tests):
+                    # schedule the grant on the running loop instead.
+                    try:
+                        asyncio.get_running_loop().create_task(on_always(command))
+                    except RuntimeError:  # pragma: no cover - no loop at all
+                        pass
+            result_future.set_result(answer)
+
+        kb = KeyBindings()
+        kb.add("y")(lambda event: resolve(True))  # noqa: ARG005
+        kb.add("Y")(lambda event: resolve(True))  # noqa: ARG005
+        kb.add("a")(lambda event: resolve(True, always=True))  # noqa: ARG005
+        kb.add("A")(lambda event: resolve(True, always=True))  # noqa: ARG005
+        kb.add("n")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("N")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("escape")(lambda event: resolve(False))  # noqa: ARG005
+        kb.add("c-c")(lambda event: resolve(False))  # noqa: ARG005
+
+        window = Window(
+            content=FormattedTextControl(
+                lambda: _bash_card_rows(command),
+                focusable=True,
+            ),
+            always_hide_cursor=True,
+        )
+        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
+
+        self._open_float(float_, kb, window)
+        try:
+            return await result_future
+        finally:
+            self._close_float(float_)
+
     async def run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]
     ) -> str | None:
@@ -948,6 +1095,10 @@ class PhosonApp:
 
     def clear(self) -> None:
         self.sink.blocks.clear()
+        # The banner is dropped with the transcript (unlike rewind, which
+        # re-seeds it): forget the reference so a later apply_theme doesn't
+        # look for an object that no longer exists in the pane.
+        self._banner_block = None
         self.sink.drop_error_notice()
         self.sink.dirty = True
         self._auto_scroll = True
@@ -993,6 +1144,65 @@ class PhosonApp:
             self.repl._expanded_reasoning.add(node_id)
             self.sink.expand_reasoning(str(reasoning))
             return
+
+    def cycle_permission_mode(self) -> None:
+        """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
+
+        The mode is the durable per-tool policy (``permissions.json``);
+        cycling it sets *bash*'s level, which is the tool the SOTA
+        harnesses gate by default. The header chip refreshes immediately
+        and the user is told the new state + how to fine-tune
+        per-tool with /permissions.
+        """
+        from ..permissions_store import LEVEL_ASK, set_level, load_policy, save_policy
+
+        policy = load_policy()
+        current = policy.levels.get("bash")
+        if current == LEVEL_ASK:
+            set_level(policy, "bash", "allow")
+            new_mode = "auto"
+        else:
+            set_level(policy, "bash", LEVEL_ASK)
+            new_mode = "ask"
+        save_policy(policy)
+        self._perm_mode_cached = new_mode
+        self._perm_mode_checked_at = time.monotonic()
+        self._header_cache_key = None  # rebuild the chip on the next frame
+        self.sink.notify(
+            "info",
+            f"Permission mode → {new_mode}"
+            + (
+                " — bash commands now confirm with Yes / Always / No"
+                if new_mode == "ask"
+                else " — bash runs freely (per-tool rules: /permissions)"
+            ),
+        )
+
+    def cycle_reasoning_effort(self) -> None:
+        """Ctrl+E: cycle the reasoning effort off → low → medium → high →
+        xhigh → max (wraps to off).
+
+        Mirrors the T-6 permission-mode cycle: the value lives on the
+        durable config (persisted like ``/reasoning-effort``), the run
+        picks it up at the *next* turn (the controller reads
+        ``config.reasoning_effort`` when building each run's ModelConfig),
+        the header chip refreshes immediately, and the user is told the
+        new state + how to set it explicitly. Ctrl+T stays the
+        show/hide toggle for the reasoning block — different axis.
+        """
+        current = self.repl.config.reasoning_effort
+        if current not in REASONING_EFFORTS:
+            current = None  # "off"
+        levels = (*REASONING_EFFORTS, None)
+        next_effort = levels[(levels.index(current) + 1) % len(levels)]
+        self.repl.config.reasoning_effort = next_effort
+        save_config(self.repl.config, only_fields={"reasoning_effort"})
+        self._header_cache_key = None  # rebuild the chip on the next frame
+        self.sink.notify(
+            "info",
+            f"Reasoning effort → {next_effort or 'off'}"
+            " · applies from the next turn (explicit: /reasoning-effort)",
+        )
 
     def keys_listing(self) -> list[tuple[str, str]]:
         """The effective key map for ``/keys`` (IMPROVEMENTS.md E6).

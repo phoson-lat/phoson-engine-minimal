@@ -7,7 +7,11 @@ terminals were supported.
 
 Tiers
 -----
-- ``dark``  — the default; the historical purple palette on dark RGB.
+- ``system`` — the default (T-8): inherits the terminal's own fg/bg.
+  No ``on #rrggbb`` backgrounds anywhere; accent is reduced to the
+  spinner/focus and the state colors are the terminal's ANSI green/red/
+  yellow. The user's terminal (Gruvbox, Catppuccin, ...) does the rest.
+- ``dark``  — the historical purple palette on dark RGB.
 - ``light`` — for light terminals (Rich never inverts automatically).
 - ``ansi``  — 16-color-safe palette for SSH/dumb terminals; no custom
   backgrounds, only named ANSI colors (Rich degrades gracefully anyway,
@@ -15,13 +19,20 @@ Tiers
 - ``no-color`` — plain text; selected automatically when ``NO_COLOR`` is
   set (non-empty) or ``CLICOLOR=0``, per the CLI color conventions.
 
-Selection: ``PHOSON_THEME`` env var, then ``config.toml [theme]`` (via
-``load_theme(config_value=...)``), then the terminal capability fallback.
-Invalid names warn and fall back to ``dark``.
+Custom themes: drop a JSON file into ``~/.phoson/themes/`` — its tokens
+merge onto a built-in ``base`` (see :func:`_load_json_themes`). Python
+plugin themes (``ThemeExtension``) remain for the odd case.
+
+Selection: ``NO_COLOR``/``CLICOLOR=0`` always win, then the
+``PHOSON_THEME`` env var, then ``config.toml [theme]`` (via
+``load_theme(config_value=...)``), then ``system``. Invalid names warn
+and fall back to ``dark``.
 """
 
 import os
+import json
 import warnings
+from pathlib import Path
 from dataclasses import replace, dataclass
 from collections.abc import Mapping, Sequence
 
@@ -55,6 +66,11 @@ class Theme:
     err: str
     warn: str
     reasoning: str
+
+    # tool cards (T-7): subtle backgrounds for diff +/- lines. ``""``
+    # (ansi/system/no-color tiers) means "prefix color only".
+    diff_add_bg: str
+    diff_del_bg: str
 
     # containers
     panel_bg: str
@@ -95,6 +111,61 @@ class Theme:
         return self.name in {"dark", "ansi"}
 
 
+#: Where user-dropped JSON themes live (T-8): ``~/.phoson/themes/*.json``.
+JSON_THEMES_DIR = Path("~/.phoson/themes").expanduser()
+
+#: Tier that inherits the terminal's own colors (T-8). Rich text tokens
+#: are ``""`` (no style → the terminal's foreground); state colors are
+#: the terminal's own ANSI green/red/yellow; nothing carries an
+#: ``on #rrggbb`` background. ``pt_*`` tokens use prompt_toolkit's
+#: ``default`` color where a background is structurally required
+#: (completion menu, scrollbar) so the terminal's own palette shows.
+SYSTEM = Theme(
+    name="system",
+    text="",
+    muted="",
+    muted_deep="",
+    accent="",
+    accent_soft="",
+    art="",
+    ok="green",
+    err="red",
+    warn="yellow",
+    # "dim" is a Rich style modifier, not a color: the terminal's fg at
+    # reduced intensity — the right treatment for thinking text on any
+    # palette.
+    reasoning="dim",
+    diff_add_bg="",
+    diff_del_bg="",
+    panel_bg="",
+    badge_user="bold",
+    badge_assistant="bold",
+    badge_history="bold",
+    code_theme="ansi_dark",
+    pt_muted="",
+    pt_muted_deep="",
+    # Accent reduced to spinner + focus (T-8): cyan is the one named
+    # color that stays legible on both light and dark terminals.
+    pt_accent="cyan",
+    pt_ok="green",
+    pt_err="red",
+    prompt_input="",
+    prompt_bracket="",
+    prompt_model="",
+    prompt_node="",
+    prompt_tokens="",
+    prompt_arrow="cyan",
+    completion_bg="default",
+    completion_fg="",
+    completion_current_bg="default",
+    completion_current_fg="cyan",
+    completion_meta_bg="default",
+    completion_meta_fg="",
+    scrollbar_bg="default",
+    scrollbar_button="default",
+)
+
+
 DARK = Theme(
     name="dark",
     text="white",
@@ -107,6 +178,8 @@ DARK = Theme(
     err="indian_red1",
     warn="gold3",
     reasoning="grey42",
+    diff_add_bg="on #0f2417",
+    diff_del_bg="on #2a1216",
     panel_bg="on #120d1d",
     badge_user="bold white on #23192f",
     badge_assistant="bold white on #3a255e",
@@ -145,6 +218,8 @@ LIGHT = Theme(
     err="#cf222e",
     warn="#9a6700",
     reasoning="#7a7288",
+    diff_add_bg="on #e0f2e4",
+    diff_del_bg="on #f8d7da",
     panel_bg="on #f2eef8",
     badge_user="bold #1a1425 on #ddd0f0",
     badge_assistant="bold #1a1425 on #cbb5ec",
@@ -183,6 +258,10 @@ ANSI = Theme(
     err="bright_red",
     warn="bright_yellow",
     reasoning="bright_black",
+    # 16-color terminals: a full-line background reads as a stripe; the
+    # +/- prefix color carries the meaning instead.
+    diff_add_bg="",
+    diff_del_bg="",
     panel_bg="",
     badge_user="bold",
     badge_assistant="bold",
@@ -223,6 +302,8 @@ NO_COLOR = Theme(
     err="",
     warn="",
     reasoning="",
+    diff_add_bg="",
+    diff_del_bg="",
     panel_bg="",
     badge_user="bold",
     badge_assistant="bold",
@@ -250,6 +331,7 @@ NO_COLOR = Theme(
 )
 
 _BY_NAME = {
+    "system": SYSTEM,
     "dark": DARK,
     "light": LIGHT,
     "ansi": ANSI,
@@ -257,6 +339,58 @@ _BY_NAME = {
 }
 
 VALID_NAMES = tuple(sorted(_BY_NAME))
+
+
+def _load_json_theme_file(path: Path) -> Theme | None:
+    """Load one drop-in JSON theme (T-8), or None when unusable.
+
+    Shape — the ``Theme`` tokens, merged onto a built-in ``base``::
+
+        {"name": "nord", "base": "dark", "accent": "#88c0d0", ...}
+
+    ``base`` defaults to ``"dark"``. Unknown tokens or a bad base make
+    the file silently skip (a broken user file must never break
+    startup); its name is still reported in ``/theme list``.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or path.stem).strip().lower()
+    if not name:
+        return None
+    base_name = str(raw.get("base") or "dark").strip().lower()
+    base = _BY_NAME.get(base_name)
+    if base is None:
+        return None
+    known_tokens = set(Theme.__dataclass_fields__) - {"name", "base"}
+    tokens: dict[str, str] = {}
+    for key, value in raw.items():
+        if key in {"name", "base"}:
+            continue
+        if key in known_tokens and isinstance(value, str):
+            tokens[key] = value
+    return replace(base, name=name, **tokens)
+
+
+def load_json_themes() -> dict[str, Theme]:
+    """All valid JSON themes from :data:`JSON_THEMES_DIR` (T-8).
+
+    Sorted by file name; a later file with the same theme name wins
+    (drop a corrected ``nord.json`` over a broken one). Never raises.
+    """
+    themes: dict[str, Theme] = {}
+    try:
+        entries = sorted(JSON_THEMES_DIR.glob("*.json"))
+    except OSError:
+        return themes
+    for entry in entries:
+        theme = _load_json_theme_file(entry)
+        if theme is not None:
+            themes[theme.name] = theme
+    return themes
 
 
 @dataclass(frozen=True)
@@ -277,22 +411,35 @@ class ThemeRegistry:
 
 
 def default_theme_registry() -> ThemeRegistry:
-    """Return the immutable registry containing only the four shipped themes."""
-    return ThemeRegistry(
-        themes=_BY_NAME,
-        descriptions={
-            "dark": "default, purple on dark",
-            "light": "light background",
-            "ansi": "16-color SSH-safe",
-            "no-color": "plain text",
-        },
-    )
+    """Return the registry with the built-in tiers plus drop-in JSON themes."""
+    themes = dict(_BY_NAME)
+    themes.update(load_json_themes())  # user files may add (not replace) names
+    descriptions = {
+        "system": "default, inherits your terminal's colors",
+        "dark": "purple on dark",
+        "light": "light background",
+        "ansi": "16-color SSH-safe",
+        "no-color": "plain text",
+    }
+    for name, theme in load_json_themes().items():
+        descriptions.setdefault(name, "JSON theme (~/.phoson/themes/)")
+    return ThemeRegistry(themes=themes, descriptions=descriptions)
 
 
 def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
     """Build a registry from one controller's loaded plugin instances."""
     themes = dict(_BY_NAME)
-    descriptions = dict(default_theme_registry().descriptions)
+    themes.update(load_json_themes())  # drop-in JSON themes (T-8)
+    descriptions = {
+        "system": "default, inherits your terminal's colors",
+        "dark": "purple on dark",
+        "light": "light background",
+        "ansi": "16-color SSH-safe",
+        "no-color": "plain text",
+    }
+    for name in themes:
+        if name not in descriptions:
+            descriptions[name] = "JSON theme (~/.phoson/themes/)"
     known_tokens = set(Theme.__dataclass_fields__) - {"name"}
 
     for plugin in plugins:
@@ -353,7 +500,8 @@ def load_theme(
        scripts and CI get plain output).
     2. ``PHOSON_THEME`` env var.
     3. ``config_value`` (the ``theme`` key from ``config.toml``).
-    4. ``dark``.
+    4. ``system`` (T-8) — the terminal's own colors, so a user's
+       Gruvbox/Catppuccin/... palette is never fought over.
 
     Unknown names warn and fall back to ``dark`` (or the no-color tier
     when the environment demands it).
@@ -371,7 +519,7 @@ def load_theme(
     if not requested and config_value:
         requested = str(config_value).strip().lower()
     if not requested:
-        return DARK
+        return SYSTEM
 
     active_registry = registry or default_theme_registry()
     theme = active_registry.get(requested)

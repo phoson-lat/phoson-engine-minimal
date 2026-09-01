@@ -554,7 +554,10 @@ class Renderer:
                 self._pending_tool_args[event.tool_call_id] = dict(event.args)
             args_preview = _args_preview(event.tool_name, event.args)
             label = _tool_label(event)
-            spinner_text = f"⚙  {label}"
+            # T-7: the same per-family glyph the full-screen cards use.
+            spinner_text = (
+                f"{_tool_icon(event.tool_name, self._tool_render_registry)}  {label}"
+            )
             if args_preview:
                 spinner_text += (
                     f"  ·  {args_preview[:50]}{'…' if len(args_preview) > 50 else ''}"

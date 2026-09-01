@@ -47,9 +47,14 @@ def _read_file(
 def _write_file(path: str, content: str) -> str:
     file_path = Path(path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    existed = file_path.exists()
     encoded = content.encode("utf-8")
     file_path.write_bytes(encoded)
-    return f"Written: {path} ({len(encoded)} bytes)"
+    # "created" vs "updated" is part of the contract: the tool card
+    # (formatting._write_summary_body) parses the verb out of this string,
+    # so the wording stays stable (T-7).
+    verb = "updated" if existed else "created"
+    return f"{verb.capitalize()}: {path} ({len(encoded)} bytes)"
 
 
 def _patch_file(

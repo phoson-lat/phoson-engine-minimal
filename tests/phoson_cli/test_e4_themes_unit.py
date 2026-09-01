@@ -23,6 +23,7 @@ from phoson_cli.theme import (
     ANSI,
     DARK,
     LIGHT,
+    SYSTEM,
     NO_COLOR,
     VALID_NAMES,
     get_theme,
@@ -244,7 +245,7 @@ def test_get_theme_direct_lookup(monkeypatch) -> None:
 
 
 def test_valid_names_cover_all_tiers() -> None:
-    assert set(VALID_NAMES) == {"dark", "light", "ansi", "no-color"}
+    assert set(VALID_NAMES) == {"system", "dark", "light", "ansi", "no-color"}
 
 
 # ─── has_persisted_theme ─────────────────────────────────────────────────────
@@ -308,8 +309,9 @@ def test_theme_picker_selects_current_initially() -> None:
     picker = build_theme_picker("light")
     assert picker._render()  # renders without error
     frame_text = "".join(text for _style, text in picker._render())
-    # The selected row (light, index 1) carries the selected marker.
-    assert "▸  2  light" in frame_text
+    # The selected row (light, index 2 — system is first) carries the
+    # selected marker.
+    assert "▸  3  light" in frame_text
     assert "(current)" in frame_text
     assert "(detected)" not in frame_text
 
@@ -359,16 +361,18 @@ def test_theme_picker_wrap_at_ends() -> None:
     from phoson_cli.theme_picker import build_theme_picker
 
     picker = build_theme_picker("dark")
-    _trigger(picker, "up")  # already at top: stays
+    _trigger(picker, "up")  # dark -> system
+    _trigger(picker, "up")  # already at top (system): stays
     frame = "".join(t for _s, t in picker._render())
-    assert "▸  1  dark" in frame
+    assert "▸  1  system" in frame
     # Walk to the bottom.
+    _trigger(picker, "down")
     _trigger(picker, "down")
     _trigger(picker, "down")
     _trigger(picker, "down")
     _trigger(picker, "down")  # past the end: stays
     frame = "".join(t for _s, t in picker._render())
-    assert "▸  4  no-color" in frame
+    assert "▸  5  no-color" in frame
 
 
 def test_theme_picker_preview_shows_selected_theme() -> None:
@@ -578,7 +582,7 @@ def test_repl_apply_theme_repoints_consumers(monkeypatch) -> None:
             lambda config: MagicMock(),
         )
         repl = PhosonRepl(PhosonConfig(provider="ollama"))
-        assert repl.theme is DARK
+        assert repl.theme is SYSTEM
 
         repl.apply_theme(LIGHT)
 
@@ -599,7 +603,7 @@ def test_app_apply_theme_recolors_everything(monkeypatch) -> None:
         mp.setattr("phoson_cli.controller.build_chat", lambda config: MagicMock())
         app = PhosonApp(PhosonConfig(provider="ollama"))
         original_banner = app._banner_block
-        assert app.theme is DARK
+        assert app.theme is SYSTEM
 
         app.apply_theme(LIGHT)
 
@@ -648,7 +652,6 @@ def _patch_suggestion_env(
     monkeypatch.setattr(
         "phoson_cli.terminal_theme.detect_terminal_theme", lambda: detected
     )
-    monkeypatch.setattr("phoson_cli.__main__.save_config", lambda config, **kw: "saved")
 
 
 def test_suggestion_skips_when_flag_given(monkeypatch) -> None:
@@ -663,7 +666,7 @@ def test_suggestion_skips_when_flag_given(monkeypatch) -> None:
     options = main_mod.CliOptions(theme="ansi")
     config = PhosonConfig(provider="ollama")
     main_mod._maybe_offer_theme_suggestion(config, options)
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 def test_suggestion_skips_when_persisted(monkeypatch) -> None:
@@ -677,7 +680,7 @@ def test_suggestion_skips_when_persisted(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", _no_input)
     config = PhosonConfig(provider="ollama")
     main_mod._maybe_offer_theme_suggestion(config, main_mod.CliOptions())
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 def test_suggestion_skips_when_terminal_unknown(monkeypatch) -> None:
@@ -691,20 +694,27 @@ def test_suggestion_skips_when_terminal_unknown(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", _no_input)
     config = PhosonConfig(provider="ollama")
     main_mod._maybe_offer_theme_suggestion(config, main_mod.CliOptions())
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 @pytest.mark.asyncio
-async def test_suggestion_accepts_and_saves(monkeypatch) -> None:
+async def test_suggestion_never_prompts_since_system_default(monkeypatch) -> None:
+    """T-8: with the system tier as default there is nothing to suggest —
+    the terminal itself resolves light/dark, so no OSC 11 probe and no
+    question ever runs."""
     from phoson_cli import __main__ as main_mod
 
     _patch_suggestion_env(monkeypatch, persisted=False, detected=True)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "\n")
+
+    def _no_input(prompt=""):
+        raise AssertionError("must not prompt")
+
+    monkeypatch.setattr("builtins.input", _no_input)
     config = PhosonConfig(provider="ollama")
 
     main_mod._maybe_offer_theme_suggestion(config, main_mod.CliOptions())
 
-    assert config.theme == "light"
+    assert config.theme == "system"
 
 
 @pytest.mark.asyncio
@@ -717,7 +727,7 @@ async def test_suggestion_declines(monkeypatch) -> None:
 
     main_mod._maybe_offer_theme_suggestion(config, main_mod.CliOptions())
 
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 @pytest.mark.asyncio
@@ -732,7 +742,7 @@ async def test_suggestion_eof_is_silent(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", _eof)
     config = PhosonConfig(provider="ollama")
     main_mod._maybe_offer_theme_suggestion(config, main_mod.CliOptions())
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 # ─── E2E: full-screen /theme through the real app shell ──────────────────────
@@ -791,7 +801,7 @@ async def test_tui_theme_picker_flow_selects_via_float(tmp_path, monkeypatch) ->
                 history_file=tmp_path / "history.txt",
             )
         )
-        assert app.theme is DARK
+        assert app.theme is SYSTEM
 
         mock_float = AsyncMock(return_value=ThemePickerResult(theme_name="light"))
         monkeypatch.setattr(app, "run_float_picker", mock_float)
@@ -802,10 +812,11 @@ async def test_tui_theme_picker_flow_selects_via_float(tmp_path, monkeypatch) ->
         await app._run_task
 
         mock_float.assert_awaited_once()
-        # The host built a REAL theme picker (float mode), current=dark.
+        # The host built a REAL theme picker (float mode); the app's
+        # current tier is system, so it carries the current marker.
         host_picker = mock_float.call_args.args[0]
         frame = "".join(t for _s, t in host_picker._render())
-        assert "current" in frame and "▸  1  dark" in frame
+        assert "current" in frame and "▸  1  system" in frame
 
     assert app.theme is LIGHT
     assert app.sink.theme is LIGHT
@@ -830,7 +841,7 @@ async def test_tui_theme_picker_escape_keeps_theme(tmp_path, monkeypatch) -> Non
                 history_file=tmp_path / "history.txt",
             )
         )
-        assert app.theme is DARK
+        assert app.theme is SYSTEM
 
         monkeypatch.setattr(
             app,
@@ -843,7 +854,7 @@ async def test_tui_theme_picker_escape_keeps_theme(tmp_path, monkeypatch) -> Non
         assert app._run_task is not None
         await app._run_task
 
-    assert app.theme is DARK
+    assert app.theme is SYSTEM
     assert saved == []
     assert any("Cancelled." in str(b) for b in app.sink.blocks)
 
