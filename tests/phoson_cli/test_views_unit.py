@@ -98,8 +98,9 @@ def test_print_banner_includes_provider_model_session() -> None:
 
     output = buf.getvalue()
     assert "openrouter" in output
-    # Model is shown as the part after the last "/"
-    assert "claude-haiku-4-5" in output
+    # Model is shown with the full saved id (vendor/ prefix included),
+    # so the banner matches config.toml and the full-screen header.
+    assert "anthropic/claude-haiku-4-5" in output
     # Session id is truncated to 8 chars.
     assert "abcdefgh" in output
     # Hint line shows up.

@@ -580,7 +580,12 @@ class PhosonRepl:
 
     def _prompt_fragments(self) -> list[tuple[str, str]]:
         """Return prompt_toolkit (style, text) fragments for the input prompt."""
-        short_model = self.current_model.split("/")[-1][:22]
+        # Show the full saved model id (with the vendor/ prefix, e.g.
+        # "anthropic/claude-opus-4.6") so the prompt matches config.toml
+        # and the session's last_model — the full-screen header already
+        # shows the full id, and the two front ends must not disagree
+        # about which model is active.
+        short_model = self.current_model
         short_node = (self.current_node_id or "new")[:8]
         # Show pending attachments indicator
         attach_indicator = f" 📎{len(self.attachments)}" if self.attachments else ""
