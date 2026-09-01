@@ -23,7 +23,7 @@
 
 | ID | Título | Prioridad | Esfuerzo | Impacto | Issue | Decisión |
 |----|--------|-----------|----------|---------|-------|----------|
-| **H-0** | *(nuevo)* Bug de verificación: `bench/` ignora `--model`/`--provider` (env vars inexistente) | **P0** | S | 🔴 Crítico (H-1 no ejecutable sin esto) | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Sprint 0 |
+| **H-0** | *(nuevo)* Bug de verificación: `bench/` ignora `--model`/`--provider` (env vars inexistente) | **P0** | S | 🔴 Crítico (H-1 no ejecutable sin esto) | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | ✅ Resuelto (post-v0.20.0) |
 | **H-1** | Set de evaluación de agente + gate de no-regresión en CI (nightly) | **P0** | M (revisado ↓ desde L) | 🔴 Crítico (hoy no existe función de fitness) | [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Sprint 1 |
 | **H-2** | Exportación de trazas: `phoson_plugin_otel` | **P0** | M | 🔴 Alto (precondición de H-1, H-11 y de #129) | [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | Sprint 1 |
 | **H-7** | Presupuesto de wall-clock en modo no-interactivo | **P1** | S | 🟠 Medio (one-shot no tiene Esc; hueco real en CI) | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Sprint 1 *(adelantado desde sprint 2)* |
@@ -97,9 +97,10 @@
 
 ---
 
-### H-0 — [Bug #138] Fix del runner de bench: model/provider override no funciona
+### H-0 — [Bug #138] Fix del runner de bench: model/provider override no funciona ✅ *resuelto (post-v0.20.0)*
 * **Prioridad:** **P0** · **Esfuerzo:** S · **Impacto:** 🔴 Crítico (bloquea el criterio de listo del H-1) · **Issue:** [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138)
 * **Área:** `bench/run_bench.py`, `phoson_cli/config.py` (o solo el bench)
+* **Fix aplicado (variante de la opción b, aún más simple):** la opción "recomendada" (b) no era cero-cambios en realidad — `config.py` hardcodea `~/.phoson/config.toml` y no respeta `PHOSON_CONFIG`/`XDG_CONFIG_HOME`. Lo mínimo fue inyectar las env **existentes** `PHOSON_MODEL`/`PHOSON_PROVIDER` (que el CLI ya resuelve con prioridad env → config.toml → default), **popeando** antes las heredadas del shell del dev para que una `PHOSON_MODEL` propia no re-apunte una baseline. `_build_env()` + `_results_payload()` en `bench/run_bench.py` (JSON con `model`/`provider`/`commit`), `bench/README.md` corregido y 5 tests en `tests/test_bench_runner.py`. Verificado end-to-end: `--model openai/gpt-4o-mini --provider openrouter` corrió un LLM real y el JSON registró los valores.
 * **Problema:** ver "Bug encontrado" arriba.
 * **Solución (elegir una, preferir la más simple):**
   - (a) Hacer que `config.py` lea los `*_OVERRIDE` (o un par de env nuevas, p. ej. `PHOSON_BENCH_MODEL`) — cambia el config real, requiere decisión.

@@ -40,7 +40,13 @@ one-shot currently prints only the final content and discards
 
 ## Notes
 
-- Tasks run with the provider/model configured in `~/.phoson/config.toml`
-  unless `--provider/--model` override them (via env vars).
+- Tasks run with the provider/model configured in `~/.phoson/config.toml`,
+  unless `--provider`/`--model` pin them. The pin is applied by setting the
+  `PHOSON_MODEL` / `PHOSON_PROVIDER` env vars on the one-shot subprocess
+  (the CLI resolves these env → config.toml → default). Any value inherited
+  from your own shell is dropped first, so a dev `PHOSON_MODEL` can't quietly
+  re-target a baseline run (issue #138).
 - The agent's `bash` tool inherits the benchmark process cwd, so all
   tasks execute inside the temp workspace.
+- Each `bench/results/*.json` records the effective `model`, `provider` and
+  the git `commit` it ran under, so a saved baseline is auditable.

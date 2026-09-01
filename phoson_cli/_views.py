@@ -203,8 +203,9 @@ def render_banner(
 
     Args:
         provider: The active provider name (``openrouter``, ``openai`` …).
-        model: The full model id; the part after the last ``/`` is used
-            in the status line.
+        model: The full saved model id (``anthropic/claude-opus-4.6``);
+            shown verbatim in the status line so the banner matches
+            ``config.toml`` and the full-screen header.
         session_id: The current session id; only the first 8 chars are
             shown.
         theme: Optional :class:`Theme`. Resolved via ``load_theme()``
@@ -237,11 +238,10 @@ def render_banner(
         Text(""),
     ]
     if show_meta:
-        short_model = model.split("/")[-1]
         items.extend(
             [
                 Text(
-                    f"  provider {provider}  ·  model {short_model}"
+                    f"  provider {provider}  ·  model {model}"
                     f"  ·  session {session_id[:8]}",
                     style=theme.muted,
                 ),

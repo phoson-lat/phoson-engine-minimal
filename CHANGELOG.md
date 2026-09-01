@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.20.1 (Unreleased)
+
+### Fix
+
+- **Model name shown in the classic prompt / banner no longer hides the
+  `vendor/` prefix**: the classic REPL prompt (`repl.py`) and the welcome
+  banner (`_views.py`) displayed the active model with the prefix stripped
+  (`claude-opus-4.6`) while `config.toml`, the session's `last_model` and
+  the full-screen header all keep the full saved id
+  (`anthropic/claude-opus-4.6`). The mismatch made it look as if the model
+  picker had persisted a different (bare) name than the one it showed.
+  Both display sites now show the full saved id verbatim, so all three
+  surfaces agree with what is persisted. The context-window registry
+  lookup (`controller.py`) intentionally keeps stripping the prefix — it
+  matches registry keys, not a display.
+
+- **`/subagent-model` inline autocomplete now shows the owning provider**:
+  the inline dropdown was the only model UI surface without a provider
+  column (`/model` autocomplete, `/subagent-model list` and the
+  `/subagent-model` modal picker all show it). Sub-agents run on the
+  *active* provider's client with no provider switch, so the column is how
+  you tell which dropdown rows the active provider actually serves — e.g.
+  while on `vllm`, picking an OpenRouter-catalog id otherwise silently
+  falls back to the main model at runtime. The completer now labels every
+  suggestion with its owning provider as `display_meta` for both
+  `/model` and `/subagent-model`.
+
+Tests: `test_views_unit.py` (banner shows the full saved id),
+`test_model_cache_and_completer_unit.py` (`/subagent-model` dropdown rows
+carry their provider, including the active-provider case).
+
 ## v0.20.0 (2026-08-31)
 
 ### Feature

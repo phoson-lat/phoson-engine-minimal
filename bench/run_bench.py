@@ -47,6 +47,48 @@ def load_tasks(filter_sub: str | None) -> list:
     return tasks
 
 
+def _git_short_commit() -> str:
+    """Short HEAD sha for result auditability (issue #138).
+
+    Baselines must record *which* code was tested. Returns ``"unknown"``
+    when the bench runs outside a git checkout (e.g. a source tarball).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return out.stdout.strip()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _build_env(model: str | None, provider: str | None) -> dict[str, str]:
+    """Env for the one-shot subprocess (issue #138).
+
+    The CLI resolves model/provider as **env → config.toml → default**
+    (`phoson_cli/config.py::_resolve_str`), so the real knobs are
+    ``PHOSON_MODEL`` / ``PHOSON_PROVIDER`` — there is no ``*_OVERRIDE``.
+    We set them *and* pop any inherited value first, so a developer
+    shell that happens to export ``PHOSON_MODEL`` cannot silently change
+    the model a baseline was measured with: when ``--model``/``--provider``
+    are given, the run uses exactly those; when they are absent, the run
+    falls back to the user's config.toml deterministically (inherited
+    env never leaks in).
+    """
+    env = os.environ.copy()
+    for key in ("PHOSON_MODEL", "PHOSON_PROVIDER"):
+        env.pop(key, None)
+    if model:
+        env["PHOSON_MODEL"] = model
+    if provider:
+        env["PHOSON_PROVIDER"] = provider
+    return env
+
+
 def run_task(task: dict, model: str | None, provider: str | None) -> TaskResult:
     workspace = Path(tempfile.mkdtemp(prefix="phoson-bench-"))
     name = task["name"]
@@ -56,12 +98,7 @@ def run_task(task: dict, model: str | None, provider: str | None) -> TaskResult:
         if setup is not None:
             setup(workspace)
 
-        env = os.environ.copy()
-        if model:
-            # phoson-cli reads model from config; allow override via env
-            env["PHOSON_MODEL_OVERRIDE"] = model
-        if provider:
-            env["PHOSON_PROVIDER_OVERRIDE"] = provider
+        env = _build_env(model, provider)
 
         start = time.perf_counter()
         proc = subprocess.run(
@@ -142,17 +179,28 @@ def main() -> None:
 
     out_file = RESULTS_DIR / (f"bench-{time.strftime('%Y%m%d-%H%M%S')}.json")
     out_file.write_text(
-        json.dumps(
-            {
-                "model": args.model,
-                "provider": args.provider,
-                "pass_rate": passed_count / len(results),
-                "results": [dataclasses.asdict(r) for r in results],
-            },
-            indent=2,
-        )
+        json.dumps(_results_payload(args.model, args.provider, results), indent=2)
     )
     print(f"Saved: {out_file}")
+
+
+def _results_payload(
+    model: str | None, provider: str | None, results: list[TaskResult]
+) -> dict:
+    """JSON shape for `bench/results/*.json` (issue #138).
+
+    Every baseline run records the **effective** model + provider + the
+    git commit it ran under, so a saved result can be audited and two
+    runs compared. ``pass_rate`` is over all results (repeat × tasks).
+    """
+    passed_count = sum(r.passed for r in results)
+    return {
+        "model": model,
+        "provider": provider,
+        "commit": _git_short_commit(),
+        "pass_rate": passed_count / len(results),
+        "results": [dataclasses.asdict(r) for r in results],
+    }
 
 
 if __name__ == "__main__":
