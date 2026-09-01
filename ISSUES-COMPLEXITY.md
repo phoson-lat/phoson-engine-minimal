@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-09-01 · v0.22.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados; v0.22.0: T-3/T-4 — #153, #154 cerrados).
+> **Estado de referencia:** 2026-09-01 · v0.23.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados; v0.22.0: T-3/T-4 — #153, #154 cerrados; v0.23.0: T-12 — #162 cerrado).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -12,7 +12,7 @@
 
 ## Resumen en una tabla (menor → mayor complejidad)
 
-*Estado (2026-09-01):* ✅ = released (v0.20.0: commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6, `1ae8627` T-5, `09696d8` T-13 · v0.21.0: T-1/T-2 · v0.22.0: T-3/T-4) · 🔶 = parcial · 🔴 = abierto.
+*Estado (2026-09-01):* ✅ = released (v0.20.0: commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6, `1ae8627` T-5, `09696d8` T-13 · v0.21.0: T-1/T-2 · v0.22.0: T-3/T-4 · v0.23.0: T-12) · 🔶 = parcial · 🔴 = abierto.
 
 | Orden | Issue | Título (corto) | Nivel | Estado |
 |-------|-------|----------------|-------|--------|
@@ -25,7 +25,7 @@
 | 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | ✅ v0.22.0 (línea `▸ thought Ns`; Ctrl+T expande in-place, sin Panel) |
 | 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 | ✅ v0.22.0 (Frame + placeholder; 1 separador) |
 | 9 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Run budget one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | 3 | 🔴 |
-| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash (bloqueado por T-4/T-6) | 3 | 🔴 (T-6 ✅ v0.20.0; T-4 ✅ v0.22.0 → desbloqueado) |
+| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash | 3 | ✅ v0.23.0 (palette fuzzy `Ctrl+P` sobre native+plugin slash; `!` bash gateado por la permission policy, output como bash card) |
 | 11 | [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) | T-6 — Chip de modo + card de confirmación | 3 | ✅ `3c6325c` |
 | 12 | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | T-7 — Tool cards (glifos/collapse/diff bg) | 3 | ✅ `39ceac6` |
 | 13 | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | T-8 — Tema `system` + JSON themes | 3 | ✅ `8667562` |
@@ -142,6 +142,27 @@
 ### 10. [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) — T-12: Palette + `!` bash
 - Dos piezas (fuzzy picker unificado + pipe a bash) sobre infra existente.
 - Complejidad *real* = complejidad propia + esperar: **bloqueado por T-4 y T-6** (si no, se construye sobre composer/permisos que van a cambiar).
+- **Estado (v0.23.0, 2026-09-01): CERRADO** (PR #170, squash `aa3a54e`). `Ctrl+P`
+  abre un único picker fuzzy-searchable sobre **todos** los slash commands
+  nativos y de plugins — la fuente es `catalog.specs` (una sola lista cubre
+  `CommandSpec` y `CliCommandSpec`, que comparten `names`/`primary`/`help`) —
+  reusando el scorer fuzzy compartido (`model_picker._fuzzy_score`) y el
+  scaffolding de Float-hosting: abre exactamente como los pickers de
+  model/theme/sessions. `↑/↓` + `PageUp/Down` navegan, `enter` ejecuta vía el
+  path normal `/command` (args vacíos), `esc` cierra; el binding es remapeable
+  en `[keys]` (action `command_palette`, en `KNOWN_KEY_ACTIONS`). La carrera de
+  doble-`Ctrl+P` se cierra con el flag síncrono `self._palette_open` (setteado
+  en `open_command_palette`, liberado en el `finally`, porque `_active_float`
+  solo se settea dentro de la task de fondo). `!` ejecuta la línea en el shell
+  del usuario gateada por la **misma** bash permission policy de la tool del
+  agente (allow → corre, ask → card T-6, deny → rechazado), con la policy
+  re-leída vía `load_policy()` en run-time (el ciclo ask/auto de `Shift+Tab` se
+  respeta sin cache stale); el output entra al transcript como una bash tool
+  card normal (`FullScreenSink.add_bash_card` → `render_tool_done_line`), igual
+  que la del agente, y `/details` la re-plega. La detección de fallo de infra
+  usa `re.fullmatch` de las dos formas exactas de una línea que devuelve
+  `_run_bash` (timeout/spawn), no `startswith`. Tests: `test_palette_unit.py`
+  (nuevo), `test_fullscreen_shell_unit.py`, `test_sink_unit.py`.
 
 ### 11. [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) — T-6: Chip de modo + card de confirmación ✅ *released v0.20.0 (`3c6325c`)*
 - UI sobre `permissions_store` (ya sólido) + keybinding `Shift+Tab` + renderer de confirmación.
@@ -244,7 +265,7 @@ Fase 4 — la infra del harness (se alimentan entre sí)
   #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)   [#138 ✅ ya destraba el modelo fijo]
   #161 (acuerdo del ADR, cuando toque)
   #160 (hero tape, recién con look 0+1 merged)
-  #162 (palette + ! bash)   [#154 ✅ v0.22.0 y #156 ✅ v0.20.0 → desbloqueado, listo para atacar]
+  #162 (palette + ! bash)   ✅ v0.23.0 (PR #170; desbloqueado por #154 ✅ v0.22.0 y #156 ✅ v0.20.0)
 
 Fase 5 — cadena de reasoning
   #134 (preserved thinking)  →  #145 (sandwich)   [ambos miden contra #139]
