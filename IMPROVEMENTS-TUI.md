@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** la sección A es trabajo de dirección visual **sobre el stack actual** (Rich + prompt_toolkit). La sección B es la decisión de toolkit — no mezclarlas. Un P0 de look no justifica un rewrite del TUI.
 >
-> **Estado de referencia:** v0.19.0 · frontend default = `phoson_cli/fullscreen` (`prompt_toolkit.Application` + Rich→ANSI) · clásico retenido (`--classic` / `TERM=dumb`) · one-shot = stdout Rich.
+> **Estado de referencia:** v0.20.0 · frontend default = `phoson_cli/fullscreen` (`prompt_toolkit.Application` + Rich→ANSI) · clásico retenido (`--classic` / `TERM=dumb`) · one-shot = stdout Rich.
 >
 > **Criterio de toda la revisión:** modelo congelado, ¿el primer frame convencería a alguien que ya usa Claude Code o OpenCode? Hoy no. El engine y el glue de UI están por encima del look.
 
@@ -42,14 +42,14 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 | **T-2** | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | Matar “Online”, label “Phoson” por turno, badges con background | **P0** | S | 🔴 El transcript se lee como trabajo, no como chat | Sprint look 0 |
 | **T-3** | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | Reasoning default colapsado a una línea mute; adiós `Panel` | **P0** | S | 🔴 El scratchpad deja de competir con la respuesta | Sprint look 0 |
 | **T-4** | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | Composer: caja 1-char, placeholder `@` `/` `!`, una sola regla | **P0** | S-M | 🔴 El 40% del tiempo de pantalla deja de ser un prompt de shell | Sprint look 0 |
-| **T-5** | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | Activity line = `Thinking 8s`; borrar frases rotativas | **P0** | S | 🟠 Ansiedad de espera; olor a chatbot | ✅ Hecho (rama `feat/tui-sprint-look-1`): `CurrentTurn.thinking_since` (monotónico) → `Thinking {n}s` por reloj de pared; re-arma a 0 por episodio (tool start / freeze); glifo braille intacto; frases y ticks de rotación eliminados |
+| **T-5** | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | Activity line = `Thinking 8s`; borrar frases rotativas | **P0** | S | 🟠 Ansiedad de espera; olor a chatbot | ✅ Hecho (v0.20.0): `CurrentTurn.thinking_since` (monotónico) → `Thinking {n}s` por reloj de pared; re-arma a 0 por episodio (tool start / freeze); glifo braille intacto; frases y ticks de rotación eliminados |
 | **T-6** | [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) | Chip de modo `ask`/`auto` + confirmación como card (Yes / Always / No) | **P1** | M | 🔴 Sin esto no se lee como harness | ✅ Hecho (Sprint look 1): chip en header (1 s cache), `Shift+Tab` cicla y persiste; card `run_float_bash_card` con comando mono + `[y]/[a]/[n]`; *Always* persiste patrón glob-quoted |
 | **T-7** | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | Tool cards: glifo por familia, collapse, diff con fondo, `created` vs `updated` | **P1** | M | 🟠 Las tools *son* el producto | ✅ Hecho (Sprint look 1): glifos 📖📂🖼/✍🪄/⌘/🔎🔗/📜 (cards + spinner clásico); diff `+`/`−` con fondo (tokens `diff_add_bg`/`diff_del_bg`); `write_file` dice Created/Updated; paths como OSC 8 `file://`; `/details` toggla el cuerpo colapsado en place |
 | **T-8** | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | Tema `system` (hereda fg/bg del terminal) + JSON en `~/.phoson/themes/` | **P1** | M | 🟠 Deja de pelearse con Gruvbox/Catppuccin | ✅ Hecho (Sprint look 1): tier `system` **default** sin `on #rrggbb` (accent = spinner/focus cyan); JSON drop-in en `~/.phoson/themes/*.json` (base + tokens, aparece en `/theme`); la pregunta light/dark de E4 queda obsoleta (el terminal ya resuelve) |
 | **T-9** | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | Footer contextual (3 hints) + scrollbar sin flechas | **P1** | S | 🟡 Discoverability real, no cheatsheet cortada | ✅ Hecho (Sprint look 1): footer 3-hints por estado (idle/running/picker); Shift+Drag → `/keys` + docs; scrollbar sin flechas |
 | **T-10** | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | Hero tape con un **diff**, no un research dump + Ctrl+T | **P2** | S | 🟡 El README vende el producto correcto | Sprint look 2 |
 | **T-12** | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | Command palette + `!` bash (gestos SOTA, no look puro) | **P2** | M | 🟡 Paridad de interacción con OpenCode/Claude | Tras T-4/T-6 |
-| **T-13** | *(nuevo, 2026-08-31)* | Chip de reasoning effort en header + `Ctrl+E` cicla `off→…→max` (patrón T-6) | **P1** | S | 🟡 La perilla existe (`/reasoning-effort`) pero no se ve ni se toca sin slash | ✅ Hecho (rama `feat/tui-sprint-look-1`): chip `effort: high` / `· effort off` en header; `Ctrl+E` cicla y persiste (`save_config`), aplica al siguiente run; remapeable en `[keys]`, aparece en `/keys` |
+| **T-13** | *(nuevo, 2026-08-31)* | Chip de reasoning effort en header + `Ctrl+E` cicla `off→…→max` (patrón T-6) | **P1** | S | 🟡 La perilla existe (`/reasoning-effort`) pero no se ve ni se toca sin slash | ✅ Hecho (v0.20.0): chip `effort: high` / `· effort off` en header; `Ctrl+E` cicla y persiste (`save_config`), aplica al siguiente run; remapeable en `[keys]`, aparece en `/keys` |
 
 ### B. Toolkit (no mezclar con A)
 
@@ -104,7 +104,7 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
   - Documentar por qué newline es Ctrl+J (ya está en código); no es P0 inventar Shift+Enter portable.
 * **Criterio de listo:** screenshot del composer idle muestra placeholder y un solo separador. Tests de layout no asumen `❯ ` como único prompt.
 
-### T-5 — Espera con elapsed, no personalidad ✅ *hecho (rama `feat/tui-sprint-look-1`)*
+### T-5 — Espera con elapsed, no personalidad ✅ *released (v0.20.0)*
 
 * **Área:** `fullscreen/sink.py::_THINKING_PHRASES`, `activity_text()`, `tick_activity_frame()`.
 * **Problema:** “Pondering the problem… / Chewing on that… / Almost there…” es stall de 2023. El tiempo es el único copy que reduce ansiedad.
@@ -160,7 +160,7 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 
 Command palette (`Ctrl+P` unifica `/model` `/theme` `/sessions` / slash) y `!` bash (Claude/OpenCode: el output entra al transcript). No son look; son el siguiente escalón de interacción. No abrirlos hasta que T-4 y T-6 existan — si no, se construyen sobre un composer/permiso que vamos a tirar.
 
-### T-13 — Reasoning effort visible + ciclable ✅ *hecho (rama `feat/tui-sprint-look-1`)*
+### T-13 — Reasoning effort visible + ciclable ✅ *released (v0.20.0)*
 
 * **Área:** `fullscreen/app.py` (chip del header + `cycle_reasoning_effort`), `fullscreen/keys.py` (action `cycle_reasoning_effort`), `config.py` (`KNOWN_KEY_ACTIONS`).
 * **Problema:** la perilla de reasoning effort existía (`/reasoning-effort <low|…|max|off>`, persistida en `config.toml`) pero era invisible: el header no la mostraba y cambiarla requería un slash command — la misma brecha que T-6 resuelve para los permisos.

@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-08-31 · v0.19.0 + rama `feat/tui-sprint-look-1` (T-5, T-6, T-7, T-8, T-9 resueltos, aún sin merge).
+> **Estado de referencia:** 2026-08-31 · v0.20.0 (T-5, T-6, T-7, T-8, T-9, T-13 released).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -12,11 +12,11 @@
 
 ## Resumen en una tabla (menor → mayor complejidad)
 
-*Estado (2026-08-31):* ✅ = resuelto en la rama `feat/tui-sprint-look-1` (commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6; aún sin merge a main) · 🔶 = parcial · 🔴 = abierto.
+*Estado (2026-08-31):* ✅ = released en v0.20.0 (commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6, `1ae8627` T-5, `09696d8` T-13) · 🔶 = parcial · 🔴 = abierto.
 
 | Orden | Issue | Título (corto) | Nivel | Estado |
 |-------|-------|----------------|-------|--------|
-| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | ✅ (rama `feat/tui-sprint-look-1`) |
+| 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | ✅ v0.20.0 |
 | 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
 | 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | 🔴 (bug confirmado en `bench/run_bench.py`) |
 | 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | 🔴 |
@@ -48,13 +48,13 @@
 
 ## Nivel 1 — Fixes chicos y aislados (cambios localizados, 1 PR)
 
-### 1. [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) — T-5: `Thinking 8s` ✅ *resuelto en la rama*
+### 1. [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) — T-5: `Thinking 8s` ✅ *released (v0.20.0)*
 - Borrar `_THINKING_PHRASES` + timer monotónico en `fullscreen/sink.py`.
 - Un solo archivo, sin API nueva. El glifo braille se queda.
 - Criterio simple: snapshots sin "Pondering"/"Chewing"; la línea cambia cada segundo.
 - **Hecho:** `CurrentTurn.thinking_since` (monotónico) arma el episodio al entrar en thinking; `activity_text()` rinde `Thinking {int(elapsed)}s` — el número corre por reloj de pared, no por ticks (el glifo sigue animado vía `tick_activity_frame`). Cada tool start / freeze de streaming reinicia el episodio a 0 (el contador mide *la* espera actual, no el run). Frases y `_THINKING_PHRASE_TICKS` eliminados.
 
-### 2. [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) — T-9: Footer contextual ✅ *resuelto en la rama (`39ceac6`)*
+### 2. [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) — T-9: Footer contextual ✅ *released v0.20.0 (`39ceac6`)*
 - 3 strings de hint por estado (idle/running/picker) en `_FOOTER_HINT` de `app.py`.
 - No cambia el layout. El trabajo real es quitar 5 atajos de la línea y moverlos a docs/`/keys`.
 - **Hecho:** `_FOOTER_HINT_IDLE`/`_RUNNING`/`_PICKER` en `fullscreen/app.py`, seleccionados por estado del app.
@@ -96,17 +96,17 @@
 - Dos piezas (fuzzy picker unificado + pipe a bash) sobre infra existente.
 - Complejidad *real* = complejidad propia + esperar: **bloqueado por T-4 y T-6** (si no, se construye sobre composer/permisos que van a cambiar).
 
-### 11. [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) — T-6: Chip de modo + card de confirmación ✅ *resuelto en la rama (`3c6325c`)*
+### 11. [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) — T-6: Chip de modo + card de confirmación ✅ *released v0.20.0 (`3c6325c`)*
 - UI sobre `permissions_store` (ya sólido) + keybinding `Shift+Tab` + renderer de confirmación.
 - Toca permisos → debe ser PR propio, no mezclado con "secar el look".
 - **Hecho:** chip de modo siempre visible en header (re-lee la política ≤1/s), `cycle_permission_mode` en Shift+Tab, y card de confirmación de bash con 3 acciones (Yes / Always / No) vía `FullScreenConfirmationService`.
 
-### 12. [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) — T-7: Tool cards ✅ *resuelto en la rama (`39ceac6`)*
+### 12. [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) — T-7: Tool cards ✅ *released v0.20.0 (`39ceac6`)*
 - 5 sub-features (glifos, collapse, diff bg, created/updated, OSC 8) todas en `formatting.py` + snapshots.
 - El más granular del nivel: conviene partirlo en 2 PRs (glifos+created/updated · collapse+diff bg).
 - **Hecho:** glifos por familia, collapse con `/details` + toggle, diff bg y marcado created/updated en `formatting.py`; los paths llevan OSC 8 real.
 
-### 13. [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) — T-8: Tema `system` + JSON ✅ *resuelto en la rama (`8667562`)*
+### 13. [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) — T-8: Tema `system` + JSON ✅ *released v0.20.0 (`8667562`)*
 - Nuevo tier + loader JSON + **cambio de default**.
 - El riesgo es el cambio de default: afecta a toda la superficie visual de los 4 tiers existentes; hay que verificar `no-color`, `ansi` y el auto-detect de OSC 11.
 - **Hecho:** tier `system` como default (hereda fg/bg del terminal) + drop-in themes JSON en `~/.phoson/themes/` (`theme.py`).

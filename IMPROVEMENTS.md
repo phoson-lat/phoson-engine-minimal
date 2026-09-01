@@ -4,7 +4,7 @@
 >
 > **Cómo usar este documento:** Cada ítem corresponde a un issue abierto en GitHub (sección A) o a un plan de trabajo derivado de la revisión externa del harness (sección B, `reporte-harness.md`), con prioridad (P0–P2), estimación de esfuerzo (S/M/L), análisis verificado en código, solución propuesta, criterios de aceptación y una decisión de ataque (Sprint N / diferido / descartado).
 >
-> **Estado de referencia:** v0.19.0 · 1841 tests passing (38 skipped) · pyright 0 errors · ruff clean.
+> **Estado de referencia:** v0.20.0 · 1848 tests passing (38 skipped) · pyright 0 errors · ruff clean.
 >
 > **Actualización 2026-08-30:** (1) se añadieron los issues abiertos #129 y #134; (2) se incorporó el plan de trabajo del harness (`reporte-harness.md`) **verificado contra el código** — varios supuestos del reporte se corrigieron (ver "Verificación contra código" en B); (3) el historial resuelto se comprimió a una línea por ítem — el detalle completo sigue en `docs/plans/I-NNN.md`, CHANGELOG y git history (el archivo anterior quedó versionado en git).
 
