@@ -119,7 +119,7 @@ def test_apply_overrides_only_sets_given_flags() -> None:
     assert config.provider == "anthropic"
     assert config.max_iterations == 7
     # Untouched flags keep the config value.
-    assert config.theme == "dark"
+    assert config.theme == "system"
 
 
 def test_apply_overrides_noop_when_no_flags() -> None:

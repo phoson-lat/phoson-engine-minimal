@@ -81,7 +81,7 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
-    theme: str = "dark"
+    theme: str = "system"
     subagent_max_parallel: int = 4
     subagent_timeout_seconds: float = 300.0
     enable_mcp: bool = False

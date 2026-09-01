@@ -8,10 +8,13 @@ from phoson_cli.theme import (
     ANSI,
     DARK,
     LIGHT,
+    SYSTEM,
     NO_COLOR,
     VALID_NAMES,
     load_theme,
+    load_json_themes,
     build_prompt_style,
+    default_theme_registry,
     build_picker_style_dict,
     build_wizard_prompt_style,
 )
@@ -19,12 +22,13 @@ from phoson_cli.theme import (
 # ── Resolution ────────────────────────────────────────────────────────────────
 
 
-def test_load_theme_defaults_to_dark(monkeypatch) -> None:
+def test_load_theme_defaults_to_system(monkeypatch) -> None:
+    """T-8: with no env/config, the terminal's own colors win."""
     monkeypatch.delenv("PHOSON_THEME", raising=False)
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("CLICOLOR", raising=False)
-    assert load_theme() is DARK
-    assert load_theme(config_value=None) is DARK
+    assert load_theme() is SYSTEM
+    assert load_theme(config_value=None) is SYSTEM
 
 
 def test_load_theme_from_env(monkeypatch) -> None:
@@ -79,6 +83,88 @@ def test_theme_is_dark_flag() -> None:
     assert not LIGHT.is_dark and not NO_COLOR.is_dark
 
 
+def test_system_tier_carries_no_backgrounds() -> None:
+    """T-8: system inherits the terminal — no ``on #rrggbb`` anywhere."""
+    for field in (
+        "text",
+        "muted",
+        "muted_deep",
+        "accent",
+        "accent_soft",
+        "art",
+        "reasoning",
+        "panel_bg",
+        "badge_user",
+        "badge_assistant",
+        "badge_history",
+        "diff_add_bg",
+        "diff_del_bg",
+    ):
+        assert "on #" not in getattr(SYSTEM, field), field
+    # Accent is reduced to the terminal's own state colors + focus.
+    assert SYSTEM.ok == "green"
+    assert SYSTEM.err == "red"
+    assert SYSTEM.pt_accent == "cyan"
+
+
+def test_system_tier_prompt_style_is_parseable() -> None:
+    """``PHOSON_THEME=system`` must produce a valid prompt_toolkit style."""
+    Style.from_dict(build_prompt_style(SYSTEM))
+    Style.from_dict(build_picker_style_dict(SYSTEM))
+    d = build_prompt_style(SYSTEM)
+    # No hex backgrounds in the chrome: bg tokens are "" or "default".
+    for value in d.values():
+        assert "bg:#" not in value, value
+
+
+# ── Drop-in JSON themes (T-8) ────────────────────────────────────────────────
+
+
+def test_load_json_theme_from_dir(tmp_path, monkeypatch) -> None:
+    import phoson_cli.theme as theme_mod
+
+    (tmp_path / "nord.json").write_text(
+        '{"name": "nord", "base": "dark", "accent": "#88c0d0", "muted": "#7b88a1"}'
+    )
+    monkeypatch.setattr(theme_mod, "JSON_THEMES_DIR", tmp_path)
+
+    themes = load_json_themes()
+    assert set(themes) == {"nord"}
+    nord = themes["nord"]
+    assert nord.name == "nord"
+    assert nord.accent == "#88c0d0"
+    assert nord.muted == "#7b88a1"
+    # Untouched tokens inherit the base.
+    assert nord.panel_bg == DARK.panel_bg
+
+
+def test_json_theme_appears_in_registry_and_loads(tmp_path, monkeypatch) -> None:
+    import phoson_cli.theme as theme_mod
+
+    (tmp_path / "catppuccin.json").write_text(
+        '{"name": "catppuccin", "base": "light", "accent": "#cba6f7"}'
+    )
+    monkeypatch.setattr(theme_mod, "JSON_THEMES_DIR", tmp_path)
+    monkeypatch.delenv("PHOSON_THEME", raising=False)
+
+    registry = default_theme_registry()
+    assert "catppuccin" in registry.valid_names()
+    assert load_theme(config_value="catppuccin", registry=registry).accent == "#cba6f7"
+
+
+def test_broken_json_theme_is_skipped(tmp_path, monkeypatch) -> None:
+    """A bad user file must never break startup — it is skipped, not fatal."""
+    import phoson_cli.theme as theme_mod
+
+    (tmp_path / "bad1.json").write_text("{not json")
+    (tmp_path / "bad2.json").write_text('{"name": "x", "base": "nope"}')
+    (tmp_path / "good.json").write_text('{"name": "ok", "base": "dark"}')
+    monkeypatch.setattr(theme_mod, "JSON_THEMES_DIR", tmp_path)
+
+    themes = load_json_themes()
+    assert set(themes) == {"ok"}
+
+
 def test_no_color_tier_is_plain() -> None:
     for field in (
         "text",
@@ -99,17 +185,17 @@ def test_no_color_tier_is_plain() -> None:
 
 
 def test_prompt_style_builds_for_every_theme() -> None:
-    for theme in (DARK, LIGHT, ANSI, NO_COLOR):
+    for theme in (SYSTEM, DARK, LIGHT, ANSI, NO_COLOR):
         Style.from_dict(build_prompt_style(theme))  # raises on bad colors
 
 
 def test_picker_style_builds_for_every_theme() -> None:
-    for theme in (DARK, LIGHT, ANSI, NO_COLOR):
+    for theme in (SYSTEM, DARK, LIGHT, ANSI, NO_COLOR):
         Style.from_dict(build_picker_style_dict(theme))
 
 
 def test_wizard_style_builds_for_every_theme() -> None:
-    for theme in (DARK, LIGHT, ANSI, NO_COLOR):
+    for theme in (SYSTEM, DARK, LIGHT, ANSI, NO_COLOR):
         Style.from_dict(build_wizard_prompt_style(theme))
 
 
