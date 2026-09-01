@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-09-01 · v0.20.2 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado — ver §4).
+> **Estado de referencia:** 2026-09-01 · v0.21.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -20,8 +20,8 @@
 | 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
 | 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | ✅ |
 | 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | ✅ v0.20.2 (dedup por I-113; drop de `unavailable` en full-screen por PR #165) |
-| 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | 🔴 |
-| 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | 🔴 |
+| 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | ✅ v0.21.0 (banner fuera del sink; art en `/about`; empty state real) |
+| 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | ✅ v0.21.0 (sin Online/Phoson-label/badge chips; cost solo >0) |
 | 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | 🔴 |
 | 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 | 🔴 |
 | 9 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Run budget one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | 3 | 🔴 |
@@ -81,12 +81,24 @@
 ## Nivel 2 — Look P0 (cambios visuales sin nueva arquitectura)
 
 ### 5. [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) — T-1: Banner/plugins fuera del chat
-- Dejar de appender `_banner_block` + empty state real + quitar prints de plugins.
-- El único riesgo: no romper el test de sink y el hero (que se regenera después en T-10).
+- **Estado (v0.21.0, 2026-09-01): CERRADO** (PR #166). `_banner_block` ya
+  no se inyecta en el sink (init/`apply_theme`/`_reset_transcript`); el sink
+  arranca vacío y el pane muestra un empty-state real de una línea
+  (`@ files · / commands`). El art quedó disponible en `/about` (nuevo
+  comando, `print_renderable`). El "Official plugins" del body ya no existía
+  en código. Riesgo previsto respetado: el test de sink y el hero no se
+  rompen (el hero se regenera en T-10; `assets/tui.gif` queda para T-10).
 
 ### 6. [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) — T-2: Chrome seco
-- Mucho detalle visual (header, badges, labels, dialecto de history), poca lógica nueva.
-- Riesgo menor: es una regresión de *look*, se ve en una screenshot.
+- **Estado (v0.21.0, 2026-09-01): CERRADO** (PR #166). `status_text` idle
+  → "" (sin "Online"); header cost solo si >0 y sin ` | ` colgando;
+  `render_streaming_panel` sin el label "Phoson" (md bare); `render_user_turn`
+  y las filas user de `render_history` con gutter `›` (chip ` user ` fuera);
+  `render_start_line` sin badge ` assistant `; `render_history` assistant md
+  bare sin `Rule`; `badge_user/assistant/history` sin fondo (`on #…` fuera)
+  en dark+light. `formatting.py`/`theme.py` son compartidos → el REPL clásico
+  recibe el mismo chrome seco. Riesgo menor confirmado: era una regresión de
+  *look*, verificada renderizando las 5 superficies.
 
 ### 7. [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) — T-3: Reasoning colapsado
 - Default + toggle Ctrl+T + auto-collapse: toca sink y formatter, reutiliza timestamps existentes.
@@ -197,7 +209,7 @@ Fase 1 — quick wins (1 día c/u, sin riesgo)
   #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix) ✅  #150 (picker) ✅
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
-  #151, #152  →  PR "chrome/transcript secos"
+  #151, #152  ✅ v0.21.0  (PR #166 "chrome/transcript secos")
   #153, #154  →  PR "reasoning + composer"   (#155 ya va desde Fase 1)
 
 Fase 3 — sprint look 1 + fixes independientes
