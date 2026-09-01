@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-08-31 · v0.20.1 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker, ver §4).
+> **Estado de referencia:** 2026-09-01 · v0.20.2 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado — ver §4).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -19,7 +19,7 @@
 | 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | ✅ v0.20.0 |
 | 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
 | 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | ✅ |
-| 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | 🔶 (dedup ✅ I-113; queda el drop de `unavailable` en full-screen) |
+| 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | ✅ v0.20.2 (dedup por I-113; drop de `unavailable` en full-screen por PR #165) |
 | 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | 🔴 |
 | 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | 🔴 |
 | 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | 🔴 |
@@ -67,16 +67,16 @@
 ### 4. [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) — Model picker
 - Bug de dedup/key: modelos con el mismo nombre colapsan y faltan entries.
 - Dos pickers (principal + sub-agent) comparten la lógica; fix localizado + test unitario.
-- **Estado (v0.20.1, 2026-08-31):** punto 1 del issue (duplicados colapsados) ya
-  resuelto por I-113: el picker unificado muestra `id (provider)` por fila y el
-  dedup es *por provider* (`_prioritize_current`), así que dos providers con
-  `gpt-4o` aparecen como dos entries distintas. Punto 2 (lista incompleta)
-  quedó reducido a un solo sitio: el host full-screen
-  (`fullscreen/command_host.py`) acepta `unavailable` pero no lo pasa a
-  `build_unified_model_picker`, de modo que un provider cuyo listing live falla
-  desaparece de la lista sin fila ⚠ (el host clásico sí lo pasa). Fix de 2
-  líneas + 1 test; el resto del flujo (listado por provider, flattening,
-  `/model list`) ya verifica completo.
+- **Estado (v0.20.2, 2026-09-01): CERRADO** (PR #165). Punto 1 del issue
+  (duplicados colapsados) resuelto por I-113: el picker unificado muestra
+  `id (provider)` por fila y el dedup es *por provider*
+  (`_prioritize_current`), así que dos providers con `gpt-4o` aparecen como
+  dos entries distintas. Punto 2 (lista incompleta) cerrado en v0.20.2: el
+  host full-screen (`fullscreen/command_host.py`) ahora reenvía `unavailable`
+  a `build_unified_model_picker`, de modo que un provider cuyo listing live
+  falla se muestra como la sección ⚠ no navegable `⚠ provider — unavailable:
+  error` (el host clásico ya lo hacía). Regression test en
+  `test_command_host_unit.py` que falla sin el fix.
 
 ## Nivel 2 — Look P0 (cambios visuales sin nueva arquitectura)
 
@@ -194,7 +194,7 @@
 
 ```
 Fase 1 — quick wins (1 día c/u, sin riesgo)
-  #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix) ✅  #150 (picker) 🔶
+  #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix) ✅  #150 (picker) ✅
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
   #151, #152  →  PR "chrome/transcript secos"
