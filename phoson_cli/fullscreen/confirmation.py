@@ -10,8 +10,8 @@ including its Ctrl+C → "no" resolution, so cancelling a run that is
 mid-confirmation can't leave the tool call hanging forever.
 """
 
-from typing import TYPE_CHECKING
-from collections.abc import Callable, Sequence, Awaitable
+from typing import TYPE_CHECKING, Any
+from collections.abc import Callable, Sequence, Coroutine
 
 from phoson_agent import Choice, FormField
 
@@ -33,7 +33,7 @@ class FullScreenConfirmationService:
         self,
         command: str,
         *,
-        on_always: "Callable[[str], Awaitable[None]] | None" = None,
+        on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions.
 

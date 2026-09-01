@@ -10,8 +10,8 @@ Keeping this protocol narrow is the point: anything the controller needs
 to *show* goes through it, so a new front end is a sink, not a fork.
 """
 
-from typing import Protocol, runtime_checkable
-from collections.abc import Callable, Awaitable
+from typing import Any, Protocol, runtime_checkable
+from collections.abc import Callable, Coroutine
 
 from phoson_agent import AgentEvent
 from phoson_llm.schemas import Message
@@ -84,7 +84,7 @@ class ConfirmationService(Protocol):
         self,
         command: str,
         *,
-        on_always: "Callable[[str], Awaitable[None]] | None" = None,
+        on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
     ) -> bool:
         """Permission-mode confirmation card (T-6): the command in
         monospace with **Yes / Always / No** actions.

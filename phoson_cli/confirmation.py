@@ -8,7 +8,8 @@ implementation. A full-screen front end can inject a modal-based
 service instead — no tool change required.
 """
 
-from collections.abc import Callable, Sequence, Awaitable
+from typing import Any
+from collections.abc import Callable, Sequence, Coroutine
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -35,7 +36,7 @@ class PromptToolkitConfirmationService:
         self,
         command: str,
         *,
-        on_always: "Callable[[str], Awaitable[None]] | None" = None,
+        on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
     ) -> bool:
         """Classic front end: same y/N prompt (no card surface here).
 

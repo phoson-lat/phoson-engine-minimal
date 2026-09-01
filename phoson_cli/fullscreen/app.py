@@ -21,7 +21,7 @@ import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
-from collections.abc import Callable, Sequence, Awaitable
+from collections.abc import Callable, Sequence, Coroutine
 
 from prompt_toolkit import Application
 from prompt_toolkit.styles import Style
@@ -895,7 +895,7 @@ class PhosonApp:
         self,
         command: str,
         *,
-        on_always: Callable[[str], Awaitable[None]] | None = None,
+        on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions.
 

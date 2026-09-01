@@ -13,6 +13,7 @@ prototype's "mutate state, then invalidate" streaming pattern.
 
 import time
 import asyncio
+from typing import Any
 from dataclasses import dataclass
 
 from phoson_agent import (
@@ -127,7 +128,7 @@ class FullScreenSink:
         # T-7: every finished regular tool call, remembered so
         # ``/details`` can re-expand a collapsed done card (event + its
         # start args + the exact block object currently in ``blocks``).
-        self._tool_calls: list[tuple[object, dict, object]] = []
+        self._tool_calls: list[tuple[AgentToolDoneEvent, dict[str, Any], object]] = []
         # /details toggle state: cards render expanded until the user
         # collapses them (T-7).
         self.tool_details_shown: bool = True
