@@ -1,6 +1,6 @@
 [project]
 name = "phoson-engine-minimal"
-version = "0.24.1"
+version = "0.24.2"
 description = "Minimal Python runtime for the Phoson autonomous-agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -66,7 +66,7 @@ line-ending = "auto"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.24.1"
+version = "0.24.2"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
