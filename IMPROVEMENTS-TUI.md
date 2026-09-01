@@ -48,7 +48,7 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 | **T-8** | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | Tema `system` (hereda fg/bg del terminal) + JSON en `~/.phoson/themes/` | **P1** | M | 🟠 Deja de pelearse con Gruvbox/Catppuccin | ✅ Hecho (Sprint look 1): tier `system` **default** sin `on #rrggbb` (accent = spinner/focus cyan); JSON drop-in en `~/.phoson/themes/*.json` (base + tokens, aparece en `/theme`); la pregunta light/dark de E4 queda obsoleta (el terminal ya resuelve) |
 | **T-9** | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | Footer contextual (3 hints) + scrollbar sin flechas | **P1** | S | 🟡 Discoverability real, no cheatsheet cortada | ✅ Hecho (Sprint look 1): footer 3-hints por estado (idle/running/picker); Shift+Drag → `/keys` + docs; scrollbar sin flechas |
 | **T-10** | [#160](https://github.com/phoson-lat/phoson-engine-minimal/issues/160) | Hero tape con un **diff**, no un research dump + Ctrl+T | **P2** | S | 🟡 El README vende el producto correcto | Sprint look 2 |
-| **T-12** | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | Command palette + `!` bash (gestos SOTA, no look puro) | **P2** | M | 🟡 Paridad de interacción con OpenCode/Claude | Tras T-4/T-6 |
+| **T-12** | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | Command palette + `!` bash (gestos SOTA, no look puro) | **P2** | M | 🟡 Paridad de interacción con OpenCode/Claude | ✅ Hecho (v0.23.0): `Ctrl+P` abre picker fuzzy (native + plugin slash commands) reusando `model_picker._fuzzy_score` y el scaffolding de Float; `!cmd` corre en el shell gateado por la misma bash permission policy (ask → card T-6, `load_policy` re-leído en run-time) y el output entra como bash tool card normal (`add_bash_card`) |
 | **T-13** | *(nuevo, 2026-08-31)* | Chip de reasoning effort en header + `Ctrl+E` cicla `off→…→max` (patrón T-6) | **P1** | S | 🟡 La perilla existe (`/reasoning-effort`) pero no se ve ni se toca sin slash | ✅ Hecho (v0.20.0): chip `effort: high` / `· effort off` en header; `Ctrl+E` cicla y persiste (`save_config`), aplica al siguiente run; remapeable en `[keys]`, aparece en `/keys` |
 
 ### B. Toolkit (no mezclar con A)
@@ -156,9 +156,12 @@ Ingeniería de UI: ~8/10. Look de harness: ~5/10. La brecha es **dirección**, n
 * **Solución:** tape de un `patch_file` (diff visible) + composer idle. Sin ASCII, sin reasoning panel, sin “Official plugins”. Regenerar `tui.gif` / `tui.png` **después** de T-1…T-5.
 * **Criterio de listo:** el PNG del README muestra una tool card de edición, no un dump de markdown de GitHub.
 
-### T-12 — Gestos SOTA (después del look)
+### T-12 — Gestos SOTA (después del look) ✅ *released (v0.23.0)*
 
 Command palette (`Ctrl+P` unifica `/model` `/theme` `/sessions` / slash) y `!` bash (Claude/OpenCode: el output entra al transcript). No son look; son el siguiente escalón de interacción. No abrirlos hasta que T-4 y T-6 existan — si no, se construyen sobre un composer/permiso que vamos a tirar.
+
+* **Área:** `palette_picker.py` (nuevo: `PaletteEntry`/`PalettePickerResult`/`build_command_palette` + fuzzy + paginado), `fullscreen/app.py` (dispatch de `!` en `submit`, `open_command_palette`/`_run_command_palette*`/`_run_bash_line`), `fullscreen/keys.py` + `config.py` (action `command_palette`, default `c-p`), `fullscreen/sink.py` (`add_bash_card`).
+* **Hecho:** la fuente del palette es `catalog.specs` (una sola lista cubre `CommandSpec` native y `CliCommandSpec` de plugins, que comparten `names`/`primary`/`help`). `↑/↓` + `PageUp/Down` navegan, `enter` ejecuta vía el path normal `/command` (args vacíos), `esc` cierra; `/exit` desde el palette sale de la app, consistente con tipearlo a mano. La carrera de doble-`Ctrl+P` se cierra con `self._palette_open` síncrono (el flag se arma en `open_command_palette` y se libera en el `finally`, porque `_active_float` solo se settea dentro de la task de fondo). `!` relee la policy con `load_policy()` en run-time (el ciclo `ask`/`auto` de `Shift+Tab` se respeta sin cache stale); el output se renderiza con `render_tool_done_line` — una bash tool card idéntica a la del agente — para que `/details` la pueda re-plegar. La detección de fallo de infra usa `re.fullmatch` de las dos formas exactas que devuelve `_run_bash` (timeout / spawn), no `startswith`, para no clasificar como ✗ un output legítimo que solo *empiece* por esas frases.
 
 ### T-13 — Reasoning effort visible + ciclable ✅ *released (v0.20.0)*
 
@@ -252,7 +255,7 @@ Sprint look 1 (P1) — HECHO (2026-08-31, 4 commits)
 
 Sprint look 2
   T-10 hero tape (después de 0+1, si no el GIF miente)
-  T-12 palette + ! bash
+  T-12 palette + ! bash      ✅ (v0.23.0)
   T-11 se queda cerrado salvo que el look siga siendo el gap
 ```
 
