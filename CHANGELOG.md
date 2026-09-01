@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.24.1 (Unreleased)
+
+### Fixes
+
+- **TUI: bash output no longer leaks raw control codes (F-42, #186)**:
+  `_bash_output_body` now strips OSC sequences (window titles such as
+  `\x1b]0;title\x07` emitted by `ls --color`, `git`, or scripts) and parses
+  the remainder with `Text.from_ansi`, so real colors become Rich styles
+  instead of stray `ESC` bytes that prompt_toolkit's `ANSI()` parser would
+  render as literal text in the transcript. A truncated CSI (torn stream)
+  is kept literally, which is safe.
+- **TUI: frozen-prefix line-bounds fingerprint now includes a cache
+  generation (F-41, #186)**: `BlockAnsiCache` carries a `generation`
+  counter bumped on every `clear()` (resize, `apply_theme`,
+  `_reset_transcript`), and it is the first element of the
+  `_compute_chat_bounds` fingerprint. Previously `(width, *id(block))`
+  alone would miss a cleared+refilled cache, so a theme with
+  differently-long escapes could hit stale cached bounds.
+- **TUI: "O(visible)" claim made precise (F-44, #186)**: the
+  `_compute_chat_bounds` docstring and the v0.24.0 changelog entry now
+  state exactly what the incremental bounds buy — the Python `str.find`
+  line-bounds loop runs over the in-flight tail only (O(visible) per dirty
+  frame); the transcript assembly and prefix copies still happen every
+  dirty frame but are C-speed `memcpy`.
+
 ## v0.24.0 (2026-09-01)
 
 ### Perf
