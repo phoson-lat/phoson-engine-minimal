@@ -2,7 +2,7 @@
 
 > **Origen:** revisión de los 17 issues abiertos de `phoson-lat/phoson-engine-minimal` (129, 134, 138–150, 151–162) leídos uno por uno, no solo por la etiqueta de esfuerzo.
 >
-> **Estado de referencia:** 2026-09-01 · v0.21.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados).
+> **Estado de referencia:** 2026-09-01 · v0.22.0 (v0.20.0: T-5, T-6, T-7, T-8, T-9, T-13 released; v0.20.1: fix de consistencia de display del model picker; v0.20.2: #150 cerrado; v0.21.0: T-1/T-2 — #151, #152 cerrados; v0.22.0: T-3/T-4 — #153, #154 cerrados).
 >
 > **Criterio de la orden:** superficie de código tocada + dependencias + riesgo de regresión + dificultad del criterio de listo. "Complejo" aquí no es lo mismo que "P0" — #138 es P0 del plan de harness y es de los fixes más baratos del repo.
 >
@@ -12,7 +12,7 @@
 
 ## Resumen en una tabla (menor → mayor complejidad)
 
-*Estado (2026-08-31):* ✅ = released en v0.20.0 (commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6, `1ae8627` T-5, `09696d8` T-13) · 🔶 = parcial · 🔴 = abierto.
+*Estado (2026-09-01):* ✅ = released (v0.20.0: commits `39ceac6` T-9/T-7, `8667562` T-8, `3c6325c` T-6, `1ae8627` T-5, `09696d8` T-13 · v0.21.0: T-1/T-2 · v0.22.0: T-3/T-4) · 🔶 = parcial · 🔴 = abierto.
 
 | Orden | Issue | Título (corto) | Nivel | Estado |
 |-------|-------|----------------|-------|--------|
@@ -22,10 +22,10 @@
 | 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | ✅ v0.20.2 (dedup por I-113; drop de `unavailable` en full-screen por PR #165) |
 | 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | ✅ v0.21.0 (banner fuera del sink; art en `/about`; empty state real) |
 | 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | ✅ v0.21.0 (sin Online/Phoson-label/badge chips; cost solo >0) |
-| 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | 🔴 |
-| 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 | 🔴 |
+| 7 | [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) | T-3 — Reasoning colapsado a 1 línea | 2 | ✅ v0.22.0 (línea `▸ thought Ns`; Ctrl+T expande in-place, sin Panel) |
+| 8 | [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) | T-4 — Composer como objeto | 2 | ✅ v0.22.0 (Frame + placeholder; 1 separador) |
 | 9 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Run budget one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | 3 | 🔴 |
-| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash (bloqueado por T-4/T-6) | 3 | 🔴 (T-6 ya resuelto; queda T-4) |
+| 10 | [#162](https://github.com/phoson-lat/phoson-engine-minimal/issues/162) | T-12 — Command palette + `!` bash (bloqueado por T-4/T-6) | 3 | 🔴 (T-6 ✅ v0.20.0; T-4 ✅ v0.22.0 → desbloqueado) |
 | 11 | [#156](https://github.com/phoson-lat/phoson-engine-minimal/issues/156) | T-6 — Chip de modo + card de confirmación | 3 | ✅ `3c6325c` |
 | 12 | [#157](https://github.com/phoson-lat/phoson-engine-minimal/issues/157) | T-7 — Tool cards (glifos/collapse/diff bg) | 3 | ✅ `39ceac6` |
 | 13 | [#158](https://github.com/phoson-lat/phoson-engine-minimal/issues/158) | T-8 — Tema `system` + JSON themes | 3 | ✅ `8667562` |
@@ -101,13 +101,37 @@
   *look*, verificada renderizando las 5 superficies.
 
 ### 7. [#153](https://github.com/phoson-lat/phoson-engine-minimal/issues/153) — T-3: Reasoning colapsado
-- Default + toggle Ctrl+T + auto-collapse: toca sink y formatter, reutiliza timestamps existentes.
-- Cuidado con el path clásico que sigue usando el panel.
+- **Estado (v0.22.0, 2026-09-01): CERRADO** (PR #168). Un turno finalizado ya
+  no abre un `Panel` redondeado de scratchpad: colapsa a una línea tenue
+  `▸ thought Ns` (`render_reasoning_collapsed`, `muted_deep`; `N` = segundos
+  desde el primer `AgentReasoningEvent` vía `CurrentTurn.reasoning_since`).
+  `Ctrl+T` post-turno expande el texto completo *in-place*
+  (`render_reasoning_expanded`, color `reasoning`, **sin Panel**), one-shot como
+  el REPL clásico: el sink guarda `_reasoning_blocks` (el más nuevo primero) y
+  `expand_reasoning` reemplaza la línea colapsada por el texto (con fallback de
+  append si el transcript se reconstruyó, p. ej. resume). `_finalize_reasoning`
+  se llama en done/error/cancel; `clear_reasoning_state` en reset de transcript
+  (`clear()`). `render_reasoning_panel` queda solo para el REPL clásico (que
+  imprime el scratchpad); `render_streaming_panel` (la vista *viva*) no cambia.
+  Riesgo previsto respetado: el path clásico sigue intacto; tests
+  `test_t3_finalized_reasoning_is_one_collapsed_line_not_a_panel` y
+  `test_t3_ctrl_t_expands_collapsed_reasoning_in_place_without_a_panel`.
 
 ### 8. [#154](https://github.com/phoson-lat/phoson-engine-minimal/issues/154) — T-4: Composer como objeto
-- Frame + placeholder en prompt_toolkit; el más "S-M" del sprint look 0.
-- Tests de layout asumen `"❯ "`; hay que actualizarlos sin romper completers/`@file`.
-- Es **base de T-12**, así que que quede bien diseñado importa.
+- **Estado (v0.22.0, 2026-09-01): CERRADO** (PR #168). El composer va envuelto
+  en un `Frame` redondeado (el mismo chrome de los pickers); el sándwich de dos
+  reglas `─`/`—` se fue (queda un solo separador: el `─` del header) y el `❯`
+  queda *dentro* de la caja. Placeholder tenue `Ask anything · @ files · /
+  commands` cuando está vacío, que se borra con la primera tecla: ptk 3.0.51 no
+  trae `placeholder=` en `TextArea` y su auto-suggestor asíncrono nunca se
+  dispara en el buffer vacío, así que es un `_ComposerPlaceholderProcessor(Processor)`
+  (síncrono) estilizado como `auto-suggestion` (`muted_deep`), que nunca entra al
+  buffer (por tanto no se puede enviar). Enter sigue enviando; `Ctrl+J` sigue
+  siendo el salto de línea (documentado en el footer; Shift+Enter portable fuera
+  de scope). **Desbloquea T-12 (#162).** Riesgo previsto respetado: los tests de
+  layout no asumen `"❯ "` como prompt único y los completers/`@file` no se
+  rompen; tests `test_composer_is_wrapped_in_a_single_frame_not_two_rules` y
+  `test_composer_placeholder_shows_when_empty_and_hides_when_typed`.
 
 ## Nivel 3 — Features medianas
 
@@ -210,7 +234,7 @@ Fase 1 — quick wins (1 día c/u, sin riesgo)
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
   #151, #152  ✅ v0.21.0  (PR #166 "chrome/transcript secos")
-  #153, #154  →  PR "reasoning + composer"   (#155 ya va desde Fase 1)
+  #153, #154  ✅ v0.22.0  (PR #168 "reasoning colapsado + composer objeto")
 
 Fase 3 — sprint look 1 + fixes independientes
   #156 (chip+card) ✅  #157 (tool cards) ✅  #158 (system theme) ✅  — resueltos en la rama
@@ -220,7 +244,7 @@ Fase 4 — la infra del harness (se alimentan entre sí)
   #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)   [#138 ✅ ya destraba el modelo fijo]
   #161 (acuerdo del ADR, cuando toque)
   #160 (hero tape, recién con look 0+1 merged)
-  #162 (palette + ! bash, recién con #154; #156 ya está)
+  #162 (palette + ! bash)   [#154 ✅ v0.22.0 y #156 ✅ v0.20.0 → desbloqueado, listo para atacar]
 
 Fase 5 — cadena de reasoning
   #134 (preserved thinking)  →  #145 (sandwich)   [ambos miden contra #139]
