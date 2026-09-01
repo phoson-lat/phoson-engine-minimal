@@ -56,6 +56,11 @@ class Theme:
     warn: str
     reasoning: str
 
+    # tool cards (T-7): subtle backgrounds for diff +/- lines. ``""``
+    # (ansi/system/no-color tiers) means "prefix color only".
+    diff_add_bg: str
+    diff_del_bg: str
+
     # containers
     panel_bg: str
     badge_user: str
@@ -107,6 +112,8 @@ DARK = Theme(
     err="indian_red1",
     warn="gold3",
     reasoning="grey42",
+    diff_add_bg="on #0f2417",
+    diff_del_bg="on #2a1216",
     panel_bg="on #120d1d",
     badge_user="bold white on #23192f",
     badge_assistant="bold white on #3a255e",
@@ -145,6 +152,8 @@ LIGHT = Theme(
     err="#cf222e",
     warn="#9a6700",
     reasoning="#7a7288",
+    diff_add_bg="on #e0f2e4",
+    diff_del_bg="on #f8d7da",
     panel_bg="on #f2eef8",
     badge_user="bold #1a1425 on #ddd0f0",
     badge_assistant="bold #1a1425 on #cbb5ec",
@@ -183,6 +192,10 @@ ANSI = Theme(
     err="bright_red",
     warn="bright_yellow",
     reasoning="bright_black",
+    # 16-color terminals: a full-line background reads as a stripe; the
+    # +/- prefix color carries the meaning instead.
+    diff_add_bg="",
+    diff_del_bg="",
     panel_bg="",
     badge_user="bold",
     badge_assistant="bold",
@@ -223,6 +236,8 @@ NO_COLOR = Theme(
     err="",
     warn="",
     reasoning="",
+    diff_add_bg="",
+    diff_del_bg="",
     panel_bg="",
     badge_user="bold",
     badge_assistant="bold",

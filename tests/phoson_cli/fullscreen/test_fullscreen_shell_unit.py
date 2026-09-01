@@ -17,7 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 
 from phoson_cli.config import PhosonConfig
-from phoson_cli.fullscreen.app import _FOOTER_HINT, PhosonApp
+from phoson_cli.fullscreen.app import (
+    _FOOTER_HINT_IDLE,
+    _FOOTER_HINT_PICKER,
+    _FOOTER_HINT_RUNNING,
+    PhosonApp,
+)
 
 
 def _trigger(app: PhosonApp, key: str) -> None:
@@ -753,16 +758,57 @@ def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None
     assert "📎" not in app._get_header_text().value
 
 
-def test_footer_is_keyboard_hints_only(app: PhosonApp) -> None:
-    """Stable runtime facts belong to the header and are never duplicated below."""
+def test_footer_is_contextual_and_never_truncates(app: PhosonApp) -> None:
+    """T-9: the footer shows at most three state-dependent hints.
+
+    Idle vs running vs picker each get their own short line, and none of
+    them is long enough to truncate at 80 columns (the old 8-shortcut
+    cheatsheet was). Stable runtime facts belong to the header and are
+    never duplicated below.
+    """
     header = app._get_header_text().value
 
     assert app.repl.config.provider in header
     assert app.repl.current_model in header
     assert app.repl.tree.session_id[:8] not in header
-    assert "Send" in _FOOTER_HINT
-    assert app.repl.config.provider not in _FOOTER_HINT
-    assert app.repl.current_model not in _FOOTER_HINT
+    assert app.repl.config.provider not in _FOOTER_HINT_IDLE
+    assert app.repl.current_model not in _FOOTER_HINT_IDLE
+    for hint in (_FOOTER_HINT_IDLE, _FOOTER_HINT_RUNNING, _FOOTER_HINT_PICKER):
+        assert len(hint) <= 50  # comfortably inside 80 columns
+
+    # Idle (default): the send/newline/commands hints.
+    footer = app._get_footer_text().value
+    assert "enter send" in footer
+    assert "ctrl+j" in footer
+    assert "/ commands" in footer
+    # The old cheatsheet is gone from the footer.
+    assert "Shift+Drag" not in footer
+    assert "PgUp" not in footer
+
+
+def test_footer_running_state_shows_cancel_hint(app: PhosonApp) -> None:
+    """T-9: while a turn is in flight the footer is just `esc cancel`."""
+    app._run_task = MagicMock()
+    app._run_task.done.return_value = False
+    try:
+        footer = app._get_footer_text().value
+        assert "esc cancel" in footer
+        assert "enter send" not in footer
+    finally:
+        app._run_task = None
+
+
+def test_footer_picker_state_shows_navigation_hints(app: PhosonApp) -> None:
+    """T-9: with a Float open (picker/confirmation) the footer is `enter · esc`."""
+    sentinel = object()
+    app._active_float = sentinel
+    try:
+        footer = app._get_footer_text().value
+        assert "enter" in footer
+        assert "esc" in footer
+        assert "enter send" not in footer
+    finally:
+        app._active_float = None
 
 
 def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:

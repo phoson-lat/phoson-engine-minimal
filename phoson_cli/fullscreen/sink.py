@@ -69,7 +69,7 @@ class CurrentTurn:
     running_tool: bool = False
     # Tool name being *composed* by the LLM right now (I-128): set by
     # AgentToolComposingEvent, cleared by AgentToolStartEvent. Rendered
-    # on the in-chat activity line ("⚙ writing file…") instead of the
+    # on the in-chat activity line ("✍ writing file…") instead of the
     # generic thinking phrases. Lives on the turn (not in ``blocks``) so
     # a stream that dies mid-composing leaves no orphan line behind.
     composing_tool: str = ""
@@ -124,10 +124,50 @@ class FullScreenSink:
         # (I-83). Repeated failures overwrite it in place instead of
         # stacking panels; the next successful run start drops it.
         self._error_notice_idx: int | None = None
+        # T-7: every finished regular tool call, remembered so
+        # ``/details`` can re-expand a collapsed done card (event + its
+        # start args + the exact block object currently in ``blocks``).
+        self._tool_calls: list[tuple[object, dict, object]] = []
+        # /details toggle state: cards render expanded until the user
+        # collapses them (T-7).
+        self.tool_details_shown: bool = True
 
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Apply the active controller's isolated plugin visual specs."""
         self._tool_render_registry = registry
+
+    def set_tool_details(self) -> bool:
+        """T-7: toggle collapsed tool cards, returning the new state.
+
+        Every finished tool call remembered so far (see the done branch
+        of :meth:`on_event`) is re-rendered in place — collapsed keeps
+        just the header + ✓/✗ · duration line, expanded restores the
+        diff/write-summary/bash-output body. Blocks are replaced by
+        identity, so only the done card objects change.
+        """
+        self.tool_details_shown = not self.tool_details_shown
+        show = self.tool_details_shown
+        for i, (event, start_args, block) in enumerate(self._tool_calls):
+            if event.tool_name in {"agent", "agents"}:
+                continue  # subagent lines keep their own layout
+            rebuilt = render_tool_done_line(
+                event,
+                self.theme,
+                args=start_args,
+                registry=self._tool_render_registry,
+                collapsed=not show,
+            )
+            try:
+                index = self.blocks.index(block)
+            except ValueError:
+                continue  # transcript cleared while the call was remembered
+            self.blocks[index] = rebuilt
+            # Keep the record pointing at the *current* block object: the
+            # next toggle replaces by identity, so a stale reference would
+            # make the card un-expandable.
+            self._tool_calls[i] = (event, start_args, rebuilt)
+        self._touch()
+        return show
 
     def publish_plugin_block(self, block_id: str, block: object) -> None:
         """Append a plugin block, namespaced by the caller's stable id."""
@@ -306,7 +346,7 @@ class FullScreenSink:
         Animates:
         - *thinking* — the spinner is the only feedback; the phrase
           rotates once per ``_THINKING_PHRASE_TICKS`` ticks (~2.5 s).
-        - *composing* (I-128) — the "⚙ writing file…" line is static text,
+        - *composing* (I-128) — the "✍ writing file…" line is static text,
           so the spinning glyph keeps a slow args generation from looking
           frozen.
         - *running tool* — the start card is static until the tool finishes
@@ -432,6 +472,7 @@ class FullScreenSink:
                         self.theme,
                         args=start_args,
                         registry=self._tool_render_registry,
+                        collapsed=not self.tool_details_shown,
                     )
                     if start_block is not None:
                         # Replace by identity: multiple parallel calls may
@@ -453,6 +494,10 @@ class FullScreenSink:
                             self.blocks[position] = done_block
                     else:
                         self.blocks.append(done_block)
+                    # T-7: remember the finished call (event + args + the
+                    # exact block object) so /details can re-render it
+                    # uncollapsed later in the session.
+                    self._tool_calls.append((event, start_args, done_block))
 
             case AgentStepDoneEvent():
                 if self.current_turn is not None:

@@ -415,7 +415,7 @@ def test_golden_snapshot_composing_tool_call() -> None:
 
     rendered = render_chat(sink, width=60, cache=cache)
     # The verb appears on the in-chat activity line...
-    assert "⚙ writing file…" in rendered
+    assert "✍ writing file…" in rendered
     # ...while no start/done card has landed yet.
     assert "src/" not in rendered
     assert "42ms" not in rendered
@@ -440,10 +440,10 @@ def test_golden_snapshot_composing_tool_call_after_streamed_text() -> None:
 
     rendered = render_chat(sink, width=60, cache=cache)
     assert "Sure, I will draft it now." in rendered
-    assert "⚙ writing file…" in rendered
+    assert "✍ writing file…" in rendered
     # The indicator must sit BELOW the streamed text, not above it...
     text_pos = rendered.index("Sure, I will draft it now.")
-    activity_pos = rendered.index("⚙ writing file…")
+    activity_pos = rendered.index("✍ writing file…")
     assert activity_pos > text_pos
     # ...and on the very next rendered line (no blank gap from the
     # trailing newline).

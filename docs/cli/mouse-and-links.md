@@ -14,7 +14,8 @@ itself* to ignore the app's mouse tracking for that gesture and fall back
 to its own native selection/copy, unaffected by whatever the app is doing
 (works in GNOME Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty,
 Windows Terminal — check your terminal's docs if the modifier differs).
-The footer's `[Shift+Drag] Select text` hint is a reminder of this.
+The text-selection note lives in the full-screen app's key listing
+(``/keys``) — the footer itself is a 3-hint contextual bar.
 
 ## Clickable hyperlinks
 

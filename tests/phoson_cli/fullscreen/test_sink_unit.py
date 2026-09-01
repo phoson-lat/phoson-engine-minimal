@@ -5,6 +5,7 @@ Feeds synthetic AgentEvent sequences and asserts on the resulting
 running prompt_toolkit Application.
 """
 
+import re
 import datetime
 
 from phoson_cli.theme import DARK
@@ -25,6 +26,13 @@ from phoson_cli.fullscreen.sink import FullScreenSink
 from phoson_cli.fullscreen.render import render_chat
 
 UTC = datetime.UTC
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\][^\x1b]*\x1b\\|[\x01\x02]")
+
+
+def _strip_ansi(text: str) -> str:
+    """ANSI/SGR/OSC 8 stripped plain text (for counting fragments)."""
+    return _ANSI_RE.sub("", text)
 
 
 def _make_sink() -> tuple[FullScreenSink, list[int]]:
@@ -314,9 +322,12 @@ def test_parallel_tool_cards_replace_their_own_start_lines() -> None:
 
     assert len(sink.blocks) == 2
     text = render_chat(sink, width=80)
-    assert text.count("reading file") == 2
-    assert text.count("a.txt") == 1
-    assert text.count("b.txt") == 1
+    plain = _strip_ansi(text)
+    assert plain.count("reading file") == 2
+    # Count the header fragment, not the bare path: the path also appears
+    # inside its OSC 8 file:// link URI (T-7).
+    assert plain.count("·  a.txt") == 1
+    assert plain.count("·  b.txt") == 1
 
 
 def test_step_done_advances_counters() -> None:
@@ -616,3 +627,51 @@ def test_error_notice_still_immediate_with_stream_event_flag() -> None:
 
     assert len(ticks) == 1  # immediate, not throttled
     assert sink._stream_event is False  # flag not latched
+
+
+# ─── T-7: collapsed tool cards + /details toggle ─────────────────────────────
+
+
+def _transcript_text(sink: FullScreenSink) -> str:
+    return render_chat(sink, 120)
+
+
+def _finish_patch_call(sink: FullScreenSink) -> None:
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="patch_file",
+            tool_call_id="c1",
+            args={"path": "f.py", "old_content": "a\nb\n", "new_content": "a\nc\n"},
+        )
+    )
+    sink.on_event(
+        AgentToolDoneEvent(
+            tool_name="patch_file", result="ok", duration_ms=5, tool_call_id="c1"
+        )
+    )
+
+
+def test_tool_card_expanded_by_default_with_details_marker() -> None:
+    sink, _ = _make_sink()
+    _finish_patch_call(sink)
+    text = _transcript_text(sink)
+    assert "-b" in text  # diff body visible
+    assert "/details" in text  # the card offers the toggle
+
+
+def test_tool_details_toggle_collapse_then_expand() -> None:
+    sink, ticks = _make_sink()
+    _finish_patch_call(sink)
+
+    ticks.clear()
+    assert sink.set_tool_details() is False  # first toggle collapses
+    collapsed = _transcript_text(sink)
+    assert "-b" not in collapsed  # body hidden
+    assert "+c" not in collapsed
+    assert len(ticks) == 1  # the re-render invalidates
+
+    assert sink.set_tool_details() is True  # and back
+    expanded = _transcript_text(sink)
+    assert "-b" in expanded
+    assert "+c" in expanded

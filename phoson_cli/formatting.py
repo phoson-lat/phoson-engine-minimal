@@ -396,6 +396,11 @@ _DIFF_MAX_LINES: Final[int] = 20
 _BASH_PREVIEW_LINES: Final[int] = 6
 _INDENT: Final[str] = "      "
 
+#: Tools whose done card renders a specialized, collapsible body (T-7).
+#: A card for one of these shows the ``/details`` hint; a plain tool
+#: (read_file, view_image, ...) has no body to collapse.
+_BODY_TOOLS: Final[frozenset[str]] = frozenset({"patch_file", "write_file", "bash"})
+
 
 def tool_verb(tool_name: str, registry: ToolRenderRegistry | None = None) -> str:
     """Human action phrase for a tool, consulting an optional session registry."""
@@ -407,10 +412,27 @@ def tool_verb(tool_name: str, registry: ToolRenderRegistry | None = None) -> str
     )
 
 
+#: Per-family glyphs (T-7): one `⚙` for everything read as one action.
+#: Families: read/inspect · write/edit · shell · web · skill.
+_TOOL_ICONS: Final[dict[str, str]] = {
+    "read_file": "📖",
+    "list_dir": "📂",
+    "view_image": "🖼",
+    "write_file": "✍",
+    "patch_file": "🪄",
+    "bash": "⌘",
+    "web_search": "🔎",
+    "web_fetch": "🔗",
+    "skill": "📜",
+}
+
+
 def tool_icon(tool_name: str, registry: ToolRenderRegistry | None = None) -> str:
     """Tool headline glyph, defaulting to the built-in gear."""
     spec = registry.get(tool_name) if registry is not None else None
-    return spec.icon if spec is not None else "⚙"
+    if spec is not None:
+        return spec.icon
+    return _TOOL_ICONS.get(tool_name, "⚙")
 
 
 def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
@@ -452,15 +474,34 @@ def _card_header(
     args: dict[str, Any],
     theme: Theme,
     registry: ToolRenderRegistry | None = None,
+    *,
+    expandable: bool = False,
 ) -> Text:
-    """The ``│ ⚙ <verb> · <detail>`` headline shared by start/done cards."""
+    """The ``│ ⚙ <verb> · <detail>`` headline shared by start/done cards.
+
+    File paths double as OSC 8 ``file://`` links (T-7): Rich emits the
+    real hyperlink escape (``link <uri>`` in its style grammar), which
+    the full-screen bridge carries through via ``osc8_passthrough`` and
+    classic terminals receive natively. ``expandable`` marks cards whose
+    done body was collapsed (``/details`` re-renders them).
+    """
     header = Text()
     header.append("  │ ", style=theme.accent_soft)
     header.append(f"{tool_icon(tool_name, registry)} ", style=theme.accent_soft)
     header.append(tool_verb(tool_name, registry), style=f"bold {theme.accent}")
     detail = tool_detail(tool_name, args)
     if detail:
-        header.append(f"  ·  {detail}", style=theme.muted)
+        header.append("  ·  ", style=theme.muted)
+        detail_style = theme.muted
+        if tool_name in {"read_file", "write_file", "patch_file"} and isinstance(
+            args.get("path"), str
+        ):
+            from .hyperlinks import file_uri  # local: formatting stays import-light
+
+            detail_style = f"{theme.muted} link {file_uri(args['path'])}"
+        header.append(detail, style=detail_style)
+    if expandable:
+        header.append("  ·  /details", style=theme.muted_deep)
     return header
 
 
@@ -478,6 +519,8 @@ def render_tool_done_line(
     theme: Theme,
     args: dict[str, Any] | None = None,
     registry: ToolRenderRegistry | None = None,
+    *,
+    collapsed: bool = False,
 ) -> RenderableType:
     """Result card for a finished regular (non-subagent) tool call.
 
@@ -489,10 +532,21 @@ def render_tool_done_line(
     Specialized bodies: colored unified diff for ``patch_file`` (built
     purely from the ``old_content``/``new_content`` args), a created/updated
     summary for ``write_file``, first stdout lines for ``bash``.
+
+    ``collapsed`` (T-7) suppresses those bodies — header + ✓/✗ · duration
+    only — the way a transcript card reads once the work is done; the
+    front end re-renders the same call uncollapsed on ``/details``.
     """
     call_args: dict[str, Any] = args or {}
+    has_body = event.tool_name in _BODY_TOOLS and not event.error
     parts: list[RenderableType] = [
-        _card_header(event.tool_name, call_args, theme, registry)
+        _card_header(
+            event.tool_name,
+            call_args,
+            theme,
+            registry,
+            expandable=has_body and not collapsed,
+        )
     ]
 
     # Subagent tools without parseable metrics keep their dedicated
@@ -505,7 +559,7 @@ def render_tool_done_line(
         spawned.append(f"  ·  {event.duration_ms}ms", style=theme.muted)
         return Group(*parts, spawned)
 
-    if not event.error:
+    if not event.error and not collapsed:
         parts.extend(_outcome_body(event.tool_name, call_args, event.result, theme))
 
     footer_bits: list[tuple[str, str]] = []
@@ -532,14 +586,20 @@ def _outcome_body(
     if tool_name == "patch_file":
         return _diff_body(args, theme)
     if tool_name == "write_file":
-        return _write_summary_body(args, theme)
+        return _write_summary_body(args, result, theme)
     if tool_name == "bash":
         return _bash_output_body(result, theme)
     return []
 
 
 def _diff_body(args: dict[str, Any], theme: Theme) -> list[RenderableType]:
-    """Colored unified-diff body for a finished patch_file call."""
+    """Colored unified-diff body for a finished patch_file call.
+
+    T-7: ``+``/``-`` lines carry a subtle full-line background
+    (``diff_add_bg``/``diff_del_bg``) in addition to the prefix color —
+    the genre's diff look. Tiers without a background token (ansi,
+    system, no-color) fall back to prefix color only.
+    """
     path = str(args.get("path") or "(file)")
     old_content = args.get("old_content")
     new_content = args.get("new_content")
@@ -556,17 +616,34 @@ def _diff_body(args: dict[str, Any], theme: Theme) -> list[RenderableType]:
                 Text(f"{_INDENT}… +{hidden} more diff lines", style=theme.muted)
             )
             break
-        color = theme.ok
+        bg = ""
+        if diff_line.startswith("+"):
+            bg = theme.diff_add_bg
+        elif diff_line.startswith("-"):
+            bg = theme.diff_del_bg
         if diff_line.startswith("-"):
-            color = theme.err
+            color = theme.err if bg else theme.muted
+        elif diff_line.startswith("+"):
+            color = theme.ok if bg else theme.muted
         elif diff_line.startswith("@@"):
             color = theme.accent_soft
-        rendered.append(Text(f"{_INDENT}{diff_line}", style=color))
+        else:
+            color = theme.muted
+        rendered.append(
+            Text(f"{_INDENT}{diff_line}", style=color + (f" {bg}" if bg else ""))
+        )
     return rendered
 
 
-def _write_summary_body(args: dict[str, Any], theme: Theme) -> list[RenderableType]:
-    """``created src/x.py · 42 lines · 1.8 KB`` summary for write_file."""
+def _write_summary_body(
+    args: dict[str, Any], result: str, theme: Theme
+) -> list[RenderableType]:
+    """``created src/x.py · 42 lines · 1.8 KB`` summary for write_file.
+
+    T-7: the tool result itself now says *Created* or *Updated*
+    (tools/files.py checks existence before writing) — the card mirrors
+    it instead of always claiming ``created`` on an overwrite.
+    """
     path = str(args.get("path") or "")
     content = args.get("content")
     if not isinstance(content, str):
@@ -574,8 +651,9 @@ def _write_summary_body(args: dict[str, Any], theme: Theme) -> list[RenderableTy
     lines = content.count("\n") + (0 if content.endswith("\n") else 1)
     size = len(content.encode("utf-8"))
     size_text = f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
+    verb = "updated" if result.lstrip().lower().startswith("updated") else "created"
     summary = Text(_INDENT)
-    summary.append("created ", style=theme.ok)
+    summary.append(f"{verb} ", style=theme.ok)
     summary.append(path, style=f"bold {theme.text}")
     summary.append(f"  ·  {lines} lines  ·  {size_text}", style=theme.muted)
     return [summary]
@@ -748,6 +826,7 @@ __all__ = [
     "tool_label",
     "subagent_tasks_from_args",
     "tool_verb",
+    "tool_icon",
     "tool_detail",
     "unified_diff",
     "error_hint",

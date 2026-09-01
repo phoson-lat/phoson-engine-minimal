@@ -179,6 +179,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/keys",
             "/attach",
             "/permissions",
+            "/details",
             "/mcp",
             "/setup",
             "/update",
@@ -304,6 +305,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/permissions", "/perms"),
         "Show or change per-tool permissions: /permissions <tool> <allow|ask|deny>",
         "_cmd_permissions",
+    ),
+    CommandSpec(
+        ("/details", "/tool-cards"),
+        "Toggle tool-card bodies (diffs, write summaries, bash output)",
+        "_cmd_details",
     ),
     CommandSpec(
         ("/agents-md",),
@@ -1041,6 +1047,8 @@ class CommandHandler:
         r.print_info("Key bindings (full-screen TUI):")
         for action, keys in rows:
             r.print_info(f"  {action:<{width}}  {keys}")
+        r.print_info("Text selection: hold Shift while dragging (terminal-native;")
+        r.print_info("not app-driven mouse tracking). See docs/cli/mouse-and-links.md.")
         r.print_info("Remap from the [keys] section of ~/.phoson/config.toml:")
         r.print_info("  [keys]")
         r.print_info('  toggle_reasoning = "c-x"      # one sequence')
@@ -1299,6 +1307,25 @@ class CommandHandler:
         if level == LEVEL_ALLOW:
             note = " (allow is the default — the entry is dropped from the file)"
         r.print_info(f"{tool} → {level} · saved{note}")
+        return True
+
+    async def _cmd_details(self, cmd: Command) -> bool:  # noqa: ARG002
+        """Toggle tool-card bodies (T-7): collapsed vs expanded.
+
+        Re-renders every finished tool card in the transcript in place.
+        The full-screen sink owns the remembered calls and the toggle
+        state; the classic front end has no such store and gets a
+        plain notice.
+        """
+        sink = getattr(getattr(self.repl, "_controller", None), "sink", None)
+        toggler = getattr(sink, "set_tool_details", None)
+        if toggler is None:
+            self._r.print_warn(
+                "Tool-card details are a full-screen TUI feature — "
+                "run phoson-cli without --classic."
+            )
+            return True
+        toggler()
         return True
 
     async def _cmd_agents_md(self, cmd: Command) -> bool:  # noqa: ARG002

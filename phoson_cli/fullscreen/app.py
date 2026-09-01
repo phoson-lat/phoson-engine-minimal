@@ -109,11 +109,14 @@ from .session_cache import SessionListCache
 # Advertising it in the footer (rather than only in a docstring) is the
 # fix: the terminal already does the work, the hint just needs to be
 # discoverable.
-_FOOTER_HINT = (
-    '<style class="footer"> [Enter] Send  [Ctrl+J] New line  [PgUp/PgDn] Scroll'
-    "  [Ctrl+T] Reasoning  [Ctrl+V] Paste image  [Ctrl+L] Clear"
-    "  [Shift+Drag] Select text  [Esc Esc] Rewind  [Ctrl+C / Ctrl+Q] Exit</style>"
-)
+#
+# The footer itself is *contextual* (T-9): at most three hints for the
+# current state, so it never truncates at 80 columns. The full cheatsheet
+# (scroll, reasoning, paste image, clear, rewind, exit, Shift+Drag) lives
+# in ``/keys`` and ``docs/cli/mouse-and-links.md`` — not on every frame.
+_FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
+_FOOTER_HINT_RUNNING = "esc cancel"
+_FOOTER_HINT_PICKER = "enter  ·  esc"
 
 # How often the subagent panel animation frame advances while active.
 # Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
@@ -294,7 +297,9 @@ class PhosonApp:
             wrap_lines=False,
             always_hide_cursor=True,
             get_vertical_scroll=self._get_effective_scroll,
-            right_margins=[ScrollbarMargin(display_arrows=True)],
+            # T-9: the scrollbar is position-only — the wheel/PgUp already
+            # work, so the clickable arrows were dead chrome.
+            right_margins=[ScrollbarMargin(display_arrows=False)],
         )
         self._chat_window._mouse_handler = self._on_chat_mouse
 
@@ -357,10 +362,12 @@ class PhosonApp:
         )
 
         bottom_margin = Window(height=1, char="—", style="class:separator")
-        # The footer is intentionally keyboard hints only. Stable runtime
-        # facts live in the compact header, avoiding duplicated UI chrome.
+        # The footer is intentionally keyboard hints only — and contextual
+        # (T-9): three hints for the current state, never a truncated
+        # cheatsheet. Stable runtime facts live in the compact header,
+        # the full key map in /keys.
         footer_window = Window(
-            content=FormattedTextControl(HTML(_FOOTER_HINT)), height=1
+            content=FormattedTextControl(self._get_footer_text), height=1
         )
 
         main_container = HSplit(
@@ -602,6 +609,23 @@ class PhosonApp:
                 f'<style class="header_dim">{update_part}</style>'
             )
         return self._header_cache
+
+    def _get_footer_text(self) -> HTML:
+        """Contextual footer: at most three hints for the current state.
+
+        Replaces the fixed 8-shortcut cheatsheet (T-9), which truncated at
+        80 columns. The hints are deliberately short so the line survives
+        narrow terminals; the full key map is ``/keys``, and the
+        Shift+Drag text-selection note lives in
+        ``docs/cli/mouse-and-links.md`` (and /keys).
+        """
+        if self._active_float is not None:
+            hint = _FOOTER_HINT_PICKER
+        elif self._is_run_in_flight():
+            hint = _FOOTER_HINT_RUNNING
+        else:
+            hint = _FOOTER_HINT_IDLE
+        return HTML(f'<style class="footer">{hint}</style>')
 
     def _has_agents_md(self) -> bool:
         """Whether any AGENTS.md/CLAUDE.md memory file applies here.

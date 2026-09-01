@@ -146,7 +146,7 @@ def test_renderer_tool_composing_relabels_spinner_with_verb() -> None:
         )
 
     assert cap.get() == ""  # composing must not print a line
-    assert renderer._spinner._label == "⚙  writing file…"
+    assert renderer._spinner._label == "✍  writing file…"
     assert renderer._spinner._label != label_before_compose
 
     renderer._spinner.stop()
@@ -160,7 +160,7 @@ def test_renderer_tool_composing_starts_spinner_when_idle() -> None:
         AgentToolComposingEvent(index=0, tool_name="bash", args_chunk='{"command":')
     )
 
-    assert renderer._spinner._label == "⚙  running command…"
+    assert renderer._spinner._label == "⌘  running command…"
     assert renderer._spinner._thread is not None
     renderer._spinner.stop()
 
@@ -202,7 +202,7 @@ def test_renderer_on_event_dispatches_composing() -> None:
         )
 
     assert cap.get() == ""
-    assert renderer._spinner._label == "⚙  searching the web…"
+    assert renderer._spinner._label == "🔎  searching the web…"
     renderer._spinner.stop()
 
 

@@ -128,7 +128,7 @@ def render_chat(
         #
         # While a tool call is being *composed* after some text has already
         # streamed, the indicator follows the text instead of leading it
-        # (I-128): the "⚙ writing file…" line reads as a continuation of the
+        # (I-128): the "✍ writing file…" line reads as a continuation of the
         # agent's message, not a banner stuck above it. Models usually end
         # the preceding paragraph with a trailing newline; with the
         # indicator below, that newline would show up as a blank line gap,

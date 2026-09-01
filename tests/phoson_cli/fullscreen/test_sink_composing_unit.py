@@ -40,8 +40,8 @@ def test_composing_sets_label_on_activity_line() -> None:
         AgentToolComposingEvent(index=0, tool_name="write_file", args_chunk='{"path":')
     )
     assert sink.current_turn.composing_tool == "write_file"
-    assert sink.activity_text() == "⚙ writing file…"
-    assert "⚙ writing file…" in render_chat(sink, width=80)
+    assert sink.activity_text() == "✍ writing file…"
+    assert "✍ writing file…" in render_chat(sink, width=80)
 
 
 def test_composing_clears_when_tool_start_card_lands() -> None:
@@ -61,7 +61,7 @@ def test_composing_clears_when_tool_start_card_lands() -> None:
     assert sink.current_turn.composing_tool == ""
     # The activity line must no longer claim "composing"; the start card is
     # now the feedback.
-    assert sink.activity_text() != "⚙ reading file…"
+    assert sink.activity_text() != "📖 reading file…"
     text = render_chat(sink, width=80)
     assert text.count("reading file") == 1  # only the start card, once
 
@@ -92,7 +92,7 @@ def test_composing_beats_streaming_when_text_already_started() -> None:
     sink.on_event(
         AgentToolComposingEvent(index=0, tool_name="bash", args_chunk='{"command":')
     )
-    assert sink.activity_text() == "⚙ running command…"
+    assert sink.activity_text() == "⌘ running command…"
 
 
 def test_composing_unknown_tool_falls_back_to_underscored_name() -> None:
@@ -105,7 +105,7 @@ def test_composing_unknown_tool_falls_back_to_underscored_name() -> None:
 
 
 def test_composing_animates_the_activity_frame() -> None:
-    """A static "⚙ writing file…" over a long args generation can look
+    """A static "✍ writing file…" over a long args generation can look
     frozen; the spinner glyph keeps ticking while composing."""
     sink = _make_sink()
     _start_turn(sink)
