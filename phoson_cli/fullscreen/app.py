@@ -12,6 +12,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 """
 
 import os
+import re
 import time
 import uuid
 import shutil
@@ -309,6 +310,11 @@ class PhosonApp:
         # active Float's own bindings run — see `_build_application`.
         self._active_float: Float | None = None
         self._float_kb: KeyBindings | None = None
+        # T-12: the palette opens as a background task, so ``_active_float``
+        # is only set when the task runs. This synchronous flag guards the
+        # window between two fast Ctrl+P presses so only one palette can
+        # be scheduled.
+        self._palette_open = False
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -928,9 +934,27 @@ class PhosonApp:
                 "A turn is already running — press Esc to cancel it first.",
             )
             return
+        if self._palette_open:
+            return  # a palette is already scheduled/animating open
+        self._palette_open = True
         self.app.create_background_task(self._run_command_palette())
 
     async def _run_command_palette(self) -> None:
+        """Host the palette as a background task with a synchronous guard.
+
+        ``_active_float`` is only set when the task actually runs (the
+        float is opened inside the task), so a fast second Ctrl+P before
+        the first task ticks would schedule a second palette and clobber
+        ``_active_float`` / ``_float_kb``. ``self._palette_open`` closes
+        that window; it is released in ``finally`` so a failure path
+        (e.g. no entries, exception) can't wedge the guard.
+        """
+        try:
+            await self._run_command_palette_inner()
+        finally:
+            self._palette_open = False
+
+    async def _run_command_palette_inner(self) -> None:
         from ..palette_picker import (
             PaletteEntry,
             PalettePickerResult,
@@ -1003,13 +1027,19 @@ class PhosonApp:
         # Infra-level failures (spawn / timeout) are execution errors, not
         # command output — render them as an ✗ card. A non-zero exit code
         # still yields its stdout+stderr as the card body, matching how the
-        # agent's bash tool reports results.
-        low = result.strip().lower()
-        error = None
-        if low.startswith("command timed out") or low.startswith(
-            "failed to spawn shell"
-        ):
-            error = result.strip()
+        # agent's bash tool reports results. These are matched by the exact
+        # one-line shapes ``_run_bash`` returns (anchored fullmatch), so a
+        # real command whose output merely *starts* with that phrase is not
+        # misclassified as an error.
+        stripped = result.strip()
+        error = (
+            stripped
+            if (
+                re.fullmatch(r"Command timed out after \d+s", stripped, re.IGNORECASE)
+                or re.fullmatch(r"Failed to spawn shell: .+", stripped, re.DOTALL)
+            )
+            else None
+        )
         self.sink.add_bash_card(command, result, duration_ms=elapsed_ms, error=error)
         self.app.invalidate()
 

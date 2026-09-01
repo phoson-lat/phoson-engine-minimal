@@ -1281,6 +1281,40 @@ def test_t12_ctrl_p_binding_is_registered(app: PhosonApp) -> None:
     raise AssertionError("c-p is not bound to the command palette")
 
 
+async def test_t12_double_ctrl_p_schedules_only_one_palette(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """A fast second Ctrl+P before the first task ticks is ignored.
+
+    ``_active_float`` is only set inside the background task, so without a
+    synchronous guard two presses would schedule two palette tasks and
+    clobber each other's float.
+    """
+    _set_palette_catalog(app)
+    opened: list[int] = []
+
+    async def fake_run_float_picker(picker):
+        opened.append(1)
+        from phoson_cli.palette_picker import PalettePickerResult
+
+        return PalettePickerResult(command_name=None, cancelled=True)
+
+    monkeypatch.setattr(app, "run_float_picker", fake_run_float_picker)
+
+    _trigger(app, "c-p")
+    # Second press before the task has ticked (before _active_float is set).
+    assert app._palette_open is True  # noqa: SLF001
+    _trigger(app, "c-p")
+
+    # Let the first task run to completion.
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if opened:
+            break
+    assert app._palette_open is False  # noqa: SLF001
+    assert opened == [1], f"palette opened {len(opened)} times, expected 1"
+
+
 async def test_t12_bang_prefix_runs_bash_not_agent(app: PhosonApp, monkeypatch) -> None:
     from phoson_agent.permissions import PermissionPolicy
 
@@ -1349,6 +1383,61 @@ async def test_t12_bang_bash_deny_policy_blocks(app: PhosonApp, monkeypatch) -> 
 
     rb.assert_not_awaited()
     assert "denied by permissions policy" in _transcript(app)
+
+
+async def test_t12_bang_output_starting_like_error_is_not_error(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """Command output that merely *starts* with the timeout phrase is not
+    misclassified as an infra error (anchored fullmatch, not startswith)."""
+    from phoson_agent.permissions import PermissionPolicy
+
+    monkeypatch.setattr(
+        "phoson_cli.permissions_store.load_policy",
+        lambda *a, **k: PermissionPolicy(levels={"bash": "allow"}),
+    )
+    with (
+        patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)),
+        patch(
+            "phoson_cli.tools.bash._run_bash",
+            new=AsyncMock(
+                return_value="Command timed out after 5s (in my test)\nmore output"
+            ),
+        ),
+    ):
+        app._prompt_input.text = "! mycmd"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    text = _transcript(app)
+    assert "✗" not in text  # rendered as a success card, not an error card
+    assert "more output" in text
+
+
+async def test_t12_bang_real_timeout_renders_error_card(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """A genuine _run_bash timeout message still renders an ✗ card."""
+    from phoson_agent.permissions import PermissionPolicy
+
+    monkeypatch.setattr(
+        "phoson_cli.permissions_store.load_policy",
+        lambda *a, **k: PermissionPolicy(levels={"bash": "allow"}),
+    )
+    with (
+        patch.object(app.repl, "_run_agent", new=AsyncMock(return_value=None)),
+        patch(
+            "phoson_cli.tools.bash._run_bash",
+            new=AsyncMock(return_value="Command timed out after 30s"),
+        ),
+    ):
+        app._prompt_input.text = "! sleep 999"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await app._run_task
+
+    assert "✗" in _transcript(app)
 
 
 def _transcript(app: PhosonApp) -> str:
