@@ -500,7 +500,7 @@ async def test_undo_jump_without_rewind_is_a_notice(tmp_path) -> None:
     assert len(app.sink.blocks) == blocks_before + 1  # one notice
 
 
-def test_reset_transcript_reseeds_banner_and_drops_cache(tmp_path) -> None:
+def test_reset_transcript_clears_and_drops_cache(tmp_path) -> None:
     app = _app_for(tmp_path)
     app.sink.blocks.append("stale block")
     # Fill the block cache so the reset must drop it.
@@ -508,8 +508,9 @@ def test_reset_transcript_reseeds_banner_and_drops_cache(tmp_path) -> None:
 
     app._reset_transcript()
 
-    assert len(app.sink.blocks) == 1  # banner only
-    assert app.sink.blocks[0] is app._banner_block
+    # T-1: the transcript is fully cleared and no banner is re-seeded.
+    assert app.sink.blocks == []
+    assert app._banner_block is None
     assert app._block_ansi_cache._entries == {}
 
 

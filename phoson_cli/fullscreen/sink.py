@@ -262,10 +262,16 @@ class FullScreenSink:
         self._error_notice_idx = None
 
     def status_text(self) -> str:
-        """Short status string for the header bar."""
+        """Short status string for the header bar.
+
+        T-2: the idle state returns an empty string, not "Online" — the
+        permission-mode chip already shows the app's state at idle, and
+        "Online" is IM vocabulary, not work-surface vocabulary. Live
+        activity (streaming / running a tool / subagents) still shows.
+        """
         turn = self.current_turn
         if turn is None:
-            return "Online"
+            return ""
         if turn.subagent_tasks:
             return "Running subagents"
         if turn.composing_tool:

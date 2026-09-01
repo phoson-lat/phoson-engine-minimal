@@ -168,7 +168,16 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("Model", ("/model", "/provider", "/subagent-model", "/reasoning-effort")),
     (
         "Info",
-        ("/status", "/env", "/cost", "/tokens", "/steps", "/agents-md", "/skills"),
+        (
+            "/status",
+            "/about",
+            "/env",
+            "/cost",
+            "/tokens",
+            "/steps",
+            "/agents-md",
+            "/skills",
+        ),
     ),
     (
         "Config & System",
@@ -271,6 +280,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/status",),
         "Show provider, model, session, cost, tokens and permissions",
         "_cmd_status",
+    ),
+    CommandSpec(
+        ("/about",),
+        "Show the Phoson wordmark and about info",
+        "_cmd_about",
     ),
     CommandSpec(
         ("/sessions",), "List, load (#) or pick saved sessions", "_cmd_sessions"
@@ -1222,6 +1236,27 @@ class CommandHandler:
             f"permissions {permissions}",
         ]
         r.print_info("\n".join(lines))
+        return True
+
+    async def _cmd_about(self, cmd: Command) -> bool:  # noqa: ARG002
+        """Show the Phoson wordmark / about info.
+
+        T-1: the ASCII banner is no longer injected into the transcript at
+        startup (the header already shows provider/model/session). This is
+        the on-demand home for the art, so it stays available without
+        occupying the pane on every launch.
+        """
+        from ._views import render_banner
+
+        self._r.print_renderable(
+            render_banner(
+                provider=self.repl.config.provider,
+                model=self.repl.current_model,
+                session_id=self.repl.tree.session_id,
+                theme=self.repl.theme,
+                show_meta=True,
+            )
+        )
         return True
 
     async def _cmd_resume(self, cmd: Command) -> bool:

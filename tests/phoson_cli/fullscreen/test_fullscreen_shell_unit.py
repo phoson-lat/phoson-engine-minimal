@@ -248,7 +248,10 @@ def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> No
     from phoson_cli.fullscreen.sink import CurrentTurn
 
     app.sink.current_turn = CurrentTurn(model="m", max_steps=10)
+    # T-2: idle shows no "Online" — and neither does an empty in-flight
+    # turn, which shows the thinking step instead.
     assert "Online" not in app._get_header_text().value
+    assert "thinking" in app._get_header_text().value
 
     app.sink.current_turn.content = "partial"
     assert "Streaming" in app._get_header_text().value
@@ -257,7 +260,9 @@ def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> No
     assert "Running tool" in app._get_header_text().value
 
     app.sink.current_turn = None
-    assert "Online" in app._get_header_text().value
+    # T-2: idle has no status word at all (the permission chip shows state).
+    assert "Online" not in app._get_header_text().value
+    assert "Streaming" not in app._get_header_text().value
 
 
 async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:
@@ -436,23 +441,23 @@ def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
 def test_theme_after_clear_does_not_crash_on_stale_banner(app: PhosonApp) -> None:
     """/theme must not raise after /clear.
 
-    The app kept a reference to the banner block object; ``clear()``
-    drops the transcript without it, so the reference dangles and
-    ``sink.blocks.index(banner)`` raised ValueError → the command
-    dispatch loop crashed ("Group object ... is not in list").
+    T-1: the banner is no longer seeded into the sink at all, so there is
+    no block reference to dangle — the regression that motivated this
+    test is now trivially impossible, but the test stays as a guard that
+    clear + a theme switch leaves the pane empty and crash-free.
     """
     from phoson_cli.theme import DARK
 
-    assert app._banner_block is not None
-    assert app._banner_block in app.sink.blocks
+    # T-1: no banner block is ever injected into the sink.
+    assert app._banner_block is None
+    assert app.sink.blocks == []
 
     app.clear()
     assert app._banner_block is None
     assert app.sink.blocks == []
 
-    # The crash from the report: apply_theme looked for the stale banner.
+    # apply_theme after a clear must be a no-op on the transcript.
     app.apply_theme(DARK)
-    # A cleared transcript intentionally has no banner — not re-inserted.
     assert app._banner_block is None
     assert app.sink.blocks == []
 
@@ -556,21 +561,21 @@ def test_scroll_home_jumps_to_top(app: PhosonApp) -> None:
     assert app._chat_scroll_top == 0
 
 
-def test_render_chat_shows_the_banner_on_startup(app: PhosonApp) -> None:
-    """The chat pane is seeded with the welcome banner, not an empty
-
-    placeholder (the "Type a message..." hint in ``render_chat`` is
-    unreachable in the real app for this reason — it's still exercised
-    directly against a bare ``FullScreenSink`` in ``test_sink_unit.py``).
-    The provider/model/session/command-hint lines are NOT part of it —
-    that info lives in the header instead (see
-    ``test_header_shows_provider_model_and_session``), not duplicated
-    in the scrollback.
+def test_render_chat_shows_empty_state_on_startup(app: PhosonApp) -> None:
+    """T-1: the chat pane is seeded with a one-line empty-state hint, not
+    the 17-line ASCII banner (which is now available via /about). The
+    provider/model/session/command-hint lines are NOT part of it — that
+    info lives in the header instead (see
+    ``test_header_shows_provider_model_and_session``), not duplicated in
+    the scrollback.
     """
     text = app._render_chat().value
-    assert "phoson" in text
+    # No ASCII-art wordmark in the idle pane.
+    assert "phoson" not in text.lower()
+    assert "Type a message" not in text
+    # The one-line hint instead.
+    assert "/ commands" in text
     assert "provider" not in text
-    assert "/help for commands" not in text
 
 
 def test_render_chat_shows_transcript_blocks(app: PhosonApp) -> None:
@@ -938,10 +943,12 @@ async def test_bash_card_always_resolves_and_notifies(
     assert app._active_float is None  # the float closed on resolve
 
 
-def test_banner_seeds_the_transcript_on_init(app: PhosonApp) -> None:
-    assert len(app.sink.blocks) == 1
+def test_transcript_is_empty_on_init(app: PhosonApp) -> None:
+    """T-1: no banner block is injected at startup — the sink starts empty
+    and the chat pane renders the one-line empty-state hint."""
+    assert app.sink.blocks == []
     text = app._render_chat().value
-    assert "phoson" in text
+    assert "/ commands" in text
 
 
 def test_slash_completer_only_completes_the_command_word() -> None:

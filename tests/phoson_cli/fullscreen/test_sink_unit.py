@@ -238,7 +238,14 @@ def test_text_interleaves_with_tool_calls_in_chronological_order() -> None:
         "All green, done.",
     ]
     # Each answer segment got its own frozen block, not one giant blob.
-    assert text.count("Phoson") >= 3
+    # T-2: no per-turn "Phoson" label — the segments are counted by their
+    # content lines, and there must be exactly three of them.
+    for seg in (
+        "Let me check the directory first.",
+        "Now running the tests.",
+        "All green, done.",
+    ):
+        assert text.count(seg) == 1
 
 
 def test_reasoning_is_captured_and_taken_once() -> None:
@@ -476,7 +483,7 @@ def test_notify_and_attachments_append_blocks() -> None:
 
 def test_render_chat_placeholder_when_empty() -> None:
     sink, _ = _make_sink()
-    assert "Type a message" in render_chat(sink, width=80)
+    assert "/ commands" in render_chat(sink, width=80)
 
 
 # ── I-84: repaint throttling ─────────────────────────────────────────────────

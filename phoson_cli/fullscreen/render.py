@@ -108,8 +108,11 @@ def render_chat(
     buf = io.StringIO()
 
     if not sink.blocks and sink.current_turn is None:
+        # T-1: real empty state — a one-line hint, no ASCII-art mascot
+        # (the banner is no longer injected into the sink). Both features
+        # work today: @file mentions and / commands.
         _make_console(buf, width).print(
-            "Type a message and press Enter.", style=sink.theme.muted
+            "  @ files  ·  / commands", style=sink.theme.muted_deep
         )
         return buf.getvalue()
 
