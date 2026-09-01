@@ -18,7 +18,7 @@
 |-------|-------|----------------|-------|--------|
 | 1 | [#155](https://github.com/phoson-lat/phoson-engine-minimal/issues/155) | T-5 — `Thinking 8s`, borrar frases rotativas | 1 | ✅ v0.20.0 |
 | 2 | [#159](https://github.com/phoson-lat/phoson-engine-minimal/issues/159) | T-9 — Footer contextual (3 hints) | 1 | ✅ `39ceac6` |
-| 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | 🔴 (bug confirmado en `bench/run_bench.py`) |
+| 3 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bug bench: `--model`/`--provider` ignorados | 1 | ✅ |
 | 4 | [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) | Model picker: duplicados + lista incompleta | 1 | 🔴 |
 | 5 | [#151](https://github.com/phoson-lat/phoson-engine-minimal/issues/151) | T-1 — Banner/plugins fuera del transcript | 2 | 🔴 |
 | 6 | [#152](https://github.com/phoson-lat/phoson-engine-minimal/issues/152) | T-2 — Chrome seco (matar "Online") | 2 | 🔴 |
@@ -59,9 +59,10 @@
 - No cambia el layout. El trabajo real es quitar 5 atajos de la línea y moverlos a docs/`/keys`.
 - **Hecho:** `_FOOTER_HINT_IDLE`/`_RUNNING`/`_PICKER` en `fullscreen/app.py`, seleccionados por estado del app.
 
-### 3. [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) — Bug del bench
+### 3. [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) — Bug del bench ✅
 - El fix recomendado (config efímero vía env en el workspace del runner) **no toca el CLI**: solo `bench/run_bench.py` + README + modelo registrado en el JSON de resultados.
 - Es P0 del plan de harness por *impacto*, no por esfuerzo.
+- **Hecho:** `_build_env()` inyecta las env reales `PHOSON_MODEL`/`PHOSON_PROVIDER` (que `config.py` resuelve env → config.toml → default) y **pop**ea las heredadas del shell del dev (una `PHOSON_MODEL` de la shell no puede re-apuntar una baseline); los `*_OVERRIDE` fantasma desaparecen. El JSON de resultados (`_results_payload`) ahora registra `model` + `provider` + `commit`. Smoke end-to-end: `--model openai/gpt-4o-mini --provider openrouter` corrió un LLM real y el JSON quedó con esos valores. 5 tests de regresión en `tests/test_bench_runner.py`.
 
 ### 4. [#150](https://github.com/phoson-lat/phoson-engine-minimal/issues/150) — Model picker
 - Bug de dedup/key: modelos con el mismo nombre colapsan y faltan entries.
@@ -145,7 +146,7 @@
 - 15–25 tasks con checkers deterministas, baseline con ≥3 corridas (varianza medida),
   workflow nightly, split held-out documentado.
 - **Es el P0 del que dependen los criterios de #142, #143, #145, #147** — su complejidad es la de su propia infra + ser el cuello de botella del plan.
-- Bloqueado por #138.
+- Bloqueante #138 (modelo fijo verificable) **resuelto** ✅ — queda armar el set + baseline + gate nightly.
 
 ### 21. [#144](https://github.com/phoson-lat/phoson-engine-minimal/issues/144) — Permisos por intención (3 fases)
 - M-L: reescribe la taxonomía de riesgo (Fase 1), consume anotaciones MCP (Fase 2),
@@ -183,7 +184,7 @@
 
 ```
 Fase 1 — quick wins (1 día c/u, sin riesgo)
-  #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix)  #150 (picker)
+  #155 (Thinking Ns) ✅  #159 (footer) ✅  #138 (bench fix) ✅  #150 (picker)
 
 Fase 2 — sprint look 0 (1-2 PRs densos)
   #151, #152  →  PR "chrome/transcript secos"
@@ -194,8 +195,7 @@ Fase 3 — sprint look 1 + fixes independientes
   #141 (run budget)                →  engine fix independiente, no mezclar
 
 Fase 4 — la infra del harness (se alimentan entre sí)
-  #138 (bench fix) → bench/ ya commitado (runner + 4 tasks); falta arreglar --model/--provider
-  #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)
+  #140 slice 1 (trace-file JSON)  →  #139 (eval set + gate nightly)   [#138 ✅ ya destraba el modelo fijo]
   #161 (acuerdo del ADR, cuando toque)
   #160 (hero tape, recién con look 0+1 merged)
   #162 (palette + ! bash, recién con #154; #156 ya está)
@@ -218,7 +218,7 @@ Fase 8 — sprint 4 / diferido
 ### Reglas del orden
 
 1. **Nunca mezclar** T-6 (#156) con el PR de "secar el look": toca permisos.
-2. **#138 antes que #139** (bloqueo duro).
+2. **#138 antes que #139** (bloqueo duro) — **resuelto** ✅; #139 ya no está bloqueado por el modelo fijo.
 3. **#140 slice 1 antes que #139**: el gate nightly necesita el trace para clasificar fallas.
 4. **#158 (system theme) va último del sprint look 1** porque cambia el default — después de que T-1…T-7 ya se vean bien sobre el purple actual.
 5. Todo lo que diga "medido contra H-1" (#142, #143, #145, #147) **no está listo para atacarse** hasta que #139 exista.
