@@ -1,8 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.1** (v0.24.0: T-14 windowing + spinner fix en `84e44b7`; v0.24.1: follow-up TUI F-41/42/44 en `df2fd70`) · 1920 tests pasados (1908 en main + 12 del PR #174/#141 en curso) · ruff/pyright limpios.
->
-> **En curso (Sprint A, PR pendiente):** #174 + #141 resueltos en código — helper compartido de middlewares en `session_utils`, sub-agentes y one-shot con la cadena Offload → Summarizer → Permission (fail-closed), `PHOSON_RUN_BUDGET_SECONDS` (exit 124) e impresión `""` en vez de `None` en one-shot. Criterio de listo verificado con 12 tests; falta el PR + cierre en GitHub.
+> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.2** (v0.24.2: #174 + #141 — middlewares en sub-agentes/one-shot + `PHOSON_RUN_BUDGET_SECONDS`, PR #191, `1f3f2d6`; v0.24.1: follow-up TUI F-41/42/44 en `df2fd70`) · 1920 tests pasados · ruff/pyright limpios.
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -19,7 +17,7 @@
 | Look del TUI (T-1…T-13) | ✅ Todo shipped v0.20.0–v0.23.0. T-11 (ADR renderer) cerrado. |
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
-| Seguridad | 🟠 #175 (`fnmatch` sobre comando completo), #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 (middlewares en sub-agentes/one-shot + budget wall-clock) resueltos en código (PR pendiente). |
+| Seguridad | 🟠 #175 (`fnmatch` sobre comando completo), #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). |
 | Loop | 🔴 #176 (compactación rompe pares), #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). |
 | ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
@@ -35,8 +33,8 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#138](https://github.com/phoson-lat/phoson-engine-minimal/issues/138) | Bench ignora `--model/--provider` | H-0 | — | — | ✅ **cerrado** | Fix en `f1b3d04` (main); verificado y cerrado el 2026-09-01. Deriva docs↔GitHub que #146 debería detectar. |
 | [#171](https://github.com/phoson-lat/phoson-engine-minimal/issues/171) | T-14 windowing del chat pane | T-14 | 🟠 perf | M | ✅ **cerrado** | Merged en PR #173 (`84e44b7`); F-40 corregido en `40c8022`. Follow-up F-41/42/44 en #186. |
 | [#186](https://github.com/phoson-lat/phoson-engine-minimal/issues/186) | TUI: ANSI/OSC crudo en bash, fingerprint sin generación, docstring O(visible) | F-41, F-42, F-44 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.1 (PR #190, `df2fd70`, cerrado 2026-09-01): `Text.from_ansi` + strip OSC en `_bash_output_body`, `generation` en fingerprint de `_compute_chat_bounds`, docstring/CHANGELOG corregidos. 5 tests nuevos. |
-| [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | **A** | 🟢 Resuelto en código (PR pendiente): helper compartido `build_middlewares`; sub-agentes heredan la cadena + `safe_mode`/`bash_confirmation`/`plugin_ui`; one-shot construye la cadena (fail-closed) y imprime `""` en vez de `None`. Absorbe #141. Prerrequisito de #129 slice 5. |
-| [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | **A** | 🟢 Resuelto en código (PR pendiente, mismo PR que #174): `run_budget_seconds` (600s, `0`=sin límite) + `PHOSON_RUN_BUDGET_SECONDS`; `asyncio.wait_for` sobre el run → exit 124 con mensaje limpio; interactivo no cambia. |
+| [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | ✅ **cerrado** | Shipped v0.24.2 (PR #191, `1f3f2d6`): helper compartido `build_middlewares`/`build_summarizer`/`build_offload`; sub-agentes heredan la cadena + contexto fresco (safe_mode/bash_confirmation/plugin_ui); one-shot construye la cadena (fail-closed) e imprime `""` no `None`. 12 tests. Absorbía #141; prerrequisito de #129 slice 5. |
+| [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.2 (mismo PR #191): `run_budget_seconds` (600s, `0`=sin límite) + `PHOSON_RUN_BUDGET_SECONDS`; `asyncio.wait_for` sobre el run → exit 124 con mensaje limpio; interactivo no cambia. |
 | [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | **A** | Bug del mecanismo actual; no espera a la taxonomía de #144. #169 lo heredaría. |
 | [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | **A** | Gap listado en la comparación SOTA. Quick win. |
 | [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | **B** | Antigravity §3.4 lo describía como correcto. Primer candidato a medir con #139. |
@@ -75,7 +73,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 
 Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar PRs de seguridad con PRs de look o perf.
 
-### Sprint A — corrección y seguridad (v0.24.0 + v0.24.1)
+### Sprint A — corrección y seguridad (v0.24.0 + v0.24.1 + v0.24.2)
 
 ```
 1. Mergear PR #173 (T-14 + fix F-40).                                        ✅ merged 84e44b7 (v0.24.0)
@@ -86,7 +84,7 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           heredan Permission + safe_mode + confirmation (fail-closed sin
           callback); one-shot construye Offload → Summarizer → Permission;
           PHOSON_RUN_BUDGET_SECONDS. (#184 puede ir aquí: misma construcción.) S-M
-          🟢 **Resuelto en código** (PR pendiente): helper `session_utils.build_middlewares`/
+          ✅ shipped v0.24.2 (PR #191, 1f3f2d6): helper `session_utils.build_middlewares`/
           `build_summarizer`/`build_offload`; `subagent.py` hereda cadena + contexto
           fresco (safe_mode/bash_confirmation/plugin_ui) en `agent` y `agents`;
           `_run_oneshot` construye la cadena (fail-closed, imprime `""` no `None`) y
