@@ -189,6 +189,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/attach",
             "/permissions",
             "/details",
+            "/notify",
             "/mcp",
             "/setup",
             "/update",
@@ -324,6 +325,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/details", "/tool-cards"),
         "Toggle tool-card bodies (diffs, write summaries, bash output)",
         "_cmd_details",
+    ),
+    CommandSpec(
+        ("/notify",),
+        "Notify the terminal when a run finishes: /notify <bell|desktop|off>",
+        "_cmd_notify",
     ),
     CommandSpec(
         ("/agents-md",),
@@ -1361,6 +1367,32 @@ class CommandHandler:
             )
             return True
         toggler()
+        return True
+
+    async def _cmd_notify(self, cmd: Command) -> bool:
+        """Set the run-completion notification mode (#167)."""
+        from phoson_cli.notify import NOTIFY_MODES
+
+        r = self._r
+        current = self.repl.config.notify_on_completion
+
+        arg = cmd.args.strip().lower()
+        if not arg:
+            r.print_info(
+                f"Notify on completion: {current}"
+                f"  ·  usage: /notify <{'|'.join(NOTIFY_MODES)}>"
+            )
+            return True
+
+        if arg not in NOTIFY_MODES:
+            r.print_error(
+                f"Unknown notification mode: {arg!r}  ·  use {', '.join(NOTIFY_MODES)}"
+            )
+            return True
+
+        self.repl.config.notify_on_completion = arg
+        save_config(self.repl.config, only_fields={"notify_on_completion"})
+        r.print_info(f"Notify on completion → {arg}  ·  saved")
         return True
 
     async def _cmd_agents_md(self, cmd: Command) -> bool:  # noqa: ARG002

@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fixes
+
+- **Compaction no longer breaks tool_use/tool_result pairs (#176, F-10/F-11)**:
+  auto-compaction cut the history by index (`others[-min_keep_messages:]`)
+  without looking at block types, so the kept tail often started on a
+  `user` `tool_result` whose `tool_use` had just been summarized —
+  Anthropic answered `400 tool_result ... without tool_use`, which is not a
+  context-length error, so the emergency-compaction rescue didn't recognize
+  it and the turn died. A new `safe_cut_index` helper backs the cut up to a
+  tool-pair boundary and is used in all three compaction sites
+  (`_compact`, `_emergency_compact`, `build_compaction`) plus the manual
+  `/compact` path, so no kept tail ever starts on an orphaned `tool_result`.
+  Two related defects fixed in the same path: a successful-but-**empty**
+  summary (the model answered with a tool call, because the internal summary
+  round trip inherited the run's tool schemas) used to drop the middle of the
+  history silently — it now **aborts** the compaction; and the internal
+  summary call now goes out **tool-free** (via an injected chat client) so
+  the model can't answer it with a tool call. A tool-pairing 400 that does
+  still reach the loop now surfaces as an explicit, diagnosable error
+  (`tool_result_without_tool_use`) instead of a cryptic 400.
+
+### Features
+
+- **Terminal notification on run completion (#167)**: new
+  `notify_on_completion` setting (`off` (default) | `bell` | `desktop`),
+  settable via `config.toml`, `PHOSON_NOTIFY_ON_COMPLETION`, or the new
+  `/notify` command. When enabled, a finished run emits a cue to the terminal
+  so a backgrounded window gets attention: `bell` writes a BEL (`\a`), and
+  `desktop` writes OSC 9 / OSC 777 desktop-notification sequences (iTerm2,
+  WezTerm, Windows Terminal, Kitty, XTerm) plus a BEL fallback. The writer is
+  TTY-gated, so piped/script output is never polluted with control bytes;
+  only successful runs notify (errors/cancellations stay silent). Default is
+  `off` to preserve the historical silent behaviour — a bell on every coding
+  turn would be intrusive, so the user opts in.
+
+- **Agent-controlled compaction — `compact_context` tool (#147, H-9)**: the
+  automatic compaction gate is *reactive* — it fires at a fixed fraction of
+  the context window, which knows nothing about the task and can interrupt a
+  reasoning step mid-subtask. The new `compact_context` tool hands control to
+  the agent so it can compact *strategically* — between tasks, or right before
+  reading/processing a large input — on top of the threshold gate, which stays
+  as the safety net. The tool takes **no arguments** the model sees: it
+  performs the exact same structured handoff the automatic path and `/compact`
+  use (tool-pair-safe `safe_cut_index` cut, structured Goal/Completed/Decisions
+  /Reasoning/Open-questions/Next-steps/Constraints summary, captured-reasoning
+  folding, empty-summary abort). It splices the engine's *in-flight* history in
+  place and queues a compaction event that the run-end tree rebase consumes —
+  identical to a mid-run auto-compaction — so `/tree` and `base_count`
+  bookkeeping stay consistent. It is wired only to the **main** engine (never
+  the shared registry sub-agents select from, so a sub-agent cannot compact the
+  parent's history), is allowed by the default permission policy, and is
+  advertised in the system prompt — with a "when to call it" note and the safety
+  rule that critical instructions belong in `AGENTS.md` / the system prompt
+  (which survive every compaction) — only when the tool is present. `docs/cli/
+  compaction.md` documents what survives (summary, recent tail, system prompt +
+  AGENTS.md), what does not survive verbatim (summarized older turns), and the
+  three modes (automatic / manual / agent-controlled). 11 new unit tests.
+
 ## v0.24.2 (2026-09-01)
 
 ### Fixes / Security

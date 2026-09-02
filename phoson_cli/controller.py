@@ -37,6 +37,7 @@ from phoson_llm.schemas import (
     ToolDefinition,
 )
 from phoson_agent.sessions import JsonlStorage, ConversationTree
+from phoson_agent.plugins.summarizer import safe_cut_index
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .theme import (
@@ -75,6 +76,7 @@ from .session_utils import (
     drain_monitor_wakes,
     find_monitor_plugin,
 )
+from .tools.compact import compact_context
 from .permissions_store import build_permission_middleware
 
 # The monitor plugin ships in the same wheel; the fallback keeps
@@ -390,6 +392,10 @@ class SessionController:
 
         self.summarizer.provider = self.config.provider
         self.summarizer.model = self.config.model
+        # The internal summary round trip must not carry the run's tool
+        # schemas (F-11 / #176): point the summarizer at the live chat
+        # client so its summary call goes out tool-free.
+        self.summarizer.chat = self.chat
         self.summarizer.vllm_base_url = self._vllm_base_url()
         self._apply_context_config()
 
@@ -408,9 +414,17 @@ class SessionController:
         # sub-engine via ``context.extra["middlewares"]`` (#174/F-01).
         self._middlewares = middlewares
 
+        # Agent-controlled compaction (#147): expose the ``compact_context``
+        # tool to the *main* engine only. It is added to a fresh tools list
+        # (not to ``self.tools`` / ``tools_dict``) so sub-agents — which pick
+        # their tools from ``available_tools`` = ``tools_dict`` — do not
+        # inherit it; a sub-agent compacting the parent's history would be
+        # wrong. The tool carries no visible args; it injects ``do_compact``
+        # (bound below) which does the work in the controller.
+        engine_tools = [*self.tools, compact_context]
         self.engine = AgentEngine(
             chat=self.chat,
-            tools=self.tools,
+            tools=engine_tools,
             middlewares=middlewares,
             plugins=plugins,
             max_iterations=self.config.max_iterations,
@@ -465,6 +479,10 @@ class SessionController:
             for tool in self.engine.tools
         ]
         self.engine.context.extra["available_tools"] = self.tools_dict
+        # #147: the ``compact_context`` tool's injected callable. It runs the
+        # agent-controlled compaction in this controller (splicing the
+        # engine's in-flight history and queueing the tree-rebase event).
+        self.engine.context.extra["do_compact"] = self._compact_inflight
         self.engine.context.extra["default_model"] = self.subagent_model
         # Fallback for sub-agents when the subagent model is unavailable.
         self.engine.context.extra["main_model"] = self.current_model
@@ -939,6 +957,16 @@ class SessionController:
         self._persist_run_reasoning()
         self.summarizer.clear_retained_reasoning()
         await self._save_session()
+        # #167: cue the terminal when a run finishes (TTY-gated; "off" is a
+        # no-op). Covers both interactive front ends and monitor-wake turns
+        # since they all flow through run_turn.
+        from phoson_cli.notify import notify_run_done
+
+        notify_run_done(
+            getattr(self.config, "notify_on_completion", "off"),
+            "done",
+            title="Phoson finished",
+        )
         return RunOutcome(
             status="done",
             final_content=terminal_event.result.final_content,
@@ -1133,6 +1161,104 @@ class SessionController:
             if (text := reasoning_by_msg.get(id(msg), ""))
         }
 
+    async def _compact_inflight(self) -> str:
+        """Agent-controlled compaction of the *in-flight* run history (#147).
+
+        Backs the ``compact_context`` tool: the agent calls it strategically
+        (between tasks, before a large read) instead of waiting for the
+        automatic threshold gate. The effect is deliberately **identical** to
+        the automatic path and to ``/compact``:
+
+        - it cuts at a tool-pair boundary (:func:`safe_cut_index`, #176), so
+          the kept tail never starts on an orphaned ``tool_result``;
+        - it generates the *same* structured handoff summary (goal /
+          completed / decisions / distilled reasoning / open questions /
+          next steps / constraints) via a tool-free ``chat.complete`` round
+          trip, with retained reasoning folded in (E1);
+        - an **empty** summary aborts (nothing is lost) — same rule as the
+          automatic path;
+        - it splices the compacted list into the engine's history **in place**
+          (``replace_history``), and queues a compaction event. The tree is
+          NOT touched here: the run-end ``_rebase_after_compaction`` consumes
+          that event and grafts the compacted history as a new branch —
+          exactly as a mid-run auto-compaction does — so ``/tree`` stays
+          consistent and ``base_count`` bookkeeping is unaffected.
+
+        The automatic threshold gate is left untouched as the safety net for
+        when the agent never calls the tool. Returns a short human/model
+        report of what was compacted.
+        """
+        path = self.engine.get_partial_history()
+        if not path:
+            return "Nothing to compact — the session is empty."
+
+        before = self.summarizer.estimate_tokens(path)
+        system_msgs = [m for m in path if m.role == "system"]
+        others = [m for m in path if m.role != "system"]
+        min_keep = self._profile_keep(None)
+        if len(others) <= min_keep:
+            return (
+                f"Only {len(others)} turn(s) in context — nothing worth compacting yet."
+            )
+
+        # Cut at a tool-pair boundary (F-10 / #176): the automatic path and
+        # /compact both do this; the agent tool must too.
+        cut = safe_cut_index(others, min_keep)
+        if cut == 0:
+            return "Nothing to compact — the recent tail already holds the context."
+        to_summarize = others[:cut]
+
+        from phoson_llm.schemas import LLMDoneEvent
+
+        # Reasoning must be indexed against *to_summarize* (the exact list
+        # handed to the prompt builder). Mid-run, most of this path is not in
+        # the tree yet, so ``_path_reasoning_map`` (which reads node metadata)
+        # only covers the committed prefix — that is fine: the run's own
+        # captured reasoning was already registered via
+        # ``set_retained_reasoning`` and resolves by identity.
+        reasoning = self._path_reasoning_map(to_summarize)
+        summary_prompt = self.summarizer.build_summary_prompt(
+            to_summarize, reasoning_for=reasoning
+        )
+        done: LLMDoneEvent = await self.chat.complete(
+            [Message(role="user", content=summary_prompt)],
+            ModelConfig(model=self.current_model, max_tokens=4096, temperature=0.3),
+        )
+
+        summary_text = done.content.strip()
+        if not summary_text:
+            # F-11 rule: never summarize the middle into nothing.
+            return (
+                "Compaction skipped — the model returned an empty summary, "
+                "so the history was left unchanged."
+            )
+
+        compacted = list(system_msgs)
+        compacted.append(
+            Message(role="user", content=f"[Conversation summary]: {summary_text}")
+        )
+        compacted.extend(others[cut:])
+
+        after = self.summarizer.estimate_tokens(compacted)
+        messages_removed = len(path) - len(compacted)
+
+        # Splice in place so the in-flight ReAct loop sees the compacted
+        # history on its next iteration, and queue the event so the run-end
+        # tree rebase consumes it (identical to a mid-run auto-compaction).
+        self.engine.replace_history(compacted)
+        self.summarizer.record_compaction_event(
+            original_tokens=before,
+            compacted_tokens=after,
+            messages_removed=messages_removed,
+            summary_length=len(summary_text),
+        )
+        self._context_tokens = self.estimate_active_path()
+
+        return (
+            f"Compacted {messages_removed} message(s): {before} → {after} "
+            f"tokens (structured handoff summary; recent tail kept)."
+        )
+
     def plan_compaction(self, profile: str | None = None) -> "CompactPlan":
         """Compute what a compaction *would* do, without any LLM call.
 
@@ -1152,13 +1278,17 @@ class SessionController:
                 ),
             )
 
-        summarize = len(others) - min_keep
+        # Cut at a tool-pair boundary (F-10 / #176) so the preview matches
+        # the applied compaction: never leave an orphaned tool_result at
+        # the top of the kept tail.
+        cut = safe_cut_index(others, min_keep)
+        summarize = cut
         estimated = self.summarizer.estimate_tokens(others[:summarize])
         return CompactPlan(
             ok=True,
             total_messages=len(others),
             summarize_messages=summarize,
-            keep_messages=min_keep,
+            keep_messages=len(others) - cut,
             estimated_tokens=estimated,
             profile=profile or "balanced",
         )
@@ -1211,7 +1341,10 @@ class SessionController:
         # folded into the prompt (E1).
         from phoson_llm.schemas import LLMDoneEvent
 
-        history_msgs = others[:-min_keep]
+        # Cut at a tool-pair boundary (F-10 / #176): never leave an
+        # orphaned tool_result at the top of the kept tail.
+        cut = safe_cut_index(others, min_keep)
+        history_msgs = others[:cut]
         # Reasoning must be indexed against *history_msgs* (the exact list
         # handed to the prompt builder), not the full path — otherwise a
         # leading system message would shift every index.
@@ -1235,7 +1368,7 @@ class SessionController:
         compacted_msgs.append(
             Message(role="user", content=f"[Conversation summary]: {summary_text}")
         )
-        keep_msgs = others[-min_keep:]
+        keep_msgs = others[cut:]
         compacted_msgs.extend(keep_msgs)
 
         after = self.summarizer.estimate_tokens(compacted_msgs)

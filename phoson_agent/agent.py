@@ -158,6 +158,19 @@ class AgentEngine:
         """Return a snapshot of the current history (post-stream or in-flight)."""
         return list(self._history)
 
+    def replace_history(self, compacted: list[Message]) -> None:
+        """Splice a compacted history IN PLACE into the in-flight history (#147).
+
+        Replaces the contents of the engine's current history list with
+        *compacted* while keeping the *same* list object, so the ReAct loop
+        (which holds a reference to it) sees the compacted history on the next
+        iteration — the same mechanism the automatic compaction's
+        ``messages[:] = compacted`` uses. This is what makes an
+        agent-controlled ``compact_context`` tool splice the live history
+        safely instead of swapping a foreign list the loop would not see.
+        """
+        self._history[:] = compacted
+
     def is_running(self) -> bool:
         """Whether ``stream()`` is currently active on this engine."""
         return self._running

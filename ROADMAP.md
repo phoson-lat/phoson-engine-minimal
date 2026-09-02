@@ -1,6 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-01 · estado de referencia **v0.24.2** (v0.24.2: #174 + #141 — middlewares en sub-agentes/one-shot + `PHOSON_RUN_BUDGET_SECONDS`, PR #191, `1f3f2d6`; v0.24.1: follow-up TUI F-41/42/44 en `df2fd70`) · 1920 tests pasados · ruff/pyright limpios.
+> **Actualizado:** 2026-09-01 · estado de referencia **v0.25.0** (v0.25.0: #176 `safe_cut_index` + #147 `compact_context` + #167 `notify_on_completion`; v0.24.2: #174 + #141 — PR #191, `1f3f2d6`) · 1977 tests pasados · ruff/pyright limpios.
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -18,8 +18,9 @@
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🟠 #175 (`fnmatch` sobre comando completo), #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). |
-| Loop | 🔴 #176 (compactación rompe pares), #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). |
+| Loop | 🟠 #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
 | ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). |
+| Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
 
 ---
@@ -36,10 +37,10 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | ✅ **cerrado** | Shipped v0.24.2 (PR #191, `1f3f2d6`): helper compartido `build_middlewares`/`build_summarizer`/`build_offload`; sub-agentes heredan la cadena + contexto fresco (safe_mode/bash_confirmation/plugin_ui); one-shot construye la cadena (fail-closed) e imprime `""` no `None`. 12 tests. Absorbía #141; prerrequisito de #129 slice 5. |
 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.2 (mismo PR #191): `run_budget_seconds` (600s, `0`=sin límite) + `PHOSON_RUN_BUDGET_SECONDS`; `asyncio.wait_for` sobre el run → exit 124 con mensaje limpio; interactivo no cambia. |
 | [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | **A** | Bug del mecanismo actual; no espera a la taxonomía de #144. #169 lo heredaría. |
-| [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | **A** | Gap listado en la comparación SOTA. Quick win. |
+| [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | ✅ **cerrado** | Shipped v0.25.0: `notify_on_completion` (off/bell/desktop) + `PHOSON_NOTIFY_ON_COMPLETION` + `/notify`; TTY-gated, solo en run exitoso. Default `off`. |
 | [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | **B** | Antigravity §3.4 lo describía como correcto. Primer candidato a medir con #139. |
 | [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | **B** | Junto con #179 forman el PR de edit tool. |
-| [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | **B** | Antigravity la llamaba "robusta". **Bloquea #147.** |
+| [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | ✅ **cerrado** | Shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/emergency/manual + plan), resumen vacío ⇒ abortar, llamada de resumen tool-free (chat), 400 de pairing ⇒ error explícito. Desbloquea #147. |
 | [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | **B** | Antigravity §2.5 describía `RetryingChat` como activo. |
 | [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | **B** | Mismo camino que #134 (`_build_assistant_message`). |
 | [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | **B** | |
@@ -56,7 +57,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#143](https://github.com/phoson-lat/phoson-engine-minimal/issues/143) | Contexto ambiental (step N/M, tiempo, % ventana) | H-4 | 🟠 | S | **D** | Se alimenta del budget de #141. |
 | [#144](https://github.com/phoson-lat/phoson-engine-minimal/issues/144) | Permisos por intención + MCP hints + audit log | H-6 | 🔴 | M-L | **D** (Fase 2) · tras #139 (Fases 1+3) | #174/#175 son bugs del mecanismo actual y van antes. |
 | [#146](https://github.com/phoson-lat/phoson-engine-minimal/issues/146) | Paridad docs↔código↔GitHub en CI | H-8 | 🟡 | S-M | **E** | Añadir regla: "✅ resuelto" en docs ⇒ issue cerrado (caso #138). |
-| [#147](https://github.com/phoson-lat/phoson-engine-minimal/issues/147) | `compact_context()` controlada por el agente | H-9 | 🟡 | M | **E** | **Bloqueado por #176.** |
+| [#147](https://github.com/phoson-lat/phoson-engine-minimal/issues/147) | `compact_context()` controlada por el agente | H-9 | 🟡 | M | ✅ **resuelto** | Shipped v0.25.0: tool sin args en el engine principal (no en el registro de sub-agents), mismo handoff estructurado que `/compact`/auto (`safe_cut_index` + resumen estructurado + abort si vacío), splice in-flight in-place + evento de rebase al fin del run, anunciada en system prompt (solo cuando existe) + `docs/cli/compaction.md`. Default `allow`. 11 tests. **Pendiente:** medición contra H-1 (#139, Sprint 4). |
 | [#148](https://github.com/phoson-lat/phoson-engine-minimal/issues/148) | Tool budget / carga diferida | H-11 | 🟡 | análisis | **E** | Con datos de #140. |
 | [#129](https://github.com/phoson-lat/phoson-engine-minimal/issues/129) | Background agents (6 slices) | I-129 | 🟡 | L | **E** (slices 1+2) | Requiere #141 y #174 resueltos (unattended sin controles). |
 | [#187](https://github.com/phoson-lat/phoson-engine-minimal/issues/187) | Refactor: extraer `ChatPane`/`HeaderModel`/floats/`RewindController` de `app.py` | F-45 | 🟡 | M | **E** | Después de #172. |
@@ -92,6 +93,9 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 5. #175   Allow-patterns: shlex + primer token; separadores → ask/deny;
           match_args obligatorio.                                               S
 6. #167   BEL + OSC 9/777; config notify_on_completion.                         S
+          ✅ shipped v0.25.0: `notify.py` + `notify_on_completion`
+          (off/bell/desktop) + env + `/notify`; TTY-gated; solo en run exitoso.
+          29 tests.
 ```
 
 **Criterio de listo del sprint:** un tool en `deny` es rechazado desde un sub-agente y desde `-p` (test); `git *` no aprueba `git status; rm -rf /` (test); un run `-p` con tool colgado termina en el presupuesto con exit ≠ 0 (test).
@@ -103,6 +107,11 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           system prompt con guía de tools, git status y aviso de no confiable. M
 2. #176   Corte de compactación en fronteras seguras; resumen vacío aborta;
           tools=[] en el call_next del resumen.                                 M
+          ✅ shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/
+          emergency/build_compaction + /compact manual y su plan); resumen
+          vacío ⇒ abortar (no perder historial); llamada de resumen tool-free
+          vía `chat`; 400 de pairing ⇒ error explícito (no se traga). 17 tests.
+          Desbloquea #147.
 3. #177   RetryingChat en build_chat; deprecar RetryMiddleware.                  S
 4. #178   stop_reason normalizado; except Exception en ToolRunner con backfill. S-M
 5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
@@ -135,7 +144,8 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 
 ```
 1. #146   Gate docs↔código↔GitHub (incluye "✅ en docs ⇒ issue cerrado").       S-M
-2. #147   compact_context() (ya con #176 resuelto).                             M
+2. #147   compact_context() — ✅ adelantado a v0.25.0 (se desbloqueó con #176,
+          que también subió a v0.25.0). Medición contra H-1 (#139) pendiente.    M
 3. #148   Análisis de tokens de definiciones con datos de #140.                 análisis
 4. #129   Background agents slices 1+2.                                         M
 5. #187   Split de app.py (después de #172).                                    M

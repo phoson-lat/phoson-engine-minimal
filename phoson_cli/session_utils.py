@@ -40,7 +40,28 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "You are working on a {so} system with a terminal. Current date is {time}. "
     "Available tools: {tools}.{mcp_note}"
     " Be concise, accurate, and use tools when needed."
-    "{skills_block}{memory_block}"
+    "{skills_block}{memory_block}{compact_block}"
+)
+
+#: Agent-controlled compaction guidance (#147). Advertised only when the
+#: ``compact_context`` tool is in the registry. Teaches the model *when* to
+#: call it (strategically, between tasks / before a large read) and the safety
+#: rule: critical rules belong in AGENTS.md / the system prompt, not in the
+#: compactable history.
+_COMPACT_BLOCK_TEMPLATE = (
+    "\n\n# Context compaction (compact_context)"
+    " You can call the compact_context tool to compact the conversation "
+    "on your own judgement, in addition to the automatic compaction that "
+    "fires near the context limit. Prefer calling it *between* tasks, or "
+    "immediately before reading or processing a large input, rather than "
+    "letting the automatic gate fire mid-task. It produces a structured "
+    "handoff summary (goal, completed work, key decisions, distilled "
+    "reasoning, open questions, next steps, constraints) and keeps a recent "
+    "tail. What survives a compaction: the summary, the recent tail, and the "
+    "system prompt / AGENTS.md. What does not survive verbatim: the "
+    "summarized older turns. Never rely on compaction to preserve a critical "
+    "rule or instruction — put such things in AGENTS.md or the system prompt, "
+    "which survive every compaction."
 )
 
 #: Wrapper framing for the AGENTS.md memory injected into the prompt.
@@ -134,6 +155,13 @@ def build_system_prompt(
             max_tokens=skills_max_tokens or _SKILLS_MAX_TOKENS_DEFAULT,
         )
 
+    # Agent-controlled compaction guidance (#147): only advertised when the
+    # ``compact_context`` tool is in the registry (main engine), so sub-agents
+    # and one-shot runs are not told to call a tool they do not have.
+    compact_block = ""
+    if any(t.name == "compact_context" for t in tools):
+        compact_block = _COMPACT_BLOCK_TEMPLATE
+
     return _SYSTEM_PROMPT_TEMPLATE.format(
         cwd=Path.cwd(),
         so=sys.platform,
@@ -142,6 +170,7 @@ def build_system_prompt(
         mcp_note=mcp_note,
         skills_block=skills_block,
         memory_block=memory_block,
+        compact_block=compact_block,
     )
 
 

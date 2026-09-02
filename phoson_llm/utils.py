@@ -11,6 +11,50 @@ logger = logging.getLogger(__name__)
 #: (IMPROVEMENTS.md I-91).
 CONTEXT_LENGTH_ERROR_CODE = "context_length_exceeded"
 
+#: Error code emitted when a provider rejects the request because a
+#: ``tool_result`` references a ``tool_use`` that is no longer in the
+#: conversation (HTTP 400 + message match). A compaction that cuts a
+#: tool pair (F-10 / #176) produces this; it is *not* a context-length
+#: error, so the emergency-compaction rescue must not swallow it.
+TOOL_PAIRING_ERROR_CODE = "tool_result_without_tool_use"
+
+#: Phrases providers use when a ``tool_result`` is orphaned. Matched
+#: case-insensitively against the error message. The check also requires
+#: the literal ``tool_result`` so a message that merely mentions
+#: ``tool_use`` (e.g. a schema error) is not misclassified. Anthropic:
+#: "tool_result ... without tool_use", "does not correspond to a
+#: tool_use"; OpenAI-family: "orphan tool_result", "tool_use_id not found".
+_TOOL_PAIRING_MISMATCH: tuple[str, ...] = (
+    "without tool_use",
+    "does not correspond",
+    "not correspond",
+    "orphan",
+    "no matching",
+    "not found",
+    "missing tool_use",
+)
+
+
+def is_tool_pairing_error(message: str) -> bool:
+    """Whether a provider error is an orphaned ``tool_result`` (F-10 / #176).
+
+    A compaction that cuts a tool pair leaves a ``tool_result`` whose
+    ``tool_use`` was dropped; the provider answers with a 400 that is
+    *not* a context-length error. Detecting it lets the caller surface an
+    explicit "history is malformed" message instead of a cryptic 400.
+
+    Args:
+        message: The provider's error message.
+
+    Returns:
+        True when the message reads as a tool_use/tool_result mismatch.
+    """
+    text = message.lower()
+    if "tool_result" not in text:
+        return False
+    return any(phrase in text for phrase in _TOOL_PAIRING_MISMATCH)
+
+
 #: Phrases providers use when the prompt is too long. Matched case-
 #: insensitively against the error message. Kept deliberately broad:
 #: OpenAI ("prompt is too long: 199999 tokens > 198000 maximum"),
@@ -32,10 +76,9 @@ _CONTEXT_LENGTH_PATTERNS: tuple[str, ...] = (
     "input_tokens",
     "request too large",
 )
-
-#: Extracts the provider's stated context window from error messages
 #: such as "This model's maximum context length is 8192 tokens" or
 #: "prompt is too long: 199999 tokens > 198000 maximum".
+#: Extracts the provider's stated context window from error messages
 _CONTEXT_WINDOW_RE = re.compile(
     r"(?:maximum context length is|context length is|context_length[=: ]+|"
     r"max_model_len[=: ]+|\d[\d,]* tokens > )\s*(\d[\d,]*)",

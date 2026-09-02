@@ -91,6 +91,16 @@ class PhosonConfig:
     # 600s; ``0`` disables the budget (unlimited) for those who want it.
     # Interactive mode ignores this entirely — Esc remains the escape.
     run_budget_seconds: float = 600.0
+    # ── Completion notification (#167) ──────────────────────────────────
+    # Cue the terminal when a run finishes, so a backgrounded window gets
+    # attention: "bell" (BEL), "desktop" (OSC 9/777 desktop notification +
+    # BEL fallback), or "off". Default "off" — preserves the historical
+    # silent behaviour; a ringing bell on every (often frequent) coding
+    # turn would be intrusive, so the user opts in via `/notify bell`
+    # (or `desktop`), `notify_on_completion` in config.toml, or the
+    # PHOSON_NOTIFY_ON_COMPLETION env var. TTY-gated so piped/script output
+    # is never polluted.
+    notify_on_completion: str = "off"
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
     # Official monitor plugin (I-126): background watchers that wake the
@@ -581,6 +591,12 @@ def load_config() -> PhosonConfig:
             fd,
             d.run_budget_seconds,
         ),
+        notify_on_completion=_resolve_str(
+            "PHOSON_NOTIFY_ON_COMPLETION",
+            "notify_on_completion",
+            fd,
+            d.notify_on_completion,
+        ).lower(),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
         mcp_config_file=Path(
             _resolve_str(
@@ -647,6 +663,19 @@ def load_config() -> PhosonConfig:
             stacklevel=2,
         )
         cfg.compact_mode = "balanced"
+
+    # #167: a typo'd notify_on_completion falls back to the default (off)
+    # rather than an unknown mode.
+    from phoson_cli.notify import is_valid_mode
+
+    if not is_valid_mode(cfg.notify_on_completion):
+        warnings.warn(
+            f"Ignoring invalid notify_on_completion "
+            f"{cfg.notify_on_completion!r}; using default 'off'.",
+            UserWarning,
+            stacklevel=2,
+        )
+        cfg.notify_on_completion = "off"
 
     # Mode presets fill in the knobs the user has NOT set explicitly, so
     # an explicit threshold/min-keep always wins over the mode (E1).
@@ -777,6 +806,7 @@ def save_config(
         ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("run_budget_seconds", getattr(config, "run_budget_seconds", None)),
+        ("notify_on_completion", getattr(config, "notify_on_completion", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
         ("enable_monitors", getattr(config, "enable_monitors", None)),

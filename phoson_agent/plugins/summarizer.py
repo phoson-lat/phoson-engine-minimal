@@ -16,13 +16,19 @@ Uses tiktoken for token estimation. Important caveats:
 """
 
 import json
+import logging
+from typing import TYPE_CHECKING
 from dataclasses import field, dataclass
 from collections.abc import AsyncIterator
 
 import tiktoken
 
+if TYPE_CHECKING:
+    from phoson_llm.chats.base import BaseLLMChat
+
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
+    is_tool_pairing_error,
     extract_context_window,
 )
 from phoson_llm.schemas import (
@@ -46,6 +52,8 @@ from phoson_llm.schemas import (
 from phoson_agent.models import AgentEvent
 from phoson_agent.middleware import LLMCallNext, AgentMiddleware
 from phoson_agent.plugins.context_window import ContextWindowResolver
+
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────
 # Token estimation with tiktoken
@@ -311,6 +319,46 @@ def _structured_summary_prompt(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Safe compaction cuts (F-10 / F-11 · #176)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _has_tool_result(msg: Message) -> bool:
+    """Whether *msg* is a ``user`` message carrying a ``ToolResultBlock``.
+
+    A tool call occupies one or more messages: an ``assistant`` with
+    ``ToolUseBlock`` followed by a ``user`` with ``ToolResultBlock`` (and
+    sometimes a second ``user`` holding an image). If a compaction cut
+    leaves such a ``user`` as the *first* kept message, its ``tool_use``
+    was just summarized away and the provider rejects the request with a
+    400 (``tool_result ... without tool_use``) that the context-length
+    rescue does not recognize. This predicate flags exactly that case.
+    """
+    if msg.role != "user" or isinstance(msg.content, str):
+        return False
+    return any(isinstance(b, ToolResultBlock) for b in msg.content)
+
+
+def safe_cut_index(others: list[Message], min_keep_messages: int) -> int:
+    """Index in *others* where the kept tail starts, at a tool-pair boundary.
+
+    The naive count-based cut (``others[-min_keep:]``) can land on a
+    ``user`` whose ``tool_result`` references a ``tool_use`` that is about
+    to be summarized — the provider then returns a 400 ``tool_result
+    without tool_use`` (F-10, #176). This starts at the count-based cut and,
+    while the first kept message is an orphaned ``tool_result`` user, pulls
+    that message (and, implicitly, the preceding ``assistant`` that carries
+    the matching ``tool_use``) into the kept tail. In a well-formed history
+    the loop therefore stops at the matching ``assistant`` — or at 0 when
+    the tail would have to hold the whole history (nothing to summarize).
+    """
+    cut = max(0, len(others) - min_keep_messages)
+    while cut > 0 and _has_tool_result(others[cut]):
+        cut -= 1
+    return cut
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Summarization middleware
 # ─────────────────────────────────────────────────────────────────────
 
@@ -368,6 +416,15 @@ class SummarizationMiddleware(AgentMiddleware):
     #: counts the schema weight in its token estimate. ``None`` means
     #: "no tools" — the estimate then skips the schema term.
     tool_definitions: list[ToolDefinition] | None = None
+    #: Chat client used for the *internal* summary round trip (F-11 / #176).
+    #: When set, the summary call goes through this client **without any
+    #: tool schemas** (``tools=None``) — it bypasses the middleware chain
+    #: that otherwise bakes the run's tool list into every call. This keeps
+    #: the summarizer from handing the model tools it could answer with a
+    #: tool call (an empty text result that used to drop the compacted
+    #: history). ``None`` (unit tests, the library-only path) falls back to
+    #: ``call_next`` with whatever tools the chain carries.
+    chat: "BaseLLMChat | None" = None
 
     # Internal state. Both are constructed in ``__post_init__``; using
     # ``init=False`` keeps them out of the dataclass constructor and out of
@@ -579,8 +636,11 @@ class SummarizationMiddleware(AgentMiddleware):
             else:
                 others.append(msg)
 
-        keep = others[-self.min_keep_messages :]
-        to_summarize = others[: len(others) - len(keep)]
+        # Cut at a tool-pair boundary (F-10 / #176): the count-based cut can
+        # land on a user tool_result whose tool_use is about to be dropped.
+        cut = safe_cut_index(others, self.min_keep_messages)
+        keep = others[cut:]
+        to_summarize = others[:cut]
 
         if not to_summarize:
             return None, before, before, "", []
@@ -597,22 +657,53 @@ class SummarizationMiddleware(AgentMiddleware):
         )
 
         summary_text, summary_failed, forward = await self._run_summary_call(
-            call_next(summary_messages, summary_config)
+            self._summary_stream(summary_messages, summary_config, call_next)
         )
         if summary_failed:
             # The summary round trip itself failed — compaction cannot
             # proceed; the caller passes the original messages through.
             return None, before, before, "", forward
+        if not summary_text.strip():
+            # F-11: the model returned no text (e.g. it answered with a tool
+            # call). Proceeding would summarize the whole middle into nothing
+            # and splice the history together with no trace, so abort — the
+            # original messages pass through and the context-length rescue
+            # remains the safety net.
+            logger.warning(
+                "Summary call returned an empty result; aborting compaction "
+                "to avoid dropping the compacted history."
+            )
+            return None, before, before, "", forward
 
         compacted = list(system_msgs)
-        if summary_text.strip():
-            summary_content = (
-                f"[Conversation summary up to this point: {summary_text.strip()}]"
-            )
-            compacted.append(Message(role="user", content=summary_content))
+        summary_content = (
+            f"[Conversation summary up to this point: {summary_text.strip()}]"
+        )
+        compacted.append(Message(role="user", content=summary_content))
         compacted.extend(keep)
         after = self._request_tokens(compacted, config)
         return compacted, before, after, summary_text, forward
+
+    def _summary_stream(
+        self,
+        summary_messages: list[Message],
+        summary_config: ModelConfig,
+        call_next: LLMCallNext,
+    ) -> AsyncIterator[LLMEvent]:
+        """Event stream for the internal summary round trip (F-11 / #176).
+
+        Prefers the tool-free :attr:`chat` client: the summary call must not
+        carry the run's tool schemas, or the model may answer with a tool
+        call instead of the summary text (an empty result that used to drop
+        the compacted history). Falls back to the chain's ``call_next``
+        (with its baked-in tools) when no chat client was injected — the
+        library-only / unit-test path.
+        """
+        if self.chat is not None:
+            # ``chat.stream`` takes ``tools=None`` by default → no tool
+            # schemas reach the model for this internal call.
+            return self.chat.stream(summary_messages, summary_config)
+        return call_next(summary_messages, summary_config)
 
     async def _run_summary_call(
         self, events: AsyncIterator[LLMEvent]
@@ -686,13 +777,32 @@ class SummarizationMiddleware(AgentMiddleware):
 
         async for event in call_next(messages, config):
             if isinstance(event, ErrorEvent):
-                if (
-                    not committed
-                    and not rescued
-                    and event.code == CONTEXT_LENGTH_ERROR_CODE
-                ):
-                    context_error = event
-                    break
+                if not committed and not rescued:
+                    if event.code == CONTEXT_LENGTH_ERROR_CODE:
+                        context_error = event
+                        break
+                    # A pre-commit 400 that is *not* a context error — e.g.
+                    # an orphaned tool_result (F-10) — must not be silently
+                    # swallowed as if it were a context overflow. Surface it
+                    # explicitly so the user sees a diagnosable message.
+                    if is_tool_pairing_error(event.message):
+                        logger.error(
+                            "Provider rejected the request: tool_result "
+                            "references a tool_use not in the conversation "
+                            "(malformed history after compaction). %s",
+                            event.message,
+                        )
+                        yield ErrorEvent(
+                            message=(
+                                "The conversation history is malformed: a "
+                                "tool_result has no matching tool_use. This "
+                                "usually means a compaction cut a tool pair. "
+                                "Start a new session or undo to recover."
+                            ),
+                            code="tool_result_without_tool_use",
+                            retryable=False,
+                        )
+                        return
                 yield event
                 return
             if isinstance(event, (TokenEvent, ReasoningTokenEvent, ToolCallEvent)):
@@ -774,8 +884,11 @@ class SummarizationMiddleware(AgentMiddleware):
             else:
                 others.append(msg)
 
-        keep = others[-self.min_keep_messages :]
-        to_summarize = others[: len(others) - len(keep)]
+        # Cut at a tool-pair boundary (F-10 / #176): the count-based cut can
+        # land on a user tool_result whose tool_use is about to be dropped.
+        cut = safe_cut_index(others, self.min_keep_messages)
+        keep = others[cut:]
+        to_summarize = others[:cut]
 
         if not to_summarize:
             return None, 0
@@ -805,7 +918,7 @@ class SummarizationMiddleware(AgentMiddleware):
                 model=config.model or self.model, max_tokens=4096, temperature=0.3
             )
             summary_text, failed, _fwd = await self._run_summary_call(
-                call_next(summary_messages, summary_config)
+                self._summary_stream(summary_messages, summary_config, call_next)
             )
         else:
             failed = True
@@ -984,7 +1097,15 @@ class SummarizationMiddleware(AgentMiddleware):
         if len(others) <= self.min_keep_messages or not summary_text.strip():
             return messages, before, before
 
-        keep = others[-self.min_keep_messages :]
+        # Cut at a tool-pair boundary (F-10 / #176) — same rule as the
+        # automatic path, so a manual /compact can't leave an orphaned
+        # tool_result at the top of the kept tail either.
+        cut = safe_cut_index(others, self.min_keep_messages)
+        if cut == 0:
+            # Nothing to summarize (the safe cut swallowed the whole
+            # history): return the input unchanged.
+            return messages, before, before
+        keep = others[cut:]
         compacted = list(system_msgs)
         compacted.append(
             Message(

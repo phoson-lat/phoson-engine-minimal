@@ -387,6 +387,9 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         # service, so the permission gate fails closed for ``ask`` tools.
         offload = build_offload(config)
         summarizer = build_summarizer(config)
+        # Internal summary call must not carry the run's tool schemas
+        # (F-11 / #176): route it through the tool-free chat client.
+        summarizer.chat = chat
         permission = build_permission_middleware(on_ask=None)
         middlewares = build_middlewares(
             config=config,
@@ -451,6 +454,17 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
             result = await run_task
         # Print an empty string (not ``None``) when there is no content.
         print(result.final_content or "")
+        # #167: cue the terminal on success. One-shot is usually piped
+        # (scripts/CI), so the TTY gate in notify_run_done keeps escape
+        # sequences out of program output; it only rings when stdout is a
+        # real terminal.
+        from phoson_cli.notify import notify_run_done
+
+        notify_run_done(
+            getattr(config, "notify_on_completion", "off"),
+            "done",
+            title="Phoson finished",
+        )
         return 0
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
