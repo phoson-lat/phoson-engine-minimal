@@ -18,7 +18,7 @@
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
-| Loop | 🟠 #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #177 (retry no conectado) merged (PR #194, `6080ba0`, pendiente de release). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
+| Loop | ✅ #178 (`stop_reason` ignorado, excepciones huérfanas) merged (PR #195, `2507df0`, pendiente de release). ✅ #177 (retry no conectado) merged (PR #194, `6080ba0`, pendiente de release). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
 | ACI (edit/search/prompt) | 🟠 #181 (grep/glob). ✅ #179 + #180 shipped v0.26.0 (PR #193, `67368b0`): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
@@ -42,7 +42,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | ✅ **cerrado** | Shipped v0.26.0 (PR #193, `67368b0`): `read_file` `cat -n` + caps en rangos; `list_dir` 500; descripciones reescritas (8 tools); system prompt + Tool usage / Environment (git) / Safety (cache-friendly). Medición H-1 (#139) pendiente. |
 | [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | ✅ **cerrado** | Shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/emergency/manual + plan), resumen vacío ⇒ abortar, llamada de resumen tool-free (chat), 400 de pairing ⇒ error explícito. Desbloquea #147. |
 | [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | ✅ **cerrado** | Merged (PR #194, `6080ba0`), pendiente de release: `build_chat` envuelve el adapter en `RetryingChat` (backoff 1s/×2/30s + jitter, solo pre-token ⇒ no duplica); `llm_max_attempts` (3, `1` desactiva) + `PHOSON_LLM_MAX_ATTEMPTS`; `RetryMiddleware` deprecado (warning). |
-| [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | **B** | Mismo camino que #134 (`_build_assistant_message`). |
+| [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | ✅ **cerrado** | Merged (PR #195, `2507df0`), pendiente de release: `LLMDoneEvent.stop_reason` normalizado en los 19 adapters; el handler no se invoca con args `_truncated`/`_raw` (error accionable); `except Exception` en ToolRunner ⇒ `tool_result` emparejado con el tipo de la excepción; `result.truncated` + badge "⚠ truncated". 55 tests. |
 | [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | **B** | |
 | [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | **B** | Relacionado con #144 (trifecta letal). |
 | [#184](https://github.com/phoson-lat/phoson-engine-minimal/issues/184) | Sub-agentes sin system prompt; `agents` anunciado al hijo pero falla | F-23, F-24 | 🟠 | S | **B** | Toca la misma construcción del hijo que #174; puede ir en el mismo PR. |
@@ -141,6 +141,19 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           retry logueado (`phoson_cli.retry`); `RetryMiddleware` deprecado
           (warning). 8 tests nuevos.
 4. #178   stop_reason normalizado; except Exception en ToolRunner con backfill. S-M
+          ✅ merged (PR #195, `2507df0`), pendiente de release:
+          `LLMDoneEvent.stop_reason` normalizado (end_turn/max_tokens/
+          tool_use/refusal/pause_turn/other; ausente→None, unknown→other) en
+          los 19 adapters (loop OpenAI-compartido = 15; + anthropic/ollama/
+          bedrock/gemini/mistral). `max_tokens` mid tool-call ⇒ el adapter
+          marca `_truncated` y el ToolRunner NO invoca el handler: responde el
+          tool_use con error accionable (retry smaller / divide) y empareja el
+          historial; también cubre el fallback `_raw` (el viejo `fn(_raw=...)`
+          → TypeError opaco). `except Exception` en la invocación del handler +
+          `on_after_tool` ⇒ `tool_result` con el tipo de la excepción
+          (`{name}: {exc_type}: {detail}`), el run sigue y el historial queda
+          válido para el proveedor. `result.truncated` + badge "⚠ truncated" en
+          `render_done_line` (REPL clásico y TUI). 55 tests nuevos.
 5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
 ```
 
