@@ -79,6 +79,8 @@ class JsonlStorage(SessionStorage):
             total_cost=float(meta.get("total_cost_usd", 0.0)),
             total_tokens=int(meta.get("total_input_tokens", 0))
             + int(meta.get("total_output_tokens", 0)),
+            total_input_tokens=int(meta.get("total_input_tokens", 0)),
+            total_output_tokens=int(meta.get("total_output_tokens", 0)),
             step_count=int(meta.get("step_count", 0)),
             last_model=meta.get("last_model") or None,
             title=meta.get("title"),
@@ -201,6 +203,14 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
 
     stat = file_path.stat()
     updated_at = datetime.datetime.fromtimestamp(stat.st_mtime, datetime.UTC)
+    has_split = meta_values and (
+        "total_input_tokens" in meta_values or "total_output_tokens" in meta_values
+    )
+    input_tokens = int(meta_values.get("total_input_tokens", 0)) if meta_values else 0
+    output_tokens = int(meta_values.get("total_output_tokens", 0)) if meta_values else 0
+    if meta_values and not has_split:
+        # F-34 legacy: only the sum was persisted — surface it under output.
+        output_tokens = int(meta_values.get("total_tokens", 0))
     return SessionMeta(
         id=file_path.stem,
         created_at=created_at,
@@ -208,6 +218,8 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         message_count=message_count,
         total_cost=(float(meta_values.get("total_cost", 0.0)) if meta_values else 0.0),
         total_tokens=int(meta_values.get("total_tokens", 0)) if meta_values else 0,
+        total_input_tokens=input_tokens,
+        total_output_tokens=output_tokens,
         step_count=int(meta_values.get("step_count", 0)) if meta_values else 0,
         last_model=meta_values.get("last_model") if meta_values else None,
         title=meta_values.get("title") if meta_values else None,

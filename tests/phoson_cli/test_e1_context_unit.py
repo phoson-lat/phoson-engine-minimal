@@ -150,6 +150,7 @@ def _controller(turns: int, **cfg) -> SessionController:
         )
         controller.current_model = "test-model"
         controller.current_task = None
+        controller._save_session = AsyncMock()
         controller._session = SimpleNamespace(
             tree=ConversationTree.new(), metrics=MagicMock(), current_node_id=None
         )

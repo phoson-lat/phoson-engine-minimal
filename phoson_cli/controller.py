@@ -1384,6 +1384,15 @@ class SessionController:
             messages_removed=len(path) - len(compacted_msgs),
             summary_length=len(summary_text),
         )
+        # F-35: a manual /compact previously left the tree un-persisted and the
+        # header's context figure stale — quitting right after lost the
+        # compaction and the header kept showing the pre-compact count. Persist
+        # the new branch and refresh the cached estimate (same estimator as
+        # before/after) so both are correct.
+        self._context_tokens = self.summarizer.estimate_tokens(
+            self.tree.get_path(self.current_node_id)
+        )
+        await self._save_session()
         return before, after, True
 
     async def load_session(self, session_id: str) -> LoadOutcome:
@@ -1399,7 +1408,16 @@ class SessionController:
             for meta in metas:
                 if str(meta.id) == session_id:
                     self.session_metrics.total_cost_usd = meta.total_cost
-                    self.session_metrics.total_output_tokens = meta.total_tokens
+                    # F-34: map the persisted input/output split. Legacy
+                    # sessions (only the total was stored) back-fill output
+                    # from the sum so nothing is lost — the split is only
+                    # "absent" when both halves are zero but the total is not.
+                    input_tokens = meta.total_input_tokens
+                    output_tokens = meta.total_output_tokens
+                    if input_tokens == 0 and output_tokens == 0 and meta.total_tokens:
+                        output_tokens = meta.total_tokens
+                    self.session_metrics.total_input_tokens = input_tokens
+                    self.session_metrics.total_output_tokens = output_tokens
                     self.session_metrics.step_count = meta.step_count
                     self.session_metrics.last_model = meta.last_model or ""
                     break
