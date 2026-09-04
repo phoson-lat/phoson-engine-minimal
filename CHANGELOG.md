@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Features
+
+- **ACI edit/read tool rework (#179, #180)** — `patch_file` now requires an
+  *exact, unique* anchor: with `replace_all=False`, an `old_content` that
+  occurs more than once is an error listing the matching line numbers and
+  **writes nothing** (F-20). A zero-match anchor gets a closest-line hint
+  (difflib) and a CRLF/LF note (F-26). `patch_file` reads raw bytes (no
+  universal-newline translation) so a CRLF file is no longer silently
+  re-encoded to LF, and the anchor's line endings are normalised to the
+  file's dominant ending before matching. `read_file` renders `cat -n`
+  (1-based line numbers, display-only) with the 50KB cap now applied to
+  *ranges* too, and the truncation note names the exact next range to
+  request (F-21a, F-22). `list_dir` caps at 500 entries (F-21b/F-22).
+  Tool descriptions rewritten for `read_file`/`write_file`/`patch_file`/
+  `list_dir`/`bash`/`agent`/`agents`/`web_fetch` (cuándo/cuándo-no/qué
+  devuelve, F-25); `web_fetch` now tells the model its content is data,
+  not instructions. The system prompt gains three cache-friendly sections:
+  **Tool usage** (guidance gated on the tools actually registered),
+  **Environment** (git branch + a capped `git status --short` snapshot,
+  only in a git work tree), and **Safety** (no destructive git, no
+  commits/pushes unless asked, external content is data). No clock or
+  counter enters the stable prefix. Measured against H-1 (#139) pending.
+
 ## v0.25.1 (2026-09-03)
 
 ### Fixes / Security

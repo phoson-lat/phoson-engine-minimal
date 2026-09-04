@@ -19,7 +19,7 @@
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
 | Loop | 🟠 #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
-| ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). |
+| ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). En curso (#179+#180, un PR): unicidad de `patch_file` + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
 
@@ -117,6 +117,10 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 ```
 1. #179 + #180   Edit tool seguro + read_file cat -n + caps + descripciones +
           system prompt con guía de tools, git status y aviso de no confiable. M
+          (En curso: unicidad de `patch_file` con líneas de match, CRLF
+          preservado/normalizado, `cat -n` + caps en rangos, tope de
+          `list_dir`, descripciones reescritas, secciones Tool usage /
+          Environment (git) / Safety en el system prompt.)
 2. #176   Corte de compactación en fronteras seguras; resumen vacío aborta;
           tools=[] en el call_next del resumen.                                 M
           ✅ shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/
