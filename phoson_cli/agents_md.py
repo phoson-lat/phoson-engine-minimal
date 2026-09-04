@@ -14,7 +14,11 @@ ones so closer-to-cwd instructions read as more specific):
    supported as an alias for compatibility with repos already configured
    for other tools).
 3. ``@path/to/file.md`` imports inside any loaded file are expanded once
-   (no cycles, missing imports skipped with a note).
+   (no cycles, missing imports skipped with a note). Imports are
+   **confined** to the file's own tree — a project file cannot import
+   outside the repository root, and the global ``~/.phoson/AGENTS.md``
+   cannot import outside ``~/.phoson/`` — so a hostile project file
+   cannot leak ``/etc/passwd`` or ``~/.ssh`` into the system prompt.
 
 The result is capped at ``max_tokens`` (heuristic: ~4 characters per
 token) and truncated with a visible marker when it exceeds the budget.
@@ -67,12 +71,21 @@ def _expand_imports(
     base_dir: Path,
     seen: set[Path],
     depth: int = 0,
+    root: Path | None = None,
+    expand_home: bool = False,
 ) -> tuple[str, list[Path]]:
     """Expand ``@relative/path.md`` import lines.
 
     Returns ``(expanded_text, imported_paths)``. Imports are expanded once
     per file (cycles are broken via ``seen``), depth-limited, and missing
     targets are replaced by a short note instead of failing.
+
+    ``root`` is the confinement tree: when given, every import target must
+    resolve inside it. Targets escaping the tree (absolute paths, ``..``
+    traversal, symlinks) are refused with a visible marker instead of being
+    inlined, so a hostile file cannot drag ``/etc/passwd`` or ``~/.ssh``
+    into the system prompt. ``expand_home`` (only for the global user file)
+    lets a leading ``~`` be expanded before the confinement check.
     """
     imported: list[Path] = []
     if depth >= _MAX_IMPORT_DEPTH:
@@ -85,7 +98,18 @@ def _expand_imports(
             out_lines.append(line)
             continue
         target_rel = stripped[1:].strip()
-        target = (base_dir / target_rel).resolve()
+        try:
+            if expand_home and target_rel.startswith("~"):
+                target = Path(target_rel).expanduser()
+            else:
+                target = base_dir / target_rel
+            target = target.resolve()
+        except (OSError, RuntimeError):
+            out_lines.append(f"[import refused: {target_rel}]")
+            continue
+        if root is not None and not target.is_relative_to(root):
+            out_lines.append(f"[import refused: outside repo: {target_rel}]")
+            continue
         if not target.is_file():
             out_lines.append(f"[import not found: {target_rel}]")
             continue
@@ -99,7 +123,12 @@ def _expand_imports(
             continue
         imported.append(target)
         nested, nested_imported = _expand_imports(
-            content, target.parent, seen, depth + 1
+            content,
+            target.parent,
+            seen,
+            depth + 1,
+            root=root,
+            expand_home=expand_home,
         )
         imported.extend(nested_imported)
         out_lines.append(nested)
@@ -174,10 +203,28 @@ def load_agents_md(
     if not files:
         return ""
 
+    # Per-file confinement trees: project files may only import inside the
+    # repository root; the global user file only inside ``~/.phoson/`` (its
+    # own directory) and may additionally use ``~``.
+    workdir = (cwd or Path.cwd()).resolve()
+    repo_root = _resolve_repo_root(workdir)
+    global_path = (home_file or Path("~/.phoson/AGENTS.md").expanduser()).resolve()
+
     sections: list[str] = []
     seen: set[Path] = {path for path, _ in files}
     for path, raw in files:
-        expanded, _imports = _expand_imports(raw, path.parent, seen)
+        is_global = path.resolve() == global_path
+        if is_global:
+            containment, expand_home = path.resolve().parent, True
+        else:
+            containment, expand_home = repo_root, False
+        expanded, _imports = _expand_imports(
+            raw,
+            path.parent,
+            seen,
+            root=containment,
+            expand_home=expand_home,
+        )
         label = (
             "~" + str(path).replace(str(Path.home()), "", 1)
             if _is_home(path)

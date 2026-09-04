@@ -16,3 +16,19 @@ turn. `/agents-md` lists what was loaded.
 - Public APIs need type hints and docstrings.
 @docs/style-guide.md
 ```
+
+## Import confinement
+
+`@` imports are **restricted to the file's own tree** so a project file
+cannot drag untrusted content into the system prompt (which is sent to the
+model provider). A project `AGENTS.md`/`CLAUDE.md` may only import files
+inside the repository root; the global `~/.phoson/AGENTS.md` may only import
+files inside `~/.phoson/`. Absolute paths, `..` traversal, and symlinks that
+escape the tree are refused and replaced with a visible marker:
+
+```
+[import refused: outside repo: /etc/passwd]
+```
+
+Only the global user file may use a leading `~` in an import; project files
+cannot. The per-import result still counts toward the same ~2000-token budget.
