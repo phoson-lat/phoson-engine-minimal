@@ -130,7 +130,29 @@ class AgentEngine:
         """
         self._loaded_plugins = []
         for plugin_spec in self.plugins:
-            plugin = load_plugin(plugin_spec)
+            # A plugin spec is optional/declarative: a single bad spec (a
+            # missing entry point, a stale ``path:`` spec pointing at a file
+            # that was deleted, an unimportable module) must degrade to a
+            # warning, not brick the whole CLI. This mirrors the in-tree
+            # MCP/monitor fallback, which skips a missing plugin rather than
+            # crashing. The *other* configured plugins still load.
+            try:
+                plugin = load_plugin(plugin_spec)
+            except Exception as exc:  # noqa: BLE001 - optional plugin, must not brick the CLI
+                if isinstance(plugin_spec, str):
+                    label = plugin_spec
+                elif isinstance(plugin_spec, dict):
+                    label = str(plugin_spec.get("name", "?"))
+                else:
+                    label = "plugin"
+                logger.warning(
+                    "Skipping plugin %r: failed to load (%s: %s). "
+                    "Remove it from [defaults].plugins to silence this.",
+                    label,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
             self._loaded_plugins.append(plugin)
             self.tools.extend(plugin.get_tools())
             self.middlewares.extend(plugin.get_middlewares())

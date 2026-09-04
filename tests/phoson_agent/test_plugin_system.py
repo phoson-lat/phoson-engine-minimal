@@ -465,5 +465,43 @@ plugin = PathPlugin()
         assert sys.path == before
 
 
+class TestAgentEngineBadPluginGracefulDegradation:
+    """A single unloadable plugin spec must not brick the engine (report).
+
+    The user's config can legitimately carry a stale spec (an entry point
+    that was never installed, or a ``path:`` spec whose file was deleted).
+    Loading it must warn and skip, and the *other* configured plugins must
+    still load — instead of raising and taking the whole CLI down.
+    """
+
+    def test_unloadable_entrypoint_is_skipped_without_crashing(self):
+        good = DummyPlugin()
+        engine = AgentEngine(
+            chat=Mock(),
+            plugins=["entrypoint:does-not-exist-12345", good],
+        )
+        # The bad spec is dropped; the good plugin still loads.
+        assert engine._loaded_plugins == [good]
+        assert engine.tools and engine.tools[0].name == "test_tool"
+
+    def test_unloadable_path_spec_is_skipped(self):
+        good = DummyPlugin()
+        engine = AgentEngine(
+            chat=Mock(),
+            plugins=["path:/nonexistent/nowhere/plugin.py", good],
+        )
+        assert engine._loaded_plugins == [good]
+        assert len(engine.middlewares) == 1
+
+    def test_only_bad_spec_yields_an_engine_with_no_plugins(self):
+        # Even with *every* spec bad, the engine still constructs.
+        engine = AgentEngine(
+            chat=Mock(),
+            plugins=["entrypoint:nope-1", "path:/no/such/file.py"],
+        )
+        assert engine._loaded_plugins == []
+        assert engine.tools == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
