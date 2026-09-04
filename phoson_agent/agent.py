@@ -394,6 +394,7 @@ class AgentEngine:
                         steps=steps,
                         total_cost_usd=total_cost_usd,
                         total_credits=total_credits,
+                        truncated=event.truncated,
                     )
                     yield await self._prepare_event(AgentDoneEvent(result=result))
                     return

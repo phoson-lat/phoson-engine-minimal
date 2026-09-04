@@ -209,6 +209,139 @@ def guess_mime(path: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+# ─── stop_reason normalization (F-13 / #178) ────────────────────────────────
+#
+# Each provider names its end-of-turn reason differently. Phoson normalizes
+# them to a small, stable vocabulary so the agent loop and the UI can reason
+# about truncation without per-adapter branching:
+#
+#     end_turn    normal completion (incl. Anthropic ``stop_sequence``)
+#     max_tokens  the response hit its token budget and was cut off
+#     tool_use    the turn ended because it issued tool call(s)
+#     refusal     the provider refused to answer (content policy)
+#     pause_turn  the model paused mid-turn (Anthropic server tools) and will
+#                 resume — currently mapped to a terminal pause
+#     other       a provider value we do not recognize (better than "other"
+#                 than silently treating a truncation as a normal end)
+
+_STOP_REASON_END: str = "end_turn"
+_STOP_REASON_MAX: str = "max_tokens"
+_STOP_REASON_TOOL: str = "tool_use"
+_STOP_REASON_REFUSAL: str = "refusal"
+_STOP_REASON_PAUSE: str = "pause_turn"
+_STOP_REASON_OTHER: str = "other"
+
+#: Canonical vocabulary (documented order for stable iteration in tests/docs).
+STOP_REASONS: tuple[str, ...] = (
+    _STOP_REASON_END,
+    _STOP_REASON_MAX,
+    _STOP_REASON_TOOL,
+    _STOP_REASON_REFUSAL,
+    _STOP_REASON_PAUSE,
+    _STOP_REASON_OTHER,
+)
+
+# OpenAI-compatible ``finish_reason`` (OpenAI, OpenRouter, Azure, Groq, ...).
+# The legacy ``function_call`` value predates ``tool_calls`` and is treated as
+# a tool turn. ``length`` is the truncation signal.
+_OPENAI_COMPAT_STOP: dict[str, str] = {
+    "stop": _STOP_REASON_END,
+    "length": _STOP_REASON_MAX,
+    "tool_calls": _STOP_REASON_TOOL,
+    "function_call": _STOP_REASON_TOOL,
+    "content_filter": _STOP_REASON_REFUSAL,
+}
+
+# Anthropic ``stop_reason``. ``stop_sequence`` is a normal stop; ``refusal``
+# and (future) ``pause_turn`` are first-class.
+_ANTHROPIC_STOP: dict[str, str] = {
+    "end_turn": _STOP_REASON_END,
+    "stop_sequence": _STOP_REASON_END,
+    "max_tokens": _STOP_REASON_MAX,
+    "tool_use": _STOP_REASON_TOOL,
+    "refusal": _STOP_REASON_REFUSAL,
+    "pause_turn": _STOP_REASON_PAUSE,
+}
+
+# Ollama ``done_reason`` on the final streaming message.
+_OLLAMA_STOP: dict[str, str] = {
+    "stop": _STOP_REASON_END,
+    "length": _STOP_REASON_MAX,
+    "tool_calls": _STOP_REASON_TOOL,
+}
+
+# Bedrock Converse ``stop_reason`` (top-level of the response).
+_BEDROCK_STOP: dict[str, str] = {
+    "end_turn": _STOP_REASON_END,
+    "stop_sequence": _STOP_REASON_END,
+    "max_tokens": _STOP_REASON_MAX,
+    "tool_use": _STOP_REASON_TOOL,
+}
+
+# Google Gemini ``FinishReason`` (enum name, e.g. ``"STOP"`` / ``"MAX_TOKENS"``).
+# Safety/recitation values are refusal-class: the provider deliberately cut
+# the answer, so surface it as a refusal rather than a normal end.
+_GEMINI_STOP: dict[str, str] = {
+    "STOP": _STOP_REASON_END,
+    "MAX_TOKENS": _STOP_REASON_MAX,
+    "SAFETY": _STOP_REASON_REFUSAL,
+    "RECITATION": _STOP_REASON_REFUSAL,
+    "PROHIBITED_CONTENT": _STOP_REASON_REFUSAL,
+    "SPII": _STOP_REASON_REFUSAL,
+    "IMAGE_SAFETY": _STOP_REASON_REFUSAL,
+    "MALFORMED_FUNCTION_CALL": _STOP_REASON_OTHER,
+}
+
+
+def normalize_stop_reason(
+    provider_reason: object, *, provider: str = "openai_compat"
+) -> str | None:
+    """Map a provider-specific stop/finish reason to Phoson's vocabulary.
+
+    See :data:`STOP_REASONS` for the canonical values. Returns ``None`` when
+    the provider gave no reason (stream ended without a finish signal) so the
+    caller can leave ``LLMDoneEvent.stop_reason`` unset rather than invent a
+    value. Unknown reasons normalize to ``"other"`` — never to ``end_turn`` —
+    so a truncated/abnormal stop is not mistaken for a clean completion
+    (F-13: a ``max_tokens`` truncation must stay distinguishable).
+
+    Args:
+        provider_reason: The raw provider value (``finish_reason`` /
+            ``stop_reason`` / ``done_reason`` / Gemini ``FinishReason``).
+            ``None`` and empty/whitespace strings yield ``None``.
+        provider: Which adapter produced the value. Selects the lookup table
+            so a value that means different things per provider is normalized
+            correctly (e.g. ``"length"`` is truncation for OpenAI-compat and
+            Ollama).
+    """
+    if provider_reason is None:
+        return None
+    if not isinstance(provider_reason, str):
+        # Gemini passes an enum whose ``.name`` is a string; accept both the
+        # enum object and its string name.
+        name = getattr(provider_reason, "name", None)
+        if not isinstance(name, str) or not name:
+            return _STOP_REASON_OTHER
+        provider_reason = name
+    key = provider_reason.strip()
+    if not key:
+        return None
+
+    if provider == "anthropic":
+        table = _ANTHROPIC_STOP
+    elif provider == "ollama":
+        table = _OLLAMA_STOP
+    elif provider == "bedrock":
+        table = _BEDROCK_STOP
+    elif provider == "google":
+        table = _GEMINI_STOP
+        key = key.upper()
+    else:  # "openai_compat" (default)
+        table = _OPENAI_COMPAT_STOP
+
+    return table.get(key, _STOP_REASON_OTHER)
+
+
 def map_error_code(status_code: int) -> str:
     """
     Maps HTTP status codes to internal Phoson error codes.

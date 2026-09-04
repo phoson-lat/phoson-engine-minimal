@@ -58,7 +58,12 @@ class RunStep:
 
 @dataclass
 class AgentRunResult:
-    """Result of an agent run."""
+    """Result of an agent run.
+
+    ``truncated`` is True when the provider cut the final answer at the token
+    budget (``stop_reason == max_tokens``) with no follow-up tool call — the
+    answer is likely incomplete and front ends should say so (F-13).
+    """
 
     final_content: str
     history: list[Message]
@@ -66,6 +71,7 @@ class AgentRunResult:
     steps: list[RunStep] = field(default_factory=list)
     total_cost_usd: float = 0.0
     total_credits: float = 0.0
+    truncated: bool = False
 
 
 @dataclass(kw_only=True)
