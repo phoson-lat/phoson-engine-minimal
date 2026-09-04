@@ -103,6 +103,14 @@ async def bash(
 ) -> str:
     """Execute a bash command and return stdout+stderr combined.
 
+    Use for anything the dedicated tools don't cover: running builds/tests,
+    git, and — because there is no native search tool — `grep -rn` / `rg` to
+    search across files and `find`/`ls` for deep or filtered listing. Prefer
+    read_file/patch_file over cat/sed for reading and editing, and keep
+    commands non-interactive (no prompts, no TUIs). Chained commands
+    (`;`, `&&`, `|`) and command substitution never match an allow-pattern,
+    so they always go through confirmation when bash is on ask/deny.
+
     Args:
         command: The shell command to execute.
         timeout: Hard timeout in seconds (per-invocation override).

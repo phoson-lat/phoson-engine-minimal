@@ -611,7 +611,18 @@ async def agent(
     bash_confirmation: Any = None,
     plugin_ui: Any = None,
 ) -> str:
-    """Execute a task using a sub-agent with clean context.
+    """Delegate a self-contained task to a fresh sub-agent (clean context).
+
+    Use for work that would otherwise bloat the main context or benefits
+    from an isolated scratchpad: large explorations (find and read many
+    files), a well-bounded subtask with a clear deliverable, or anything
+    that can be stated in one prompt and judged from its final answer. The
+    sub-agent gets a fresh context, inherits your permission gate (deny/ask
+    levels apply the same), and returns only its final answer — so it is a
+    good fit for "go look into X and report back", not for steps that need
+    to share intermediate state with the main loop. Do not use it for a
+    single quick edit or read (do that directly); parallel independent
+    tasks belong in the agents tool instead.
 
     Args:
         task: The task to run in a sub-agent with clean context.
@@ -681,7 +692,15 @@ async def agents(
     bash_confirmation: Any = None,
     plugin_ui: Any = None,
 ) -> str:
-    """Execute multiple tasks in parallel using sub-agents.
+    """Delegate several independent tasks to parallel sub-agents.
+
+    Use when you have multiple *independent* subtasks that can run at the
+    same time (research different areas, fix unrelated files, prepare
+    several deliverables). Each task gets its own fresh-context sub-agent
+    that inherits your permission gate, and the results are returned
+    together. Tasks in one call must not depend on each other's output —
+    if they do, run them sequentially (or in one agent) instead, since a
+    later task cannot see an earlier one's result within the same batch.
 
     Args:
         tasks: The tasks to run in parallel sub-agents.
