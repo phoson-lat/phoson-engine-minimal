@@ -181,9 +181,21 @@ class AgentLoop:
             history.append(
                 Message(role="assistant", content=outcome.done_event.content)
             )
-            yield IterationFinal(final_content=outcome.done_event.content)
+            yield IterationFinal(
+                final_content=outcome.done_event.content,
+                truncated=(outcome.done_event.stop_reason == "max_tokens"),
+            )
             return
 
+        # F-13: a tool call whose argument JSON is incomplete (cut by
+        # max_tokens, or malformed enough for the adapter to fall back to
+        # ``_raw``) is tagged by the adapter that saw it (``_truncated`` /
+        # ``_raw`` in args). The runner refuses to invoke a handler on such a
+        # call and answers it with an actionable error instead — see
+        # :meth:`ToolRunner._execute_single`. We do NOT blanket-tag every
+        # call on a max_tokens turn: a *complete* tool_use that merely sits
+        # at the token boundary (e.g. Anthropic) is still dispatchable, and
+        # refusing it would just force the model to re-issue it.
         if not outcome.tool_calls:
             yield IterationFailed(
                 error_event=AgentErrorEvent(

@@ -35,10 +35,23 @@ class LLMStartEvent(LLMEvent):
 
 @dataclass(kw_only=True)
 class LLMDoneEvent(LLMEvent):
-    """Event emitted when an LLM call completes successfully."""
+    """Event emitted when an LLM call completes successfully.
+
+    Attributes:
+        content: The accumulated assistant text.
+        has_tool_calls: Whether the turn produced tool-call events.
+        stop_reason: The provider's end-of-turn reason, normalized to the
+            Phoson vocabulary ``end_turn`` / ``max_tokens`` / ``tool_use`` /
+            ``refusal`` / ``pause_turn`` / ``other`` (see
+            :func:`phoson_llm.utils.normalize_stop_reason`). ``None`` when
+            the adapter could not determine it. A ``max_tokens`` reason with
+            ``has_tool_calls`` signals a truncated (partial-JSON) tool call,
+            which the agent loop must NOT dispatch to the handler (#178).
+    """
 
     content: str = ""
     has_tool_calls: bool = False
+    stop_reason: str | None = None
 
 
 # ─── Text ───────────────────────────────────────────────────────────────────

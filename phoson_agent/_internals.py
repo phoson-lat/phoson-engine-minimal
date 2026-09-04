@@ -121,9 +121,15 @@ class IterationCost(AgentEvent):
 
 @dataclass(kw_only=True)
 class IterationFinal(AgentEvent):
-    """Internal: signals the iteration produced a final assistant answer."""
+    """Internal: signals the iteration produced a final assistant answer.
+
+    ``truncated`` is True when the provider cut the response at the token
+    budget (``stop_reason == max_tokens``) so front ends can flag it as an
+    incomplete answer rather than a normal completion (F-13).
+    """
 
     final_content: str = ""
+    truncated: bool = False
 
 
 @dataclass(kw_only=True)

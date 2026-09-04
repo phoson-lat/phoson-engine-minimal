@@ -20,6 +20,7 @@ from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
     map_error_code,
+    normalize_stop_reason,
     is_context_length_error,
 )
 from phoson_llm.schemas import (
@@ -341,25 +342,41 @@ class ToolCallAccumulator:
             )
         return events
 
-    def finalize(self) -> list[ToolCallEvent]:
+    def finalize(self, truncated: bool = False) -> list[ToolCallEvent]:
         """Build :class:`ToolCallEvent` for every accumulated call and reset.
 
-        Calls missing an id or a name are skipped (malformed stream). The
-        buffers are cleared so a subsequent ``tool_calls`` finish in the
-        same response starts fresh.
+        Normally, calls missing an id or a name are skipped (malformed
+        stream). When *truncated* is True (the response hit ``max_tokens``
+        mid-tool-call, F-13) we instead emit one event per accumulated
+        fragment — synthesizing a missing id/name and tagging the args with
+        ``_truncated`` — so the agent loop can answer the partial ``tool_use``
+        with an actionable error result instead of invoking the handler on
+        incomplete JSON. The buffers are cleared so a subsequent
+        ``tool_calls`` finish in the same response starts fresh.
         """
         events: list[ToolCallEvent] = []
-        for idx, raw in self.tool_args_acc.items():
-            if idx not in self.tool_ids or idx not in self.tool_names:
-                continue
-            events.append(
-                ToolCallEvent(
-                    index=idx,
-                    tool_call_id=self.tool_ids[idx],
-                    tool_name=self.tool_names[idx],
-                    args=_parse_tool_args(raw),
+        if truncated:
+            for idx, raw in self.tool_args_acc.items():
+                events.append(
+                    ToolCallEvent(
+                        index=idx,
+                        tool_call_id=self.tool_ids.get(idx, f"truncated_{idx}"),
+                        tool_name=self.tool_names.get(idx, "unknown"),
+                        args={"_raw": raw, "_truncated": True},
+                    )
                 )
-            )
+        else:
+            for idx, raw in self.tool_args_acc.items():
+                if idx not in self.tool_ids or idx not in self.tool_names:
+                    continue
+                events.append(
+                    ToolCallEvent(
+                        index=idx,
+                        tool_call_id=self.tool_ids[idx],
+                        tool_name=self.tool_names[idx],
+                        args=_parse_tool_args(raw),
+                    )
+                )
         self.tool_args_acc.clear()
         self.tool_ids.clear()
         self.tool_names.clear()
@@ -468,6 +485,10 @@ async def stream_chat_completions(
     has_tool_calls = False
     final_usage: object = None
     tools_emitted = False
+    # Last non-None ``finish_reason`` from the stream (F-13). OpenAI-family
+    # adapters signal truncation via ``finish_reason == "length"``; keeping it
+    # so the final LLMDoneEvent can report the normalized stop_reason.
+    finish_reason: str | None = None
 
     yield LLMStartEvent(model=config.model, message_count=len(messages))
 
@@ -498,6 +519,8 @@ async def stream_chat_completions(
                         yield event
 
             finish = chunk.choices[0].finish_reason
+            if finish is not None:
+                finish_reason = finish
             if finish == "tool_calls" and not tools_emitted:
                 tools_emitted = True
                 for event in tool_acc.finalize():
@@ -522,6 +545,26 @@ async def stream_chat_completions(
             retryable=True,
         )
         return
+
+    # F-13: if the response was cut off at the token budget mid-tool-call,
+    # the buffer still holds fragments that never got a ``tool_calls``
+    # finish. Without this they'd be silently dropped — the model's intent
+    # is lost and the user sees a dead stop. Instead we emit one truncated
+    # ToolCallEvent per fragment (tagged ``_truncated``) so the agent loop
+    # answers it with an actionable "retry smaller" result rather than
+    # leaving an orphaned tool_use or invoking the handler on partial JSON.
+    stop_reason = normalize_stop_reason(finish_reason, provider="openai_compat")
+    if stop_reason == "max_tokens":
+        truncated_calls = tool_acc.finalize(truncated=True)
+        for event in truncated_calls:
+            yield event
+        # A truncated tool call counts as a tool call even though it never
+        # got a ``tool_calls`` finish — so the loop dispatches the (refused)
+        # call instead of treating the turn as a plain final answer. (In
+        # practice the fragments already set ``has_tool_calls`` in the main
+        # loop; this keeps it correct even if that ever changes.)
+        if truncated_calls:
+            has_tool_calls = True
 
     if reasoning_acc:
         yield ReasoningDoneEvent(content=reasoning_acc)
@@ -560,7 +603,11 @@ async def stream_chat_completions(
             cost_known=cost_known,
         )
 
-    yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
+    yield LLMDoneEvent(
+        content=text_acc,
+        has_tool_calls=has_tool_calls,
+        stop_reason=stop_reason,
+    )
 
 
 def _is_retryable(code: str, status_code: int) -> bool:

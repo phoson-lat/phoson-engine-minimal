@@ -7,6 +7,7 @@ import httpx
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
     map_error_code,
+    normalize_stop_reason,
     is_context_length_error,
 )
 from phoson_llm.schemas import (
@@ -165,6 +166,9 @@ class OllamaChat(BaseLLMChat):
         tool_ids: dict[int, str] = {}
         has_tool_calls = False
         final_usage: dict | None = None
+        # F-13: Ollama reports the stop reason on the final line as
+        # ``done_reason`` (``stop`` / ``length`` / ``tool_calls``).
+        stop_reason: str | None = None
 
         yield LLMStartEvent(
             model=config.model,
@@ -269,6 +273,9 @@ class OllamaChat(BaseLLMChat):
                                     "output": int(data.get("eval_count", 0) or 0),
                                     "input": int(data.get("prompt_eval_count", 0) or 0),
                                 }
+                            done_reason = data.get("done_reason")
+                            if isinstance(done_reason, str):
+                                stop_reason = done_reason
 
         except httpx.ConnectError as e:
             yield ErrorEvent(
@@ -334,6 +341,7 @@ class OllamaChat(BaseLLMChat):
         yield LLMDoneEvent(
             content=text_acc,
             has_tool_calls=has_tool_calls,
+            stop_reason=normalize_stop_reason(stop_reason, provider="ollama"),
         )
 
 

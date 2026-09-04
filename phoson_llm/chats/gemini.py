@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from phoson_llm.utils import (
     load_file_as_base64,
+    normalize_stop_reason,
     missing_attachment_placeholder,
 )
 from phoson_llm.pricing import calculate_cost
@@ -195,6 +196,9 @@ class GeminiChat(BaseLLMChat):
         text_acc = ""
         has_tool_calls = False
         usage = None
+        # F-13: Gemini carries the stop reason on each candidate as
+        # ``finish_reason`` (a FinishReason enum). Keep the last non-None one.
+        stop_reason: object = None
 
         try:
             async for chunk in await client.aio.models.generate_content_stream(
@@ -206,6 +210,9 @@ class GeminiChat(BaseLLMChat):
                     usage = chunk.usage_metadata
 
                 for candidate in chunk.candidates or []:
+                    cand_finish = getattr(candidate, "finish_reason", None)
+                    if cand_finish is not None:
+                        stop_reason = cand_finish
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
                             if part.text:
@@ -261,4 +268,8 @@ class GeminiChat(BaseLLMChat):
                 cost_known=cost_known,
             )
 
-        yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
+        yield LLMDoneEvent(
+            content=text_acc,
+            has_tool_calls=has_tool_calls,
+            stop_reason=normalize_stop_reason(stop_reason, provider="google"),
+        )

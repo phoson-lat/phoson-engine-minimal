@@ -15,6 +15,7 @@ from phoson_llm.utils import (
     guess_mime,
     map_error_code,
     load_file_as_base64,
+    normalize_stop_reason,
     is_context_length_error,
     missing_attachment_placeholder,
 )
@@ -364,6 +365,9 @@ class AnthropicChat(BaseLLMChat):
         tool_names: dict[int, str] = {}
         tool_ids: dict[int, str] = {}
         has_tool_calls = False
+        # F-13: Anthropic carries the stop reason on the final message
+        # (``stop_reason``), not on deltas — captured after the stream closes.
+        stop_reason: str | None = None
 
         yield LLMStartEvent(
             model=config.model,
@@ -452,6 +456,7 @@ class AnthropicChat(BaseLLMChat):
                             )
 
                 final_msg = await s.get_final_message()
+                stop_reason = getattr(final_msg, "stop_reason", None)
                 u = final_msg.usage
 
                 usage = TokenUsage(
@@ -497,4 +502,5 @@ class AnthropicChat(BaseLLMChat):
         yield LLMDoneEvent(
             content=text_acc,
             has_tool_calls=has_tool_calls,
+            stop_reason=normalize_stop_reason(stop_reason, provider="anthropic"),
         )

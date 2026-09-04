@@ -5,6 +5,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
+from phoson_llm.utils import normalize_stop_reason
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -114,7 +115,16 @@ class BedrockChat(BaseLLMChat):
                 cost_known=cost_known,
             )
 
-            yield LLMDoneEvent(content=text, has_tool_calls=False)
+            yield LLMDoneEvent(
+                content=text,
+                has_tool_calls=False,
+                # F-13: Converse reports the stop reason at the response top
+                # level (``end_turn`` / ``max_tokens`` / ``stop_sequence`` /
+                # ``tool_use``).
+                stop_reason=normalize_stop_reason(
+                    response.get("stop_reason"), provider="bedrock"
+                ),
+            )
 
         except Exception as e:
             from phoson_llm.schemas import ErrorEvent

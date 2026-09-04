@@ -12,6 +12,7 @@ directly.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable, Awaitable, AsyncIterator
 
 from phoson_llm.schemas import (
@@ -37,6 +38,50 @@ from phoson_agent._internals import (
     to_result_text,
 )
 from phoson_agent.exceptions import PhosonAgentError
+
+logger = logging.getLogger(__name__)
+
+# Result text recorded when the model's tool call was cut off by its token
+# budget (stop_reason == max_tokens) or arrived with malformed JSON (the
+# adapter's ``_raw`` fallback). Its argument JSON is incomplete, so the handler
+# is *not* invoked — the model is told why and how to recover (#178/F-13).
+TRUNCATED_TOOL_CALL_RESULT = (
+    "Tool call NOT executed: its argument JSON is incomplete or could not be "
+    "parsed (the model likely hit its token budget mid-call). Retry the same "
+    "tool with shorter, complete arguments, or split the work across multiple "
+    "smaller calls."
+)
+
+# Default message recorded for tool calls left unrun by an abnormal exit
+# (user cancellation or an unhandled exception escaping the runner).
+CANCELLED_TOOL_RESULT = "Tool execution cancelled by user."
+
+# Result template for an unhandled exception that escapes the tool handler or
+# a middleware hook. The exception type name is included so the model (and the
+# user) can tell a genuine bug from a provider hiccup (#178/F-14).
+TOOL_HANDLER_ERROR_TEMPLATE = (
+    "Internal error while executing tool '{name}': {exc_type}: {detail}"
+)
+
+
+def _is_unusable_args(args: object) -> bool:
+    """True when a tool call's args are not safely dispatchable to a handler.
+
+    Adapters tag a call whose argument JSON is incomplete so the agent loop
+    can answer it instead of invoking the handler:
+
+    * ``_truncated`` — the response hit ``max_tokens`` mid tool-call (F-13);
+    * ``_raw`` — the accumulated JSON did not parse, so the adapter fell back
+      to the opaque ``{"_raw": ...}`` marker.
+
+    Either way, calling the handler with those args would raise an opaque
+    ``TypeError`` (or act on partial data). The presence of *either* key means
+    the call must be answered with an actionable error result, not dispatched.
+    """
+    if not isinstance(args, dict):
+        return False
+    return "_truncated" in args or "_raw" in args
+
 
 # Type aliases for the middleware-applying callbacks the engine injects.
 # Keeping them typed keeps the runner decoupled from ``AgentEngine``.
@@ -82,11 +127,16 @@ class ToolRunner:
         history: list[Message],
         steps: list[RunStep],
     ) -> AsyncIterator[AgentEvent]:
-        """Execute every tool call in order with cancellation handling.
+        """Execute every tool call in order with backfill on cancellation.
 
-        On ``CancelledError`` we backfill synthetic ``tool_result`` blocks
-        for the calls that haven't run yet so the next LLM turn does not
-        complain about orphaned ``tool_use`` blocks.
+        A ``tool_use`` block the model put in the history must be answered
+        with a matching ``tool_result`` before the next LLM turn, or the
+        provider rejects the conversation. Handler/middleware exceptions are
+        already converted to paired error results inside
+        :meth:`_execute_single` (F-14), so the only remaining abnormal exit
+        that can leave later calls unrun is ``CancelledError`` (user
+        interrupt) — we backfill synthetic results for those and preserve the
+        cancel.
         """
         for call_idx, original_call in enumerate(tool_calls):
             committed = False
@@ -134,6 +184,19 @@ class ToolRunner:
                 yield event, True
             return
 
+        # F-13: a tool call whose argument JSON is incomplete — either the
+        # adapter marked it ``_truncated`` (cut by max_tokens mid-call) or
+        # fell back to ``_raw`` (unparseable JSON) — must NOT be dispatched to
+        # its handler: that would either raise an opaque ``TypeError`` or act
+        # on partial args. Answer the tool_use with an actionable error result
+        # instead (no Start, no handler) so the model can retry smaller.
+        if _is_unusable_args(original_call.args):
+            async for event in self._handle_unusable_args(
+                original_call, history, steps
+            ):
+                yield event, True
+            return
+
         yield (
             await self._prepare_event(
                 AgentToolStartEvent(
@@ -148,11 +211,33 @@ class ToolRunner:
         )
 
         tool_started = now_utc()
-        result_text, error_text, error_flag, result_image = await self._invoke_handler(
-            call
-        )
-
-        result_text = await self._apply_after_tool(call, result_text, error_flag)
+        try:
+            (
+                result_text,
+                error_text,
+                error_flag,
+                result_image,
+            ) = await self._invoke_handler(call)
+            result_text = await self._apply_after_tool(call, result_text, error_flag)
+        except Exception as exc:  # noqa: BLE001 - F-14, deliberate catch-all
+            # An unhandled exception in the handler or a middleware hook must
+            # NOT escape the loop: it would leave this tool_use without a
+            # matching tool_result and corrupt the persisted session, and a
+            # single misbehaving hook would kill the whole run. Convert it to
+            # an error result (exception type included) so the step and
+            # history record *why* the call failed and the model can adapt on
+            # the next turn — mirroring the existing handler-error path.
+            error_text = TOOL_HANDLER_ERROR_TEMPLATE.format(
+                name=call.tool_name, exc_type=type(exc).__name__, detail=str(exc)
+            )
+            result_text = error_text
+            error_flag = True
+            result_image = None
+            logger.error(
+                "Unhandled exception executing tool %s: %r",
+                call.tool_name,
+                exc,
+            )
 
         tool_ended = now_utc()
         tool_step = RunStep(
@@ -346,6 +431,58 @@ class ToolRunner:
         )
         yield await self._prepare_event(AgentStepDoneEvent(step=refused_step))
 
+    async def _handle_unusable_args(
+        self,
+        original_call: ToolCallEvent,
+        history: list[Message],
+        steps: list[RunStep],
+    ) -> AsyncIterator[AgentEvent]:
+        """Handle a tool call whose argument JSON is incomplete or unparseable
+        (cut by max_tokens, or the adapter's ``_raw`` fallback). The args are
+        NOT passed to the handler — the tool_use is answered with an
+        actionable error result so the model can retry with a smaller call
+        (#178/F-13)."""
+        history.append(
+            Message(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_call_id=original_call.tool_call_id,
+                        result=TRUNCATED_TOOL_CALL_RESULT,
+                        error=True,
+                    )
+                ],
+            )
+        )
+
+        now = now_utc()
+        truncated_step = RunStep(
+            kind="tool",
+            started_at=now,
+            ended_at=now,
+            duration_ms=0,
+            tool_name=original_call.tool_name,
+            tool_call_id=original_call.tool_call_id,
+            error="tool_call_truncated",
+            payload={
+                "args": original_call.args,
+                "result": TRUNCATED_TOOL_CALL_RESULT,
+            },
+        )
+        steps.append(truncated_step)
+
+        yield await self._prepare_event(
+            AgentToolDoneEvent(
+                index=original_call.index,
+                tool_call_id=original_call.tool_call_id,
+                tool_name=original_call.tool_name,
+                result=TRUNCATED_TOOL_CALL_RESULT,
+                error="tool_call_truncated",
+                duration_ms=0,
+            )
+        )
+        yield await self._prepare_event(AgentStepDoneEvent(step=truncated_step))
+
     def _fill_cancelled_results(
         self,
         history: list[Message],
@@ -359,7 +496,7 @@ class ToolRunner:
                     content=[
                         ToolResultBlock(
                             tool_call_id=pending_call.tool_call_id,
-                            result="Tool execution cancelled by user.",
+                            result=CANCELLED_TOOL_RESULT,
                             error=True,
                         )
                     ],

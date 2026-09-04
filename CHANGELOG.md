@@ -10,6 +10,33 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Fixes
 
+- **`stop_reason` is now surfaced and enforced (#178, F-13, F-14)**: the
+  provider's end-of-turn reason is read by *every* adapter and normalized to a
+  stable vocabulary (`end_turn` / `max_tokens` / `tool_use` / `refusal` /
+  `pause_turn` / `other`; unknown → `other`, absent → `None`), exposed on
+  `LLMDoneEvent.stop_reason`. The OpenAI-compatible shared loop covers 15
+  providers in one place; anthropic, ollama, bedrock, gemini and mistral each
+  read their own field (`stop_reason` / `done_reason` / `finish_reason` /
+  `FinishReason`).
+  - **Truncation is now distinguishable.** A response cut at `max_tokens`
+    mid tool-call (partial JSON) is no longer indistinguishable from a clean
+    finish, and its handler is **never invoked** on the incomplete arguments —
+    that path used to raise an opaque `TypeError` that was handed back to the
+    model as a Python error. The adapter marks the call (`_truncated`, or the
+    pre-existing `_raw` fallback for unparseable JSON) and the `ToolRunner`
+    answers the `tool_use` with an actionable "NOT executed — retry smaller /
+    split the work" result, so the history stays valid and the model can
+    recover on the next turn.
+  - **Incomplete answers are flagged.** A final answer cut at `max_tokens`
+    sets `AgentRunResult.truncated`, and both the classic REPL and the
+    full-screen TUI render a `⚠ truncated` line on the run summary.
+  - **Tool-use pairing is robust.** A middleware that raises (e.g. `RuntimeError`
+    in `on_after_tool`) no longer escapes `engine.stream()` and leaves an
+    orphaned `tool_use` in the persisted session; the failure is converted to a
+    paired `tool_result` whose text names the exception type
+    (`Internal error while executing tool '<name>': <ExcType>: <detail>`), so
+    the run continues and the history stays valid for the provider.
+
 - **Retry is actually wired up now (#177, F-12)**: a 429/529 (rate limit /
   overload) or a dropped connection that arrived *before the first token*
   used to kill the whole turn. There were two retry implementations and

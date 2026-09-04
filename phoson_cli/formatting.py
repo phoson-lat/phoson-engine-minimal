@@ -198,16 +198,27 @@ def render_subagent_start_line(event: AgentToolStartEvent, theme: Theme) -> Text
 
 
 def render_done_line(event: AgentDoneEvent, theme: Theme) -> Text | None:
-    """Run summary line (cost + step count), or None when there's nothing to show."""
+    """Run summary line (cost + step count), or None when there's nothing to show.
+
+    When the run was cut off at the model's token budget (``result.truncated``,
+    F-13) a leading ``⚠ truncated`` badge is added in the warning tone so the
+    user knows the answer is incomplete rather than a clean completion.
+    """
     r = event.result
     parts: list[str] = []
     if r.total_cost_usd > 0:
         parts.append(f"${r.total_cost_usd:.5f}")
     steps = len(r.steps)
     parts.append(f"{steps} step{'s' if steps != 1 else ''}")
-    if not parts:
+    if not parts and not r.truncated:
         return None
-    return Text(f"  {chr(183)} ".join(["", *parts]), style=theme.muted)
+    line = Text()
+    if r.truncated:
+        line.append("  ⚠ truncated", style=theme.warn)
+        if parts:
+            line.append(f"  {chr(183)} ", style=theme.muted)
+    line.append(f"  {chr(183)} ".join(["", *parts]), style=theme.muted)
+    return line
 
 
 def _sanitize_error_message(message: str, limit: int = 80) -> str:

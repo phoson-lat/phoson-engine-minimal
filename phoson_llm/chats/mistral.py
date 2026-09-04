@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING
 from collections.abc import AsyncIterator
 
+from phoson_llm.utils import normalize_stop_reason
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -60,6 +61,10 @@ class MistralChat(BaseLLMChat):
 
         text_acc = ""
         has_tool_calls = False
+        # F-13: Mistral (OpenAI-compatible) reports the stop reason on the
+        # choice as ``finish_reason``. Probe defensively — the SDK shape has
+        # varied, and a missing attribute must not break the stream.
+        stop_reason: object = None
 
         try:
             stream_response = await client.chat.stream_async(
@@ -71,10 +76,15 @@ class MistralChat(BaseLLMChat):
             )
 
             async for chunk in stream_response:
-                delta_content = chunk.data.choices[0].delta.content
+                choice = chunk.data.choices[0]
+                delta_content = choice.delta.content
                 if isinstance(delta_content, str) and delta_content:
                     text_acc += delta_content
                     yield TokenEvent(content=delta_content)
+
+                finish = getattr(choice, "finish_reason", None)
+                if finish is not None:
+                    stop_reason = finish
 
                 if chunk.data.usage:
                     u = chunk.data.usage
@@ -101,4 +111,8 @@ class MistralChat(BaseLLMChat):
             yield ErrorEvent(message=str(e), code="provider_error", retryable=False)
             return
 
-        yield LLMDoneEvent(content=text_acc, has_tool_calls=has_tool_calls)
+        yield LLMDoneEvent(
+            content=text_acc,
+            has_tool_calls=has_tool_calls,
+            stop_reason=normalize_stop_reason(stop_reason, provider="openai_compat"),
+        )
