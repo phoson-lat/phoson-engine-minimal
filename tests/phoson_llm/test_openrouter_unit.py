@@ -21,6 +21,8 @@ class _Delta:
 
 
 def test_build_chat_returns_openrouter_chat_for_openrouter_provider() -> None:
+    from phoson_llm.retry import RetryingChat
+
     chat = build_chat(
         PhosonConfig(
             provider="openrouter",
@@ -28,7 +30,10 @@ def test_build_chat_returns_openrouter_chat_for_openrouter_provider() -> None:
         )
     )
 
-    assert isinstance(chat, OpenRouterChat)
+    # build_chat wraps the adapter in a RetryingChat (default 3 attempts);
+    # the underlying adapter is still the provider's chat.
+    assert isinstance(chat, RetryingChat)
+    assert isinstance(chat._inner, OpenRouterChat)
 
 
 def test_extract_reasoning_delta_supports_reasoning_content() -> None:

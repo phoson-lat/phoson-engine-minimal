@@ -2,6 +2,7 @@
 Module for agent middlewares.
 """
 
+import warnings
 from abc import ABC
 from collections.abc import Callable, AsyncIterator
 
@@ -59,8 +60,20 @@ class AgentMiddleware(ABC):
 
 
 class RetryMiddleware(AgentMiddleware):
-    """
-    Middleware to automatically retry LLM calls on errors.
+    """Middleware to automatically retry LLM calls on errors.
+
+    .. deprecated::
+        Use :class:`phoson_llm.retry.RetryingChat` instead. It has the
+        correct streaming semantics (it only retries *before* any token has
+        been emitted, so a committed stream is never re-run and output is
+        never duplicated) and it is the layer the CLI actually wires up via
+        :func:`phoson_cli.config.build_chat`. This middleware marks a call
+        as "visible" on the very first ``LLMStartEvent`` every adapter
+        emits, so a retryable error that arrives after the start is
+        re-sent instead of retried — it effectively never retries. It is
+        kept (and only emits a deprecation warning on construction) so
+        existing code that imports it keeps working; do not add it to a
+        new middleware chain.
     """
 
     def __init__(
@@ -69,6 +82,15 @@ class RetryMiddleware(AgentMiddleware):
         base_delay_seconds: float = 0.5,
         backoff_multiplier: float = 2.0,
     ) -> None:
+        warnings.warn(
+            "RetryMiddleware is deprecated and does not reliably retry "
+            "(a stream is marked visible on LLMStartEvent, which every "
+            "adapter emits first). Wrap your chat in "
+            "phoson_llm.retry.RetryingChat instead — the CLI does this "
+            "automatically via build_chat (config.llm_max_attempts).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.max_retries = max_retries
         self.base_delay_seconds = base_delay_seconds
         self.backoff_multiplier = backoff_multiplier

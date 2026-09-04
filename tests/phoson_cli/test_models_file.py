@@ -409,7 +409,8 @@ def test_build_chat_applies_models_json_base_url(tmp_path) -> None:
     ):
         config = config_mod.PhosonConfig(provider="groq", groq_api_key="gsk_test")
         chat = config_mod.build_chat(config)
-    assert chat._base_url == "https://proxy.example/v1"
+    # build_chat wraps in RetryingChat; the adapter is chat._inner.
+    assert chat._inner._base_url == "https://proxy.example/v1"
 
 
 def test_build_chat_without_base_url_uses_provider_default(tmp_path) -> None:
@@ -419,4 +420,5 @@ def test_build_chat_without_base_url_uses_provider_default(tmp_path) -> None:
     with patch.object(models_mod, "load_models_file", return_value={}):
         config = config_mod.PhosonConfig(provider="groq", groq_api_key="gsk_test")
         chat = config_mod.build_chat(config)
-    assert chat._base_url == "https://api.groq.com/openai/v1"
+    # build_chat wraps in RetryingChat; the adapter is chat._inner.
+    assert chat._inner._base_url == "https://api.groq.com/openai/v1"

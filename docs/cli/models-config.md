@@ -22,6 +22,26 @@ instead of silently degrading. API keys never live there; see
 - `[defaults]` — compaction knobs
   (see [compaction.md](compaction.md)).
 
+## Retrying transient provider errors
+
+A 429/529 (rate limit / overload) or a dropped connection that arrives
+*before the first token* used to kill the whole turn. The chat client
+built by `build_chat` is wrapped in `RetryingChat`, which re-attempts
+transient failures with exponential backoff (1s, ×2, capped at 30s) and
+jitter — but **only while no token has been emitted**. Once the stream
+commits (first token / reasoning / tool call) it is never re-run, so
+partial output is never duplicated.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `llm_max_attempts` | `3` | Total tries per LLM call (initial + retries). `1` disables retries. |
+| `PHOSON_LLM_MAX_ATTEMPTS` | `3` | Env override for the same. |
+
+Each retry is logged (`phoson_cli.retry` at INFO: "LLM call failed before
+the first token; retry N/M after backoff"). Non-retryable errors
+(auth, invalid request) and errors *after* the first token are propagated
+immediately, not retried.
+
 ## Themes (light/dark aware)
 
 The first time you run `phoson-cli` without a saved theme, it asks your

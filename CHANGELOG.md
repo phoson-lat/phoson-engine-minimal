@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fixes
+
+- **Retry is actually wired up now (#177, F-12)**: a 429/529 (rate limit /
+  overload) or a dropped connection that arrived *before the first token*
+  used to kill the whole turn. There were two retry implementations and
+  neither ran in the CLI: `RetryMiddleware` marked a stream as "visible"
+  on the very first `LLMStartEvent` (which every adapter emits), so a
+  retryable error was re-sent instead of retried; `RetryingChat` had the
+  correct streaming semantics but was never connected. `build_chat` now
+  wraps every provider's adapter in `RetryingChat`, which re-attempts
+  transient failures with exponential backoff (1s, ×2, capped at 30s) and
+  jitter — **only while no token has been emitted**, so a committed stream
+  is never re-run and output is never duplicated. Retry count comes from
+  `llm_max_attempts` (default 3, `1` disables) / `PHOSON_LLM_MAX_ATTEMPTS`.
+  `RetryMiddleware` is deprecated (emits a `DeprecationWarning` on
+  construction; kept for import compatibility). Docs:
+  `docs/cli/models-config.md`.
+
 ## v0.26.0 (2026-09-04)
 
 ### Features

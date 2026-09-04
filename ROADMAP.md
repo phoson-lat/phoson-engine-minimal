@@ -134,6 +134,10 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           vía `chat`; 400 de pairing ⇒ error explícito (no se traga). 17 tests.
           Desbloquea #147.
 3. #177   RetryingChat en build_chat; deprecar RetryMiddleware.                  S
+          (En curso: `build_chat` envuelve el adapter en `RetryingChat` —
+          backoff 1s/×2/30s + jitter, solo pre-token (no duplica);
+          `llm_max_attempts` default 3 + `PHOSON_LLM_MAX_ATTEMPTS` (1
+          desactiva); `RetryMiddleware` deprecado con warning.)
 4. #178   stop_reason normalizado; except Exception en ToolRunner con backfill. S-M
 5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
 ```
