@@ -367,6 +367,18 @@ tasks in parallel). Parallelism is bounded by `subagent_max_parallel`
 many LLM sessions may run at once), and each task is guarded by a
 timeout.
 
+**System prompt & delegation (F-23, F-24).** Each sub-agent receives the
+*same* system prompt the parent builds — cwd, date/timezone, platform,
+AGENTS.md/CLAUDE.md memory, and the tool list — derived from **its own**
+tool subset, plus a one-line sub-agent framing ("work on this task and
+return a concise report; do not delegate"). This is passed via
+`ModelConfig.system`, so `CLAUDE.md`/`AGENTS.md` conventions keep
+applying once work is delegated. The child is **never** offered the
+`agent`/`agents` tools (both are stripped from its registry), so
+recursion is bounded to one level *by design* — a nested delegation would
+otherwise fail with a `TypeError`, since the child context carries no
+`chat`/`available_tools`.
+
 Timeout semantics (I-127):
 
 - **Per invocation (model-set):** the optional `timeout` parameter.

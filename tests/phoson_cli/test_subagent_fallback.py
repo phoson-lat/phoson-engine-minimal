@@ -12,6 +12,21 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_cli.tools.subagent import agent, agents, _is_model_unavailable_error
 
 
+class _ProbeTool:
+    """A real (non-delegation) tool so the sub-agent is not tool-less.
+
+    ``_select_tools`` strips ``agent``/``agents`` (F-24), so a fixture that
+    only offered those leaves the sub-agent with no tools.
+    """
+
+    name = "read_file"
+    description = "read a file"
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+    async def handler(self, args, context=None):
+        return "ok"
+
+
 class UnavailableThenFallbackChat(BaseLLMChat):
     """Raises 404 for one model, succeeds for any other."""
 
@@ -43,7 +58,7 @@ class AlwaysFailingChat(BaseLLMChat):
 def _ctx(chat, *, with_main: bool = True) -> dict:
     ctx = {
         "chat": chat,
-        "available_tools": {"agents": agents},
+        "available_tools": {"read_file": _ProbeTool()},
         "default_model": "google/gemini-flash-lite-preview",
         "max_iterations": 2,
         "safe_mode": False,
