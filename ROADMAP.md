@@ -19,7 +19,7 @@
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
 | Loop | 🟠 #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
-| ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). En curso (#179+#180, un PR): unicidad de `patch_file` + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
+| ACI (edit/search/prompt) | 🟠 #181 (grep/glob). ✅ #179 + #180 merged (PR #193, `67368b0`, pendiente de release): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
 
@@ -38,8 +38,8 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.2 (mismo PR #191): `run_budget_seconds` (600s, `0`=sin límite) + `PHOSON_RUN_BUDGET_SECONDS`; `asyncio.wait_for` sobre el run → exit 124 con mensaje limpio; interactivo no cambia. |
 | [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | ✅ **cerrado** | Shipped v0.25.1 (PR #192, `af502f0`): `pattern_allows`/`is_simple_shell_command` (solo un simple command matchea; `;`/`&`/`|`/`$( `/subshell ⇒ nivel del tool, quotes respetadas) + `match_args` obligatorio (sin fallback a "primer string"): `write_file` matchea `path`, no `content`. 35 tests. #169 ya no hereda el bypass. |
 | [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | ✅ **cerrado** | Shipped v0.25.0: `notify_on_completion` (off/bell/desktop) + `PHOSON_NOTIFY_ON_COMPLETION` + `/notify`; TTY-gated, solo en run exitoso. Default `off`. |
-| [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | **B** | Antigravity §3.4 lo describía como correcto. Primer candidato a medir con #139. |
-| [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | **B** | Junto con #179 forman el PR de edit tool. |
+| [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | ✅ **cerrado** | Merged PR #193 (`67368b0`), pendiente de release: `count>1` sin `replace_all` ⇒ error con líneas (no escribe); hint difflib + CRLF/LF si `count==0`; lee bytes crudos (preserva CRLF) y normaliza EOL de la ancla. Primer candidato a medir con #139. |
+| [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | ✅ **cerrado** | Merged PR #193 (`67368b0`), pendiente de release: `read_file` `cat -n` + caps en rangos; `list_dir` 500; descripciones reescritas (8 tools); system prompt + Tool usage / Environment (git) / Safety (cache-friendly). Medición H-1 (#139) pendiente. |
 | [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | ✅ **cerrado** | Shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/emergency/manual + plan), resumen vacío ⇒ abortar, llamada de resumen tool-free (chat), 400 de pairing ⇒ error explícito. Desbloquea #147. |
 | [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | **B** | Antigravity §2.5 describía `RetryingChat` como activo. |
 | [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | **B** | Mismo camino que #134 (`_build_assistant_message`). |
@@ -117,10 +117,15 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 ```
 1. #179 + #180   Edit tool seguro + read_file cat -n + caps + descripciones +
           system prompt con guía de tools, git status y aviso de no confiable. M
-          (En curso: unicidad de `patch_file` con líneas de match, CRLF
-          preservado/normalizado, `cat -n` + caps en rangos, tope de
-          `list_dir`, descripciones reescritas, secciones Tool usage /
-          Environment (git) / Safety en el system prompt.)
+          ✅ merged (PR #193, `67368b0`), pendiente de release: unicidad de
+          `patch_file` (count>1 ⇒ error con líneas, no escribe; hint difflib +
+          CRLF/LF si count==0), lee bytes crudos (preserva CRLF, normaliza EOL
+          de la ancla), no-UTF-8 ⇒ error accionable; `read_file` `cat -n` +
+          cap en rangos + hint del siguiente rango; `list_dir` 500;
+          descripciones reescritas (read/write/patch/list/bash/agent/agents/
+          web_fetch); system prompt + Tool usage (gated) / Environment
+          (git branch + status capped, solo en repo) / Safety. 19 tests.
+          Medición H-1 (#139) pendiente (Sprint C).
 2. #176   Corte de compactación en fronteras seguras; resumen vacío aborta;
           tools=[] en el call_next del resumen.                                 M
           ✅ shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/
