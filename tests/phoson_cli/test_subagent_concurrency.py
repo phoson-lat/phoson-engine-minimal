@@ -10,6 +10,21 @@ from phoson_llm.chats.base import BaseLLMChat
 from phoson_cli.tools.subagent import agent, agents
 
 
+class _ProbeTool:
+    """A real (non-delegation) tool so the sub-agent is not tool-less.
+
+    ``_select_tools`` strips ``agent``/``agents`` (F-24), so a fixture that
+    only offered those leaves the sub-agent with no tools.
+    """
+
+    name = "read_file"
+    description = "read a file"
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+    async def handler(self, args, context=None):
+        return "ok"
+
+
 class ConcurrencyChat(BaseLLMChat):
     """Tracks how many sub-agent streams are active at once.
 
@@ -55,7 +70,7 @@ class SlowChat(BaseLLMChat):
 def _context(**overrides):
     base = {
         "chat": None,
-        "available_tools": {"agent": agent, "agents": agents},
+        "available_tools": {"read_file": _ProbeTool()},
         "default_model": "fake-model",
         "max_iterations": 2,
         "safe_mode": False,

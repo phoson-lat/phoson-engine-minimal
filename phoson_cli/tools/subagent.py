@@ -41,6 +41,18 @@ from .subagent_panel import (
 
 _LOGGER = logging.getLogger("phoson_cli.subagent")
 
+# F-23: appended to the sub-agent's (otherwise parent-identical) system
+# prompt so the model knows it is a sub-agent and what to return. Stable
+# text — no live clock — so it doesn't break the prompt-cache prefix.
+_SUBAGENT_PREAMBLE = (
+    "\n\n# Sub-agent\n"
+    "You are a sub-agent delegated a self-contained task by a parent agent. "
+    "Work only on this task using the tools available to you, then finish "
+    "with a single concise, self-contained report of your findings or the "
+    "work completed. Do not call the `agent` or `agents` tools — you cannot "
+    "delegate further."
+)
+
 
 def _debug_enabled() -> bool:
     return os.environ.get("PHOSON_SUBAGENT_DEBUG", "").strip().lower() in {
@@ -94,9 +106,10 @@ def _subagent_context(
     - ``plugin_ui`` — so plugin tools inside a sub-agent work.
 
     The sub-agent *parameters* (``chat``, ``available_tools``, ...) are
-    deliberately NOT forwarded: nested sub-agents are a separate concern
-    (#184) and must not silently reuse the parent's chat client or tool
-    registry.
+    deliberately NOT forwarded: nested sub-agents are **not supported by
+    design** (#184/F-24) — the child is never offered the ``agent``/
+    ``agents`` tools, so it cannot delegate further, and it must not
+    silently reuse the parent's chat client or tool registry.
     """
     ctx = AgentContext()
     ctx.extra["safe_mode"] = safe_mode
@@ -287,8 +300,13 @@ def _select_tools(
     Returns a ``(selected, error)`` pair. ``error`` is non-None when the
     request cannot be satisfied; in that case the caller should short-
     circuit and surface the error to the parent agent.
+
+    Both ``agent`` and ``agents`` are always stripped (F-24): the sub-agent
+    context has no ``chat``/``available_tools``, so a delegated
+    ``agent``/``agents`` call would fail with a ``TypeError`` returned as a
+    string. Recursion is bounded by *design* (one level), not by accident.
     """
-    allowed = {k: v for k, v in available_tools.items() if k != "agent"}
+    allowed = {k: v for k, v in available_tools.items() if k not in ("agent", "agents")}
     if requested is None:
         if not allowed:
             return ({}, "Error: No tools available for sub-agent.")
@@ -475,9 +493,23 @@ async def _run_one_subagent(
             ),
             max_iterations=max_iterations,
         )
+        # F-23: the child previously got *no* system prompt, so it had no idea
+        # of cwd, date, platform, AGENTS.md/CLAUDE.md conventions, or which
+        # tools it actually had. Reuse the parent's builder over the child's
+        # own tool subset (it auto-gates the compact/skill/MCP blocks on the
+        # tools really present, and available_tools already excludes
+        # agent/agents/compact_context) and add a one-line sub-agent framing.
+        # Kept as a function-local import: it's heavy (reads AGENTS.md +
+        # skills) and only needed when a sub-agent actually runs.
+        from ..session_utils import build_system_prompt
+
+        system_prompt = build_system_prompt(list(selected_tools)) + _SUBAGENT_PREAMBLE
         messages = [Message(role="user", content=task)]
         return await _stream_final(
-            sub_engine, messages, ModelConfig(model=model_name), on_event=_on_event
+            sub_engine,
+            messages,
+            ModelConfig(model=model_name, system=system_prompt),
+            on_event=_on_event,
         )
 
     async def _attempt(model_name: str) -> AgentRunResult:

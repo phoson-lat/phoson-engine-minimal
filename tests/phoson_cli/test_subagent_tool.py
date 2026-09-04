@@ -13,6 +13,23 @@ from phoson_cli.tools.subagent import agent, agents
 from phoson_cli.tools.subagent_panel import render_subagent_panel_frame
 
 
+class _ProbeTool:
+    """A real (non-delegation) tool so the sub-agent is not tool-less.
+
+    ``_select_tools`` strips ``agent``/``agents`` (F-24), so a fixture that
+    only offered those leaves the sub-agent with no tools. These tests are
+    about timeout/fallback/parallelism, not tool selection, so they give the
+    sub-agent one trivial tool to keep the engine runnable.
+    """
+
+    name = "read_file"
+    description = "read a file"
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+    async def handler(self, args, context=None):
+        return "ok"
+
+
 class FakeSubagentChat(BaseLLMChat):
     async def stream(
         self,
@@ -67,7 +84,7 @@ async def test_agent_tool_awaits_subengine_run() -> None:
         {"task": "read PROJECT.md"},
         {
             "chat": FakeSubagentChat(),
-            "available_tools": {"agent": agent, "agents": agents},
+            "available_tools": {"read_file": _ProbeTool()},
             "default_model": "fake-demo-model",
             "max_iterations": 2,
             "safe_mode": False,
@@ -83,7 +100,7 @@ async def test_agents_tool_awaits_each_subengine_run() -> None:
         {"tasks": ["read PROJECT.md", "read README.md"]},
         {
             "chat": FakeSubagentChat(),
-            "available_tools": {"agent": agent, "agents": agents},
+            "available_tools": {"read_file": _ProbeTool()},
             "default_model": "fake-demo-model",
             "max_iterations": 2,
             "safe_mode": False,
@@ -100,7 +117,7 @@ async def test_agents_tool_runs_subagents_concurrently_and_keeps_output_order() 
         {"tasks": ["read PROJECT.md", "read README.md"]},
         {
             "chat": DelayedSubagentChat(),
-            "available_tools": {"agent": agent, "agents": agents},
+            "available_tools": {"read_file": _ProbeTool()},
             "default_model": "fake-demo-model",
             "max_iterations": 2,
             "safe_mode": False,
@@ -118,7 +135,7 @@ async def test_agents_tool_uses_isolated_chat_instances_for_parallel_runs() -> N
         {"tasks": ["read PROJECT.md", "read README.md"]},
         {
             "chat": SingleStreamChat(),
-            "available_tools": {"agent": agent, "agents": agents},
+            "available_tools": {"read_file": _ProbeTool()},
             "default_model": "fake-demo-model",
             "max_iterations": 2,
             "safe_mode": False,
@@ -261,7 +278,7 @@ def test_tool_decorator_builds_array_schema_for_list_of_strings() -> None:
 def _agent_ctx(**overrides) -> dict:
     ctx = {
         "chat": FakeSubagentChat(),
-        "available_tools": {"agent": agent, "agents": agents},
+        "available_tools": {"read_file": _ProbeTool()},
         "default_model": "fake-demo-model",
         "max_iterations": 2,
         "safe_mode": False,
