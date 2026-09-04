@@ -8,12 +8,14 @@ the LLM chat clients.
 import os
 import re
 import shutil
+import logging
 import tomllib
 import warnings
 from typing import Any, Final
 from pathlib import Path
 from dataclasses import field, dataclass
 
+from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats.grok import GrokChat
 from phoson_llm.chats.groq import GroqChat
@@ -34,6 +36,8 @@ from phoson_llm.chats.fireworks import FireworksChat
 from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.chats.github_models import GitHubModelsChat
+
+_LOG = logging.getLogger("phoson_cli.retry")
 
 
 class PhosonConfigError(Exception):
@@ -91,6 +95,16 @@ class PhosonConfig:
     # 600s; ``0`` disables the budget (unlimited) for those who want it.
     # Interactive mode ignores this entirely — Esc remains the escape.
     run_budget_seconds: float = 600.0
+    # ── LLM retry on transient provider errors (#177 / F-12) ─────────────
+    # A 429/529 (rate limit / overload) or a dropped connection *before the
+    # first token* used to kill the whole turn. The chat built by
+    # :func:`build_chat` is wrapped in ``RetryingChat`` which re-attempts
+    # transient failures with exponential backoff + jitter, but **only while
+    # no token has been emitted** (a committed stream is never re-run, so
+    # output is never duplicated). ``llm_max_attempts`` is the total number
+    # of tries (3 = initial + 2 retries); ``1`` disables retries entirely.
+    # Delay/backoff are fixed (1s, ×2, capped at 30s) — see ``build_chat``.
+    llm_max_attempts: int = 3
     # ── Completion notification (#167) ──────────────────────────────────
     # Cue the terminal when a run finishes, so a backgrounded window gets
     # attention: "bell" (BEL), "desktop" (OSC 9/777 desktop notification +
@@ -591,6 +605,12 @@ def load_config() -> PhosonConfig:
             fd,
             d.run_budget_seconds,
         ),
+        llm_max_attempts=_resolve_int(
+            "PHOSON_LLM_MAX_ATTEMPTS",
+            "llm_max_attempts",
+            fd,
+            d.llm_max_attempts,
+        ),
         notify_on_completion=_resolve_str(
             "PHOSON_NOTIFY_ON_COMPLETION",
             "notify_on_completion",
@@ -806,6 +826,7 @@ def save_config(
         ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("run_budget_seconds", getattr(config, "run_budget_seconds", None)),
+        ("llm_max_attempts", getattr(config, "llm_max_attempts", None)),
         ("notify_on_completion", getattr(config, "notify_on_completion", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
@@ -979,7 +1000,39 @@ def _models_provider_base_url(config: PhosonConfig, provider: str) -> str | None
 
 
 def build_chat(config: PhosonConfig) -> BaseLLMChat:
-    """Build the appropriate LLM chat client based on configuration."""
+    """Build the appropriate LLM chat client based on configuration.
+
+    The adapter is wrapped in :class:`~phoson_llm.retry.RetryingChat` so a
+    transient provider failure (429/529 rate limit or overload, a dropped
+    connection) that happens **before the first token** is re-attempted
+    with exponential backoff + jitter instead of killing the turn. The
+    wrapper is streaming-aware: once a token/reasoning/tool-call event has
+    been emitted the stream is committed and never re-run, so output is
+    never duplicated. Retry count comes from ``config.llm_max_attempts``
+    (``1`` disables retries). Backoff is fixed at 1s, ×2, capped at 30s.
+    """
+    adapter = _build_chat_adapter(config)
+    max_attempts = max(1, int(getattr(config, "llm_max_attempts", 3)))
+    if max_attempts <= 1:
+        return adapter
+    return with_retry(
+        adapter,
+        max_attempts=max_attempts,
+        initial_delay=1.0,
+        max_delay=30.0,
+        multiplier=2.0,
+        jitter=0.25,
+        on_retry=lambda attempt, error: _LOG.info(
+            "LLM call failed before the first token (%s); retry %d/%d after backoff",
+            error.code or "error",
+            attempt,
+            max_attempts - 1,
+        ),
+    )
+
+
+def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
+    """Build the raw LLM chat adapter (no retry wrapper) for a provider."""
     provider = config.provider.lower()
     base_url = _models_provider_base_url(config, provider)
     if provider == "openrouter":

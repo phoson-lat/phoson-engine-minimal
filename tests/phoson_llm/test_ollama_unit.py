@@ -23,6 +23,8 @@ from phoson_llm.chats.ollama import (
 
 
 def test_build_chat_returns_ollama_chat_for_ollama_provider() -> None:
+    from phoson_llm.retry import RetryingChat
+
     chat = build_chat(
         PhosonConfig(
             provider="ollama",
@@ -30,7 +32,10 @@ def test_build_chat_returns_ollama_chat_for_ollama_provider() -> None:
         )
     )
 
-    assert isinstance(chat, OllamaChat)
+    # build_chat wraps the adapter in a RetryingChat (default 3 attempts);
+    # the underlying adapter is still the provider's chat.
+    assert isinstance(chat, RetryingChat)
+    assert isinstance(chat._inner, OllamaChat)
 
 
 def test_convert_messages_keeps_system_in_messages() -> None:
