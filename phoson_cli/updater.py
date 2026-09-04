@@ -38,6 +38,11 @@ UPDATE_CHECK_INTERVAL = 86_400.0
 # a background task that never blocks input or first paint; the deadline
 # only bounds how long the check may hold a network connection.
 STARTUP_CHECK_TIMEOUT = 10.0
+# Hard deadline for the *upgrade subprocess* itself (uv tool upgrade / pip
+# install -U). Without one a wedged network or a hung pip can freeze the
+# REPL forever (F-38). Generous on purpose: a real install can download
+# wheels, but it should never need more than a few minutes.
+UPGRADE_TIMEOUT = 600.0
 # Cache file holding the last check timestamp, its outcome, and — when an
 # update is available — the latest version. Written atomically (tmp +
 # rename) and best-effort: a failure to persist just means the next start
@@ -260,14 +265,30 @@ def upgrade_command(mode: str) -> list[str] | None:
     return None  # source / uvx / unknown — handled as guidance, not a command
 
 
-async def run_upgrade_command(command: list[str]) -> tuple[int, str]:
-    """Run an upgrade command, returning (returncode, combined output tail)."""
+async def run_upgrade_command(
+    command: list[str], timeout: float = UPGRADE_TIMEOUT
+) -> tuple[int, str]:
+    """Run an upgrade command, returning (returncode, combined output tail).
+
+    A hard deadline bounds the whole subprocess (F-38): a wedged network or
+    hung pip/uv can no longer freeze the REPL. On timeout the child is
+    killed and ``(124, "timed out after {timeout}s")`` is returned — 124 is
+    GNU ``timeout``'s conventional "killed by timeout" code.
+    """
     proc = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    stdout_b, _ = await proc.communicate()
+    try:
+        stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:  # pragma: no cover - already reaped
+            pass
+        await proc.wait()
+        return 124, f"update command timed out after {timeout:.0f}s"
     output = (stdout_b or b"").decode("utf-8", errors="replace").strip()
     return proc.returncode or 0, output[-2000:]
 

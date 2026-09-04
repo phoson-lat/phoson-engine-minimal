@@ -59,6 +59,12 @@ class SessionMeta:
     message_count: int
     total_cost: float = 0.0
     total_tokens: int = 0
+    # F-34: the input/output split (persisted alongside ``total_tokens``) so a
+    # resumed session can show real in/out figures instead of dumping the sum
+    # into output. Pre-F-34 files only carry ``total_tokens``; the fields
+    # default to 0 and the CLI back-fills output from the sum on resume.
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
     step_count: int = 0
     last_model: str | None = None
     title: str | None = None
@@ -86,6 +92,10 @@ class ConversationTree:
 
     total_cost: float = 0.0
     total_tokens: int = 0
+    # F-34: persisted split (see SessionMeta); back-filled on resume when
+    # absent so a legacy file's sum lands in output, not a misleading 0.
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
     step_count: int = 0
     last_model: str | None = None
     title: str | None = None
@@ -264,6 +274,8 @@ class ConversationTree:
                 message_count=0,
                 total_cost=self.total_cost,
                 total_tokens=self.total_tokens,
+                total_input_tokens=self.total_input_tokens,
+                total_output_tokens=self.total_output_tokens,
                 step_count=self.step_count,
                 last_model=self.last_model,
                 title=self.title,
@@ -276,6 +288,8 @@ class ConversationTree:
             message_count=len(nodes),
             total_cost=self.total_cost,
             total_tokens=self.total_tokens,
+            total_input_tokens=self.total_input_tokens,
+            total_output_tokens=self.total_output_tokens,
             step_count=self.step_count,
             last_model=self.last_model,
             title=self.title,
@@ -307,6 +321,8 @@ class ConversationTree:
         self,
         total_cost: float | None = None,
         total_tokens: int | None = None,
+        total_input_tokens: int | None = None,
+        total_output_tokens: int | None = None,
         step_count: int | None = None,
         last_model: str | None = None,
         title: str | None = None,
@@ -316,6 +332,10 @@ class ConversationTree:
             self.total_cost = total_cost
         if total_tokens is not None:
             self.total_tokens = total_tokens
+        if total_input_tokens is not None:
+            self.total_input_tokens = total_input_tokens
+        if total_output_tokens is not None:
+            self.total_output_tokens = total_output_tokens
         if step_count is not None:
             self.step_count = step_count
         if last_model is not None:

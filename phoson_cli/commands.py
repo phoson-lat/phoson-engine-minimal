@@ -878,6 +878,11 @@ class CommandHandler:
         return False
 
     async def _cmd_new(self, cmd: Command) -> bool:  # noqa: ARG002
+        if getattr(self.repl, "is_running", False):
+            self._r.print_warn(
+                "A turn is running — press Esc (or Ctrl+C) first (F-35)."
+            )
+            return True
         maybe = self.repl.new_session()
         if inspect.isawaitable(maybe):
             await maybe  # type: ignore[misc]
@@ -1271,6 +1276,9 @@ class CommandHandler:
         query = cmd.args.strip()
         if not query:
             r.print_info("Usage:  /resume <session_id>  (see /sessions)")
+            return True
+        if getattr(self.repl, "is_running", False):
+            r.print_warn("A turn is running — press Esc (or Ctrl+C) first (F-35).")
             return True
 
         sessions = await self.repl.storage.list_meta()

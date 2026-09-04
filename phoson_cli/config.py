@@ -127,6 +127,11 @@ class PhosonConfig:
     # the optional MCP plugin. Config-file entries are data only; direct Plugin
     # instances remain an API-only AgentEngine feature.
     plugins: list[str | dict[str, Any]] = field(default_factory=list)
+    # F-38: plugins that were *disabled* (spec removed from ``plugins``).
+    # Keeping the spec here means ``plugin list`` can show the disabled state
+    # and ``enable`` can restore a plugin it disabled — including ``path:``
+    # specs, which have no entry-point name to re-derive from.
+    disabled_plugins: list[str | dict[str, Any]] = field(default_factory=list)
     # Input-history file for the front ends. Not a persisted setting (not
     # loaded from / saved to config.toml) — overridable per run, mainly so
     # tests can point it at a temp file instead of the user's real history.
@@ -159,10 +164,20 @@ class PhosonConfig:
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
-    """Parse string to boolean."""
+    """Parse string to boolean (env path; warns + falls back on bad input)."""
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    warnings.warn(
+        f"Ignoring invalid boolean value {value!r}; using default {default}.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return default
 
 
 #: Valid values for ``compact_mode`` (IMPROVEMENTS.md E1). "aggressive"
@@ -247,8 +262,32 @@ def _resolve_bool(
     if env_var in os.environ:
         return _parse_bool(os.environ[env_var], default)
     if file_key in fd:
-        return bool(fd[file_key])
+        return _parse_bool_file(fd[file_key], default, file_key)
     return default
+
+
+def _parse_bool_file(value: Any, default: bool, file_key: str) -> bool:
+    """Parse a ``[defaults]`` boolean (F-36): ``bool("false")`` must be False.
+
+    Real booleans pass through; strings are case-insensitive
+    true/false/1/0/yes/no/on/off. Anything else is a config typo, so it
+    raises :class:`PhosonConfigError` (named, with the key) rather than
+    silently treating a truthy string as enabled.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return value == 1
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    raise PhosonConfigError(
+        f"[defaults].{file_key} must be a boolean (true/false, 1/0, yes/no), "
+        f"got {value!r}"
+    )
 
 
 def _resolve_int(
@@ -259,52 +298,61 @@ def _resolve_int(
 ) -> int:
     if env_var in os.environ:
         return _parse_int(os.environ[env_var], default, env_var=env_var)
-    return int(fd.get(file_key, default))
+    value = fd.get(file_key, default)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise PhosonConfigError(
+            f"[defaults].{file_key} must be an integer, got {value!r}"
+        ) from exc
 
 
-def _resolve_plugins(fd: dict[str, Any]) -> list[str | dict[str, Any]]:
-    """Validate plugin specs read from ``[defaults].plugins``.
+def _validate_plugin_specs(value: Any, key: str) -> list[str | dict[str, Any]]:
+    """Validate a list of plugin specs read from a ``[defaults]`` key.
 
     Plugin configuration intentionally has no environment-variable override:
     TOML is needed for structured per-plugin configuration, and accepting a
     free-form serialized list from an environment variable would be ambiguous
     and hard to audit.
     """
-    value = fd.get("plugins", [])
     if value is None:
         return []
     if not isinstance(value, list):
-        raise PhosonConfigError("[defaults].plugins must be an array of plugin specs")
+        raise PhosonConfigError(f"[defaults].{key} must be an array of plugin specs")
 
     specs: list[str | dict[str, Any]] = []
     for index, spec in enumerate(value):
         if isinstance(spec, str):
             if not spec.strip():
                 raise PhosonConfigError(
-                    f"[defaults].plugins[{index}] must not be an empty string"
+                    f"[defaults].{key}[{index}] must not be an empty string"
                 )
             specs.append(spec)
             continue
         if not isinstance(spec, dict):
             raise PhosonConfigError(
-                f"[defaults].plugins[{index}] must be a string or inline table"
+                f"[defaults].{key}[{index}] must be a string or inline table"
             )
         name = spec.get("name")
         if not isinstance(name, str) or not name.strip():
             raise PhosonConfigError(
-                f"[defaults].plugins[{index}] inline table requires a string 'name'"
+                f"[defaults].{key}[{index}] inline table requires a string 'name'"
             )
         plugin_config = spec.get("config", {})
         if not isinstance(plugin_config, dict):
             raise PhosonConfigError(
-                f"[defaults].plugins[{index}].config must be an inline table"
+                f"[defaults].{key}[{index}].config must be an inline table"
             )
         if set(spec) - {"name", "config"}:
             raise PhosonConfigError(
-                f"[defaults].plugins[{index}] supports only 'name' and 'config'"
+                f"[defaults].{key}[{index}] supports only 'name' and 'config'"
             )
         specs.append({"name": name, "config": plugin_config})
     return specs
+
+
+def _resolve_plugins(fd: dict[str, Any]) -> list[str | dict[str, Any]]:
+    return _validate_plugin_specs(fd.get("plugins", []), "plugins")
 
 
 def _resolve_float(
@@ -635,6 +683,9 @@ def load_config() -> PhosonConfig:
             )
         ).expanduser(),
         plugins=_resolve_plugins(fd),
+        disabled_plugins=_validate_plugin_specs(
+            fd.get("disabled_plugins", []), "disabled_plugins"
+        ),
         compact_mode=_resolve_str(
             "PHOSON_COMPACT_MODE", "compact_mode", fd, d.compact_mode
         ).lower(),
@@ -710,6 +761,28 @@ def load_config() -> PhosonConfig:
 
     cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+#: Secret-bearing keys and the env var each one is *sourced from*. ``save_config``
+#: refuses to persist a value that currently comes from one of these env vars, so
+#: a bare ``save_config(load_config())`` can't write an env-only key into the
+#: config file (F-36).
+_SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
+    "openrouter_api_key": "OPENROUTER_API_KEY",
+    "openai_api_key": "OPENAI_API_KEY",
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "github_token": "GITHUB_TOKEN",
+    "nvidia_api_key": "NVIDIA_API_KEY",
+    "xai_api_key": "XAI_API_KEY",
+    "groq_api_key": "GROQ_API_KEY",
+    "deepseek_api_key": "DEEPSEEK_API_KEY",
+    "together_api_key": "TOGETHER_API_KEY",
+    "perplexity_api_key": "PERPLEXITY_API_KEY",
+    "azure_openai_api_key": "AZURE_OPENAI_API_KEY",
+    "gemini_api_key": "GEMINI_API_KEY",
+    "mistral_api_key": "MISTRAL_API_KEY",
+    "vllm_api_key": "VLLM_API_KEY",
+}
 
 
 def save_config(
@@ -790,6 +863,13 @@ def save_config(
 
     enabled_providers = enabled_providers_from_config(config)
 
+    # The on-disk defaults, so we can tell which secret values currently come
+    # from the file (persist) versus only from the environment (skip) — F-36.
+    try:
+        fd = _load_file_defaults(config_path)
+    except PhosonConfigError:
+        fd = {}
+
     managed: dict[str, str | None] = {}
     for key, value in [
         ("provider", getattr(config, "provider", None)),
@@ -833,6 +913,7 @@ def save_config(
         ("enable_monitors", getattr(config, "enable_monitors", None)),
         ("monitors_data_dir", str(getattr(config, "monitors_data_dir", ""))),
         ("plugins", getattr(config, "plugins", None)),
+        ("disabled_plugins", getattr(config, "disabled_plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),
         ("compact_threshold", getattr(config, "compact_threshold", None)),
         (
@@ -847,6 +928,11 @@ def save_config(
     ]:
         if only_fields is not None and key not in only_fields:
             continue  # not part of this narrow save — leave the file's line alone
+        if env_var := _SECRET_ENV_BY_KEY.get(key):
+            # F-36: never persist a secret that only exists in the process
+            # environment — a bare full save would otherwise write it to disk.
+            if os.environ.get(env_var) and not fd.get(key):
+                continue
         managed[key] = _line(key, value)
 
     def _is_complete_value(line: str) -> bool:

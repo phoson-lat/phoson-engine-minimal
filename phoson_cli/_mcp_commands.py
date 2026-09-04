@@ -96,6 +96,12 @@ def toggle_mcp_config(
     except OSError:  # pragma: no cover - best-effort safety net
         pass
     config_path.write_text(json.dumps(data, indent=2))
+    # F-37: mcps.json can hold secrets — enforce owner-only perms after the
+    # rewrite so a pre-existing 0o644/0o666 is never left world-readable.
+    try:
+        os.chmod(config_path, 0o600)
+    except OSError:  # pragma: no cover - best-effort
+        pass
     return target, new_state
 
 
@@ -361,13 +367,15 @@ class _MCPSubcommands:
             self.r.print_error("Usage: /mcp config <path>")
             return True
 
-        self.repl.config.mcp_config_file = Path(path)
+        self.repl.config.mcp_config_file = Path(path).expanduser()
         save_config(self.repl.config, only_fields={"mcp_config_file"})
 
         if self.repl.config.enable_mcp:
             await self.repl.set_model(self.repl.current_model)
 
-        self.r.print_info(f"MCP config file → {path}  ·  saved")
+        self.r.print_info(
+            f"MCP config file → {self.repl.config.mcp_config_file}  ·  saved"
+        )
         return True
 
     async def _help(self) -> bool:

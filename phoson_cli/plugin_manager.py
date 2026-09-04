@@ -284,12 +284,25 @@ def install_plugin(
     return name
 
 
+def _plugin_name(spec: str | dict) -> str:
+    return spec if isinstance(spec, str) else str(spec.get("name", "?"))
+
+
 def configured_plugins(config: PhosonConfig) -> list[InstalledPlugin]:
-    """List specs from config without importing or initializing plugin code."""
+    """List specs from config without importing or initializing plugin code.
+
+    F-38: disabled plugins (recorded in ``config.disabled_plugins`` when
+    their spec was removed from ``plugins``) are reported too, flagged
+    ``enabled=False``, so ``plugin list`` reflects reality instead of
+    printing "enabled" for everything and silently dropping disabled ones.
+    """
     result: list[InstalledPlugin] = []
     for spec in config.plugins:
-        name = spec if isinstance(spec, str) else str(spec.get("name", "?"))
-        result.append(InstalledPlugin(name=name, spec=spec, enabled=True))
+        result.append(InstalledPlugin(name=_plugin_name(spec), spec=spec, enabled=True))
+    for spec in config.disabled_plugins:
+        result.append(
+            InstalledPlugin(name=_plugin_name(spec), spec=spec, enabled=False)
+        )
     return result
 
 
@@ -299,24 +312,54 @@ def _matches(spec: str | dict, plugin_id: str) -> bool:
 
 
 def disable_plugin(plugin_id: str, config: PhosonConfig) -> None:
-    """Disable a plugin by removing its spec; installed code stays untouched."""
+    """Disable a plugin by removing its spec from ``plugins``.
+
+    F-38: the spec is preserved in ``config.disabled_plugins`` rather than
+    dropped, so the disabled state is visible and the plugin — including a
+    ``path:`` spec, which has no entry-point name to re-derive from — can be
+    re-enabled. Installed code is untouched.
+    """
     remaining = [spec for spec in config.plugins if not _matches(spec, plugin_id)]
     if len(remaining) == len(config.plugins):
         raise PluginManagerError(f"Configured plugin not found: {plugin_id}")
+    removed = [spec for spec in config.plugins if _matches(spec, plugin_id)]
+    for spec in removed:
+        if not any(
+            _matches(existing, plugin_id) for existing in config.disabled_plugins
+        ):
+            config.disabled_plugins.append(spec)
     config.plugins = remaining
-    save_config(config, only_fields={"plugins"})
+    save_config(config, only_fields={"plugins", "disabled_plugins"})
 
 
 def enable_plugin(plugin_id: str, config: PhosonConfig) -> None:
-    """Enable a discovered ``phoson.plugins`` entry point by name."""
+    """Enable a plugin by name.
+
+    A plugin that was previously disabled (its spec kept in
+    ``config.disabled_plugins``) is restored with its original spec — this
+    works for ``path:`` and inline-table specs that have no entry-point name
+    to re-derive. Otherwise it must be an installed ``phoson.plugins`` entry
+    point, enabled as ``entrypoint:<name>``.
+    """
+    # Already enabled: idempotent no-op.
+    if any(_matches(spec, plugin_id) for spec in config.plugins):
+        return
+    # Restore a previously-disabled spec (any kind, incl. path:/inline table).
+    restored = [spec for spec in config.disabled_plugins if _matches(spec, plugin_id)]
+    if restored:
+        for spec in restored:
+            config.disabled_plugins.remove(spec)
+        config.plugins.extend(restored)
+        save_config(config, only_fields={"plugins", "disabled_plugins"})
+        return
+    # Otherwise: a discovered entry point.
     if plugin_id not in _entrypoint_names():
         raise PluginManagerError(
             f"No installed phoson.plugins entry point: {plugin_id}"
         )
     spec = f"entrypoint:{plugin_id}"
-    if spec not in config.plugins:
-        config.plugins.append(spec)
-        save_config(config, only_fields={"plugins"})
+    config.plugins.append(spec)
+    save_config(config, only_fields={"plugins"})
 
 
 def update_plugin(

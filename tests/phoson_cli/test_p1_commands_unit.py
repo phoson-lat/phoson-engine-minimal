@@ -263,6 +263,7 @@ def _controller_with_history(turns: int) -> SessionController:
         )
         controller.current_model = "test-model"
         controller.current_task = None
+        controller._save_session = AsyncMock()
         controller._session = SimpleNamespace(
             tree=ConversationTree.new(),
             metrics=MagicMock(),

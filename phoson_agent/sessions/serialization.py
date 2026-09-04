@@ -181,6 +181,8 @@ def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
         "session_id": tree.session_id,
         "total_cost": tree.total_cost,
         "total_tokens": tree.total_tokens,
+        "total_input_tokens": tree.total_input_tokens,
+        "total_output_tokens": tree.total_output_tokens,
         "step_count": tree.step_count,
         "last_model": tree.last_model,
         "title": tree.title,
@@ -189,9 +191,19 @@ def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
 
 def apply_tree_meta(tree: ConversationTree, data: dict[str, Any]) -> None:
     """Apply session metadata to a ConversationTree."""
+    # F-34: a legacy record carries only the ``total_tokens`` sum, not the
+    # split. Back-fill output from the sum (input stays 0) so a resumed
+    # legacy session shows its tokens under "out" instead of dropping to 0.
+    has_split = "total_input_tokens" in data or "total_output_tokens" in data
+    input_tokens = int(data.get("total_input_tokens", 0))
+    output_tokens = int(data.get("total_output_tokens", 0))
+    if not has_split:
+        output_tokens = int(data.get("total_tokens", 0))
     tree.update_session_meta(
         total_cost=float(data.get("total_cost", 0.0)),
         total_tokens=int(data.get("total_tokens", 0)),
+        total_input_tokens=input_tokens,
+        total_output_tokens=output_tokens,
         step_count=int(data.get("step_count", 0)),
         last_model=data.get("last_model"),
         title=data.get("title"),

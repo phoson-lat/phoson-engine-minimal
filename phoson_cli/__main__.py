@@ -262,7 +262,8 @@ def _run_plugin_command(
         if not entries:
             print("No community plugins configured.")
         for entry in entries:
-            print(f"enabled  {entry.name}")
+            status = "enabled" if entry.enabled else "disabled"
+            print(f"{status:8} {entry.name}")
         return
     if command == "install" and len(rest) == 1:
         source = rest[0]

@@ -16,6 +16,7 @@ from phoson_cli.plugin_manager import (
     _save_lockfile,
     disable_plugin,
     install_plugin,
+    configured_plugins,
     _resolve_git_commit,
     _pin_git_requirement,
     normalize_plugin_source,
@@ -151,8 +152,39 @@ def test_disable_plugin_removes_only_target_and_persists() -> None:
     with patch("phoson_cli.plugin_manager.save_config") as save:
         disable_plugin("one", config)
 
+    # F-38: the spec is preserved in disabled_plugins (not just dropped), so
+    # it can be re-enabled and shown as disabled in `plugin list`.
     assert config.plugins == ["entrypoint:two"]
-    save.assert_called_once_with(config, only_fields={"plugins"})
+    assert config.disabled_plugins == ["entrypoint:one"]
+    save.assert_called_once_with(config, only_fields={"plugins", "disabled_plugins"})
+
+
+def test_disable_then_enable_restores_path_plugin() -> None:
+    """F-38: a disabled `path:` plugin (no entry-point name) re-enables."""
+    config = PhosonConfig(plugins=["path:/opt/my_plugin.py", "entrypoint:other"])
+    with patch("phoson_cli.plugin_manager.save_config"):
+        disable_plugin("path:/opt/my_plugin.py", config)
+    assert config.plugins == ["entrypoint:other"]
+    assert config.disabled_plugins == ["path:/opt/my_plugin.py"]
+
+    # Re-enable: the path spec has no entry point, so it must be restored
+    # from disabled_plugins (not rejected as "no installed entry point").
+    with patch("phoson_cli.plugin_manager._entrypoint_names", return_value=set()):
+        enable_plugin("path:/opt/my_plugin.py", config)
+    assert "path:/opt/my_plugin.py" in config.plugins
+    assert config.disabled_plugins == []
+
+
+def test_configured_plugins_reports_disabled_state() -> None:
+    """F-38: `plugin list` reflects disabled plugins, not always 'enabled'."""
+    config = PhosonConfig(
+        plugins=["entrypoint:one"],
+        disabled_plugins=["path:/opt/off.py"],
+    )
+    entries = configured_plugins(config)
+    by_name = {e.name: e for e in entries}
+    assert by_name["entrypoint:one"].enabled is True
+    assert by_name["path:/opt/off.py"].enabled is False
 
 
 def test_enable_plugin_checks_entrypoint_and_deduplicates() -> None:
