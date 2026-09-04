@@ -53,9 +53,32 @@ def _fetch_module():
     return importlib.import_module("phoson_cli.tools.web_fetch")
 
 
+def _fake_dns(mapping: dict[str, str]):
+    """A stand-in for ``socket.getaddrinfo`` that resolves from ``mapping``.
+
+    ``socket.getaddrinfo`` normally returns a list of tuples like
+    ``(family, type, proto, canonname, (addr, port))`` — the code under
+    test reads ``info[4][0]`` for the address, so each entry returns a
+    single-element list carrying the resolved IP. Hosts not in ``mapping``
+    raise ``socket.gaierror`` (so a hostname that doesn't resolve behaves
+    like a real NXDOMAIN).
+    """
+    import socket
+
+    def _resolve(host, port, *a, **k):
+        if host in mapping:
+            return [(2, 1, 6, "", (mapping[host], port))]
+        raise socket.gaierror(f"Name or service not known: {host}")
+
+    return _resolve
+
+
 @pytest.mark.asyncio
 async def test_web_fetch_rejects_error_status(monkeypatch) -> None:
     mod = _fetch_module()
+    monkeypatch.setattr(
+        mod, "_getaddrinfo", _fake_dns({"missing.example": "93.184.216.34"})
+    )
 
     class _FailingClient:
         def __init__(self, *a, **k): ...
@@ -66,10 +89,20 @@ async def test_web_fetch_rejects_error_status(monkeypatch) -> None:
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url, headers=None):
+        def stream(self, method, url, headers=None):
             request = httpx.Request("GET", url)
             response = httpx.Response(404, request=request)
-            raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+            class _Ctx:
+                async def __aenter__(self2):
+                    # raise_for_status raises inside the response context.
+                    response.raise_for_status()
+                    return response
+
+                async def __aexit__(self2, *exc):
+                    return False
+
+            return _Ctx()
 
     monkeypatch.setattr(mod.httpx, "AsyncClient", _FailingClient)
 
@@ -80,15 +113,19 @@ async def test_web_fetch_rejects_error_status(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_web_fetch_success_returns_readable_text(monkeypatch) -> None:
     mod = _fetch_module()
+    monkeypatch.setattr(mod, "_getaddrinfo", _fake_dns({"ok.example": "93.184.216.34"}))
 
     page = "<html><body><h1>Docs</h1><p>It works</p></body></html>"
+    body = page.encode("utf-8")
 
     class _FakeResponse:
         status_code = 200
         headers = {"content-type": "text/html; charset=utf-8"}
-        text = page
 
         def raise_for_status(self) -> None: ...
+
+        async def aiter_bytes(self):
+            yield body
 
     class _FakeClient:
         def __init__(self, *a, **k): ...
@@ -99,8 +136,15 @@ async def test_web_fetch_success_returns_readable_text(monkeypatch) -> None:
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url, headers=None):
-            return _FakeResponse()
+        def stream(self, method, url, headers=None):
+            class _Ctx:
+                async def __aenter__(self2):
+                    return _FakeResponse()
+
+                async def __aexit__(self2, *exc):
+                    return False
+
+            return _Ctx()
 
     monkeypatch.setattr(mod.httpx, "AsyncClient", _FakeClient)
 
@@ -108,6 +152,7 @@ async def test_web_fetch_success_returns_readable_text(monkeypatch) -> None:
     assert "Fetched https://ok.example/docs" in result
     assert "Docs" in result
     assert "It works" in result
+    assert "untrusted data" in result
 
 
 @pytest.mark.asyncio
