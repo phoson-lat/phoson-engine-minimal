@@ -1,6 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-04 · estado de referencia **v0.26.0** (v0.26.0: #179 `patch_file` unicidad + CRLF + #180 `cat -n`/caps/descripciones/system prompt ACI — PR #193, `67368b0`; v0.25.1: #175 `is_simple_shell_command` + `match_args` obligatorio — PR #192, `af502f0`; v0.25.0: #176 `safe_cut_index` + #147 `compact_context` + #167 `notify_on_completion`) · 2030 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
+> **Actualizado:** 2026-09-04 · estado de referencia **v0.26.0** + #177 (v0.26.0: #179 `patch_file` unicidad + CRLF + #180 `cat -n`/caps/descripciones/system prompt ACI — PR #193, `67368b0`; #177 `RetryingChat` en `build_chat` + `RetryMiddleware` deprecado — PR #194, `6080ba0`, pendiente de release; v0.25.1: #175 `is_simple_shell_command` + `match_args` obligatorio — PR #192, `af502f0`) · 2039 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -18,7 +18,7 @@
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
-| Loop | 🟠 #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
+| Loop | 🟠 #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #177 (retry no conectado) merged (PR #194, `6080ba0`, pendiente de release). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
 | ACI (edit/search/prompt) | 🟠 #181 (grep/glob). ✅ #179 + #180 shipped v0.26.0 (PR #193, `67368b0`): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
@@ -41,7 +41,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | ✅ **cerrado** | Shipped v0.26.0 (PR #193, `67368b0`): `count>1` sin `replace_all` ⇒ error con líneas (no escribe); hint difflib + CRLF/LF si `count==0`; lee bytes crudos (preserva CRLF) y normaliza EOL de la ancla. Primer candidato a medir con #139. |
 | [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | ✅ **cerrado** | Shipped v0.26.0 (PR #193, `67368b0`): `read_file` `cat -n` + caps en rangos; `list_dir` 500; descripciones reescritas (8 tools); system prompt + Tool usage / Environment (git) / Safety (cache-friendly). Medición H-1 (#139) pendiente. |
 | [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | ✅ **cerrado** | Shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/emergency/manual + plan), resumen vacío ⇒ abortar, llamada de resumen tool-free (chat), 400 de pairing ⇒ error explícito. Desbloquea #147. |
-| [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | **B** | Antigravity §2.5 describía `RetryingChat` como activo. |
+| [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | ✅ **cerrado** | Merged (PR #194, `6080ba0`), pendiente de release: `build_chat` envuelve el adapter en `RetryingChat` (backoff 1s/×2/30s + jitter, solo pre-token ⇒ no duplica); `llm_max_attempts` (3, `1` desactiva) + `PHOSON_LLM_MAX_ATTEMPTS`; `RetryMiddleware` deprecado (warning). |
 | [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | **B** | Mismo camino que #134 (`_build_assistant_message`). |
 | [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | **B** | |
 | [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | **B** | Relacionado con #144 (trifecta letal). |
@@ -134,10 +134,12 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           vía `chat`; 400 de pairing ⇒ error explícito (no se traga). 17 tests.
           Desbloquea #147.
 3. #177   RetryingChat en build_chat; deprecar RetryMiddleware.                  S
-          (En curso: `build_chat` envuelve el adapter en `RetryingChat` —
-          backoff 1s/×2/30s + jitter, solo pre-token (no duplica);
-          `llm_max_attempts` default 3 + `PHOSON_LLM_MAX_ATTEMPTS` (1
-          desactiva); `RetryMiddleware` deprecado con warning.)
+          ✅ merged (PR #194, `6080ba0`), pendiente de release: `build_chat`
+          envuelve el adapter en `RetryingChat` (backoff 1s/×2/30s + jitter,
+          solo pre-token ⇒ no duplica); `llm_max_attempts` default 3
+          (`1` desactiva) + `PHOSON_LLM_MAX_ATTEMPTS` (+ config.toml);
+          retry logueado (`phoson_cli.retry`); `RetryMiddleware` deprecado
+          (warning). 8 tests nuevos.
 4. #178   stop_reason normalizado; except Exception en ToolRunner con backfill. S-M
 5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
 ```
