@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fixes
+
+- **Bash allow-patterns no longer bless compound shell lines (#175, F-03/F-07)**:
+  allow-patterns were `fnmatch`-ed against the *entire* command line, so a
+  pattern like `git *` (the typical "always allow") also approved
+  `git status; rm -rf /`, `git log | sh` and `git $(rm -rf /)` — the pattern
+  blessed the first command while the shell ran the rest. Bash patterns now
+  only match a **single simple command**: a line containing any separator
+  (`;`, `&`/`&&`, `|`/`||`, newline), subshell grouping (`(...)`) or command
+  substitution (`` ` ``, `` $( ``) matches no pattern and falls back to the
+  tool's configured level (usually `ask`, so a human sees the whole line).
+  Quoting is respected (`git commit -m 'a; b'` is one command).
+- **Allow-patterns can no longer be steered onto an unintended argument
+  (#175/F-07)**: the permission middleware used to fall back to "the first
+  string argument in dict order" for tools without an explicit `match_args`
+  entry — an order the model controls — so a `write_file` pattern could
+  match `content` instead of `path`. Patterns now apply **only** to tools
+  with a declared match argument (`bash`→`command`, file tools→`path`,
+  `web_search`→`query`, `web_fetch`→`url`); every other tool resolves purely
+  by level. Interactive "always allow" grants follow the same rules.
+  No `permissions.json` changes — existing rules keep their meaning.
+  Docs: `docs/cli/permissions.md`.
+
 ## v0.25.0 (2026-09-01)
 
 ### Fixes

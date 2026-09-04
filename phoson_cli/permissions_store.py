@@ -13,6 +13,11 @@ with the CLI's configuration surface:
         "allow_patterns": {"bash": ["git status", "pytest*"]}
       }
 
+  Allow-patterns only apply to tools listed in :data:`MATCH_ARGS` (bash
+  matches its command line — and only when it is a single simple command —
+  the file tools match their ``path``, the web tools their ``query``/
+  ``url``); every other tool resolves purely by its level.
+
 - Runtime changes made through ``/permissions`` (and "[a] always" answers
   from the confirmation flow) are persisted back to the same file, so
   allowlists survive sessions.
@@ -40,9 +45,26 @@ _LOGGER = logging.getLogger("phoson_cli.permissions")
 DEFAULT_PERMISSIONS_FILE = Path("~/.phoson/permissions.json").expanduser()
 
 #: Tool argument matched against allow patterns for each known tool.
-#: bash matches its command line; other tools fall back to their first
-#: string argument (see PermissionMiddleware).
-MATCH_ARGS: dict[str, str] = {"bash": "command"}
+#:
+#: This mapping is the *only* way an allow-pattern becomes applicable:
+#: a tool not listed here has no match text, so no pattern ever matches
+#: it (its calls resolve purely by level). The middleware refuses to
+#: guess a fallback argument, because argument order in a tool call is
+#: under the model's control (#175/F-07).
+#:
+#: For ``bash`` the command line must additionally be a *single simple
+#: command* before any pattern matches (see
+#: ``phoson_agent.permissions.pattern_allows``), so ``git *`` approves
+#: ``git status`` but never ``git status; rm -rf /``.
+MATCH_ARGS: dict[str, str] = {
+    "bash": "command",
+    "read_file": "path",
+    "write_file": "path",
+    "patch_file": "path",
+    "list_dir": "path",
+    "web_search": "query",
+    "web_fetch": "url",
+}
 
 
 def _normalize_level(value: object) -> str | None:

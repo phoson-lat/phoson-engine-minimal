@@ -10,7 +10,12 @@ standard ``on_before_tool`` hook and decides whether it may run:
 
 Tool-level levels can be refined with per-tool glob patterns
 (``bash.allow_patterns = ["git *", "pytest*"]``): a matching pattern
-overrides the tool's default level. This is deliberately *middleware*
+overrides the tool's default level. For ``bash`` a pattern only authorizes
+a *single simple command* — a compound shell line (``;``, ``&``, ``|``,
+``$( ``) never matches, so ``git *`` allows ``git status`` but not
+``git status; rm -rf /``. Patterns apply only to tools that declare a
+``match_args`` entry, so they can't be steered onto an unintended argument.
+This is deliberately *middleware*
 (not hardcoded into tools) so it stays framework-free and reusable by any
 front end — including Phoson-Core.
 
@@ -54,6 +59,92 @@ VALID_LEVELS = frozenset({LEVEL_ALLOW, LEVEL_ASK, LEVEL_DENY})
 AskCallback = Callable[[str, dict[str, Any]], Awaitable[bool]]
 
 
+# ── Bash allow-pattern safety (F-03, F-07, #175) ─────────────────────────────
+#
+# An allow-pattern may only authorize a *single simple command* — one program
+# run. The old implementation ran ``fnmatch`` over the whole shell line, so a
+# pattern like ``git *`` also matched ``git status; rm -rf /``, ``git log |
+# sh`` and ``git $(rm -rf /)``: the pattern blessed the *first* command but the
+# shell went on to run the rest. The helpers below make a bash pattern match
+# only when the line is a single simple command, so a line that can run more
+# than one program (or substitute one in) is never auto-approved by a pattern
+# and falls back to the tool's configured level (usually ``ask``/``deny``).
+
+#: Characters that, in a shell-active position, chain or background commands.
+_COMPOUND_SEPARATORS = frozenset(";&|\n")
+#: Characters that, in a shell-active position, open command substitution or a
+#: subshell. ``$(`` is a two-char sequence and is handled separately.
+_COMPOUND_CHARS = frozenset("`()")
+
+
+def is_simple_shell_command(command: str) -> bool:
+    """Return True only when ``command`` is a single *simple* shell command.
+
+    A simple command runs exactly one program. Anything that lets the shell
+    run *more than one* program — or substitute another command in — makes the
+    line **compound** and returns False:
+
+    - separators ``;``, ``&`` (``&&``), ``|`` (``||``), newline;
+    - command substitution `` ` ``, ``$( ``;
+    - subshell grouping ``(`` ``)``.
+
+    Quoting is respected: operators inside **single quotes** are fully
+    literal (``git commit -m 'a; b'`` is a single command). Inside **double
+    quotes** the separators are literal, but command substitution (`` ` ``,
+    ``$( ``) still executes, so those are still flagged. A backslash escapes
+    the following character outside single quotes.
+
+    Deliberately conservative: on any doubt it returns False, so the gate
+    falls back to ``ask`` (safe) instead of auto-allowing a compound line.
+    """
+    in_single = False
+    in_double = False
+    escape = False
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        nxt = command[i + 1] if i + 1 < n else ""
+        if in_single:
+            if ch == "'":
+                in_single = False
+        elif escape:
+            escape = False  # this char was escaped by a previous backslash
+        elif in_double:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_double = False
+            elif ch == "`" or (ch == "$" and nxt == "("):
+                # Substitution is active even inside double quotes.
+                return False
+        else:  # unquoted
+            if ch == "\\":
+                escape = True
+            elif ch == "'":
+                in_single = True
+            elif ch == '"':
+                in_double = True
+            elif ch in _COMPOUND_SEPARATORS or ch in _COMPOUND_CHARS:
+                return False
+            elif ch == "$" and nxt == "(":
+                return False
+        i += 1
+    return True
+
+
+def pattern_allows(tool_name: str, pattern: str, match_text: str) -> bool:
+    """Return True when ``pattern`` authorizes ``match_text`` for ``tool_name``.
+
+    For ``bash`` a pattern matches only when ``match_text`` is a single simple
+    command (see :func:`is_simple_shell_command`); a compound shell line is
+    never auto-allowed by a pattern. Other tools are matched as plain globs.
+    """
+    if tool_name == "bash" and not is_simple_shell_command(match_text):
+        return False
+    return fnmatch.fnmatch(match_text, pattern)
+
+
 @dataclass
 class PermissionPolicy:
     """Declarative table of per-tool permission levels and patterns.
@@ -67,6 +158,9 @@ class PermissionPolicy:
             against the tool's match text (for bash, the command line).
             A match short-circuits to *allow* even under ``ask``/``deny``
             (e.g. safe git subcommands under a deny-by-default bash).
+            For bash the command line must be a single simple command for
+            a pattern to match (see :func:`pattern_allows`), so a pattern
+            cannot bless a chained or substituted shell line.
     """
 
     levels: dict[str, str] = field(default_factory=dict)
@@ -84,11 +178,14 @@ class PermissionPolicy:
             match_text: Optional string matched against the tool's allow
                 patterns. A pattern hit short-circuits to *allow*;
                 otherwise the tool's configured level applies (allow when
-                unlisted).
+                unlisted). For ``bash``, a pattern only matches a single
+                *simple* command (see :func:`pattern_allows`): a compound
+                shell line never short-circuits to allow and falls back to
+                the configured level.
         """
         if match_text:
             for pattern in self.allow_patterns.get(tool_name, []):
-                if fnmatch.fnmatch(match_text, pattern):
+                if pattern_allows(tool_name, pattern, match_text):
                     return LEVEL_ALLOW
         return self.levels.get(tool_name, LEVEL_ALLOW)
 
@@ -110,10 +207,13 @@ class PermissionMiddleware(AgentMiddleware):
         on_ask: Async callback consulted for ``ask``-level calls.
             Receives ``(tool_name, args)`` and returns True to proceed.
             ``None`` means fail closed (non-interactive contexts).
-        match_args: Optional mapping of tool name → argument name whose
-            value is matched against allow patterns (e.g.
-            ``{"bash": "command"}``). Tools not listed fall back to their
-            first string argument value.
+        match_args: Mapping of tool name → argument name whose value is
+            matched against allow patterns (e.g. ``{"bash": "command"}``).
+            Allow-patterns apply **only** to tools listed here: a tool
+            without an explicit entry never matches a pattern (its args are
+            not trusted as match text), so a pattern can only ever target
+            the argument the caller intends — never a free-floating string
+            the model chose to put in another argument.
     """
 
     def __init__(
@@ -136,15 +236,20 @@ class PermissionMiddleware(AgentMiddleware):
             patterns.append(pattern)
 
     def _match_text(self, call: ToolCallEvent) -> str | None:
-        """Extract the string that allow-patterns match against."""
+        """Extract the string that allow-patterns match against.
+
+        Returns ``None`` — no pattern applies — unless the tool has an
+        explicit ``match_args`` entry *and* that argument is a string.
+        There is deliberately no "first string argument" fallback: the
+        argument order of a tool call is under the model's control, so
+        falling back to an unlisted argument would let the model steer a
+        pattern toward, e.g., ``content`` instead of ``path``.
+        """
         arg_name = self.match_args.get(call.tool_name)
-        if arg_name is not None:
-            value = call.args.get(arg_name)
-            return value if isinstance(value, str) else None
-        for value in call.args.values():
-            if isinstance(value, str):
-                return value
-        return None
+        if arg_name is None:
+            return None
+        value = call.args.get(arg_name)
+        return value if isinstance(value, str) else None
 
     async def on_before_tool(self, call: ToolCallEvent) -> ToolCallEvent | None:
         """Gate the call; raises :class:`ToolBlockedError` on refusal."""
@@ -153,7 +258,7 @@ class PermissionMiddleware(AgentMiddleware):
 
         if match_text:
             for pattern in self._session_allow.get(tool_name, []):
-                if fnmatch.fnmatch(match_text, pattern):
+                if pattern_allows(tool_name, pattern, match_text):
                     return call
 
         decision = self.policy.check(tool_name, match_text)
@@ -183,4 +288,6 @@ __all__ = [
     "PermissionPolicy",
     "ToolBlockedError",
     "VALID_LEVELS",
+    "is_simple_shell_command",
+    "pattern_allows",
 ]
