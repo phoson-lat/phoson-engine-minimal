@@ -1,6 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-03 · estado de referencia **v0.25.0** + #175 (Sprint A completo: #176 `safe_cut_index` + #147 `compact_context` + #167 `notify_on_completion` en v0.25.0; #175 allow-patterns `is_simple_shell_command` + `match_args` obligatorio en cola de merge); v0.24.2: #174 + #141 — PR #191, `1f3f2d6` · 2012 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
+> **Actualizado:** 2026-09-03 · estado de referencia **v0.25.1** (v0.25.1: #175 `is_simple_shell_command` + `match_args` obligatorio — PR #192, `af502f0`; v0.25.0: #176 `safe_cut_index` + #147 `compact_context` + #167 `notify_on_completion`; v0.24.2: #174 + #141 — PR #191, `1f3f2d6`) · 2012 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -17,7 +17,7 @@
 | Look del TUI (T-1…T-13) | ✅ Todo shipped v0.20.0–v0.23.0. T-11 (ADR renderer) cerrado. |
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
-| Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) resuelto: `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
+| Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
 | Loop | 🟠 #177 (retry no conectado), #178 (`stop_reason` ignorado, excepciones huérfanas). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
 | ACI (edit/search/prompt) | 🟠 #179 (`patch_file` sin unicidad), #180 (números de línea, descripciones, system prompt), #181 (grep/glob). |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
@@ -36,7 +36,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#186](https://github.com/phoson-lat/phoson-engine-minimal/issues/186) | TUI: ANSI/OSC crudo en bash, fingerprint sin generación, docstring O(visible) | F-41, F-42, F-44 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.1 (PR #190, `df2fd70`, cerrado 2026-09-01): `Text.from_ansi` + strip OSC en `_bash_output_body`, `generation` en fingerprint de `_compute_chat_bounds`, docstring/CHANGELOG corregidos. 5 tests nuevos. |
 | [#174](https://github.com/phoson-lat/phoson-engine-minimal/issues/174) | Sub-agentes y one-shot sin `PermissionMiddleware` ni `safe_mode` | F-01, F-02 | 🔴 | S-M | ✅ **cerrado** | Shipped v0.24.2 (PR #191, `1f3f2d6`): helper compartido `build_middlewares`/`build_summarizer`/`build_offload`; sub-agentes heredan la cadena + contexto fresco (safe_mode/bash_confirmation/plugin_ui); one-shot construye la cadena (fail-closed) e imprime `""` no `None`. 12 tests. Absorbía #141; prerrequisito de #129 slice 5. |
 | [#141](https://github.com/phoson-lat/phoson-engine-minimal/issues/141) | Wall-clock en one-shot (`PHOSON_RUN_BUDGET_SECONDS`) | H-7 | 🟠 | S | ✅ **cerrado** | Shipped v0.24.2 (mismo PR #191): `run_budget_seconds` (600s, `0`=sin límite) + `PHOSON_RUN_BUDGET_SECONDS`; `asyncio.wait_for` sobre el run → exit 124 con mensaje limpio; interactivo no cambia. |
-| [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | ✅ **resuelto** | `pattern_allows`/`is_simple_shell_command` (solo un simple command matchea; `;`/`&`/`|`/`$( `/subshell ⇒ nivel del tool, quotes respetadas) + `match_args` obligatorio (sin fallback a "primer string"): `write_file` matchea `path`, no `content`. 35 tests. #169 ya no hereda el bypass. |
+| [#175](https://github.com/phoson-lat/phoson-engine-minimal/issues/175) | Allow-patterns: `fnmatch` permite `git status; rm -rf /` | F-03, F-07 · Antigravity V-01 | 🔴 | S | ✅ **cerrado** | Shipped v0.25.1 (PR #192, `af502f0`): `pattern_allows`/`is_simple_shell_command` (solo un simple command matchea; `;`/`&`/`|`/`$( `/subshell ⇒ nivel del tool, quotes respetadas) + `match_args` obligatorio (sin fallback a "primer string"): `write_file` matchea `path`, no `content`. 35 tests. #169 ya no hereda el bypass. |
 | [#167](https://github.com/phoson-lat/phoson-engine-minimal/issues/167) | Notificación al terminar (BEL / OSC 9/777) | externo | 🟡 | S | ✅ **cerrado** | Shipped v0.25.0: `notify_on_completion` (off/bell/desktop) + `PHOSON_NOTIFY_ON_COMPLETION` + `/notify`; TTY-gated, solo en run exitoso. Default `off`. |
 | [#179](https://github.com/phoson-lat/phoson-engine-minimal/issues/179) | `patch_file` edita la primera de varias coincidencias | F-20 | 🔴 | S | **B** | Antigravity §3.4 lo describía como correcto. Primer candidato a medir con #139. |
 | [#180](https://github.com/phoson-lat/phoson-engine-minimal/issues/180) | ACI: `read_file` con números de línea, descripciones, system prompt | F-21a, F-22, F-25 | 🟠 | M | **B** | Junto con #179 forman el PR de edit tool. |
@@ -98,12 +98,12 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           string"), y la tabla CLI declara bash→command, file tools→path,
           web_search→query, web_fetch→url. Grants "[a] always" sujetos a la
           misma regla. Doc en `docs/cli/permissions.md`.                     S
-          ✅ resuelto: `permissions.py` `is_simple_shell_command` +
-          `pattern_allows` en `policy.check` y en los session grants (también
-          cubre la línea `!` del TUI, que llama a `policy.check` directo);
-          `permissions_store.MATCH_ARGS` con 7 tools. 35 tests (matriz
-          compound/simple, session grant compound, `write_file` path vs
-          content). Suite 2012 passed.
+          ✅ shipped v0.25.1 (PR #192, `af502f0`): `permissions.py`
+          `is_simple_shell_command` + `pattern_allows` en `policy.check` y
+          en los session grants (también cubre la línea `!` del TUI, que
+          llama a `policy.check` directo); `permissions_store.MATCH_ARGS`
+          con 7 tools. 35 tests (matriz compound/simple, session grant
+          compound, `write_file` path vs content). Suite 2012 passed.
 6. #167   BEL + OSC 9/777; config notify_on_completion.                         S
           ✅ shipped v0.25.0: `notify.py` + `notify_on_completion`
           (off/bell/desktop) + env + `/notify`; TTY-gated; solo en run exitoso.

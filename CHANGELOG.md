@@ -6,9 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## Unreleased
+## v0.25.1 (2026-09-03)
 
-### Fixes
+### Fixes / Security
 
 - **Bash allow-patterns no longer bless compound shell lines (#175, F-03/F-07)**:
   allow-patterns were `fnmatch`-ed against the *entire* command line, so a
