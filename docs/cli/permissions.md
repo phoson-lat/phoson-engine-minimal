@@ -14,6 +14,32 @@ matching allow-pattern runs without asking even under `ask`/`deny` —
 handy for safe subcommands. Inspect or change levels at runtime with
 `/permissions bash ask` (persisted immediately).
 
+## Allow-pattern semantics
+
+A pattern matches *one program's invocation* — a **single simple command**
+— never the rest of a shell line:
+
+- **bash**: before any pattern can match, the command line must be a
+  single simple command. If the line chains or backgrounds anything
+  (`;`, `&`/`&&`, `|`/`||`, newline), runs a subshell (`(...)`) or
+  performs command substitution (`` ` ``, `` $( ``), **no pattern
+  applies** and the call falls back to the tool's level (usually `ask`,
+  where a human sees the whole line). Quoting is respected: `git commit
+  -m 'a; b'` is a single command, while ``git status $(rm -rf /)`` is not.
+
+  So `git *` allows `git status` but **not** `git status; rm -rf /`,
+  `git log | sh` or `git $(rm -rf /)` — the classic bypass where a
+  blessed subcommand dragged an arbitrary second command along.
+- **Other tools**: patterns only apply to the argument declared in the
+  tool's match table (`read_file`/`write_file`/`patch_file` match
+  `path`, `list_dir` matches `path`, `web_search` matches `query`,
+  `web_fetch` matches `url`). A tool without a declared match argument
+  never matches any pattern: the middleware does not guess a fallback,
+  so a `write_file` pattern cannot be steered onto `content` instead of
+  `path`.
+- Interactive "always allow" grants (the `[a]` on the bash confirmation
+  card) are subject to the same simple-command rule.
+
 **Scope.** The policy applies to *every* engine the CLI builds, not just
 the interactive REPL:
 
