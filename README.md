@@ -51,7 +51,6 @@
   - [Interactive CLI](#interactive-cli)
 - [CI and security workflows](#-ci-and-security-workflows)
 - [Commit message format](#-commit-message-format)
-- [Roadmap](#-roadmap)
 - [Contributing](#-contributing)
 - [License](#-license)
 - [Support](#-support)
@@ -168,7 +167,6 @@ phoson-engine-minimal/
 ├── docs/api/             # Per-package API documentation
 ├── docs/cli/             # Deep-dive CLI documentation (keybindings, caching, …)
 ├── .github/workflows/    # CI, release, binaries and security automation
-├── ROADMAP.md            # Project roadmap
 └── pyproject.toml        # Project metadata, dependencies, tooling config
 ```
 
@@ -595,12 +593,6 @@ chore: update pre-commit hook versions
 ```
 
 **Common types:** `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`
-
----
-
-## 🗓️ Roadmap
-
-For the project roadmap see [ROADMAP.md](./ROADMAP.md), and per-package API documentation under [docs/api/](./docs/api/index.md).
 
 ---
 

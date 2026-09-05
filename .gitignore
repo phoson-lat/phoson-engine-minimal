@@ -20,3 +20,14 @@ SUMMARY.md
 PLUGIN_COMPLETION_SUMMARY.txt
 FINAL_SUMMARY.txt
 docs/superpowers
+
+# Development/analysis docs (roadmaps, reviews, work plans) — kept locally, not tracked
+/ROADMAP.md
+/TODO.md
+/IMPROVEMENTS.md
+/IMPROVEMENTS-TUI.md
+/ISSUES-COMPLEXITY.md
+/reporte-harness.md
+/REVISION-*.md
+/2026-05-13-ai-providers-expansion.md
+/docs/plans/
