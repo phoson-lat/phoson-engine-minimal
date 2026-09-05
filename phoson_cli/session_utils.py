@@ -312,14 +312,21 @@ def build_system_prompt(
 
 
 def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Combine configured community plugins and optional built-in MCP specs.
+    """Combine configured community plugins and optional built-in specs.
 
-    User-configured specs load first, followed by MCP. The order is stable so
-    tool/middleware ordering remains predictable and can be documented. Direct
-    ``Plugin`` instances remain available only through ``AgentEngine``'s API;
-    TOML config is intentionally restricted to strings and dictionaries.
+    User-configured specs load first, followed by MCP, monitors and the
+    official OTel tracing plugin. The order is stable so tool/middleware
+    ordering remains predictable and can be documented. Direct
+    ``Plugin`` instances remain available only through ``AgentEngine``'s
+    API; TOML config is intentionally restricted to strings and
+    dictionaries.
     """
-    return [*config.plugins, *build_mcp_plugins(config), *build_monitor_plugins(config)]
+    return [
+        *config.plugins,
+        *build_mcp_plugins(config),
+        *build_monitor_plugins(config),
+        *build_otel_plugins(config),
+    ]
 
 
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
@@ -402,6 +409,59 @@ def _in_tree_plugin_path(package: str) -> Path:
     """
     root = Path(__file__).resolve().parent.parent
     return root / package / "_plugin.py"
+
+
+def build_otel_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official OTel tracing plugin spec (issue #140).
+
+    Returns an empty list when tracing is disabled (``enable_otel``) or
+    when the user has already listed ``phoson-plugin-otel`` in
+    ``[plugins]`` (their explicit spec wins — no double-tracing).
+
+    Tries the in-tree ``phoson_plugin_otel`` first and returns a
+    *pre-configured, fresh* instance (the direct-``Plugin`` form, so the
+    config flags are honored); falls back to the path-based loader used
+    during local development. Mirrors :func:`build_monitor_plugins`.
+    """
+    if not config.enable_otel:
+        return []
+    if _user_specified_otel(config.plugins):
+        return []
+
+    otel_config = {
+        "service_name": config.otel_service_name,
+        "file_path": str(config.otel_file_path),
+        "otlp_endpoint": config.otel_endpoint,
+    }
+
+    try:
+        from phoson_plugin_otel import PhosonOtelPlugin
+
+        instance = PhosonOtelPlugin()
+        instance.configure(otel_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_otel", otel_config, "otel tracing disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise otel plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+def _user_specified_otel(plugins: list[str | dict[str, Any]]) -> bool:
+    """True when the user explicitly enabled otel via a ``[plugins]`` spec."""
+    for spec in plugins:
+        name = (
+            spec
+            if isinstance(spec, str)
+            else (spec.get("name", "") if isinstance(spec, dict) else "")
+        )
+        if name in ("phoson-plugin-otel", "phoson_plugin_otel"):
+            return True
+    return False
 
 
 def _in_tree_fallback_spec(

@@ -622,7 +622,7 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md) for details on our code of cond
 
 - 🆕 Add new LLM providers (20+ already supported — see the table above)
 - 🔧 Improve tool execution (batching, retries, caching)
-- 📊 Add observability integrations (OpenTelemetry, Langfuse)
+- 📊 Extend observability: the `phoson_plugin_otel` plugin already traces runs as OTel span trees with a local trace-file sink — real OTLP export (slice 2) and Langfuse remain open
 - 🖥️ Build a web-based REPL or playground
 - 📚 Improve documentation and examples
 
