@@ -286,7 +286,7 @@ def _list_dir(path: str = ".") -> str:
     if truncated:
         lines.append(
             f"[… listing stopped at {LIST_DIR_MAX_ENTRIES} entries; "
-            "narrow the path or use bash find/ls]"
+            "narrow the path or use the glob/grep tools]"
         )
     return "\n".join(lines)
 
@@ -350,8 +350,8 @@ def list_dir(path: str = ".") -> str:
     """List a directory tree (max 3 levels deep, max 500 entries).
 
     Use to orient yourself in a repository before reading or editing.
-    Skips __pycache__, .git and node_modules. For filtered or deeper
-    queries use bash with find/ls instead. Returns one entry per line,
-    indented by depth.
+    Skips __pycache__, .git and node_modules. To find files by name use
+    the `glob` tool; to search their contents use `grep`. Returns one
+    entry per line, indented by depth.
     """
     return _list_dir(path)

@@ -366,6 +366,8 @@ _TOOL_VERBS: Final[dict[str, str]] = {
     "write_file": "writing file",
     "patch_file": "editing file",
     "list_dir": "listing directory",
+    "grep": "searching files",
+    "glob": "globbing files",
     "view_image": "viewing image",
     "bash": "running command",
     "skill": "loading skill",
@@ -459,6 +461,8 @@ def tool_verb(tool_name: str, registry: ToolRenderRegistry | None = None) -> str
 _TOOL_ICONS: Final[dict[str, str]] = {
     "read_file": "📖",
     "list_dir": "📂",
+    "grep": "🔍",
+    "glob": "🗂",
     "view_image": "🖼",
     "write_file": "✍",
     "patch_file": "🪄",
@@ -487,6 +491,12 @@ def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
         cmd = str(args.get("command") or "")
         one_line = " ".join(cmd.split())
         return one_line[:72] + ("…" if len(one_line) > 72 else "")
+    if tool_name in {"grep", "glob"}:
+        # The pattern is the useful detail (like bash's command), not the
+        # search root — "searching files · def build_" beats "· .".
+        pattern = args.get("pattern")
+        if isinstance(pattern, str) and pattern:
+            return pattern[:72] + ("…" if len(pattern) > 72 else "")
     for key in ("path", "query", "url", "pattern", "name"):
         value = args.get(key)
         if isinstance(value, str) and value:

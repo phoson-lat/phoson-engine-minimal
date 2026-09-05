@@ -36,6 +36,8 @@ def test_tool_verb_maps_known_tools_to_human_phrases() -> None:
     assert tool_verb("write_file") == "writing file"
     assert tool_verb("bash") == "running command"
     assert tool_verb("web_search") == "searching the web"
+    assert tool_verb("grep") == "searching files"
+    assert tool_verb("glob") == "globbing files"
 
 
 def test_tool_verb_falls_back_for_unknown_tools() -> None:
@@ -47,6 +49,9 @@ def test_tool_detail_extracts_path_query_url_and_command() -> None:
     assert tool_detail("web_search", {"query": "phoson"}) == "phoson"
     assert tool_detail("web_fetch", {"url": "https://x.dev"}) == "https://x.dev"
     assert "pytest -q" in tool_detail("bash", {"command": "pytest -q"})
+    # grep/glob surface the search pattern (tool_detail's key tuple has it).
+    assert tool_detail("grep", {"pattern": "def foo", "path": "."}) == "def foo"
+    assert tool_detail("glob", {"pattern": "*.py"}) == "*.py"
 
 
 def test_tool_detail_truncates_long_commands() -> None:
@@ -225,6 +230,9 @@ def test_tool_icons_differ_per_family() -> None:
     assert tool_icon("read_file") != tool_icon("write_file")
     assert tool_icon("write_file") != tool_icon("patch_file")
     assert tool_icon("web_fetch") != tool_icon("web_search")
+    # The two search tools are distinct glyphs (content vs filename).
+    assert tool_icon("grep") != tool_icon("glob")
+    assert tool_icon("grep") != tool_icon("web_search")
     assert tool_icon("unknown_tool") == "⚙"  # fallback stays the gear
 
 

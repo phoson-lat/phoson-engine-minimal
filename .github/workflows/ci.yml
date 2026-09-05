@@ -61,6 +61,13 @@ jobs:
       - name: Setup Python
         run: uv python install 3.12
 
+      # The native grep/glob tools have two backends (ripgrep + pure-Python
+      # fallback). The parity tests need `rg` on PATH; ubuntu-latest ships
+      # without it, so install it here. (Without `rg` the parity tests are
+      # skipped and the fallback is exercised via the public functions.)
+      - name: Install ripgrep
+        run: sudo apt-get update -y && sudo apt-get install -y ripgrep
+
       - name: Install dependencies
         run: uv sync --dev --locked
 

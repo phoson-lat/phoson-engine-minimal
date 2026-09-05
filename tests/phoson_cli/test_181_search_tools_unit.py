@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import phoson_cli.tools.search as search_mod
 from phoson_cli.tools import build_tools, build_tools_dict
 from phoson_cli.tools.search import (
     _glob,
@@ -30,6 +31,13 @@ from phoson_cli.tools.search import (
 )
 
 RG_PRESENT = _rg_available()
+
+# The parity tests exercise *both* backends explicitly, so they need `rg`
+# on PATH — including on this machine, where the public-function tests
+# otherwise route everything through the ripgrep path and the pure-Python
+# fallback would never run. CI (ubuntu-latest) ships no `rg`: there the
+# parity tests are skipped and the public tests exercise the fallback.
+requires_rg = pytest.mark.skipif(not RG_PRESENT, reason="ripgrep not on PATH")
 
 
 # ── fixture: a small tree exercising every rule ─────────────────────────────
@@ -83,11 +91,21 @@ def tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-# ── grep: basic behavior (public function, auto backend) ────────────────────
+# ── grep: basic behavior (public function, Python backend forced) ───────────
+#
+# The public tests run with `rg` *absent* (monkeypatched) so the pure-Python
+# fallback is exercised on every machine — including ones that have rg, where
+# the auto path would otherwise never reach it. The TestGrepParity class
+# below covers the rg backend explicitly (skipped when rg is missing).
+
+
+@pytest.fixture()
+def no_rg(monkeypatch):
+    monkeypatch.setattr(search_mod, "_rg_available", lambda: False)
 
 
 class TestGrep:
-    def test_finds_matches_with_path_line_content(self, tree: Path):
+    def test_finds_matches_with_path_line_content(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree))
         assert "src/main.py:4: ALPHA constant" in out
         assert "src/pkg/util.py:1: ALPHA = 42" in out
@@ -101,7 +119,7 @@ class TestGrep:
         out = _grep("x", path=str(tmp_path / "nope"))
         assert "Path not found" in out
 
-    def test_regex_and_case_insensitive(self, tree: Path):
+    def test_regex_and_case_insensitive(self, tree: Path, no_rg):
         lower = _grep("^ALPHA", path=str(tree))
         assert "src/main.py:4" in lower
         # unanchored + case-insensitive also finds "alpha" mid-line (superset)
@@ -110,37 +128,37 @@ class TestGrep:
         assert "src/main.py:4: ALPHA constant" in ci
         assert "src/pkg/util.py:2: beta line" not in ci
 
-    def test_glob_filters_files(self, tree: Path):
+    def test_glob_filters_files(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree), glob="*.py")
         assert "src/main.py:4" in out
         assert "README.md" not in out
         assert "docs/api" not in out
 
-    def test_context_lines(self, tree: Path):
+    def test_context_lines(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree), context=1, glob="src/pkg/*.py")
         lines = out.splitlines()
         assert "src/pkg/util.py:1: ALPHA = 42" in lines
         # context=1 includes the line before/after the match
         assert "src/pkg/util.py:2: beta line" in lines
 
-    def test_max_results_stops_with_note(self, tree: Path):
+    def test_max_results_stops_with_note(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree), max_results=2)
         assert "stopped at 2 matching lines" in out
         match_lines = [line for line in out.splitlines() if re.match(r".+:\d+: ", line)]
         assert len(match_lines) <= 3  # 2 matches (+ possible context line)
 
-    def test_gitignore_respected(self, tree: Path):
+    def test_gitignore_respected(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree))
         assert ".env" not in out
         assert "build/out.txt" not in out
         assert "run.log" not in out
         assert "docs/api/spec.md" not in out
 
-    def test_gitignore_negation_keeps_file(self, tree: Path):
+    def test_gitignore_negation_keeps_file(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree))
         assert "keep.log:1: ALPHA keep" in out
 
-    def test_noise_dirs_and_hidden_and_binary_skipped(self, tree: Path):
+    def test_noise_dirs_and_hidden_and_binary_skipped(self, tree: Path, no_rg):
         out = _grep("ALPHA", path=str(tree))
         assert "node_modules" not in out
         assert ".git" not in out
@@ -151,11 +169,11 @@ class TestGrep:
         out = _grep("ALPHA", path=str(tree / "README.md"))
         assert "README.md:2: see ALPHA docs" in out
 
-    def test_invalid_regex_is_actionable(self, tree: Path):
+    def test_invalid_regex_is_actionable(self, tree: Path, no_rg):
         out = _grep("(", path=str(tree))
         assert "invalid search pattern" in out.lower()
 
-    def test_max_results_is_clamped_to_hard_cap(self, tree: Path):
+    def test_max_results_is_clamped_to_hard_cap(self, tree: Path, no_rg):
         # A bogus huge value must not be forwarded to the backends.
         out = _grep("ALPHA", path=str(tree), max_results=10**9)
         assert "1000000000" not in out
@@ -164,6 +182,7 @@ class TestGrep:
 # ── grep: backend parity (rg vs Python) ─────────────────────────────────────
 
 
+@requires_rg
 class TestGrepParity:
     ARGS = dict(glob="*.py", case_insensitive=False, max_results=50, context=0)
 
@@ -200,25 +219,25 @@ class TestGrepParity:
 
 
 class TestGlob:
-    def test_basename_at_any_depth(self, tree: Path):
+    def test_basename_at_any_depth(self, tree: Path, no_rg):
         out = _glob("*.py", path=str(tree))
         assert "src/main.py" in out
         assert "src/pkg/util.py" in out
         assert "README.md" not in out
 
-    def test_double_star_spans_segments(self, tree: Path):
+    def test_double_star_spans_segments(self, tree: Path, no_rg):
         out = _glob("src/**/*.py", path=str(tree))
         assert "src/main.py" in out
         assert "src/pkg/util.py" in out
         out_all = _glob("**/*.py", path=str(tree))
         assert "src/pkg/util.py" in out_all
 
-    def test_dir_trailing_double_star_matches_subtree(self, tree: Path):
+    def test_dir_trailing_double_star_matches_subtree(self, tree: Path, no_rg):
         out = _glob("src/**", path=str(tree))
         assert "src/main.py" in out
         assert "src/pkg/util.py" in out
 
-    def test_gitignore_and_noise(self, tree: Path):
+    def test_gitignore_and_noise(self, tree: Path, no_rg):
         # --files semantics: hidden *files* are listed, hidden *dirs* and
         # gitignored dirs are not.
         out = _glob("**/*.txt", path=str(tree))
@@ -228,7 +247,7 @@ class TestGlob:
         out_build = _glob("build/**", path=str(tree))
         assert "build/out.txt" not in out_build
 
-    def test_most_recently_modified_first(self, tmp_path: Path):
+    def test_most_recently_modified_first(self, tmp_path: Path, no_rg):
         a = tmp_path / "a.txt"
         b = tmp_path / "b.txt"
         a.write_text("a", encoding="utf-8")
@@ -243,7 +262,7 @@ class TestGlob:
         assert lines[0] == "b.txt"
         assert lines[1] == "a.txt"
 
-    def test_no_match_message(self, tree: Path):
+    def test_no_match_message(self, tree: Path, no_rg):
         out = _glob("*.zig", path=str(tree))
         assert "No files matched" in out
 
@@ -254,6 +273,7 @@ class TestGlob:
         assert "Not a directory" in _glob("*.py", path=str(tree / "README.md"))
 
 
+@requires_rg
 class TestGlobParity:
     def test_same_output_on_shared_tree(self, tree: Path):
         assert _rg_glob(tree, "**/*.py") == _py_glob(tree, "**/*.py")
