@@ -61,3 +61,7 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     if got != "services/reports/totals.py":
         return False, f"expected 'services/reports/totals.py', got {got!r}"
     return True, "definition located"
+
+
+def SOLVE(workspace: Path) -> None:
+    (workspace / "answer.txt").write_text("services/reports/totals.py\n")

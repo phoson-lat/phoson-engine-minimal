@@ -1,0 +1,156 @@
+name: nightly-agent-eval
+
+# No-regression gate for the agent eval set (issue #139 / H-1).
+#
+# Runs the deterministic bench at least 3 times against a FIXED LOCAL model
+# (Ollama) so the harness's quality is measured on the regime where it pays
+# off (no API key, free, reproducible). Fails if the pass rate drops below
+# the committed baseline minus the measured run-to-run noise; ties are
+# rejected.
+#
+# Bootstrap: the committed bench/baseline.json is a `pass_rate: null`
+# sentinel, so the first real run self-seeds it — the workflow then commits
+# the measured baseline back to main, and every later night gates against it.
+
+on:
+  schedule:
+    - cron: "15 2 * * *" # 02:15 UTC nightly
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model (provider/model, e.g. ollama/qwen2.5:1.5b)"
+        required: false
+        default: ""
+      provider:
+        description: "Provider (ollama/vllm/lmstudio)"
+        required: false
+        default: ""
+      repeat:
+        description: "Runs per task (>=3 to measure noise)"
+        required: false
+        default: "3"
+      bootstrap:
+        description: "Force (re)seed the baseline from this run"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # to commit the self-seeded baseline back
+
+concurrency:
+  group: nightly-agent-eval
+  cancel-in-progress: false
+
+jobs:
+  agent-eval:
+    # Default to a normal hosted runner (installs Ollama itself). Override
+    # with a repo variable RUNNER_LABEL (e.g. a self-hosted GPU runner) if
+    # you prefer to keep the model pre-loaded.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    env:
+      OLLAMA_BASE_URL: http://localhost:11434
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need full history to commit the seeded baseline
+
+      - name: Resolve model/provider
+        id: cfg
+        run: |
+          model="${{ inputs.model }}"
+          provider="${{ inputs.provider }}"
+          [ -z "$model" ] && model="${{ vars.BENCH_MODEL || 'qwen2.5:1.5b' }}"
+          [ -z "$provider" ] && provider="${{ vars.BENCH_PROVIDER || 'ollama' }}"
+          # Local providers (ollama/vllm/lmstudio) expect the BARE model tag,
+          # not an `ollama/...` slug — the adapter sends config.model verbatim
+          # to the provider API. Strip a leading provider/ prefix defensively
+          # so either convention works; for openrouter-style providers the
+          # slug is correct and there is no `ollama/` prefix to strip.
+          model="${model#ollama/}"
+          model="${model#vllm/}"
+          model="${model#lmstudio/}"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      - name: Install Ollama
+        if: steps.cfg.outputs.provider == 'ollama'
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # Start the server (hosted runners have no systemd).
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS "http://localhost:11434/api/version" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -fsS "http://localhost:11434/api/version"
+
+      - name: Pull model
+        if: steps.cfg.outputs.provider == 'ollama'
+        run: |
+          # The resolved model is already the bare tag (prefix stripped).
+          ollama pull "${{ steps.cfg.outputs.model }}"
+
+      - name: Run gated bench (>=3 runs, measures noise)
+        id: bench
+        run: |
+          repeat="${{ inputs.repeat || 3 }}"
+          bootstrap_flag=()
+          [ "${{ inputs.bootstrap }}" = "true" ] && bootstrap_flag=(--bootstrap)
+          # The gate exits non-zero on regression — capture it, don't abort.
+          set +e
+          uv run python bench/run_bench.py \
+            --gate \
+            --repeat "$repeat" \
+            --model "${{ steps.cfg.outputs.model }}" \
+            --provider "${{ steps.cfg.outputs.provider }}" \
+            "${bootstrap_flag[@]}" \
+            | tee "$RUNNER_TEMP/bench.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Publish results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/
+          if-no-files-found: ignore
+
+      - name: Commit self-seeded baseline
+        if: steps.bench.outputs.exit_code == '0'
+        run: |
+          # Only commit if the run actually replaced the sentinel with data.
+          if grep -q '"pass_rate": null' bench/baseline.json 2>/dev/null; then
+            echo "baseline still a sentinel — nothing to commit"
+            exit 0
+          fi
+          if git diff --quiet -- bench/baseline.json; then
+            echo "baseline unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add bench/baseline.json
+          git commit -m "bench: seed nightly baseline (model ${{ steps.cfg.outputs.model }}, run ${{ github.run_id }})"
+          git push
+
+      - name: Fail on regression
+        if: steps.bench.outputs.exit_code != '0'
+        run: |
+          echo "::error::nightly agent-eval gate FAILED (exit ${{ steps.bench.outputs.exit_code }})"
+          tail -40 "$RUNNER_TEMP/bench.log"
+          exit 1

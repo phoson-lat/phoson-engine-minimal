@@ -1,0 +1,5 @@
+{
+  "pass_rate": null,
+  "status": "pending",
+  "note": "Bootstrap sentinel. The first real gated run (bench/run_bench.py --gate, on a runner with a local model) self-seeds this file with the measured pass_rate, model, provider, noise, commit and date. Do not hand-edit pass_rate; re-seed deliberately with `run_bench.py --gate --bootstrap`."
+}

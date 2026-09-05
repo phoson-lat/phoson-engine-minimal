@@ -15,6 +15,7 @@ inherited from the developer's own shell cannot leak in and quietly
 re-target a baseline run.
 """
 
+import json
 import importlib.util
 from pathlib import Path
 
@@ -106,3 +107,167 @@ def test_results_payload_records_effective_model_and_commit(bench) -> None:
     assert payload["commit"]  # non-empty short sha (or "unknown" off-repo)
     assert payload["pass_rate"] == 1.0
     assert payload["results"][0]["name"] == "csv-stats"
+
+
+def _res(bench, name: str, passed: bool):
+    """A minimal TaskResult (only the gate reads .name/.passed)."""
+    return bench.TaskResult(
+        name=name, passed=passed, duration_s=0.0, exit_code=0, detail=""
+    )
+
+
+def test_run_gate_bootstraps_when_no_baseline(bench, tmp_path) -> None:
+    """First real run seeds the baseline and passes (issue #139)."""
+    p = tmp_path / "baseline.json"
+    results = [
+        _res(bench, "a#1", True),
+        _res(bench, "b#1", False),
+        _res(bench, "a#2", True),
+        _res(bench, "b#2", False),
+    ]
+    rc = bench.run_gate(results, baseline_path=p, model="m", provider="p")
+    assert rc == 0
+
+    doc = json.loads(p.read_text())
+    assert doc["model"] == "m" and doc["provider"] == "p"
+    assert doc["pass_rate"] == 0.5  # a passes, b fails every run
+    assert doc["per_task"] == {"a": 1.0, "b": 0.0}
+
+
+def test_run_gate_passes_when_above_baseline(bench, tmp_path) -> None:
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 0.5,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 1.0, "b": 0.0},
+            }
+        )
+    )
+    # current: a + b both pass now → 1.0 > 0.5
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", True)]
+    assert bench.run_gate(results, baseline_path=p) == 0
+
+
+def test_run_gate_fails_on_regression(bench, tmp_path) -> None:
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 1.0,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 1.0, "b": 1.0},
+            }
+        )
+    )
+    # current drops to 0.5 → below baseline 1.0 − 0 → regression
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", False)]
+    assert bench.run_gate(results, baseline_path=p) == 1
+
+
+def test_run_gate_bootstraps_on_null_sentinel(bench, tmp_path) -> None:
+    """A committed sentinel (pass_rate: null) is treated as 'no baseline'."""
+    p = tmp_path / "baseline.json"
+    p.write_text(json.dumps({"pass_rate": None, "status": "pending"}))
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", True)]
+    assert bench.run_gate(results, baseline_path=p, model="m", provider="p") == 0
+    assert json.loads(p.read_text())["pass_rate"] == 1.0  # seeded
+
+
+def test_run_gate_bootstrap_flag_deliberately_reseeds(bench, tmp_path) -> None:
+    """--bootstrap overwrites an existing baseline (maintainer re-seed)."""
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 0.2,
+                "noise": 0.0,
+                "commit": "old",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 0.0, "b": 0.0},
+            }
+        )
+    )
+    # Without --bootstrap this would GATE against 0.2; with it, re-seed.
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", True)]
+    assert bench.run_gate(results, baseline_path=p, bootstrap=True) == 0
+    assert json.loads(p.read_text())["pass_rate"] == 1.0  # re-seeded
+
+
+def test_run_gate_without_bootstrap_flags_against_existing(bench, tmp_path) -> None:
+    """A real (non-null) baseline is gated, never silently re-seeded."""
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 1.0,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 1.0},
+            }
+        )
+    )
+    # current 0.0 < 1.0 → regression; and the baseline must NOT change.
+    results = [_res(bench, "a#1", False)]
+    assert bench.run_gate(results, baseline_path=p) == 1
+    assert json.loads(p.read_text())["pass_rate"] == 1.0  # untouched
+
+
+def test_run_gate_reports_heldout_separately(bench, tmp_path, capsys) -> None:
+    """The held-out subset's pass rate is reported on its own line (issue
+    #139: 'held-out reportado aparte'), without changing the verdict."""
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 0.5,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {},
+            }
+        )
+    )
+    # a passes, b fails → full rate 0.5; held-out = {b} → 0.0
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", False)]
+    rc = bench.run_gate(results, baseline_path=p, heldout={"b"})
+    # 0.5 > 0.5? No — tie → regression (ties rejected). Verdict independent
+    # of the held-out line.
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "held-out (1 tasks): 0.000" in out
+
+
+def test_committed_sentinel_baseline_is_none(bench) -> None:
+    """The committed bench/baseline.json sentinel reads as 'no baseline'
+    so the first real run self-seeds (issue #139 bootstrap)."""
+    src = _BENCH_DIR / "baseline.json"
+    if not src.exists():
+        pytest.skip("committed baseline.json not present")
+    doc = json.loads(src.read_text())
+    assert bench.B.baseline_rate(doc) is None  # B is run_bench's baseline mod
+    assert doc.get("status") in (None, "pending")
+
+
+def test_load_tasks_heldout_split(bench, monkeypatch, tmp_path) -> None:
+    """heldout.txt names the never-iterate subset; --no-heldout skips it
+    (issue #139)."""
+    (tmp_path / "heldout.txt").write_text("# comment\nrename-symbol\n\n")
+    monkeypatch.setattr(bench, "HELDOUT_PATH", tmp_path / "heldout.txt")
+
+    all_names = [t["name"] for t in bench.load_tasks(None)]
+    train = [t["name"] for t in bench.load_tasks(None, include_heldout=False)]
+    assert "rename-symbol" in all_names
+    assert "rename-symbol" not in train
+    assert len(train) == len(all_names) - 1

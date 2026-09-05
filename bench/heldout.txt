@@ -1,0 +1,16 @@
+# Held-out split (issue #139 / H-1).
+#
+# These task names form the subset a harness PR must *never* iterate
+# against. Authors tune against the train split (`run_bench.py
+# --no-heldout`) and see the held-out result reported separately by the
+# nightly — so a change cannot be overfit to the evaluation set.
+#
+# Lines starting with '#' and blank lines are ignored. One task name per
+# line. The runner skips these under --no-heldout; the nightly reports
+# their pass rate as its own line.
+
+# A deliberate, diverse trio (one per capability axis) so the held-out
+# subset is representative, not the easiest or hardest tasks.
+count-defs-in-tree
+parse-noisy-config
+rename-symbol

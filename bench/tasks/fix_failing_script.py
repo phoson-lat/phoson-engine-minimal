@@ -31,3 +31,11 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     if proc.stdout.strip() != "42":
         return False, f"expected '42', got {proc.stdout.strip()!r}"
     return True, "calc.py prints 42"
+
+
+def SOLVE(workspace: Path) -> None:
+    """The minimal fix: the operator on line 2 must be ``+``, not ``-``."""
+    (workspace / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n\n"
+        "if __name__ == '__main__':\n    print(add(40, 2))\n"
+    )
