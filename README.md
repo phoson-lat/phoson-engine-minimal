@@ -93,6 +93,7 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | **Multi-provider** | 20+ providers behind a single `BaseLLMChat` contract |
 | **Typed events** | Normalized `LLMEvent` stream for all providers |
 | **Tool execution** | `@tool` decorator with JSON Schema definitions |
+| **Native code search** | `grep` (regex, ripgrep-backed with Python fallback) + `glob` tools, `.gitignore`-aware, capped |
 | **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
 | **Branching sessions** | `ConversationTree` for non-linear conversation history |
 | **Interactive CLI** | Full-screen TUI (default) + classic REPL: streaming, rewind, sessions, pickers |
