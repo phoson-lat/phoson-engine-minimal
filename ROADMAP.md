@@ -1,6 +1,6 @@
 # ROADMAP — phoson-engine-minimal / phoson-cli
 
-> **Actualizado:** 2026-09-04 · estado de referencia **v0.26.1** (v0.26.1: #178 `stop_reason` normalizado + truncación/enforcement + `result.truncated` y #177 `RetryingChat` en `build_chat` + `RetryMiddleware` deprecado — PR #195, `2507df0` + PR #194, `6080ba0`; v0.26.0: #179 `patch_file` unicidad + CRLF + #180 `cat -n`/caps/descripciones/system prompt ACI — PR #193, `67368b0`; v0.25.1: #175 `is_simple_shell_command` + `match_args` obligatorio — PR #192, `af502f0`) · 2094 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
+> **Actualizado:** 2026-09-04 · estado de referencia **v0.26.2** (v0.26.2: #182 `@import` confinado al repo + #183 `web_fetch` SSRF/limite de descarga + #184 system prompt del sub-agente + `agents` no ofrecido + #185 cinco fixes CLI + #200 plugin spec degradado a warning — PR #196, `7d5cf6c` + PR #199, `602217e` + PR #198, `5a99f91` + PR #197, `ced2d51` + PR #200, `25a2bb8`; v0.26.1: #178 `stop_reason` normalizado + truncación/enforcement + `result.truncated` y #177 `RetryingChat` en `build_chat` + `RetryMiddleware` deprecado — PR #195, `2507df0` + PR #194, `6080ba0`; v0.26.0: #179 `patch_file` unicidad + CRLF + #180 `cat -n`/caps/descripciones/system prompt ACI — PR #193, `67368b0`; v0.25.1: #175 `is_simple_shell_command` + `match_args` obligatorio — PR #192, `af502f0`) · 2164 tests pasados · ruff limpio (pyright: 1 error preexistente en `gemini.py`).
 >
 > **Fuentes:** los 33 issues abiertos en GitHub (17 previos + 16 abiertos el 2026-09-01 a partir de la revisión final; #138 cerrado el mismo día), `REVISION-FINAL-BY-FABLE.md` (hallazgos `F-nn`, verificados en código), `IMPROVEMENTS.md` (H-*/I-*), `IMPROVEMENTS-TUI.md` (T-*), `ISSUES-COMPLEXITY.md` (orden transversal previo).
 >
@@ -17,7 +17,7 @@
 | Look del TUI (T-1…T-13) | ✅ Todo shipped v0.20.0–v0.23.0. T-11 (ADR renderer) cerrado. |
 | Perf del TUI | ✅ T-14 (#171) shipped v0.24.0 (PR #173, `84e44b7`, incl. fix F-40 spinner). ✅ Follow-up #186 (F-41/42/44) shipped v0.24.1 (PR #190, `df2fd70`). T-15 (#172) pendiente. |
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
-| Seguridad | 🟠 #183 (SSRF), #182 (`@import` fuera del repo). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
+| Seguridad | ✅ #183 (SSRF) + #182 (`@import` fuera del repo) shipped v0.26.2 (PR #199, `602217e` + PR #196, `7d5cf6c`). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
 | Loop | ✅ #178 (`stop_reason` ignorado, excepciones huérfanas) shipped v0.26.1 (PR #195, `2507df0`). ✅ #177 (retry no conectado) shipped v0.26.1 (PR #194, `6080ba0`). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
 | ACI (edit/search/prompt) | 🟠 #181 (grep/glob). ✅ #179 + #180 shipped v0.26.0 (PR #193, `67368b0`): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
@@ -43,10 +43,10 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#176](https://github.com/phoson-lat/phoson-engine-minimal/issues/176) | Compactación rompe pares tool_use/tool_result | F-10, F-11 | 🔴 | M | ✅ **cerrado** | Shipped v0.25.0: `safe_cut_index` en los 4 cortes (auto/emergency/manual + plan), resumen vacío ⇒ abortar, llamada de resumen tool-free (chat), 400 de pairing ⇒ error explícito. Desbloquea #147. |
 | [#177](https://github.com/phoson-lat/phoson-engine-minimal/issues/177) | Retry inexistente (`RetryMiddleware` no reintenta; `RetryingChat` sin conectar) | F-12 | 🔴 | S | ✅ **cerrado** | Shipped v0.26.1 (PR #194, `6080ba0`): `build_chat` envuelve el adapter en `RetryingChat` (backoff 1s/×2/30s + jitter, solo pre-token ⇒ no duplica); `llm_max_attempts` (3, `1` desactiva) + `PHOSON_LLM_MAX_ATTEMPTS`; `RetryMiddleware` deprecado (warning). |
 | [#178](https://github.com/phoson-lat/phoson-engine-minimal/issues/178) | `stop_reason` ignorado; excepciones dejan tool_use huérfano | F-13, F-14 | 🟠 | S-M | ✅ **cerrado** | Shipped v0.26.1 (PR #195, `2507df0`): `LLMDoneEvent.stop_reason` normalizado en los 19 adapters; el handler no se invoca con args `_truncated`/`_raw` (error accionable); `except Exception` en ToolRunner ⇒ `tool_result` emparejado con el tipo de la excepción; `result.truncated` + badge "⚠ truncated". 55 tests. |
-| [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | **B** | |
-| [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | **B** | Relacionado con #144 (trifecta letal). |
-| [#184](https://github.com/phoson-lat/phoson-engine-minimal/issues/184) | Sub-agentes sin system prompt; `agents` anunciado al hijo pero falla | F-23, F-24 | 🟠 | S | **B** | Toca la misma construcción del hijo que #174; puede ir en el mismo PR. |
-| [#185](https://github.com/phoson-lat/phoson-engine-minimal/issues/185) | Varios pequeños CLI: `/resume` tokens, `/compact` sin persistir, `_resolve_bool`, `/mcp config`, updater | F-34…F-38 | 🟡 | S | **B** | Cinco fixes independientes, un test por fila. |
+| [#182](https://github.com/phoson-lat/phoson-engine-minimal/issues/182) | `@import` de AGENTS.md resuelve rutas fuera del repo | F-04 | 🟠 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #196, `7d5cf6c`): root de confinamiento por archivo (repo root / `~/.phoson/`) aplicado **tras** `resolve()` ⇒ absolute/`..`/symlink fuera ⇒ marcador `[import refused: outside repo: …]`; `~` solo en el global. 8 tests. |
+| [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #199, `602217e`): `assert_public_url` pre-flight + hook por redirect (loopback/RFC1918/ULA/link-local + metadata IP/CGNAT/reservados); `stream()` + corte ~2 MB; prefijo "untrusted" en todo resultado. 25 tests. Relacionado con #144 (trifecta letal). |
+| [#184](https://github.com/phoson-lat/phoson-engine-minimal/issues/184) | Sub-agentes sin system prompt; `agents` anunciado al hijo pero falla | F-23, F-24 | 🟠 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #198, `5a99f91`): el hijo recibe el mismo `build_system_prompt` del padre (derivado de **su propio** subset de tools) + preamble; `ModelConfig.system` en todos los adapters; `_select_tools` quita `agent` **y** `agents` (recursión acotada por diseño, un nivel). 5 tests. |
+| [#185](https://github.com/phoson-lat/phoson-engine-minimal/issues/185) | Varios pequeños CLI: `/resume` tokens, `/compact` sin persistir, `_resolve_bool`, `/mcp config`, updater | F-34…F-38 | 🟡 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #197, `ced2d51`): split input/output persistido; `/compact` persiste + refresca header; bool/int estrictos + env-only keys no persistidas; `expanduser` + `0o600` en `mcps.json`; timeout 600 s en updater + estado real en `plugin list` + re-enable `path:`. 30 tests. Residuos fuera de alcance (respawn en `/mcp toggle` stdio; opt-out del check PyPI): deuda. |
 | [#181](https://github.com/phoson-lat/phoson-engine-minimal/issues/181) | Tools nativas `grep` y `glob` | F-21b | 🟠 | M | **C** | Hipótesis de harness: shippear con descripción cuidada y medir contra #139. |
 | [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | `phoson_plugin_otel` (trazas) | H-2 | 🔴 | M | **C** | Slice 1 (trace-file JSON) antes de #139. |
 | [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Eval set 15–25 tareas + gate nightly | H-1 | 🔴 | M | **C** | Incluir tareas de ancla ambigua, búsqueda en repo, compactación. Baseline = v0.24.0. |
@@ -112,7 +112,7 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 
 **Criterio de listo del sprint:** un tool en `deny` es rechazado desde un sub-agente y desde `-p` (test); `git *` no aprueba `git status; rm -rf /` (test); un run `-p` con tool colgado termina en el presupuesto con exit ≠ 0 (test).
 
-### Sprint B — v0.25.0–v0.26.1 · ACI y robustez del loop
+### Sprint B — v0.25.0–v0.26.2 · ACI y robustez del loop (COMPLETO)
 
 ```
 1. #179 + #180   Edit tool seguro + read_file cat -n + caps + descripciones +
@@ -154,12 +154,25 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
           (`{name}: {exc_type}: {detail}`), el run sigue y el historial queda
           válido para el proveedor. `result.truncated` + badge "⚠ truncated" en
           `render_done_line` (REPL clásico y TUI). 55 tests nuevos.
-5. #182, #183, #184 (si no fue en A), #185   Pequeños independientes.           S c/u
+5. #182, #183, #184, #185   Pequeños independientes (uno por PR).               S c/u
+          ✅ shipped v0.26.2:
+          - #182 (PR #196, `7d5cf6c`): `@import` confinado al árbol del repo
+            (root por archivo, tras `resolve()`, marker de rechazo); 8 tests.
+          - #183 (PR #199, `602217e`): `web_fetch` SSRF (pre-flight + por
+            redirect, metadata/loopback/RFC1918/CGNAT) + corte ~2 MB + prefijo
+            "untrusted"; 25 tests.
+          - #184 (PR #198, `5a99f91`): system prompt del hijo (mismo builder,
+            subset propio) + `agent`/`agents` nunca ofrecidos; 5 tests.
+          - #185 (PR #197, `ced2d51`): los 5 fixes CLI, un test por fila;
+            30 tests.
+          - Bonus fuera de fila: #200 (PR #200, `25a2bb8`): una spec de plugin
+            inválida degrada a warning y el CLI arranca (no brickeaba todo el
+            startup); 3 tests.
 ```
 
 **Criterio de listo:** compactación con `min_keep` cayendo en un `tool_result` produce historial válido (test); 429 antes del primer token se reintenta (test); `patch_file` con dos coincidencias falla sin escribir (test).
 
-### Sprint C — v0.26.0 · función de fitness
+### Sprint C — v0.26.3 · función de fitness
 
 ```
 1. #181   grep + glob nativos.                                                  M
