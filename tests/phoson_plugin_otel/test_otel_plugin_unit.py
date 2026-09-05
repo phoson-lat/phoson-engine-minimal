@@ -20,6 +20,7 @@ from phoson_plugin_otel import PhosonOtelPlugin
 from phoson_agent.models import AgentDoneEvent, AgentRunResult, AgentStartEvent
 from phoson_plugin_otel.sink import PHOSON_TRACE_KEY, FileSink, trace_envelope
 from phoson_plugin_otel.span import OtelSpan, build_trace, new_trace_id
+from phoson_plugin_otel.tracing import _RunState
 
 
 def _spans(n: int = 2) -> list[OtelSpan]:
@@ -257,16 +258,29 @@ class TestConfigure:
 
 
 class _CollectorHandler(BaseHTTPRequestHandler):
-    """Captures POST bodies; the test reads ``received`` afterwards."""
+    """Captures POST bodies + headers; the test reads them afterwards."""
 
     received: list[bytes] = []
+    received_headers: list[dict] = []
 
     def do_POST(self) -> None:  # noqa: N802 — http.server API
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
         type(self).received.append(body)
+        type(self).received_headers.append(
+            {k.lower(): v for k, v in self.headers.items() if k.lower() in self._want}
+        )
         self.send_response(200)
         self.end_headers()
+
+    # Only capture the headers the tests assert on (keep the dict small).
+    _want = {
+        "content-type",
+        "content-encoding",
+        "authorization",
+        "x-api-key",
+        "x-tenant",
+    }
 
     def log_message(self, *_args) -> None:  # silence
         pass
@@ -278,32 +292,142 @@ def collector():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     _CollectorHandler.received = []
+    _CollectorHandler.received_headers = []
     yield f"http://127.0.0.1:{server.server_address[1]}"
     server.shutdown()
 
 
 class TestOtlpHttpSink:
-    def test_posts_otlp_body(self, collector: str, monkeypatch) -> None:
+    def test_posts_pure_otlp_body(self, collector: str, monkeypatch) -> None:
         monkeypatch.setenv("PHOSON_OTEL_ENDPOINT", collector)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
         plugin = PhosonOtelPlugin()
         plugin.configure({})
         assert plugin.sink_path == f"{collector}/v1/traces"
 
         _run_start_done(plugin)
 
-        # Wait for the background export thread.
         deadline = time.time() + 5
         while not _CollectorHandler.received and time.time() < deadline:
             time.sleep(0.01)
         assert len(_CollectorHandler.received) == 1
         doc = json.loads(_CollectorHandler.received[0])
-        assert doc[PHOSON_TRACE_KEY]["span_count"] == 1  # run span only
-        assert doc["resourceSpans"][0]["resource"]["attributes"]
+        # Slice 2: the collector receives the *pure* ExportTraceServiceRequest
+        # — no phoson_trace envelope (that's file-sink-only).
+        assert PHOSON_TRACE_KEY not in doc
+        spans = doc["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert len(spans) == 1  # run span only
+        assert spans[0]["name"] == "phoson.run"
+        # run id survives as a root-span attribute (lost nothing by dropping envelope)
+        attrs = {a["key"] for a in spans[0]["attributes"]}
+        assert "phoson.run.id" in attrs
+        # Standard OTLP headers present.
+        headers = _CollectorHandler.received_headers[0]
+        assert headers["content-type"] == "application/json"
+        assert headers["content-encoding"] == "identity"
+
+    def test_custom_headers_are_sent(self, collector: str, monkeypatch) -> None:
+        monkeypatch.setenv("PHOSON_OTEL_ENDPOINT", collector)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_HEADERS", raising=False)
+        plugin = PhosonOtelPlugin()
+        plugin.configure(
+            {"headers": {"Authorization": "Bearer tok", "X-Api-Key": "abc"}}
+        )
+        _run_start_done(plugin)
+        deadline = time.time() + 5
+        while not _CollectorHandler.received and time.time() < deadline:
+            time.sleep(0.01)
+        assert _CollectorHandler.received
+        headers = _CollectorHandler.received_headers[0]
+        assert headers["authorization"] == "Bearer tok"
+        assert headers["x-api-key"] == "abc"
+
+    def test_env_headers_parsed(self, collector: str, monkeypatch) -> None:
+        """The standard OTEL_EXPORTER_OTLP_HEADERS env (k=v,k2=v2) is honored."""
+        monkeypatch.setenv("PHOSON_OTEL_ENDPOINT", collector)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=env1,x-tenant=t")
+        plugin = PhosonOtelPlugin()
+        plugin.configure({})
+        _run_start_done(plugin)
+        deadline = time.time() + 5
+        while not _CollectorHandler.received and time.time() < deadline:
+            time.sleep(0.01)
+        assert _CollectorHandler.received
+        headers = _CollectorHandler.received_headers[0]
+        assert headers["x-api-key"] == "env1"
+        assert headers["x-tenant"] == "t"
+
+    def test_config_headers_override_env(self, collector: str, monkeypatch) -> None:
+        monkeypatch.setenv("PHOSON_OTEL_ENDPOINT", collector)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=env1")
+        plugin = PhosonOtelPlugin()
+        plugin.configure({"headers": {"x-api-key": "cfg"}})
+        _run_start_done(plugin)
+        deadline = time.time() + 5
+        while not _CollectorHandler.received and time.time() < deadline:
+            time.sleep(0.01)
+        assert _CollectorHandler.received
+        assert _CollectorHandler.received_headers[0]["x-api-key"] == "cfg"
+
+    def test_build_request_is_pure_and_testable(self, monkeypatch) -> None:
+        """build_request returns (url, headers, body) synchronously — the
+        wire format is assertable without a network round-trip."""
+        from phoson_plugin_otel.span import OtelSpan, new_trace_id
+        from phoson_plugin_otel._plugin import OtlpHttpSink
+
+        sink = OtlpHttpSink(
+            "http://c:4318",
+            {"service.name": "s"},
+            headers={"Authorization": "Bearer z"},
+        )
+        trace_id = new_trace_id()
+        run = OtelSpan(name="phoson.run", trace_id=trace_id, start_time=1, end_time=2)
+        run.set_attribute("phoson.run.id", "rid-1")
+        state = _RunState(run_id="rid-1", trace_id=trace_id, run_span=run, spans=[run])
+
+        url, headers, body = sink.build_request(state)
+        assert url == "http://c:4318/v1/traces"
+        assert headers["Content-Type"] == "application/json"
+        assert headers["Authorization"] == "Bearer z"
+        doc = json.loads(body)
+        assert PHOSON_TRACE_KEY not in doc
+        spans = doc["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert spans[0]["traceId"] == trace_id
+        assert spans[0]["attributes"]
 
     def test_endpoint_gets_http_prefix(self, monkeypatch) -> None:
         plugin = PhosonOtelPlugin()
         plugin.configure({"sink": "otlp", "otlp_endpoint": "collector.local:4318"})
         assert plugin.sink_path == "http://collector.local:4318/v1/traces"
+
+
+class TestParseOtlpHeaders:
+    def test_pairs(self) -> None:
+        from phoson_plugin_otel._plugin import _parse_otlp_headers
+
+        assert _parse_otlp_headers("a=1,b=2") == {"a": "1", "b": "2"}
+
+    def test_trims_whitespace(self) -> None:
+        from phoson_plugin_otel._plugin import _parse_otlp_headers
+
+        assert _parse_otlp_headers(" a = 1 , b=2 ") == {"a": "1", "b": "2"}
+
+    def test_skips_malformed(self) -> None:
+        from phoson_plugin_otel._plugin import _parse_otlp_headers
+
+        assert _parse_otlp_headers("noequals, ok=1, =x") == {"ok": "1"}
+
+    def test_empty(self) -> None:
+        from phoson_plugin_otel._plugin import _parse_otlp_headers
+
+        assert _parse_otlp_headers("") == {}
+        assert _parse_otlp_headers(",,,") == {}
+
+    def test_value_with_equals(self) -> None:
+        from phoson_plugin_otel._plugin import _parse_otlp_headers
+
+        # partition on the first '=' keeps the rest of the value intact.
+        assert _parse_otlp_headers("auth=Bearer a=b") == {"auth": "Bearer a=b"}
 
 
 # ── Export plumbing / cleanup flush ────────────────────────────────────────────

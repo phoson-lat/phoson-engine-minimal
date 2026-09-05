@@ -1,15 +1,11 @@
 # phoson_plugin_otel
 
-OpenTelemetry tracing for Phoson (issue #140, **slice 1**: local
-trace-file sink).
+OpenTelemetry tracing for Phoson (issue #140). Two sinks, one span tree.
 
 Every agent run — main engine *and* sub-agents — is traced as an OTel
 span tree and exported in **OTLP/HTTP JSON** shape (the
 `ExportTraceServiceRequest` body, `application/json`, the format the
-OTLP `/v1/traces` endpoint expects). Slice 1 writes that body to a
-local JSON file; no collector or extra dependency is required, and the
-same document can be replayed into any OTLP-compatible tool (Jaeger,
-the OTel collector, `otlpreplay`).
+OTLP `/v1/traces` endpoint expects), stdlib-only:
 
 ```
 phoson.run                     one per engine.run() (or sub-agent run)
@@ -17,6 +13,20 @@ phoson.run                     one per engine.run() (or sub-agent run)
     ├── phoson.llm_call        kind="llm"  — model, tokens, cache, cost, credits
     └── phoson.tool_call       kind="tool" — name, call id, outcome, args, result size
 ```
+
+* **`sink = "file"`** (slice 1) — writes the trace to a local JSON file
+  (OTLP body + a small `phoson_trace` envelope). No collector, no
+  dependency; the `.resourceSpans` can be replayed into any OTLP tool
+  (Jaeger, the OTel collector, `otlpreplay`).
+* **`sink = "otlp"`** (slice 2) — POSTs the *pure*
+  `ExportTraceServiceRequest` body to a real collector's `/v1/traces`
+  (OTel collector, Jaeger, Honeycomb, LGTM, …), with `headers` for
+  auth/routing.
+
+`auto` (default) picks OTLP when an endpoint is configured, file
+otherwise. The wire format is pinned by a conformance test that decodes
+the plugin's exact payload into the real `opentelemetry-proto` schema
+(test-only dependency; the runtime stays stdlib-only).
 
 ## Enabling
 
@@ -55,10 +65,46 @@ plugins = [
 | `file_path` | `.phoson/trace.json` | file-sink path; `{trace_id}` → one file per run |
 | `otlp_endpoint` | `$PHOSON_OTEL_ENDPOINT` / `$OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP/HTTP base URL |
 | `otlp_timeout_s` | `5.0` | export timeout |
+| `headers` | merged over `$OTEL_EXPORTER_OTLP_HEADERS` | extra OTLP request headers (auth/routing, e.g. `Authorization`) |
 | `resource_attributes` | `{}` | extra resource attributes (e.g. `deployment.environment`) |
 
 Correlation: set `PHOSON_OTEL_TRACE_ID` to a 32-hex-char W3C trace id
 to pin the trace id (e.g. from a CI runner).
+
+## Exporting to a collector (slice 2)
+
+Point it at any OTLP/HTTP (JSON) collector — the OTel collector,
+Jaeger, or a hosted backend. The endpoint alone is enough for a local
+collector:
+
+```toml
+[defaults]
+enable_otel = true
+otel_endpoint = "http://localhost:4318"     # collector → /v1/traces
+```
+
+For a hosted backend you also need an API key — pass it via the
+standard `OTEL_EXPORTER_OTLP_HEADERS` env (the config-file `defaults`
+only carries the endpoint, so headers go on the plugin spec or the
+env):
+
+```toml
+[defaults]
+plugins = [
+  { name = "phoson-plugin-otel",
+    config = { sink = "otlp",
+               otlp_endpoint = "https://api.honeycomb.io",
+               headers = { Authorization = "Bearer <honeycomb-write-key>" } } }
+]
+```
+
+or, equivalently, `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <key>`
+(`key=value,key2=value2` format — the standard OTel env).
+
+The exporter sends the pure `ExportTraceServiceRequest` body (no
+`phoson_trace` envelope — that's file-sink only; the run id rides along
+as `phoson.run.id` on the root span), on a background thread so a slow
+collector never blocks the agent.
 
 ## Output
 
@@ -107,9 +153,13 @@ metadata. Tool outcomes are normalized: `ok`, `error`,
   log a warning and are swallowed — observability must never take a run
   down with it. A run still open when the plugin is cleaned up (host
   shutdown mid-run) is flushed at `cleanup()`.
-- **Stdlib only.** No `opentelemetry-*` dependency. Slice 2 may prefer
-  the official SDK/exporter when present, reusing this span tree and
-  the already-shipped minimal OTLP HTTP sink.
+- **Stdlib only at runtime.** No `opentelemetry-*` dependency. The
+  OTLP sink speaks the documented OTLP/HTTP JSON wire format
+  (hex `traceId`/`spanId` per OTEP-0122, integer enums, 64-bit ints as
+  decimal strings, lowerCamelCase keys) — a conformance test decodes
+  the plugin's exact payload into the real `opentelemetry-proto`
+  schema (`opentelemetry-proto` is a test-only dependency, not a
+  runtime one) so the format can't drift silently.
 
 ## Development
 

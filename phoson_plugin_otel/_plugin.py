@@ -1,10 +1,14 @@
-"""Phoson OpenTelemetry plugin (issue #140, slice 1).
+"""Phoson OpenTelemetry plugin (issue #140).
 
 Traces every agent run as an OTel trace — ``phoson.run`` →
 ``phoson.step`` → ``phoson.llm_call`` / ``phoson.tool_call`` — and
-exports it. Slice 1 ships the **local file sink** (OTLP/HTTP JSON on
-disk); slice 2 will add the real OTLP HTTP export, reusing the same
-span tree.
+exports it via one of two sinks:
+
+* **file** (slice 1) — a local trace-file in OTLP/HTTP JSON shape,
+  inspectable and replayable into any OTLP tool with no collector.
+* **otlp** (slice 2) — a real POST to a collector's ``/v1/traces``
+  (pure ``ExportTraceServiceRequest`` body, ``headers`` for
+  auth/routing, standard ``OTEL_EXPORTER_OTLP_HEADERS`` honored).
 
 Design
 ------
@@ -14,9 +18,9 @@ Design
   span tree from ``AgentStepDoneEvent`` (which carries the full
   ``RunStep``), so span attributes cannot drift from what ``/cost`` and
   ``/tokens`` report.
-* **Stdlib only.** Span model + JSON sink use no third-party
-  dependency; the optional ``opentelemetry-*`` packages are *not*
-  required (slice 2 may prefer them when present).
+* **Stdlib only at runtime.** Span model + both sinks use no
+  third-party dependency; ``opentelemetry-*`` packages are **not**
+  required (they are a test-only conformance oracle).
 * **Concurrency-safe.** The middleware instance is shared between the
   main engine and all sub-agent engines; active-run state lives in a
   ``ContextVar`` so parallel sub-agents never interleave traces.
@@ -35,12 +39,18 @@ Configuration (``config:`` block of the plugin spec)
     # service_name = "phoson"    # resource service.name ($PHOSON_SERVICE_NAME)
     # file_path = ".phoson/trace.json"  # ($PHOSON_OTEL_TRACE_FILE)
     # otlp_endpoint = ""         # ($PHOSON_OTEL_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT)
+    # [plugins.config.headers]   # extra OTLP request headers (auth/routing)
+    # "Authorization" = "Bearer …"
     # [plugins.config.resource_attributes]
     # "deployment.environment" = "dev"
 
 ``auto`` (default) picks the OTLP sink when an endpoint is configured
 (via config or env) and the file sink otherwise. ``file_path`` may
-contain a ``{trace_id}`` placeholder for one file per run.
+contain a ``{trace_id}`` placeholder for one file per run. ``headers``
+is merged over the standard ``OTEL_EXPORTER_OTLP_HEADERS`` env var
+(``key=value,key2=value2``) so the exporter can carry an
+``Authorization`` bearer or a vendor API key — the way you point it at
+Honeycomb, LGTM or any hosted backend.
 """
 
 import os
@@ -74,14 +84,46 @@ def _env_str(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
-class OtlpHttpSink:
-    """Export a finished run's trace to an OTLP/HTTP endpoint.
+def _parse_otlp_headers(value: str) -> dict[str, str]:
+    """Parse the standard ``OTEL_EXPORTER_OTLP_HEADERS`` format.
 
-    Slice 1 keeps this minimal: a single POST of the
-    ``ExportTraceServiceRequest`` body to ``<endpoint>/v1/traces``
-    with a short timeout, on a background thread so a slow or dead
-    collector never blocks the agent. Failures are logged, never
-    raised.
+    ``key1=value1,key2=value2`` → ``{"key1": "value1", "key2": "value2"}``.
+    Commas inside a value are *not* supported (matches the OTel spec:
+    values must not contain `,`); a segment without ``=`` is skipped.
+    """
+    headers: dict[str, str] = {}
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, val = part.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if key:
+            headers[key] = val.strip()
+    return headers
+
+
+class OtlpHttpSink:
+    """Export a finished run's trace to an OTLP/HTTP collector.
+
+    Slice 2: a production-shaped OTLP/HTTP (JSON) exporter.
+
+    * Sends the **pure** ``ExportTraceServiceRequest`` body (no
+      ``phoson_trace`` envelope) to ``<endpoint>/v1/traces`` — the exact
+      payload a real collector (the OTel collector, Jaeger, Honeycomb,
+      LGTM, …) expects. The run id is preserved as the ``phoson.run.id``
+      attribute on the root span, so nothing is lost by dropping the
+      envelope.
+    * Supports **custom headers** (``headers`` config / env) for auth and
+      routing — the way you point a single exporter at a hosted backend
+      (``Authorization``, ``X-OTLP-API-Key``, a vendor trace path, …).
+    * The request (URL + headers + body) is built **synchronously** so
+      the wire format is deterministically testable; only the network
+      send runs on a short-lived daemon thread so a slow or dead
+      collector never blocks the agent. Failures are logged, never
+      raised.
     """
 
     def __init__(
@@ -89,6 +131,7 @@ class OtlpHttpSink:
         endpoint: str,
         resource_attributes: dict[str, Any],
         timeout_s: float = _DEFAULT_OTLP_TIMEOUT_S,
+        headers: dict[str, str] | None = None,
     ) -> None:
         endpoint = endpoint.rstrip("/")
         if not endpoint.lower().startswith(("http://", "https://")):
@@ -96,31 +139,35 @@ class OtlpHttpSink:
         self._url = endpoint + _OTLP_TRACES_PATH
         self._resource = dict(resource_attributes)
         self._timeout_s = timeout_s
+        self._headers = {k: str(v) for k, v in (headers or {}).items()}
 
-    def write(self, state: _RunState) -> None:
-        """POST the run's trace; logs (does not raise) on failure.
+    def build_request(self, state: _RunState) -> tuple[str, dict[str, str], bytes]:
+        """Return ``(url, headers, body)`` for one run — pure & testable.
 
-        The POST runs on a short-lived daemon thread so a slow or dead
-        collector never blocks the agent loop.
+        The body is the canonical OTLP/HTTP JSON
+        ``ExportTraceServiceRequest`` (``build_trace``), so the same
+        bytes a collector receives can be asserted in a test.
         """
         import json
+
+        from phoson_plugin_otel.sink import build_trace
+
+        body = json.dumps(
+            build_trace(state.spans, self._resource), ensure_ascii=False
+        ).encode("utf-8")
+        headers = {
+            "Content-Type": _OTLP_CONTENT_TYPE,
+            "Content-Encoding": "identity",
+            **self._headers,
+        }
+        return self._url, headers, body
+
+    def write(self, state: _RunState) -> None:
+        """POST the run's trace; logs (does not raise) on failure."""
         import threading
 
-        from phoson_plugin_otel.sink import trace_envelope
-
-        document = trace_envelope(
-            state.spans, self._resource, run_info={"run_id": state.run_id}
-        )
-        payload = json.dumps(document, ensure_ascii=False).encode("utf-8")
-        request = Request(
-            self._url,
-            data=payload,
-            headers={
-                "Content-Type": _OTLP_CONTENT_TYPE,
-                "Content-Encoding": "identity",
-            },
-            method="POST",
-        )
+        url, headers, payload = self.build_request(state)
+        request = Request(url, data=payload, headers=headers, method="POST")
 
         def _post() -> None:
             try:
@@ -131,14 +178,14 @@ class OtlpHttpSink:
                     if status >= 400:
                         _LOGGER.warning(
                             "otel: collector %s returned HTTP %s for run %s",
-                            self._url,
+                            url,
                             status,
                             state.run_id,
                         )
             except HTTPError as exc:
                 _LOGGER.warning(
                     "otel: collector %s returned HTTP %s for run %s: %s",
-                    self._url,
+                    url,
                     exc.code,
                     state.run_id,
                     exc.reason,
@@ -147,7 +194,7 @@ class OtlpHttpSink:
                 _LOGGER.warning(
                     "otel: failed to export run %s to %s: %s",
                     state.run_id,
-                    self._url,
+                    url,
                     exc,
                 )
 
@@ -172,6 +219,7 @@ class PhosonOtelPlugin(Plugin):
             "otlp_endpoint": None,
             "otlp_timeout_s": None,
             "resource_attributes": {},
+            "headers": {},
         }
         self._sink: FileSink | OtlpHttpSink | None = None
         self._middleware: OtelTracingMiddleware | None = None
@@ -258,6 +306,16 @@ class PhosonOtelPlugin(Plugin):
             )
             timeout_s = _DEFAULT_OTLP_TIMEOUT_S
 
+        # Headers: env (standard OTel format) first, then the config
+        # mapping (which wins on key collisions) — e.g. an
+        # ``Authorization`` bearer or a vendor API key.
+        headers = _parse_otlp_headers(_env_str("OTEL_EXPORTER_OTLP_HEADERS"))
+        cfg_headers = cfg["headers"]
+        if not isinstance(cfg_headers, dict):
+            _LOGGER.warning("otel: 'headers' must be a mapping; ignoring")
+            cfg_headers = {}
+        headers.update({str(k): str(v) for k, v in cfg_headers.items()})
+
         sink = str(cfg["sink"]).lower()
         if sink not in _SINKS:
             _LOGGER.warning(
@@ -279,7 +337,10 @@ class PhosonOtelPlugin(Plugin):
 
         if use_otlp:
             self._sink = OtlpHttpSink(
-                otlp_endpoint, self._resource, timeout_s=timeout_s
+                otlp_endpoint,
+                self._resource,
+                timeout_s=timeout_s,
+                headers=headers,
             )
             _LOGGER.info("otel: tracing enabled → OTLP %s", self._url_of(self._sink))
         else:
