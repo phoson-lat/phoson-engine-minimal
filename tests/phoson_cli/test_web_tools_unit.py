@@ -3,12 +3,12 @@
 import httpx
 import pytest
 
-from phoson_cli.tools.search import (
+from phoson_cli.tools.web_fetch import html_to_text, format_fetch_result
+from phoson_cli.tools.web_search import (
     _DuckParser,
     _format_results,
     resolve_backend,
 )
-from phoson_cli.tools.web_fetch import html_to_text, format_fetch_result
 
 # ─── web_fetch: HTML → text ──────────────────────────────────────────────────
 
@@ -231,7 +231,7 @@ def test_duck_parser_extracts_title_url_and_snippet() -> None:
 async def test_web_search_duckduckgo_backend_formats_results(monkeypatch) -> None:
     import importlib
 
-    mod = importlib.import_module("phoson_cli.tools.search")
+    mod = importlib.import_module("phoson_cli.tools.web_search")
 
     html = (
         '<a class="result__a" href="https://one.dev">One</a>'
@@ -269,7 +269,7 @@ async def test_web_search_duckduckgo_backend_formats_results(monkeypatch) -> Non
 async def test_web_search_reports_http_failures_gracefully(monkeypatch) -> None:
     import importlib
 
-    mod = importlib.import_module("phoson_cli.tools.search")
+    mod = importlib.import_module("phoson_cli.tools.web_search")
 
     class _FailingClient:
         def __init__(self, *a, **k): ...
