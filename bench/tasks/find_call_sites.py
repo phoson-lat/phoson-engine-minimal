@@ -72,3 +72,9 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     if got != expected:
         return False, f"expected {expected}, got {got}"
     return True, "all call sites found"
+
+
+def SOLVE(workspace: Path) -> None:
+    (workspace / "call_sites.txt").write_text(
+        "core/store.py\njobs/etl.py\nweb/views.py\n"
+    )

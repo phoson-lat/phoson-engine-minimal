@@ -7,6 +7,7 @@ deterministic checker. Prints a summary table and saves JSON results.
 """
 
 import os
+import sys
 import json
 import time
 import shutil
@@ -18,6 +19,14 @@ from pathlib import Path
 
 TASKS_DIR = Path(__file__).parent / "tasks"
 RESULTS_DIR = Path(__file__).parent / "results"
+BASELINE_PATH = Path(__file__).parent / "baseline.json"
+HELDOUT_PATH = Path(__file__).parent / "heldout.txt"
+
+
+# Make ``baseline.py`` importable both when run as a script and when the
+# tests import ``run_bench`` by path (bench is not a package).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import baseline as B  # noqa: E402
 
 
 @dataclasses.dataclass
@@ -30,21 +39,44 @@ class TaskResult:
     stdout_bytes: int = 0
 
 
-def load_tasks(filter_sub: str | None) -> list:
+def load_tasks(filter_sub: str | None, include_heldout: bool = True) -> list:
+    """Load bench tasks.
+
+    ``heldout.txt`` (one task name per line) names the held-out split —
+    the subset a harness PR must *never* iterate against. When
+    ``include_heldout`` is False those tasks are skipped, so a PR author
+    can tune against the training split only and see the held-out result
+    separately. Lines starting with ``#`` are comments.
+    """
+    heldout = _heldout_names() if not include_heldout else set()
     tasks = []
     for path in sorted(TASKS_DIR.glob("*.py")):
         if path.name.startswith("_"):
             continue
         namespace: dict = {}
         exec(compile(path.read_text(), path.name, "exec"), namespace)  # noqa: S102
+        name = namespace.get("NAME", path.stem)
+        if not include_heldout and name in heldout:
+            continue
         task = {
-            "name": namespace.get("NAME", path.stem),
+            "name": name,
             "module": namespace,
         }
         if filter_sub and filter_sub not in task["name"]:
             continue
         tasks.append(task)
     return tasks
+
+
+def _heldout_names() -> set[str]:
+    if not HELDOUT_PATH.exists():
+        return set()
+    names = set()
+    for line in HELDOUT_PATH.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.add(line)
+    return names
 
 
 def _git_short_commit() -> str:
@@ -140,7 +172,7 @@ def run_task(task: dict, model: str | None, provider: str | None) -> TaskResult:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", help="run only tasks whose name contains it")
     parser.add_argument("--model", help="override model for this run")
@@ -148,13 +180,41 @@ def main() -> None:
     parser.add_argument(
         "--repeat", type=int, default=1, help="runs per task (stability)"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="evaluate the run against bench/baseline.json and exit non-zero "
+        "on regression (the nightly no-regression gate)",
+    )
+    parser.add_argument(
+        "--no-heldout",
+        action="store_true",
+        help="skip the tasks named in heldout.txt (train split only)",
+    )
+    parser.add_argument(
+        "--baseline",
+        default=str(BASELINE_PATH),
+        help="path to the baseline JSON (default: bench/baseline.json)",
+    )
+    parser.add_argument(
+        "--min-margin",
+        type=float,
+        default=0.0,
+        help="extra strictness added to the gate's noise floor",
+    )
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="deliberately (re)seed the baseline from this run, "
+        "ignoring any existing baseline value",
+    )
+    args = parser.parse_args(argv)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    tasks = load_tasks(args.filter)
+    tasks = load_tasks(args.filter, include_heldout=not args.no_heldout)
     if not tasks:
         print("No tasks found.")
-        return
+        return 1
 
     results: list[TaskResult] = []
     for i in range(args.repeat):
@@ -183,6 +243,125 @@ def main() -> None:
     )
     print(f"Saved: {out_file}")
 
+    if not args.gate:
+        return 0
+
+    # ── no-regression gate (issue #139 / H-1) ──────────────────────────
+    return run_gate(
+        results,
+        baseline_path=Path(args.baseline),
+        model=args.model,
+        provider=args.provider,
+        min_margin=args.min_margin,
+        bootstrap=args.bootstrap,
+        heldout=_heldout_names(),
+    )
+
+
+def _print_heldout_line(results: list[TaskResult], heldout: set[str] | None) -> None:
+    """Report the held-out subset's pass rate on its own line.
+
+    The held-out split is the subset a harness PR must never iterate
+    against; reporting it separately (issue #139: "subset held-out
+    reportado aparte") lets a maintainer watch it for overfitting
+    without it altering the full-set verdict.
+    """
+    if not heldout:
+        return
+    held: list[bool] = []
+    for r in results:
+        base = r.name.rsplit("#", 1)[0]
+        if base in heldout:
+            held.append(bool(r.passed))
+    if not held:
+        return
+    rate = sum(held) / len(held)
+    print(
+        f"   🛡️  held-out ({len(heldout)} tasks): {rate:.3f}  "
+        f"[report-only, excluded from the iteration set]"
+    )
+
+
+def run_gate(
+    results: list[TaskResult],
+    baseline_path: Path,
+    model: str | None = None,
+    provider: str | None = None,
+    min_margin: float = 0.0,
+    bootstrap: bool = False,
+    heldout: set[str] | None = None,
+) -> int:
+    """Evaluate ``results`` against the committed baseline (issue #139).
+
+    Pure orchestration over :mod:`baseline` so the runner↔gate seam is
+    unit-testable without a model:
+
+    * **Bootstrap** — no baseline (a ``pass_rate: null`` sentinel), or
+      ``bootstrap=True`` → seed/overwrite the baseline from this run and
+      return 0. The nightly's first real run self-seeds; a maintainer can
+      re-seed deliberately with ``--bootstrap``.
+    * **Gate** — return 0 when the current pass rate is strictly above
+      ``baseline − noise``, else 1 (a regression).
+
+    When ``heldout`` is given, the pass rate of that subset is reported
+    as its own line (the issue's "held-out reportado aparte") so it can
+    be watched for overfitting without affecting the verdict. Prints the
+    verdict and the per-task movement (the falsifiable contract a
+    harness PR declares).
+    """
+    run_rates = B.run_pass_rates(results)
+    per_task = B.run_per_task_rates(results)
+    doc = B.load_baseline(baseline_path)
+    baseline = B.baseline_rate(doc)
+
+    if bootstrap or baseline is None:
+        new = B.bootstrap_baseline(
+            model=model or _effective_model(),
+            provider=provider or _effective_provider(),
+            run_rates=run_rates,
+            per_task=per_task,
+            commit=_git_short_commit(),
+        )
+        B.save_baseline(baseline_path, new)
+        print(
+            f"🌱 No baseline found → bootstrapped {baseline_path.name} "
+            f"(pass_rate {new['pass_rate']:.3f}, {len(per_task)} tasks). "
+            "Next gated run will compare against it."
+        )
+        return 0
+
+    verdict = B.evaluate(
+        run_rates, baseline, B.baseline_noise(doc), min_margin=min_margin
+    )
+    print(
+        f"\n📊 Gate: {verdict.detail} "
+        f"[baseline {baseline:.3f} @ {doc.get('commit', '?')} / "
+        f"{doc.get('model', '?')} {doc.get('provider', '?')}]"
+    )
+    _print_heldout_line(results, heldout)
+    deltas = B.task_deltas(per_task, B.baseline_per_task(doc))
+    moved = {k: v for k, v in deltas.items() if abs(v) > 1e-9}
+    if moved:
+        for k, v in sorted(moved.items()):
+            print(f"   {'+' if v > 0 else ''}{v:.3f}  {k}")
+    if not verdict.ok:
+        print(
+            "❌ REGRESSION: pass rate dropped below baseline − noise. "
+            "Do not land a harness change that regresses the agent."
+        )
+        return 1
+    print("✅ Gate passed.")
+    return 0
+
+
+def _effective_model() -> str:
+    """Best-effort effective model when the runner didn't pin one."""
+    return os.environ.get("PHOSON_MODEL") or "config-default"
+
+
+def _effective_provider() -> str:
+    return os.environ.get("PHOSON_PROVIDER") or "config-default"
+
 
 def _results_payload(
     model: str | None, provider: str | None, results: list[TaskResult]
@@ -204,4 +383,4 @@ def _results_payload(
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

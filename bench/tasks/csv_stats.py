@@ -24,3 +24,7 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     if value != "31.00":
         return False, f"expected '31.00', got {value!r}"
     return True, "average computed correctly"
+
+
+def SOLVE(workspace: Path) -> None:
+    (workspace / "result.txt").write_text("31.00\n")

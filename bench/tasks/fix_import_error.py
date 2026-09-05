@@ -39,3 +39,9 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     if proc.stdout.strip() != "ok":
         return False, f"expected 'ok', got {proc.stdout.strip()!r}"
     return True, "module runs correctly"
+
+
+def SOLVE(workspace: Path) -> None:
+    """The module is named util.py but main.py imports ``utils`` — rename it."""
+    helpers = workspace / "app" / "helpers"
+    (helpers / "util.py").rename(helpers / "utils.py")

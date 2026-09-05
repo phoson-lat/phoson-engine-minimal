@@ -27,3 +27,11 @@ def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
 
 def setup(workspace: Path) -> None:
     pass
+
+
+def SOLVE(workspace: Path) -> None:
+    """Reference solution (conformance oracle): the exact file the agent
+    must produce. Never seen by the agent — used only by the self-test."""
+    (workspace / "config.json").write_text(
+        json.dumps({"name": "phoson", "version": "1.0.0", "tags": ["agent", "cli"]})
+    )
