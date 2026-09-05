@@ -122,6 +122,15 @@ class PhosonConfig:
     # in monitors_data_dir.
     enable_monitors: bool = False
     monitors_data_dir: Path = Path("~/.phoson/monitors/").expanduser()
+    # Official OTel tracing plugin (issue #140): per-run span tree
+    # (run → step → llm_call/tool_call) exported to a local JSON trace
+    # file by default. Off by default — tracing must be opt-in because
+    # it writes a file on every run; enable via `enable_otel = true` in
+    # config.toml, the PHOSON_ENABLE_OTEL env var, or a `[plugins]` spec.
+    enable_otel: bool = False
+    otel_service_name: str = "phoson"
+    otel_file_path: Path = Path(".phoson/trace.json")
+    otel_endpoint: str = ""
     # Third-party engine/CLI plugin specifications. They use the same
     # string/dict forms accepted by AgentEngine and are loaded in addition to
     # the optional MCP plugin. Config-file entries are data only; direct Plugin
@@ -682,6 +691,23 @@ def load_config() -> PhosonConfig:
                 str(d.monitors_data_dir),
             )
         ).expanduser(),
+        enable_otel=_resolve_bool(
+            "PHOSON_ENABLE_OTEL", "enable_otel", fd, d.enable_otel
+        ),
+        otel_service_name=_resolve_str(
+            "PHOSON_SERVICE_NAME", "otel_service_name", fd, d.otel_service_name
+        ),
+        otel_file_path=Path(
+            _resolve_str(
+                "PHOSON_OTEL_TRACE_FILE",
+                "otel_file_path",
+                fd,
+                str(d.otel_file_path),
+            )
+        ).expanduser(),
+        otel_endpoint=_resolve_str(
+            "PHOSON_OTEL_ENDPOINT", "otel_endpoint", fd, d.otel_endpoint
+        ),
         plugins=_resolve_plugins(fd),
         disabled_plugins=_validate_plugin_specs(
             fd.get("disabled_plugins", []), "disabled_plugins"
