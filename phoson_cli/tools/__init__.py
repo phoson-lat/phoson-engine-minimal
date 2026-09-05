@@ -3,10 +3,10 @@ from phoson_agent import AgentTool
 from .bash import bash
 from .files import list_dir, read_file, patch_file, write_file
 from .skill import skill
-from .search import web_search
 from .subagent import agent, agents
 from .web_fetch import web_fetch
 from .view_image import view_image
+from .web_search import web_search
 
 #: Tools always present, in prompt/registry order.
 _BASE_TOOLS: list[AgentTool] = [
