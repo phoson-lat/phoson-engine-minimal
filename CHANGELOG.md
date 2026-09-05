@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.28.0 (2026-09-05)
+
+### Feat
+
+- **bench**: agent eval set (15 tasks) + no-regression nightly gate (#139)
+- **otel**: slice 2 — real OTLP/HTTP export + conformance oracle (#140)
+
 ## v0.27.0 (2026-09-05)
 
 ### Feat
