@@ -19,7 +19,7 @@
 | Harness infra (H-1/H-2) | Sin empezar (#139, #140). `bench/` tiene 4 tareas triviales, sin baseline, sin CI. |
 | Seguridad | ✅ #183 (SSRF) + #182 (`@import` fuera del repo) shipped v0.26.2 (PR #199, `602217e` + PR #196, `7d5cf6c`). ✅ #174 + #141 shipped v0.24.2 (PR #191, `1f3f2d6`). ✅ #175 (allow-patterns `fnmatch` sobre comando completo) shipped v0.25.1 (PR #192, `af502f0`): `is_simple_shell_command` + `pattern_allows` (solo un simple command matchea un patrón bash; separadores/`$( `)/subshell ⇒ caen al nivel del tool) + `match_args` obligatorio sin fallback. 35 tests. |
 | Loop | ✅ #178 (`stop_reason` ignorado, excepciones huérfanas) shipped v0.26.1 (PR #195, `2507df0`). ✅ #177 (retry no conectado) shipped v0.26.1 (PR #194, `6080ba0`). ✅ #176 (compactación rompe pares) shipped v0.25.0. |
-| ACI (edit/search/prompt) | 🟠 #181 (grep/glob) merged (pendiente de release): tools nativos read-only (rg si existe + fallback Python, `.gitignore`, caps), wiring de registry/permisos/prompt/TUI + 2 bench tasks de búsqueda. ✅ #179 + #180 shipped v0.26.0 (PR #193, `67368b0`): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. Medición H-1 (#139) pendiente. |
+| ACI (edit/search/prompt) | 🟠 #181 (grep/glob) merged (PR #201, `a4fb00e`, pendiente de release): tools nativos read-only (rg si existe + fallback Python, `.gitignore`, caps), wiring de registry/permisos/prompt/TUI + 2 bench tasks de búsqueda. ✅ #179 + #180 shipped v0.26.0 (PR #193, `67368b0`): unicidad de `patch_file` + CRLF + `cat -n` + caps + descripciones + secciones ACI del system prompt. Medición H-1 (#139) pendiente. |
 | Notificación (#167) | ✅ Shipped v0.25.0. `notify_on_completion` (off/bell/desktop) + `/notify`; TTY-gated. |
 | Deriva docs↔GitHub | #138 estaba resuelto en código y en docs pero abierto en GitHub; **cerrado 2026-09-01** tras verificar `f1b3d04` + 5 tests. Regla propuesta para #146. |
 
@@ -47,7 +47,7 @@ Ordenada por sprint. `F-nn` remite a `REVISION-FINAL-BY-FABLE.md` §2; `H-n`/`T-
 | [#183](https://github.com/phoson-lat/phoson-engine-minimal/issues/183) | `web_fetch` sin filtro SSRF ni límite de descarga | F-06 | 🟠 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #199, `602217e`): `assert_public_url` pre-flight + hook por redirect (loopback/RFC1918/ULA/link-local + metadata IP/CGNAT/reservados); `stream()` + corte ~2 MB; prefijo "untrusted" en todo resultado. 25 tests. Relacionado con #144 (trifecta letal). |
 | [#184](https://github.com/phoson-lat/phoson-engine-minimal/issues/184) | Sub-agentes sin system prompt; `agents` anunciado al hijo pero falla | F-23, F-24 | 🟠 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #198, `5a99f91`): el hijo recibe el mismo `build_system_prompt` del padre (derivado de **su propio** subset de tools) + preamble; `ModelConfig.system` en todos los adapters; `_select_tools` quita `agent` **y** `agents` (recursión acotada por diseño, un nivel). 5 tests. |
 | [#185](https://github.com/phoson-lat/phoson-engine-minimal/issues/185) | Varios pequeños CLI: `/resume` tokens, `/compact` sin persistir, `_resolve_bool`, `/mcp config`, updater | F-34…F-38 | 🟡 | S | ✅ **cerrado** | Shipped v0.26.2 (PR #197, `ced2d51`): split input/output persistido; `/compact` persiste + refresca header; bool/int estrictos + env-only keys no persistidas; `expanduser` + `0o600` en `mcps.json`; timeout 600 s en updater + estado real en `plugin list` + re-enable `path:`. 30 tests. Residuos fuera de alcance (respawn en `/mcp toggle` stdio; opt-out del check PyPI): deuda. |
-| [#181](https://github.com/phoson-lat/phoson-engine-minimal/issues/181) | Tools nativas `grep` y `glob` | F-21b | 🟠 | M | ✅ **merged** | Merged (pendiente de release): `phoson_cli/tools/search.py` — `grep` (regex, `rg --json` + fallback Python idéntico, `path:line: content`) y `glob` (mtime desc, 500) read-only, `.gitignore` (parser propio, funciona sin git) + noise dirs, caps (100/1000 líneas, 16 KB, 2 MB/file, 20k files). Registry, `MATCH_ARGS` (`path`), system prompt (reemplaza el hint "no native search"), TUI (🔍/🗂), docs. CI instala ripgrep (paridad rg↔Python); sin `rg` se ejercita el fallback vía tests públicos. 2 bench tasks de búsqueda (`find-call-sites`, `locate-definition`). 51 tests. **Pendiente:** medición contra H-1 (#139, Sprint C). |
+| [#181](https://github.com/phoson-lat/phoson-engine-minimal/issues/181) | Tools nativas `grep` y `glob` | F-21b | 🟠 | M | ✅ **merged** | Merged (PR #201, `a4fb00e`), pendiente de release: `phoson_cli/tools/search.py` — `grep` (regex, `rg --json` + fallback Python idéntico, `path:line: content`) y `glob` (mtime desc, 500) read-only, `.gitignore` (parser propio, funciona sin git) + noise dirs, caps (100/1000 líneas, 16 KB, 2 MB/file, 20k files). Registry, `MATCH_ARGS` (`path`), system prompt (reemplaza el hint "no native search"), TUI (🔍/🗂), docs. CI instala ripgrep (paridad rg↔Python); sin `rg` se ejercita el fallback vía tests públicos. 2 bench tasks de búsqueda (`find-call-sites`, `locate-definition`). 51 tests. **Pendiente:** medición contra H-1 (#139, Sprint C). |
 | [#140](https://github.com/phoson-lat/phoson-engine-minimal/issues/140) | `phoson_plugin_otel` (trazas) | H-2 | 🔴 | M | **C** | Slice 1 (trace-file JSON) antes de #139. |
 | [#139](https://github.com/phoson-lat/phoson-engine-minimal/issues/139) | Eval set 15–25 tareas + gate nightly | H-1 | 🔴 | M | **C** | Incluir tareas de ancla ambigua, búsqueda en repo, compactación. Baseline = v0.24.0. |
 | [#172](https://github.com/phoson-lat/phoson-engine-minimal/issues/172) | T-15 FormattedText desde el renderer | T-15 | 🟡 perf | S-M | **C** | Después de #173. Antes de #187 para no chocar. |
@@ -176,10 +176,11 @@ Cada sprint es una release. Un PR por fila, con test de regresión. No mezclar P
 
 ```
 1. #181   grep + glob nativos.                                                  M
-          ✅ merged (pendiente de release): `phoson_cli/tools/search.py` con
-          `rg --json` + fallback Python idéntico, `.gitignore` propio,
-          noise dirs, caps; registry/MATCH_ARGS/prompt/TUI/docs; CI instala
-          ripgrep (paridad rg↔Python); 2 bench tasks de búsqueda; 51 tests.
+          ✅ merged (PR #201, `a4fb00e`, pendiente de release):
+          `phoson_cli/tools/search.py` con `rg --json` + fallback Python
+          idéntico, `.gitignore` propio, noise dirs, caps; registry/
+          MATCH_ARGS/prompt/TUI/docs; CI instala ripgrep (paridad
+          rg↔Python); 2 bench tasks de búsqueda; 51 tests.
           Medición contra #139 pendiente.
 2. #140   slice 1: trace-file JSON por run (run → step → tool_call).            M
 3. #139   bench/ a 15–25 tareas; baseline ≥3 corridas con modelo local fijo
