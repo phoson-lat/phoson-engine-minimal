@@ -306,7 +306,7 @@ def read_file(
     file, capped at 50KB — the truncation note names the exact next range
     to request. Use start_line/end_line (1-based, inclusive) to read a
     slice of a large file; slices are capped the same way. Do not use it
-    to search many files — use bash with `grep -rn` or `rg` for that.
+    to search many files — use the `grep` tool for that.
     """
     return _read_file(path, start_line, end_line)
 

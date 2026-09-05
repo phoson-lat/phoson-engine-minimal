@@ -62,6 +62,8 @@ MATCH_ARGS: dict[str, str] = {
     "write_file": "path",
     "patch_file": "path",
     "list_dir": "path",
+    "grep": "path",
+    "glob": "path",
     "web_search": "query",
     "web_fetch": "url",
 }
