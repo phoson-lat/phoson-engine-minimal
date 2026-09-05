@@ -132,12 +132,17 @@ def assert_public_url(url: str) -> None:
             )
 
 
-def _request_guard(request: httpx.Request) -> None:
+async def _request_guard(request: httpx.Request) -> None:
     """Per-hop SSRF guard, registered as an httpx ``request`` event hook.
 
-    httpx fires this for **every** request it issues — including each redirect
-    hop — so a 302 that lands on a private/metadata address is refused rather
-    than followed.
+    Must be **async**: httpx's *async* client invokes request hooks with
+    ``await hook(request)`` (``httpx/_client.py``, ``_send_handling_redirects``)
+    — on **every** hop, the initial request included. A synchronous hook
+    returns ``None`` and the ``await`` raises
+    ``TypeError: object NoneType can't be used in 'await' expression`` on
+    the very first request. httpx fires the hook for **every** request it
+    issues — including each redirect hop — so a 302 that lands on a
+    private/metadata address is refused rather than followed.
     """
     try:
         assert_public_url(str(request.url))

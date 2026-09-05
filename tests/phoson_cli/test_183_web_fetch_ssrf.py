@@ -106,18 +106,81 @@ def test_assert_public_url_lets_unresolvable_host_through(monkeypatch) -> None:
 # ── _request_guard: the per-redirect hook ───────────────────────────────────
 
 
-def test_request_guard_refuses_private_redirect() -> None:
+async def test_request_guard_refuses_private_redirect() -> None:
     request = httpx.Request("GET", "http://10.0.0.5/internal")
-    with pytest.raises(httpx.ConnectError, match="10.0.0.5"):
-        _request_guard(request)
+    # The async client awaits the hook (httpx/_client.py:
+    # ``await hook(request)``) — so the guard must be a coroutine function.
+    import inspect
+
+    assert inspect.iscoroutinefunction(_request_guard)
+    with pytest.raises(httpx.ConnectError, match="10\\.0\\.0\\.5"):
+        await _request_guard(request)
 
 
-def test_request_guard_allows_public() -> None:
+async def test_request_guard_allows_public() -> None:
     request = httpx.Request("GET", "https://93.184.216.34/")
-    _request_guard(request)  # no raise
+    await _request_guard(request)  # no raise
 
 
 # ── web_fetch handler: end-to-end ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_public_url_happy_path_survives_hook_await(monkeypatch):
+    """A public URL must not crash on the client's ``await hook(request)``.
+
+    Regression: the SSRF guard was originally a *sync* function, so on the
+    first (public) request the async client did ``await None`` and every
+    ``web_fetch`` failed with ``object NoneType can't be used in 'await'
+    expression``. This test runs the real happy path — guard allows,
+    response streams — exactly the way httpx's async client drives it.
+    """
+    mod = _fetch_module()
+    monkeypatch.setattr(
+        mod, "_getaddrinfo", _fake_dns({"public.example": "93.184.216.34"})
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        headers = {"content-type": "text/plain"}
+
+        async def aiter_bytes(self):
+            yield b"hello public"
+
+    # Faithful to httpx/_client.py: the async client AWAITS the request hook
+    # in __aenter__ of the stream context manager, on every hop.
+    class _Client:
+        def __init__(self, *a, **k):
+            self.hooks = k.get("event_hooks", {}).get("request", [])
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, headers=None):
+            hooks = self.hooks
+
+            class _CM:
+                async def __aenter__(self):
+                    for hook in hooks:
+                        await hook(httpx.Request("GET", url))
+                    return _FakeResponse()
+
+                async def __aexit__(self, *exc):
+                    return False
+
+            return _CM()
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _Client)
+    result = await mod.web_fetch.handler({"url": "https://public.example/page"}, None)
+    assert "Fetched https://public.example/page" in result
+    assert "hello public" in result
+    # The failure mode this guards against must be absent.
+    assert "await" not in result
 
 
 @pytest.mark.asyncio
@@ -174,6 +237,25 @@ async def test_web_fetch_refuses_redirect_to_private(monkeypatch) -> None:
     mod = _fetch_module()
     monkeypatch.setattr(mod, "_getaddrinfo", _fake_dns({"ok.example": "93.184.216.34"}))
 
+    class _GuardedStreamCM:
+        """Async CM that mirrors httpx: the request hook fires in __aenter__."""
+
+        def __init__(self, kw):
+            self.kw = kw
+
+        async def __aenter__(self):
+            # Replicate the real async client: it AWAITS the request hook
+            # on every hop (httpx/_client.py: ``await hook(request)``).
+            # A sync guard would surface here as
+            # "object NoneType can't be used in 'await' expression".
+            redirect_request = httpx.Request("GET", "http://10.0.0.5/internal")
+            for hook in self.kw.get("event_hooks", {}).get("request", []):
+                await hook(redirect_request)  # must raise httpx.ConnectError
+            raise AssertionError("guard should have raised before this")
+
+        async def __aexit__(self, *exc):
+            return False
+
     class _RedirectingClient:
         def __init__(self, *a, **k):
             self.kw = k
@@ -185,12 +267,7 @@ async def test_web_fetch_refuses_redirect_to_private(monkeypatch) -> None:
             return False
 
         def stream(self, method, url, headers=None):
-            # Simulate httpx following a redirect to a PRIVATE address and
-            # firing the registered per-request hook for that hop.
-            redirect_request = httpx.Request("GET", "http://10.0.0.5/internal")
-            for hook in self.kw.get("event_hooks", {}).get("request", []):
-                hook(redirect_request)  # must raise httpx.ConnectError
-            raise AssertionError("guard should have raised before this")
+            return _GuardedStreamCM(self.kw)
 
     monkeypatch.setattr(mod.httpx, "AsyncClient", _RedirectingClient)
     result = await mod.web_fetch.handler({"url": "https://ok.example/redirect"}, None)
