@@ -264,6 +264,9 @@ Start the REPL and type natural language or commands.
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
 | `/label`          | Label current node                      |
+| `/notify`         | Notify the terminal when a run finishes (`/notify <bell\|desktop\|off>`, default `off`) |
+| `/details`        | Toggle tool-card bodies (diffs, write summaries, bash output) |
+| `/about`          | Show the Phoson wordmark and about info |
 | `/keys`           | List key bindings and how to remap them |
 | `/undo`           | Undo the last turn (branch before your last message) |
 | `/attach`         | Attach image/audio/video/pdf           |
