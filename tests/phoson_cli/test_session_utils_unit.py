@@ -145,25 +145,33 @@ def _cwd_bound_prompt(tmp_path, tools):
 
 def test_tool_usage_gated_on_registered_tools() -> None:
     """Each Tool-usage line is only advertised for tools that exist."""
-    # Full file-editing set: edit preference + line-number caveat.
+    # Full file-editing set (no native search tools): bash grep hint.
     prompt = _cwd_bound_prompt(
         Path.home(), {"bash", "read_file", "patch_file", "agent", "agents"}
     )
     assert "# Tool usage" in prompt
     assert "Prefer patch_file for targeted edits" in prompt
     assert "read_file shows line numbers" in prompt
-    assert "grep -rn" in prompt
+    assert "There is no native search/glob tool" in prompt
     assert "agent/agents tools for self-contained subtasks" in prompt
+
+    # Native search tools present: their guidance replaces the bash hint.
+    prompt = _cwd_bound_prompt(Path.home(), {"bash", "read_file", "grep", "glob"})
+    assert "grep tool to search file contents" in prompt
+    assert "There is no native search" not in prompt
 
     # No read_file/patch_file: their guidance must not leak in.
     prompt = _cwd_bound_prompt(Path.home(), {"bash", "write_file"})
     assert "read_file shows line numbers" not in prompt
     assert "Prefer patch_file" not in prompt
-    assert "grep -rn" in prompt  # bash-only line still present
+    assert (
+        "There is no native search/glob tool" in prompt
+    )  # bash-only line still present
 
-    # No bash: no search guidance.
+    # No bash and no search tools: no search guidance at all.
     prompt = _cwd_bound_prompt(Path.home(), {"read_file", "patch_file"})
-    assert "grep -rn" not in prompt
+    assert "grep tool to search" not in prompt
+    assert "There is no native search" not in prompt
     assert "Prefer patch_file" in prompt
 
     # No web_fetch: no untrusted-content line.

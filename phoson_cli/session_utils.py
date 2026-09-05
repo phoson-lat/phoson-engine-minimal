@@ -156,7 +156,13 @@ def _tool_usage_block(tool_names: set[str]) -> str:
             "include them in a patch_file anchor. Copy the anchor exactly "
             "from the read_file output."
         )
-    if "bash" in tool_names:
+    if {"grep", "glob"} <= tool_names:
+        lines.append(
+            "- Use the grep tool to search file contents (regex, "
+            ".gitignore-aware) and the glob tool to find files by name "
+            "pattern; prefer them over bash with grep -rn / find."
+        )
+    elif "bash" in tool_names:
         lines.append(
             "- There is no native search/glob tool: use bash with "
             "`grep -rn` (or `rg`) to search across files and `list_dir` "

@@ -3,6 +3,7 @@ from phoson_agent import AgentTool
 from .bash import bash
 from .files import list_dir, read_file, patch_file, write_file
 from .skill import skill
+from .search import glob, grep
 from .subagent import agent, agents
 from .web_fetch import web_fetch
 from .view_image import view_image
@@ -16,6 +17,8 @@ _BASE_TOOLS: list[AgentTool] = [
     list_dir,
     view_image,
     bash,
+    grep,
+    glob,
     web_search,
     web_fetch,
     agent,
@@ -69,6 +72,8 @@ __all__ = [
     "list_dir",
     "view_image",
     "bash",
+    "grep",
+    "glob",
     "skill",
     "web_search",
     "web_fetch",

@@ -93,6 +93,7 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 | **Multi-provider** | 20+ providers behind a single `BaseLLMChat` contract |
 | **Typed events** | Normalized `LLMEvent` stream for all providers |
 | **Tool execution** | `@tool` decorator with JSON Schema definitions |
+| **Native code search** | `grep` (regex, ripgrep-backed with Python fallback) + `glob` tools, `.gitignore`-aware, capped |
 | **Middleware hooks** | Pre/post processing for LLM calls and tool execution |
 | **Branching sessions** | `ConversationTree` for non-linear conversation history |
 | **Interactive CLI** | Full-screen TUI (default) + classic REPL: streaming, rewind, sessions, pickers |
@@ -509,9 +510,12 @@ the classic REPL is selected automatically.
 | `/attach` (`/attachments`) | Attach a file to the next message, or list pending attachments |
 | `/permissions` (`/perms`) | Show or change per-tool `allow`/`ask`/`deny` levels |
 | `/mcp` | Manage Model Context Protocol servers |
+| `/notify` | Notify the terminal when a run finishes: `/notify <bell\|desktop\|off>` (default `off`) |
 | `/status`, `/env`, `/cost`, `/tokens`, `/steps` | Session metrics: provider/model/permissions, environment, running cost, token totals, step count |
 | `/theme` | Pick or set the color theme (live preview; `list` to list) |
+| `/details` (`/tool-cards`) | Toggle tool-card bodies (diffs, write summaries, bash output) |
 | `/keys` | List the key bindings and the `[keys]` remap syntax |
+| `/about` | Show the Phoson wordmark and about info |
 | `/agents-md` | Show which AGENTS.md/CLAUDE.md memory files are loaded |
 | `/skills` | List available skills; `/skills <name>` shows one's instructions |
 | `/setup` | Run the initial setup wizard again |

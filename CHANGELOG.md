@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Features
+
+- **Native `grep` and `glob` tools (#181, F-21b)**: the agent's only
+  first-class navigation before this was `list_dir` (depth 3) and `bash`.
+  Two read-only tools (permission level `allow` by default, never follow
+  symlinks) now cover content and filename search with clean, structured
+  output — no shell-quoting pitfalls:
+  - `grep(pattern, path=".", glob=None, case_insensitive=False,
+    max_results=100, context=0)`: regex content search,
+    `path:line: content` output. Backed by `rg --json` when ripgrep is on
+    PATH, with a pure-Python line-search fallback — both produce
+    **identical output** (deterministic order, same caps). `max_results`
+    stops with an explicit note; output is capped so a pathological
+    pattern cannot flood the context window.
+  - `glob(pattern, path=".")`: filename search (`*` within a segment,
+    `**` across, slash-free patterns match a basename at any depth), most
+    recently modified first, capped at 500 results.
+  - Both respect `.gitignore` via a small self-contained parser (also
+    works in non-git directories) and always skip `.git`, `node_modules`,
+    `__pycache__`, `.venv`, `dist`, `build`.
+  - Wired into the registry (after `bash`, before the web pair), the
+    permission match table (`grep`/`glob` match `path`), the system
+    prompt's Tool-usage block (replacing the old "no native search tool"
+    bash hint when the tools are present), the TUI tool cards
+    (🔍/🗂 verbs "searching files"/"globbing files"), `docs/api` and
+    `docs/cli/permissions.md`.
+  - Harness hypothesis: a *well-designed* search tool moves task success
+    rates — it ships with the careful descriptions above and must be
+    **measured against the #139 baseline** (Sprint C).
+  - CI installs ripgrep so the parity tests (rg ↔ Python) run there;
+    without `rg` they are skipped and the fallback is exercised through
+    the public functions. 51 tests.
+
 ## v0.26.2 (2026-09-04)
 
 ### Fixes

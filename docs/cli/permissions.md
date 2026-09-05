@@ -32,11 +32,11 @@ A pattern matches *one program's invocation* — a **single simple command**
   blessed subcommand dragged an arbitrary second command along.
 - **Other tools**: patterns only apply to the argument declared in the
   tool's match table (`read_file`/`write_file`/`patch_file` match
-  `path`, `list_dir` matches `path`, `web_search` matches `query`,
-  `web_fetch` matches `url`). A tool without a declared match argument
-  never matches any pattern: the middleware does not guess a fallback,
-  so a `write_file` pattern cannot be steered onto `content` instead of
-  `path`.
+  `path`, `list_dir`/`grep`/`glob` match `path`, `web_search` matches
+  `query`, `web_fetch` matches `url`). A tool without a declared match
+  argument never matches any pattern: the middleware does not guess a
+  fallback, so a `write_file` pattern cannot be steered onto `content`
+  instead of `path`.
 - Interactive "always allow" grants (the `[a]` on the bash confirmation
   card) are subject to the same simple-command rule.
 

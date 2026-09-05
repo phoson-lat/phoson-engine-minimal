@@ -264,6 +264,9 @@ Start the REPL and type natural language or commands.
 | `/sessions`       | Interactive session picker               |
 | `/delete`         | Delete a saved session                  |
 | `/label`          | Label current node                      |
+| `/notify`         | Notify the terminal when a run finishes (`/notify <bell\|desktop\|off>`, default `off`) |
+| `/details`        | Toggle tool-card bodies (diffs, write summaries, bash output) |
+| `/about`          | Show the Phoson wordmark and about info |
 | `/keys`           | List key bindings and how to remap them |
 | `/undo`           | Undo the last turn (branch before your last message) |
 | `/attach`         | Attach image/audio/video/pdf           |
@@ -320,6 +323,49 @@ annotations):
 `safe_mode` and `bash_confirmation` are injected by the front end (not set
 by the model): with `safe_mode=True` and no confirmation service available
 (one-shot / scripts) the command **fails closed** rather than hanging.
+
+### grep / glob (native code search)
+
+Read-only content and filename search (F-21b / #181). Both tools are
+`AgentTool`s, backed by **ripgrep when it is on PATH** and a pure-Python
+fallback otherwise — the output format is identical either way. Both
+respect `.gitignore` (a minimal, self-contained parser, so they also work
+in non-git directories) and always skip `.git`, `node_modules`,
+`__pycache__`, `.venv`, `dist`, `build`.
+
+```python
+from phoson_cli.tools import grep, glob
+
+# Content search: a regular expression, `path:line: content` output.
+result = grep.handler(
+    {"pattern": "def build_", "path": ".", "glob": "*.py", "context": 1}
+)
+
+# Filename search: a glob, most-recently-modified first.
+result = glob.handler({"pattern": "tests/**/*.py", "path": "."})
+```
+
+`grep` parameters (JSON schema from the type annotations):
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `pattern` | string | — | Regular expression (required). |
+| `path` | string | `"."` | Directory (or single file) to search, relative to cwd. |
+| `glob` | string | — | Filter which files are searched (`*.py`, `src/**`). |
+| `case_insensitive` | bool | `false` | Case-insensitive matching. |
+| `max_results` | int | `100` | Stop after N matching lines (hard cap 1000). |
+| `context` | int | `0` | Surrounding lines per match (like `grep -C`, capped at 20). |
+
+`glob` parameters:
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `pattern` | string | — | Glob: `*` within a segment, `**` across segments, a slash-free pattern matches a basename at any depth (required). |
+| `path` | string | `"."` | Directory to search, relative to cwd. |
+
+Both are `allow` by default (read-only); they never follow symlinks and
+cap their output so a pathological pattern cannot flood the context
+window.
 
 ### SearchTool
 
