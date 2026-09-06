@@ -60,6 +60,16 @@ class PhosonConfig:
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     reasoning_effort: str | None = None
     show_reasoning: bool = True
+    # Reasoning sandwich (#145): per-phase reasoning-effort scheduling.
+    # ``reasoning_sandwich`` gates the feature (default ``False`` = off, so
+    # behaviour is unchanged unless opted in).  When on, the agent derives the
+    # effort per iteration from ``reasoning_effort_profile`` (planning /
+    # execution / verification); a user's explicit ``reasoning_effort``
+    # override always wins over the profile.  Set via config.toml
+    # (``reasoning_sandwich`` / ``reasoning_effort_profile``) or the
+    # PHOSON_REASONING_SANDWICH env var.
+    reasoning_sandwich: bool = False
+    reasoning_effort_profile: dict[str, str] | None = None
     # Whether to re-send captured assistant reasoning to the model on later
     # turns (#134). Tri-state: ``None`` (default) lets the adapter decide —
     # OpenAI-compatible reasoning models emit ``reasoning_content``, Anthropic
@@ -342,6 +352,47 @@ def _resolve_optional_bool(
     return None
 
 
+def _resolve_effort_profile(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+) -> dict[str, str] | None:
+    """Resolve the per-phase reasoning-effort profile (#145).
+
+    Returns a ``{phase: effort}`` mapping, or ``None`` when neither the
+    environment nor the config file sets the value (the caller then uses the
+    default profile).  The config file value is a TOML table::
+
+        [reasoning_effort_profile]
+        planning = "high"
+        execution = "low"
+        verification = "high"
+
+    The environment variable is a JSON object of the same shape (so it can be
+    expressed on a single shell line).  Only the three known phases are
+    kept; unknown keys are dropped rather than raising, so a partially filled
+    profile degrades to "no effort for that phase" instead of breaking startup.
+    """
+    import json as _json
+
+    raw: Any = None
+    if env_var in os.environ:
+        raw = _json.loads(os.environ[env_var])
+    elif file_key in fd:
+        raw = fd[file_key]
+
+    if not isinstance(raw, dict):
+        return None
+
+    from phoson_agent.reasoning_effort import _PHASES  # noqa: PLC0415
+
+    return {
+        str(phase): str(effort)
+        for phase, effort in raw.items()
+        if phase in _PHASES and effort is not None
+    }
+
+
 def _resolve_int(
     env_var: str,
     file_key: str,
@@ -605,6 +656,12 @@ def load_config() -> PhosonConfig:
         ),
         show_reasoning=_resolve_bool(
             "PHOSON_SHOW_REASONING", "show_reasoning", fd, d.show_reasoning
+        ),
+        reasoning_sandwich=_resolve_bool(
+            "PHOSON_REASONING_SANDWICH", "reasoning_sandwich", fd, d.reasoning_sandwich
+        ),
+        reasoning_effort_profile=_resolve_effort_profile(
+            "PHOSON_REASONING_EFFORT_PROFILE", "reasoning_effort_profile", fd
         ),
         preserve_thinking=_resolve_optional_bool(
             "PHOSON_PRESERVE_THINKING", "preserve_thinking", fd
@@ -966,6 +1023,8 @@ def save_config(
         ("reasoning_effort", getattr(config, "reasoning_effort", None)),
         ("show_reasoning", getattr(config, "show_reasoning", True)),
         ("preserve_thinking", getattr(config, "preserve_thinking", None)),
+        ("reasoning_sandwich", getattr(config, "reasoning_sandwich", None)),
+        ("reasoning_effort_profile", getattr(config, "reasoning_effort_profile", None)),
         ("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
         ("openai_api_key", getattr(config, "openai_api_key", None)),
         ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
