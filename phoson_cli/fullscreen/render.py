@@ -158,6 +158,79 @@ class BlockAnsiCache:
         self.generation += 1
 
 
+def renderable_to_formatted_text(renderable, width: int):
+    """Render a Rich renderable to prompt_toolkit ``FormattedText`` (T-15, #172).
+
+    The FormattedText counterpart of :meth:`BlockAnsiCache.get_or_render`:
+    the renderable is printed into a throwaway truecolor ``Console`` writing
+    to a ``StringIO`` (the same ``_make_console`` the ANSI cache uses), and
+    the captured ANSI string is parsed into a list of ``(style, text)``
+    fragments via ``prompt_toolkit.formatted_text.ANSI`` / ``to_formatted_text``.
+
+    OSC 8 hyperlinks (IMPROVEMENTS.md G4) survive the parse: Rich emits the
+    link escapes into the buffer, but ``ANSI()`` on its own tears them apart
+    into literal text (the bug G4 was filed for). ``osc8_passthrough`` wraps
+    each OSC 8 sequence in ``\\001``/``\\002`` first, so ``ANSI()`` turns it
+    into a ``[ZeroWidthEscape]`` fragment that prompt_toolkit writes to the
+    terminal raw — the same treatment :meth:`BlockAnsiCache.get_or_render`
+    applies to its cached ANSI strings.
+    """
+    from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+
+    buf = io.StringIO()
+    _make_console(buf, width).print(renderable, end="")
+    return to_formatted_text(ANSI(osc8_passthrough(buf.getvalue())))
+
+
+def _render_block_formatted_text(block: object, width: int):
+    """Render one transcript block straight to ptk ``FormattedText`` (T-15)."""
+    return renderable_to_formatted_text(block, width)
+
+
+class BlockFormattedTextCache:
+    """``FormattedText`` cache for immutable transcript blocks (T-15, #172).
+
+    The FormattedText counterpart of :class:`BlockAnsiCache`: same
+    append-only invariant, same keying (block identity + width) and same
+    generation bump on :meth:`clear`, but the cached value is a prompt_toolkit
+    ``FormattedText`` (a list of ``(style, text)`` fragments) produced by
+    :func:`renderable_to_formatted_text` instead of an ANSI string.
+
+    Entries hold a strong reference to the block alongside its rendered
+    fragments, so an ``id`` can never be matched against a different
+    (recycled) object — mirroring ``BlockAnsiCache``'s safety rule.
+    """
+
+    __slots__ = ("_entries", "_width", "generation")
+
+    def __init__(self) -> None:
+        self._entries: dict[int, tuple[object, object]] = {}
+        self._width: int = 0
+        self.generation: int = 0
+
+    def get_or_render(self, block: object, width: int):
+        """Return the cached ``FormattedText`` for *block*, rendering if needed."""
+        if width != self._width:
+            self.clear(width)
+        key = id(block)
+        entry = self._entries.get(key)
+        if entry is not None and entry[0] is block:
+            return entry[1]
+        ft = _render_block_formatted_text(block, width)
+        self._entries[key] = (block, ft)
+        return ft
+
+    def clear(self, width: int) -> None:
+        """Drop all entries (e.g. on terminal resize or a theme change).
+
+        Bumps :attr:`generation` so fingerprints of cached derivatives see
+        the invalidation even when the same block objects reappear.
+        """
+        self._entries.clear()
+        self._width = width
+        self.generation += 1
+
+
 def render_chat_split(
     sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
 ) -> tuple[str, int]:

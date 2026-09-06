@@ -125,6 +125,28 @@ ContentBlock = (
 # ─── Message ─────────────────────────────────────────────────────────────────
 
 
+#: Maximum number of characters of an assistant's reasoning that are re-sent
+#: to the model in a historical message (#134). Reasoning is a best-effort
+#: hint: truncating it does not invalidate the request, but may degrade the
+#: model's coherence on long chains of thought. The marker makes the cut
+#: visible to the model so it does not mistake the tail for the full thought.
+REASONING_MAX_CHARS: Final = 10_000
+REASONING_TRUNCATION_MARKER: Final = "...[truncated]"
+
+
+def cap_reasoning(reasoning: str) -> str:
+    """Truncate *reasoning* to :data:`REASONING_MAX_CHARS`, appending a marker.
+
+    The full reasoning is kept in the in-memory history and session
+    persistence; the cap is applied only when the text is serialized into an
+    outgoing request body, so the context window is not inflated by very long
+    chains of thought (#134).
+    """
+    if len(reasoning) <= REASONING_MAX_CHARS:
+        return reasoning
+    return reasoning[:REASONING_MAX_CHARS] + REASONING_TRUNCATION_MARKER
+
+
 @dataclass
 class Message:
     """Represents a conversation message with role and content.
@@ -132,10 +154,22 @@ class Message:
     Args:
         role: Sender type - system, user, or assistant.
         content: Text content or list of content blocks for multimodal messages.
+        reasoning: The model's chain-of-thought for this turn, captured from
+            the stream (``ReasoningDoneEvent``). Adapters that support
+            re-sending it (OpenAI-compatible ``reasoning_content``, Anthropic
+            ``thinking`` blocks) fold it back into the request so multi-turn
+            reasoning models stay coherent (#134). Adapters without such a
+            mechanism ignore it (the ``session_id`` pattern). ``None`` when the
+            turn produced no reasoning.
+        reasoning_signature: Anthropic's opaque per-thinking-block signature.
+            Required to re-send a ``thinking`` block; when absent the block is
+            dropped (degradation, not an error). Ignored by other adapters.
     """
 
     role: Literal["system", "user", "assistant"]
     content: str | Sequence[ContentBlock]
+    reasoning: str | None = None
+    reasoning_signature: str | None = None
 
 
 # ─── Tool ────────────────────────────────────────────────────────────────────
@@ -190,6 +224,14 @@ class ModelConfig:
             upstream provider, keeping its prompt cache warm
             (IMPROVEMENTS.md G2 / #69). Ignored by adapters without
             such a mechanism.
+        preserve_thinking: Whether to re-send captured reasoning
+            (``Message.reasoning``) to the model on subsequent turns (#134).
+            ``None`` (default) = the adapter decides: OpenAI-compatible
+            adapters emit ``reasoning_content`` for assistant turns that carry
+            reasoning, Anthropic emits signed ``thinking`` blocks, and adapters
+            without a reasoning channel ignore it. ``True`` forces emission
+            where the adapter supports it; ``False`` never emits it (the
+            ``PHOSON_PRESERVE_THINKING`` env var maps to this).
     """
 
     model: str
@@ -199,3 +241,4 @@ class ModelConfig:
     thinking_budget: int | None = None
     reasoning_effort: ReasoningEffort | None = None
     session_id: str | None = None
+    preserve_thinking: bool | None = None

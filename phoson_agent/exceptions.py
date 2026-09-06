@@ -71,6 +71,29 @@ class PhosonToolReturnTypeError(PhosonAgentError, TypeError):
     """
 
 
+# ── Doom loop errors (#142) ──────────────────────────────────────────────
+
+
+class DoomLoopDetectedError(PhosonAgentError):
+    """Raised when a doom loop is detected in ``abort`` mode (#142).
+
+    A doom loop is the same tool call (name + normalized args) failing
+    ``n`` times in a row. In ``abort`` mode the
+    :class:`~phoson_agent.middleware.DoomLoopMiddleware` raises this from
+    ``on_before_tool`` to refuse the next identical call. Inside the
+    engine the tool runner converts it into an actionable error *result*
+    (the run continues, the model sees why the call was refused); direct
+    callers of the middleware can catch it to terminate the run.
+
+    Attributes:
+        tool_name: Name of the tool that was looping.
+    """
+
+    def __init__(self, message: str, *, tool_name: str = "") -> None:
+        super().__init__(message)
+        self.tool_name = tool_name
+
+
 # ── Plugin errors ───────────────────────────────────────────────────────
 
 

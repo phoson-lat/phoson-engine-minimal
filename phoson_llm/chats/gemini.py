@@ -40,6 +40,19 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
     """Converts Phoson messages to Gemini Content objects."""
     from google.genai import types
 
+    # Gemini's ``function_response`` part requires the *function name*, but a
+    # Phoson ``ToolResultBlock`` only carries the ``tool_call_id``. Build a
+    # tool_call_id → tool_name map from the assistant ``ToolUseBlock``s (which
+    # always precede their results in the conversation) so each response can
+    # be named correctly.
+    tool_name_by_id: dict[str, str] = {}
+    for msg in messages:
+        if isinstance(msg.content, str):
+            continue
+        for block in msg.content:
+            if isinstance(block, ToolUseBlock):
+                tool_name_by_id[block.tool_call_id] = block.tool_name
+
     gemini_messages = []
     for msg in messages:
         if msg.role == "system":
@@ -50,7 +63,7 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
             parts.append(types.Part.from_text(text=msg.content))
         else:
             for block in msg.content:
-                part_or_text = _convert_block(types, block)
+                part_or_text = _convert_block(types, block, tool_name_by_id)
                 parts.append(part_or_text)
 
         role = "user" if msg.role == "user" else "model"
@@ -59,7 +72,7 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
     return gemini_messages
 
 
-def _convert_block(types: Any, block: Any) -> Any:
+def _convert_block(types: Any, block: Any, tool_name_by_id: dict[str, str]) -> Any:
     """Convert a single Phoson ContentBlock to a Gemini Part.
 
     Local ``file://`` sources are read and base64-encoded inline
@@ -67,6 +80,10 @@ def _convert_block(types: Any, block: Any) -> Any:
     local paths). Unsupported block types become a visible text
     placeholder instead of being silently dropped, mirroring the other
     adapters.
+
+    ``tool_name_by_id`` maps a ``ToolUseBlock``'s ``tool_call_id`` to its
+    name; it is needed to name the ``function_response`` parts produced from
+    ``ToolResultBlock``s, which only carry the id.
     """
     from google.genai import types
 
@@ -112,11 +129,30 @@ def _convert_block(types: Any, block: Any) -> Any:
             text=f"[Video not supported by Gemini: {block.source}]"
         )
 
-    if isinstance(block, (ToolUseBlock, ToolResultBlock)):
-        raise TypeError(
-            f"ToolUseBlock/ToolResultBlock should not reach _convert_block. "
-            f"Got: {type(block)}"
+    if isinstance(block, ToolUseBlock):
+        # An assistant turn that requested a tool becomes a ``function_call``
+        # part. Gemini correlates the later ``function_response`` back to this
+        # call via the id, so carry the Phoson tool_call_id through.
+        return types.Part(
+            function_call=types.FunctionCall(
+                name=block.tool_name,
+                args=block.args or {},
+                id=block.tool_call_id,
+            )
         )
+
+    if isinstance(block, ToolResultBlock):
+        # A user turn carrying a tool result becomes a ``function_response``
+        # part. ``ToolResultBlock`` only carries the ``tool_call_id``; the
+        # function name is looked up from the matching ``ToolUseBlock``.
+        # ``from_function_response`` does not accept an ``id``, so build the
+        # ``FunctionResponse`` (which does carry the id) and wrap it by hand.
+        function_response = types.FunctionResponse(
+            name=tool_name_by_id.get(block.tool_call_id, ""),
+            response={"result": block.result},
+            id=block.tool_call_id,
+        )
+        return types.Part(function_response=function_response)
 
     return types.Part.from_text(text=f"[Unsupported block: {type(block).__name__}]")
 
@@ -196,6 +232,12 @@ class GeminiChat(BaseLLMChat):
         text_acc = ""
         has_tool_calls = False
         usage = None
+        # Gemini emits each ``function_call`` part as a *complete* tool call
+        # (unlike OpenAI, where args stream in fragments). A single response
+        # can carry several tool calls, so we assign each one a distinct,
+        # incremental index rather than hardcoding 0 (which used to make the
+        # 2nd+ call overwrite the 1st).
+        tool_call_index = 0
         # F-13: Gemini carries the stop reason on each candidate as
         # ``finish_reason`` (a FinishReason enum). Keep the last non-None one.
         stop_reason: object = None
@@ -221,14 +263,14 @@ class GeminiChat(BaseLLMChat):
 
                             if part.function_call:
                                 has_tool_calls = True
-                                # Note: Gemini SDK handles tool calls slightly
-                                # differently in stream. This is a simplified version.
+                                fc = part.function_call
                                 yield ToolCallEvent(
-                                    index=0,  # Simplified
-                                    tool_call_id=part.function_call.id or "call",
-                                    tool_name=part.function_call.name or "",
-                                    args=part.function_call.args or {},
+                                    index=tool_call_index,
+                                    tool_call_id=fc.id or f"call_{tool_call_index}",
+                                    tool_name=fc.name or "",
+                                    args=fc.args or {},
                                 )
+                                tool_call_index += 1
 
         except Exception as e:
             from phoson_llm.utils import (
@@ -248,7 +290,14 @@ class GeminiChat(BaseLLMChat):
 
         if usage:
             input_tokens = usage.prompt_token_count or 0
-            output_tokens = usage.candidates_token_count or 0
+            # The SDK renamed the output-token field across versions
+            # (``candidates_token_count`` → ``response_token_count``); probe
+            # both so a missing attribute does not break the stream.
+            output_tokens = (
+                getattr(usage, "response_token_count", None)
+                or getattr(usage, "candidates_token_count", None)
+                or 0
+            )
             # Gemini prompt caching info
             cache_read = getattr(usage, "cached_content_token_count", 0) or 0
 

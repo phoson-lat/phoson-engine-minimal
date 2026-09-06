@@ -60,6 +60,14 @@ class PhosonConfig:
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     reasoning_effort: str | None = None
     show_reasoning: bool = True
+    # Whether to re-send captured assistant reasoning to the model on later
+    # turns (#134). Tri-state: ``None`` (default) lets the adapter decide —
+    # OpenAI-compatible reasoning models emit ``reasoning_content``, Anthropic
+    # emits signed ``thinking`` blocks, adapters without a reasoning channel
+    # ignore it. ``True`` forces emission where supported; ``False`` never
+    # emits. Set via ``preserve_thinking`` in config.toml or the
+    # PHOSON_PRESERVE_THINKING env var.
+    preserve_thinking: bool | None = None
     provider: str = "openrouter"
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
@@ -95,6 +103,15 @@ class PhosonConfig:
     # 600s; ``0`` disables the budget (unlimited) for those who want it.
     # Interactive mode ignores this entirely — Esc remains the escape.
     run_budget_seconds: float = 600.0
+    # ── Doom-loop detection (#142) ──────────────────────────────────────
+    # The DoomLoopMiddleware counts how many times in a row the *same*
+    # tool call (name + normalized args) fails. After ``loop_detect_n``
+    # consecutive identical failures it acts: "inject" (default) appends
+    # a "[⚠ doom-loop]" observation to the result so the model changes
+    # approach; "abort" refuses the next identical call. ``0`` disables
+    # detection entirely (the middleware is not built).
+    loop_detect_n: int = 3
+    loop_detect_mode: str = "inject"
     # ── LLM retry on transient provider errors (#177 / F-12) ─────────────
     # A 429/529 (rate limit / overload) or a dropped connection *before the
     # first token* used to kill the whole turn. The chat built by
@@ -160,6 +177,12 @@ class PhosonConfig:
     offload_max_chars: int = 24_000
     offload_head_chars: int = 1_500
     offload_tail_chars: int = 500
+    # Offload retention (F-51): TTL in days for files under compacted_dir
+    # (0 = no age-based cleanup) and total size quota in MB (0 = no
+    # quota). The middleware enforces both via RetentionPolicy, deleting
+    # the oldest files first, checked every 50 offloads.
+    offload_ttl_days: int = 7
+    offload_max_mb: int = 500
     # Where offloaded tool outputs live.
     compacted_dir: Path = Path("~/.phoson/compacted/").expanduser()
     # ── Customizable key bindings (IMPROVEMENTS.md E6) ───────────────────
@@ -297,6 +320,26 @@ def _parse_bool_file(value: Any, default: bool, file_key: str) -> bool:
         f"[defaults].{file_key} must be a boolean (true/false, 1/0, yes/no), "
         f"got {value!r}"
     )
+
+
+def _resolve_optional_bool(
+    env_var: str,
+    file_key: str,
+    fd: dict[str, Any],
+) -> bool | None:
+    """Resolve a tri-state boolean: ``True`` / ``False`` / ``None`` (#134).
+
+    Unlike :func:`_resolve_bool`, which always falls back to a concrete
+    default, this returns ``None`` when neither the environment nor the
+    config file sets the value — letting the adapter decide (e.g. whether to
+    re-send captured reasoning). A malformed value still raises, so a typo
+    never silently flips a tri-state setting.
+    """
+    if env_var in os.environ:
+        return _parse_bool(os.environ[env_var], default=False)
+    if file_key in fd:
+        return _parse_bool_file(fd[file_key], default=False, file_key=file_key)
+    return None
 
 
 def _resolve_int(
@@ -563,6 +606,9 @@ def load_config() -> PhosonConfig:
         show_reasoning=_resolve_bool(
             "PHOSON_SHOW_REASONING", "show_reasoning", fd, d.show_reasoning
         ),
+        preserve_thinking=_resolve_optional_bool(
+            "PHOSON_PRESERVE_THINKING", "preserve_thinking", fd
+        ),
         provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
         openrouter_api_key=_resolve_optional_str(
             "OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key
@@ -662,6 +708,12 @@ def load_config() -> PhosonConfig:
             fd,
             d.run_budget_seconds,
         ),
+        loop_detect_n=_resolve_int(
+            "PHOSON_LOOP_DETECT_N", "loop_detect_n", fd, d.loop_detect_n
+        ),
+        loop_detect_mode=_resolve_str(
+            "PHOSON_LOOP_DETECT_MODE", "loop_detect_mode", fd, d.loop_detect_mode
+        ).lower(),
         llm_max_attempts=_resolve_int(
             "PHOSON_LLM_MAX_ATTEMPTS",
             "llm_max_attempts",
@@ -744,6 +796,15 @@ def load_config() -> PhosonConfig:
             "offload_tail_chars",
             fd,
             d.offload_tail_chars,
+        ),
+        offload_ttl_days=_resolve_int(
+            "PHOSON_OFFLOAD_TTL_DAYS",
+            "offload_ttl_days",
+            fd,
+            d.offload_ttl_days,
+        ),
+        offload_max_mb=_resolve_int(
+            "PHOSON_OFFLOAD_MAX_MB", "offload_max_mb", fd, d.offload_max_mb
         ),
         compacted_dir=Path(
             _resolve_str(
@@ -904,6 +965,7 @@ def save_config(
         ("subagent_model", getattr(config, "subagent_model", None)),
         ("reasoning_effort", getattr(config, "reasoning_effort", None)),
         ("show_reasoning", getattr(config, "show_reasoning", True)),
+        ("preserve_thinking", getattr(config, "preserve_thinking", None)),
         ("openrouter_api_key", getattr(config, "openrouter_api_key", None)),
         ("openai_api_key", getattr(config, "openai_api_key", None)),
         ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
@@ -932,6 +994,8 @@ def save_config(
         ("subagent_max_parallel", getattr(config, "subagent_max_parallel", None)),
         ("subagent_timeout_seconds", getattr(config, "subagent_timeout_seconds", None)),
         ("run_budget_seconds", getattr(config, "run_budget_seconds", None)),
+        ("loop_detect_n", getattr(config, "loop_detect_n", None)),
+        ("loop_detect_mode", getattr(config, "loop_detect_mode", None)),
         ("llm_max_attempts", getattr(config, "llm_max_attempts", None)),
         ("notify_on_completion", getattr(config, "notify_on_completion", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
@@ -950,6 +1014,8 @@ def save_config(
         ("offload_max_chars", getattr(config, "offload_max_chars", None)),
         ("offload_head_chars", getattr(config, "offload_head_chars", None)),
         ("offload_tail_chars", getattr(config, "offload_tail_chars", None)),
+        ("offload_ttl_days", getattr(config, "offload_ttl_days", None)),
+        ("offload_max_mb", getattr(config, "offload_max_mb", None)),
         ("compacted_dir", str(getattr(config, "compacted_dir", ""))),
     ]:
         if only_fields is not None and key not in only_fields:

@@ -81,9 +81,19 @@ class ReasoningTokenEvent(LLMEvent):
 
 @dataclass(kw_only=True)
 class ReasoningDoneEvent(LLMEvent):
-    """Event emitted when extended reasoning/thinking completes."""
+    """Event emitted when extended reasoning/thinking completes.
+
+    Attributes:
+        content: The accumulated reasoning/thinking text for the turn.
+        signature: The provider's opaque signature for the thinking block
+            (Anthropic). ``None`` for adapters that do not sign their
+            reasoning (OpenAI-compatible, etc.). Adapters that require a
+            signature to re-send the block (Anthropic) drop the block when it
+            is absent — degradation, not an error (#134).
+    """
 
     content: str = ""
+    signature: str | None = None
 
 
 # ─── Tool calls ──────────────────────────────────────────────────────────────

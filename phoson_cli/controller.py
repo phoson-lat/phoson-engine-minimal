@@ -13,6 +13,7 @@ a full-screen UI going forward) without touching this module — a new
 front end is a new sink, not a fork.
 """
 
+import uuid
 import asyncio
 import logging
 from typing import Any
@@ -36,7 +37,15 @@ from phoson_llm.schemas import (
     ContentBlock,
     ToolDefinition,
 )
-from phoson_agent.sessions import JsonlStorage, ConversationTree
+from phoson_agent.sessions import (
+    STATUS_ACTIVE,
+    STATUS_ABORTED,
+    STATUS_COMPLETED,
+    JsonlStorage,
+    ConversationTree,
+    orphan_recovery,
+)
+from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.plugins.summarizer import safe_cut_index
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
@@ -343,6 +352,13 @@ class SessionController:
         self.offload.head_chars = self.config.offload_head_chars
         self.offload.tail_chars = self.config.offload_tail_chars
         self.offload.output_dir = self.config.compacted_dir
+        # F-51: retention knobs (TTL / quota) are projected onto the
+        # middleware's policy so a config change applies to the next
+        # automatic cleanup.
+        self.offload._retention = RetentionPolicy(
+            max_age_days=self.config.offload_ttl_days,
+            max_total_mb=float(self.config.offload_max_mb),
+        )
 
     def _rebuild_engine(self) -> None:
         """(Re)build chat client, tool registry, plugins and the engine.
@@ -799,11 +815,34 @@ class SessionController:
         if node is not None and node.message.role == "assistant":
             node.metadata["reasoning"] = reasoning
 
+    def _set_run_status(self, status: str, run_id: str | None = None) -> None:
+        """Record the run status on the tree before the next save (#129).
+
+        ``active`` is set at turn start (before anything is awaited, so a
+        crash mid-run leaves it on disk); ``completed``/``aborted`` are
+        set on the terminal paths. ``run_id`` identifies the run for
+        forensics. Best-effort: the value is only meaningful once
+        :meth:`_save_session` persists it.
+        """
+        self.tree.status = status
+        if run_id is not None:
+            self.tree.last_run_id = run_id
+
     async def _save_session(self) -> None:
         self._ensure_session_title()
+        # #129: persist the run status with the metrics so ``bg list`` and
+        # resume can tell a clean finish from a crash. The tree fields are
+        # the source of truth (set by _set_run_status / load_session);
+        # legacy metrics dicts carry no status, so save_meta passes None
+        # and leaves the tree's value in place.
         await self.storage.save(self.tree)
         await self.storage.save_meta(
-            self.tree.session_id, self.session_metrics.to_meta()
+            self.tree.session_id,
+            {
+                **self.session_metrics.to_meta(),
+                "status": self.tree.status,
+                "last_run_id": self.tree.last_run_id,
+            },
         )
 
     def _ensure_session_title(self) -> None:
@@ -919,10 +958,20 @@ class SessionController:
             # Stable per-conversation key: OpenRouter uses it for sticky
             # routing so the upstream prompt cache stays warm (G2 / #69).
             session_id=self._session.tree.session_id,
+            # Re-send captured assistant reasoning on later turns (#134).
+            # Tri-state from PHOSON_PRESERVE_THINKING / config.toml: None =
+            # the adapter decides, True = force, False = never.
+            preserve_thinking=self.config.preserve_thinking,
         )
 
         await self._refresh_context_window()
         self._context_tokens = self.estimate_active_path()
+
+        # #129: mark the run in flight *before* anything is awaited, so a
+        # crash mid-run leaves status="active" on disk — the signal resume
+        # uses to detect an orphaned session.
+        run_id = uuid.uuid4().hex
+        self._set_run_status(STATUS_ACTIVE, run_id)
 
         try:
             terminal_event = await self._consume_stream(path, config)
@@ -932,6 +981,7 @@ class SessionController:
             self.sink.capture_partial_reasoning()
             self._append_partial_history(base_count)
             self._persist_run_reasoning()
+            self._set_run_status(STATUS_ABORTED)
             await self._save_session()
             self.sink.notify("warn", "Partial progress saved.")
             return RunOutcome(status="cancelled")
@@ -944,6 +994,7 @@ class SessionController:
             # or /undo'd.
             self._append_partial_history(base_count)
             self._persist_run_reasoning()
+            self._set_run_status(STATUS_ABORTED)
             await self._save_session()
             if terminal_event.code == "auth":
                 self.sink.notify(
@@ -956,6 +1007,7 @@ class SessionController:
         self._finalize_run(terminal_event, base_count)
         self._persist_run_reasoning()
         self.summarizer.clear_retained_reasoning()
+        self._set_run_status(STATUS_COMPLETED)
         await self._save_session()
         # #167: cue the terminal when a run finishes (TTY-gated; "off" is a
         # no-op). Covers both interactive front ends and monitor-wake turns
@@ -1395,6 +1447,59 @@ class SessionController:
         await self._save_session()
         return before, after, True
 
+    async def _repair_orphaned_run(self) -> bool:
+        """Detect and repair a run that died mid-tool-call (#129).
+
+        The tree's ``status`` (set by the previous process, or defaulted to
+        ``active`` for legacy files without one) tells us whether the last
+        run ever finished cleanly. ``completed``/``aborted`` are terminal
+        and need no repair; ``active`` (or ``orphaned``) means the run may
+        have died between persisting an assistant ``tool_use`` and its
+        ``tool_result`` — a history the provider rejects with a 400
+        tool-pairing error on the next call.
+
+        When the active path ends on such an orphaned tool call,
+        :func:`orphan_recovery` appends an error ``tool_result`` per
+        orphaned call (deterministic node id, so the repair is idempotent),
+        the cursor moves to the recovery node (the next turn must continue
+        from it, not fork off the orphan), and the tree is re-saved so the
+        repaired history is what the next run resumes from. The status is
+        left ``active``: the session is being resumed *now*, and the next
+        :meth:`_execute_turn` will set it to ``active`` again with a fresh
+        run id and settle on ``completed``/``aborted`` at its end.
+
+        Must be called after :meth:`find_latest_node_id` has placed the
+        cursor on the loaded session's continuation point.
+
+        Returns:
+            True when a recovery node was added (the caller may want to
+            tell the user), False otherwise.
+        """
+        tree = self.tree
+        if tree.status not in (STATUS_ACTIVE, "orphaned"):
+            return False
+        if self.current_node_id is None:
+            return False
+        path = tree.get_node_path(self.current_node_id)
+        if not path:
+            return False
+        # orphan_recovery mutates the path in place and returns it, so the
+        # "did it repair?" signal is the length delta, captured up front.
+        before = len(path)
+        orphan_recovery(path)
+        if len(path) == before:
+            return False
+        recovery_node = path[-1]
+        if recovery_node.id not in tree.nodes:
+            tree.add_node(recovery_node)
+        self.current_node_id = recovery_node.id
+        # Persist the tree (nodes + its own meta fields, which were loaded
+        # from the file) — NOT _save_session(): at this point the in-memory
+        # SessionMetrics were just reset to zero by load_session, and
+        # save_meta would clobber the persisted cost/token/step totals.
+        await self.storage.save(tree)
+        return True
+
     async def load_session(self, session_id: str) -> LoadOutcome:
         """Load a session from storage and replay its tail."""
         try:
@@ -1402,6 +1507,7 @@ class SessionController:
             self._session.current_node_id = self.find_latest_node_id()
             self._session.metrics = SessionMetrics()
             self.sink.set_session(self._session.tree.session_id)
+            recovered = await self._repair_orphaned_run()
 
             # Load saved metrics using the authoritative SessionMeta field names.
             metas = await self.storage.list_meta()
@@ -1438,6 +1544,16 @@ class SessionController:
                 _LOGGER.debug(
                     "Could not replay session history — node may be corrupted",
                     exc_info=True,
+                )
+
+            # #129: the user should know the history was repaired — the
+            # interrupted tool call(s) were answered with a synthetic error
+            # result so the run can continue.
+            if recovered:
+                self.sink.notify(
+                    "warn",
+                    "⚠ Recovered from an orphaned run — the interrupted "
+                    "tool call(s) were answered with an error result.",
                 )
 
             return LoadOutcome(ok=True)

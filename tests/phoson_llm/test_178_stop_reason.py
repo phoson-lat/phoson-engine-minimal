@@ -685,6 +685,7 @@ async def test_gemini_reports_finish_reason() -> None:
 class _Mistral_Delta:
     def __init__(self, content=None) -> None:
         self.content = content
+        self.tool_calls = None
 
 
 class _Mistral_Choice:
