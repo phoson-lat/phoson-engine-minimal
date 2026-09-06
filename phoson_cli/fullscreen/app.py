@@ -15,7 +15,6 @@ import os
 import re
 import time
 import uuid
-import shutil
 import asyncio
 import logging
 import tempfile
@@ -31,10 +30,9 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
-from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
+from prompt_toolkit.mouse_events import MouseEvent
 from prompt_toolkit.layout.layout import Layout, FocusableElement
 from prompt_toolkit.formatted_text import ANSI, HTML
-from prompt_toolkit.layout.margins import Margin
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
@@ -70,13 +68,7 @@ from .floats import FloatsController
 # the historical name ``_bash_card_rows`` from this module (moved to
 # :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
 from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
-from .render import (
-    BlockAnsiCache,
-    BlockFormattedTextCache,
-    windowed_slice,
-    _line_boundaries,
-    render_chat_split,
-)
+from .render import BlockAnsiCache, BlockFormattedTextCache
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
@@ -87,6 +79,12 @@ from ..config import (
 )
 from ..pickers import BasePicker
 from ..commands import Command, CommandHandler, parse_command
+from .chat_pane import (
+    _PERF_LOGGER,
+    ChatPane,
+    ChatScrollbarMargin,
+    enable_perf_counter,
+)
 from .clipboard import (
     read_clipboard_text,
     read_clipboard_image,
@@ -207,166 +205,6 @@ class _ComposerPlaceholderProcessor(Processor):
 _DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
 
 
-class ChatScrollbarMargin(Margin):
-    """1-column scrollbar for the windowed chat pane (T-14 / #171).
-
-    ptk's built-in ``ScrollbarMargin`` derives its thumb from
-    ``window_render_info.content_height`` / ``displayed_lines`` — which,
-    once the chat pane is windowed (content == visible window only, see
-    :meth:`PhosonApp._render_chat`), both equal the visible height and the
-    thumb would fill the whole bar. This margin instead takes the
-    *transcript* totals from a callback bound to the app's scroll state
-    (``total_lines`` and ``scroll_top``), and computes the thumb from
-    ``visible_height = min(height, total_lines)`` — the same formula the
-    built-in uses, but against the real transcript rather than the
-    windowed content.
-    """
-
-    __slots__ = ("_callback",)
-
-    def __init__(self, callback: Callable[[], tuple[int, int]]) -> None:
-        """*callback* returns ``(total_lines, scroll_top)`` of the full
-        transcript. Called once per frame (during margin render only)."""
-        self._callback = callback
-
-    def get_width(self, get_ui_content: Callable[[], Any]) -> int:
-        return 1
-
-    def create_margin(
-        self, window_render_info: Any, width: int, height: int
-    ) -> list[tuple[str, str]]:
-        total, scroll = self._callback()
-        if total <= 0 or height <= 0:
-            return []
-        # Mirror ScrollbarMargin's thumb math, but against the *transcript*
-        # (total/scroll from the callback) rather than the windowed content
-        # (which always equals the visible height). fraction_visible and
-        # fraction_above use the same expressions the built-in does.
-        fraction_visible = min(height, total) / float(total)
-        fraction_above = min(max(0, scroll), max(0, total - height)) / float(total)
-        scrollbar_height = int(min(height, max(1, height * fraction_visible)))
-        scrollbar_top = int(height * fraction_above)
-
-        def is_scroll_button(row: int) -> bool:
-            return scrollbar_top <= row <= scrollbar_top + scrollbar_height
-
-        scrollbar_background = "class:scrollbar.background"
-        scrollbar_background_start = "class:scrollbar.background,scrollbar.start"
-        scrollbar_button = "class:scrollbar.button"
-        scrollbar_button_end = "class:scrollbar.button,scrollbar.end"
-
-        result: list[tuple[str, str]] = []
-        for i in range(height):
-            if is_scroll_button(i):
-                if not is_scroll_button(i + 1):
-                    result.append((scrollbar_button_end, " "))
-                else:
-                    result.append((scrollbar_button, " "))
-            else:
-                if is_scroll_button(i + 1):
-                    result.append((scrollbar_background_start, " "))
-                else:
-                    result.append((scrollbar_background, " "))
-            result.append(("", "\n"))
-        return result
-
-
-_PERF_LOGGER = logging.getLogger("phoson.cli.perf")
-
-# T-14 (#171): resolved once at import. The steady state of ``_render_chat``
-# must add no env lookup per frame, so we never re-read ``os.environ`` there.
-_PERF_LOGGING = bool(os.environ.get("PHOSON_PERF"))
-
-
-def _perf_logger_ready() -> None:
-    """Attach a stderr handler to the perf logger, once.
-
-    The dedicated logger gets its own handler: while the TUI is up the root
-    logger has a NullHandler (so raw library warnings never leak over the UI)
-    and would otherwise swallow perf lines. Idempotent — safe to call from
-    both the per-turn counter and the per-frame chat-pane logger.
-    """
-    if not _PERF_LOGGER.handlers:
-        _handler = logging.StreamHandler()
-        _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s: %(message)s"))
-        _PERF_LOGGER.addHandler(_handler)
-    _PERF_LOGGER.setLevel(logging.INFO)
-
-
-def _chat_perf_log(
-    full_chars: int,
-    total_lines: int,
-    top: int,
-    height: int,
-    slice_ms: float,
-    render_ms: float = 0.0,
-) -> None:
-    """T-14 (#171): per-frame chat-pane cost, verifiable on a real session.
-
-    Called only when ``PHOSON_PERF`` is set (see :data:`_PERF_LOGGING`).
-
-    * ``slice_ms`` — the wall time of the ``windowed_slice`` that produced the
-      visible fragment, i.e. the step that used to be the O(transcript)
-      ``split_lines`` / ``tuple()+hash`` pass inside prompt_toolkit. Its
-      flatness across session lengths is the acceptance criterion for the
-      windowing work.
-    * ``render_ms`` — the wall time of the dirty-frame re-render
-      (``render_chat_split`` + the incremental bounds build) when the
-      transcript is dirty (a streamed token, a new block, a resize). 0.0 on
-      frames that only re-sliced (scroll). Its *bounds* component is
-      O(visible) (the frozen prefix's line offsets are cached; only the small
-      in-flight tail is re-scanned — see :meth:`PhosonApp._compute_chat_bounds`),
-      but it also includes re-rendering the frozen transcript, which is still
-      O(transcript); that term is the remaining cost to eliminate for a fully
-      O(visible) streaming frame (known follow-up).
-
-    The logger's handler is attached at import time (below), so the
-    steady-state call is a single ``.info``.
-    """
-    if not _PERF_LOGGING:
-        return
-    _PERF_LOGGER.info(
-        "perf chat-pane: full_chars=%d total_lines=%d top=%d height=%d "
-        "render_ms=%.3f slice_ms=%.3f",
-        full_chars,
-        total_lines,
-        top,
-        height,
-        render_ms,
-        slice_ms,
-    )
-
-
-# Attach the handler once, at import, when perf logging is on. While the TUI
-# is up the root logger carries a NullHandler (so raw library warnings never
-# leak over the UI); without a dedicated handler these lines would be lost.
-if _PERF_LOGGING:
-    _perf_logger_ready()
-
-
-def enable_perf_counter(app: Application) -> Callable[[], int] | None:
-    """Attach the per-turn render counter (I-84, phase 0).
-
-    Enabled by ``PHOSON_PERF=1``: logs one line per agent turn with the
-    number of full render passes prompt_toolkit performed during the turn
-    and the effective fps. The counter reads ``Application.render_counter``
-    (already maintained by prompt_toolkit), so the steady-state cost with
-    the env var unset is a single ``bool(None)`` check in ``_run_turn``.
-
-    The dedicated logger gets its own stderr handler (see
-    :func:`_perf_logger_ready`) so these lines survive the TUI's root-logger
-    NullHandler.
-    """
-    if app.render_counter is None:  # defensive: never crashes if renamed
-        return None
-    _perf_logger_ready()
-
-    def _count() -> int:
-        return app.render_counter or 0
-
-    return _count
-
-
 def _skill_names() -> list[str]:
     """Skill names for the ``/skills <name>`` completer (G5).
 
@@ -398,55 +236,14 @@ class PhosonApp:
         # config object the shared REPL later wraps.
         self._config = config
 
-        self._chat_scroll_top = 0
-        self._auto_scroll = True
-        self._total_chat_lines = 1
-        self._cache_dirty = True
-        self._last_width = 80
-        # T-14 (#171) — windowed chat render. The whole transcript is cached
-        # as ONE ANSI string (re-rendered only when dirty/resized, as before),
-        # but prompt_toolkit is handed only the *visible window* substring.
-        # ptk's per-frame to_formatted_text / split_lines / tuple()+hash all
-        # run over the fragment list, so this turns them from O(transcript)
-        # into O(visible lines). `_full_ansi_bounds` are the char offsets of
-        # each visual line (see render._line_boundaries) so the window can be
-        # sliced at line boundaries — slicing at a \n is render-safe because
-        # Rich re-asserts each line's SGR after every newline.
-        self._full_ansi_text = ""
-        self._full_ansi_bounds: list[int] = [0]
-        # T-14 follow-up: incremental line-bounds. The *frozen* prefix
-        # (concatenated immutable blocks) never changes while a turn streams —
-        # only the in-flight tail (activity line + streaming panel) grows. So
-        # `_compute_chat_bounds` caches the frozen prefix's line boundaries and
-        # re-scans only the small tail each dirty frame, making the per-frame
-        # line-bounds build O(visible) during streaming, not O(transcript).
-        # `_frozen_ansi_bounds` is invalidated against `_frozen_ansi_ids` (a
-        # (width, *id(block)) fingerprint): the transcript is append-only and
-        # every in-place block edit replaces the block with a *new* object (see
-        # sink), so a changed fingerprint means the frozen prefix changed and
-        # must be re-scanned.
-        self._frozen_ansi_bounds: list[int] = [0]
-        # Fingerprint of the frozen prefix for _compute_chat_bounds:
-        # (cache generation, width, *id(block)) — see that method.
-        self._frozen_ansi_ids: tuple[int, ...] | None = None
-        # Bumped on every dirty re-render of the full transcript. The slice
-        # cache must refresh on it, not only on (top, height, total): a
-        # spinner tick repaints the *same* line count at the *same* window
-        # position, so without the epoch the cached fragment keeps the stale
-        # glyph and the in-chat spinner appears frozen.
-        self._chat_content_epoch = 0
-        self._window_top = -1
-        self._window_total = -1
-        self._window_height = -1
-        self._window_epoch = -1
-        self._windowed_ansi = ANSI("")
-        # Immutable transcript blocks render to ANSI once per width (#perf).
-        self._block_ansi_cache = BlockAnsiCache()
-        # T-15 (#172): FormattedText counterpart of the ANSI cache above.
-        # Same append-only blocks, cached as ptk (style, text) fragments.
-        # Kept in sync (init/apply_theme/_reset_transcript); see the
-        # TODO(T-15) in _render_chat for the intended fragment windowing.
-        self._block_ft_cache = BlockFormattedTextCache()
+        # Chat pane (scroll + windowed render + bounds cache), #187 slice 2.
+        # Owns the pane state (see ChatPane.__init__); ``PhosonApp`` exposes
+        # proxy properties so ``app._full_ansi_text`` / ``app._window_top`` /
+        # … keep working for the test suite and ``apply_theme`` /
+        # ``_reset_transcript``. Created before the layout: it reads
+        # ``sink`` / ``_chat_window`` lazily, both of which exist by the time
+        # anything renders.
+        self._chat_pane = ChatPane(self)
         self._run_task: asyncio.Task | None = None
         # Double-Esc rewind (IMPROVEMENTS.md G1): monotonic timestamp of the
         # last idle Esc press, and the stack of pre-rewind cursors that
@@ -719,89 +516,174 @@ class PhosonApp:
         self.sink.dirty = True
         self.app.invalidate()
 
-    # ── Scroll (ported from the reference prototype) ────────────────────
+    # ── Scroll / windowed render ─────────────────────────────────────────
+    # The chat pane owns its state and rendering logic (``chat_pane.ChatPane``
+    # — #187 slice 2). The methods below are thin delegates so ``keys.py``
+    # scroll bindings keep working; the properties proxy the pane state so the
+    # test suite (``app._full_ansi_text``, ``app._window_top``, …) and
+    # ``apply_theme`` / ``_reset_transcript`` are untouched.
+
+    # --- Scroll method delegates ---
 
     def _get_visible_window_height(self) -> int:
-        render_info = self._chat_window.render_info
-        if render_info is not None:
-            return max(1, render_info.window_height)
-        term_lines = shutil.get_terminal_size((80, 24)).lines
-        return max(1, term_lines - 5)
+        return self._chat_pane.get_visible_window_height()
 
     def _get_effective_scroll(self, window: Window | None = None) -> int:
-        visible_height = self._get_visible_window_height()
-        max_scroll = max(0, self._total_chat_lines - visible_height)
-        if self._auto_scroll:
-            return max_scroll
-        return max(0, min(self._chat_scroll_top, max_scroll))
+        return self._chat_pane.get_effective_scroll(window)
 
     def _get_chat_cursor_position(self) -> Point:
-        # T-14 (#171): the control only holds the visible slice, so the
-        # (hidden) cursor sits at the top of that slice. ptk's
-        # ``_scroll_without_linewrapping`` clamps ``vertical_scroll`` to keep
-        # the cursor visible — with the cursor at y=0 the window's own scroll
-        # stays at 0 and the logical transcript scroll is entirely ours
-        # (via ``_chat_scroll_top`` / the windowing in ``_render_chat``).
-        return Point(x=0, y=0)
+        return self._chat_pane.get_chat_cursor_position()
 
     def scroll_page_up(self) -> None:
-        current = self._get_effective_scroll()
-        self._auto_scroll = False
-        step = max(5, self._get_visible_window_height() // 2)
-        self._chat_scroll_top = max(0, current - step)
-        self.app.invalidate()
+        self._chat_pane.scroll_page_up()
 
     def scroll_page_down(self) -> None:
-        current = self._get_effective_scroll()
-        step = max(5, self._get_visible_window_height() // 2)
-        max_scroll = max(0, self._total_chat_lines - self._get_visible_window_height())
-        if current + step >= max_scroll:
-            self._auto_scroll = True
-            self._chat_scroll_top = max_scroll
-        else:
-            self._chat_scroll_top = current + step
-        self.app.invalidate()
+        self._chat_pane.scroll_page_down()
 
     def scroll_line_up(self) -> None:
-        current = self._get_effective_scroll()
-        self._auto_scroll = False
-        self._chat_scroll_top = max(0, current - 2)
-        self.app.invalidate()
+        self._chat_pane.scroll_line_up()
 
     def scroll_line_down(self) -> None:
-        current = self._get_effective_scroll()
-        max_scroll = max(0, self._total_chat_lines - self._get_visible_window_height())
-        if current + 2 >= max_scroll:
-            self._auto_scroll = True
-            self._chat_scroll_top = max_scroll
-        else:
-            self._chat_scroll_top = current + 2
-        self.app.invalidate()
+        self._chat_pane.scroll_line_down()
 
     def scroll_home(self) -> None:
-        self._auto_scroll = False
-        self._chat_scroll_top = 0
-        self.app.invalidate()
+        self._chat_pane.scroll_home()
 
     def scroll_end(self) -> None:
-        self._auto_scroll = True
-        self.app.invalidate()
+        self._chat_pane.scroll_end()
 
     def _on_chat_mouse(self, mouse_event: MouseEvent) -> object:
-        current = self._get_effective_scroll()
-        max_scroll = max(0, self._total_chat_lines - self._get_visible_window_height())
-        if mouse_event.event_type == MouseEventType.SCROLL_UP:
-            self._auto_scroll = False
-            self._chat_scroll_top = max(0, current - 3)
-            return None
-        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-            if current + 3 >= max_scroll:
-                self._auto_scroll = True
-                self._chat_scroll_top = max_scroll
-            else:
-                self._chat_scroll_top = current + 3
-            return None
-        return NotImplemented
+        return self._chat_pane.on_chat_mouse(mouse_event)
+
+    # --- Pane state proxies (test suite + cache resets read these directly) ---
+
+    @property
+    def _chat_scroll_top(self) -> int:
+        return self._chat_pane._chat_scroll_top
+
+    @_chat_scroll_top.setter
+    def _chat_scroll_top(self, value: int) -> None:
+        self._chat_pane._chat_scroll_top = value
+
+    @property
+    def _auto_scroll(self) -> bool:
+        return self._chat_pane._auto_scroll
+
+    @_auto_scroll.setter
+    def _auto_scroll(self, value: bool) -> None:
+        self._chat_pane._auto_scroll = value
+
+    @property
+    def _total_chat_lines(self) -> int:
+        return self._chat_pane._total_chat_lines
+
+    @_total_chat_lines.setter
+    def _total_chat_lines(self, value: int) -> None:
+        self._chat_pane._total_chat_lines = value
+
+    @property
+    def _cache_dirty(self) -> bool:
+        return self._chat_pane._cache_dirty
+
+    @_cache_dirty.setter
+    def _cache_dirty(self, value: bool) -> None:
+        self._chat_pane._cache_dirty = value
+
+    @property
+    def _last_width(self) -> int:
+        return self._chat_pane._last_width
+
+    @_last_width.setter
+    def _last_width(self, value: int) -> None:
+        self._chat_pane._last_width = value
+
+    @property
+    def _full_ansi_text(self) -> str:
+        return self._chat_pane._full_ansi_text
+
+    @_full_ansi_text.setter
+    def _full_ansi_text(self, value: str) -> None:
+        self._chat_pane._full_ansi_text = value
+
+    @property
+    def _full_ansi_bounds(self) -> list[int]:
+        return self._chat_pane._full_ansi_bounds
+
+    @_full_ansi_bounds.setter
+    def _full_ansi_bounds(self, value: list[int]) -> None:
+        self._chat_pane._full_ansi_bounds = value
+
+    @property
+    def _frozen_ansi_bounds(self) -> list[int]:
+        return self._chat_pane._frozen_ansi_bounds
+
+    @_frozen_ansi_bounds.setter
+    def _frozen_ansi_bounds(self, value: list[int]) -> None:
+        self._chat_pane._frozen_ansi_bounds = value
+
+    @property
+    def _frozen_ansi_ids(self) -> tuple[int, ...] | None:
+        return self._chat_pane._frozen_ansi_ids
+
+    @_frozen_ansi_ids.setter
+    def _frozen_ansi_ids(self, value: tuple[int, ...] | None) -> None:
+        self._chat_pane._frozen_ansi_ids = value
+
+    @property
+    def _chat_content_epoch(self) -> int:
+        return self._chat_pane._chat_content_epoch
+
+    @_chat_content_epoch.setter
+    def _chat_content_epoch(self, value: int) -> None:
+        self._chat_pane._chat_content_epoch = value
+
+    @property
+    def _window_top(self) -> int:
+        return self._chat_pane._window_top
+
+    @_window_top.setter
+    def _window_top(self, value: int) -> None:
+        self._chat_pane._window_top = value
+
+    @property
+    def _window_total(self) -> int:
+        return self._chat_pane._window_total
+
+    @_window_total.setter
+    def _window_total(self, value: int) -> None:
+        self._chat_pane._window_total = value
+
+    @property
+    def _window_height(self) -> int:
+        return self._chat_pane._window_height
+
+    @_window_height.setter
+    def _window_height(self, value: int) -> None:
+        self._chat_pane._window_height = value
+
+    @property
+    def _window_epoch(self) -> int:
+        return self._chat_pane._window_epoch
+
+    @_window_epoch.setter
+    def _window_epoch(self, value: int) -> None:
+        self._chat_pane._window_epoch = value
+
+    @property
+    def _windowed_ansi(self) -> ANSI:
+        return self._chat_pane._windowed_ansi
+
+    @_windowed_ansi.setter
+    def _windowed_ansi(self, value: ANSI) -> None:
+        self._chat_pane._windowed_ansi = value
+
+    @property
+    def _block_ansi_cache(self) -> BlockAnsiCache:
+        return self._chat_pane._block_ansi_cache
+
+    @property
+    def _block_ft_cache(self) -> BlockFormattedTextCache:
+        return self._chat_pane._block_ft_cache
 
     # ── Rendering ────────────────────────────────────────────────────────
 
@@ -837,147 +719,20 @@ class PhosonApp:
         """Compact display path for the fixed-width header."""
         return _short_cwd_impl(cwd)
 
+    # Render / windowing method delegates (bodies in ``ChatPane``, #187
+    # slice 2).
+
     def _compute_chat_bounds(self, text: str, prefix_len: int, width: int) -> list[int]:
-        """Per-line char offsets for *text*, built incrementally (T-14 follow-up).
-
-        Returns the same list :func:`render._line_boundaries` would produce
-        over the whole string — ``bounds[k]`` = start of visual line ``k`` —
-        but without re-scanning the frozen prefix every frame. The transcript
-        is ``text[:prefix_len]`` (frozen, the concatenated immutable blocks)
-        + ``text[prefix_len:]`` (the in-flight tail: activity line, streaming
-        panel, subagent panel). While a turn streams, only the tail changes,
-        so the frozen prefix's line boundaries are cached and only the small
-        tail is re-scanned, then spliced on.
-
-        To be precise about what this buys (F-44): every dirty frame still
-        assembles the full transcript string and still copies
-        ``text[:prefix_len]`` / ``text[prefix_len:]`` — those are C-speed
-        ``memcpy``. The win is that the *line-bounds build* (a Python
-        ``str.find`` loop, i.e. one Python iteration per line) runs over the
-        tail only, so per dirty frame it is O(visible) instead of
-        O(transcript) during streaming.
-
-        The cache is invalidated when the frozen prefix changes: the
-        transcript is append-only, every in-place block edit replaces the
-        block with a *new* object (so its ``id`` changes), and a width change
-        re-renders every block — all captured by the fingerprint below. On a
-        cache miss the prefix bounds are rebuilt from the (C-speed) prefix
-        scan.
-
-        The fingerprint also carries the block ANSI cache's *generation*
-        (bumped on every ``clear``): ``apply_theme`` and ``_reset_transcript``
-        drop the cache while the transcript may keep the same block objects,
-        and after a refill the same ids can describe different ANSI strings
-        (a theme with differently-long escapes), so ids alone would be a
-        stale fingerprint (F-41).
-        """
-        prefix = text[:prefix_len]
-        tail = text[prefix_len:]
-        fingerprint = (
-            self._block_ansi_cache.generation,
-            width,
-            *(id(block) for block in self.sink.blocks),
-        )
-        if fingerprint != self._frozen_ansi_ids:
-            self._frozen_ansi_bounds = _line_boundaries(prefix)
-            self._frozen_ansi_ids = fingerprint
-        # Splice: the prefix's lines, then the tail's lines. The frozen prefix
-        # ends in a newline (Rich re-asserts SGR + a \n after every line), so
-        # the tail always begins on a fresh visual line whose start offset
-        # coincides with the prefix's trailing-empty-line start; dropping
-        # ``tail_bounds[0]`` (=0, the prefix's last line) avoids double-counting
-        # it and shifts the tail's offsets by ``prefix_len``.
-        tail_bounds = _line_boundaries(tail)
-        if len(tail_bounds) == 1:
-            return self._frozen_ansi_bounds
-        return self._frozen_ansi_bounds + [prefix_len + b for b in tail_bounds[1:]]
+        """Per-line char offsets for *text*, built incrementally (T-14 follow-up)."""
+        return self._chat_pane.compute_chat_bounds(text, prefix_len, width)
 
     def _render_chat(self) -> ANSI:
-        term_width = shutil.get_terminal_size((80, 24)).columns
-        width = max(40, term_width - 4)
-
-        # render_ms: wall time of this frame's full re-render (0.0 when the
-        # frame only re-sliced an already-rendered transcript, e.g. scroll).
-        render_ms = 0.0
-        if self.sink.dirty or width != self._last_width:
-            render_start = time.perf_counter()
-            # TODO(T-15): wire BlockFormattedTextCache into _render_chat —
-            # window the cached FormattedText fragments directly so the pane
-            # skips the per-frame ANSI re-parse. Not done yet on purpose:
-            # the ANSI-string windowing below relies on Rich re-asserting
-            # each line's SGR state after every newline, and a
-            # fragments->ANSI_to_string round trip would drop that
-            # re-assertion and unstyle the window's top line. The FT cache
-            # is already created/cleared alongside the ANSI cache (init,
-            # apply_theme, _reset_transcript), so the switch is a
-            # fragment-windowing change in this method + render_chat_split.
-            text, prefix_len = render_chat_split(
-                self.sink, width, self._block_ansi_cache
-            )
-            # T-14 (#171): cache the *full* transcript as one ANSI string.
-            # Rich re-asserts each line's SGR state after every newline, so the
-            # string can later be sliced at any line boundary (see
-            # render._line_boundaries / windowed_slice) without corrupting
-            # styling. `_compute_chat_bounds` builds the per-line char offsets
-            # incrementally: the frozen prefix's bounds are cached and only the
-            # small in-flight tail is re-scanned, so the full-string bounds
-            # match `count("\n") + 1` lines (matching ptk's `split_lines`).
-            self._full_ansi_text = text
-            self._full_ansi_bounds = self._compute_chat_bounds(text, prefix_len, width)
-            self._total_chat_lines = max(1, len(self._full_ansi_bounds))
-            self._chat_content_epoch += 1
-            self.sink.dirty = False
-            self._last_width = width
-            render_ms = (time.perf_counter() - render_start) * 1e3
-
-        height = self._get_visible_window_height()
-        total = self._total_chat_lines
-        scroll = self._get_effective_scroll()
-        top = max(0, min(scroll, total - height)) if total >= height else 0
-
-        # Slice out the visible window. Cache the result: scrolling (which
-        # does NOT change the transcript) only changes `top`, so the slice is
-        # O(visible) string work rather than an O(transcript) re-render.
-        # `_chat_content_epoch` must also be part of the key: dirty frames
-        # (spinner tick, streamed token) change the *content* at the same
-        # (top, height, total), and a same-position slice of the stale string
-        # would keep the old glyph — which is exactly what froze the
-        # in-chat spinner after the windowing landed.
-        if (
-            top != self._window_top
-            or height != self._window_height
-            or total != self._window_total
-            or self._chat_content_epoch != self._window_epoch
-        ):
-            slice_start = time.perf_counter()
-            self._windowed_ansi = ANSI(
-                windowed_slice(
-                    self._full_ansi_text, self._full_ansi_bounds, top, height
-                )
-            )
-            slice_ms = (time.perf_counter() - slice_start) * 1e3
-            self._window_top = top
-            self._window_height = height
-            self._window_total = total
-            self._window_epoch = self._chat_content_epoch
-            _chat_perf_log(
-                full_chars=len(self._full_ansi_text),
-                total_lines=total,
-                top=top,
-                height=height,
-                slice_ms=slice_ms,
-                render_ms=render_ms,
-            )
-        return self._windowed_ansi
+        """Render the visible chat window (windowed, O(visible))."""
+        return self._chat_pane.render_chat()
 
     def _scrollbar_state(self) -> tuple[int, int]:
-        """(total_lines, scroll_top) for :class:`ChatScrollbarMargin`.
-
-        Returns the *logical* scroll of the full transcript (not the windowed
-        content, which always equals the visible height). The margin computes
-        the thumb from these against the real transcript length.
-        """
-        return self._total_chat_lines, self._get_effective_scroll()
+        """(total_lines, scroll_top) for :class:`ChatScrollbarMargin`."""
+        return self._chat_pane.scrollbar_state()
 
     # ── Input handling ───────────────────────────────────────────────────
 
