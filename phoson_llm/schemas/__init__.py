@@ -1,5 +1,7 @@
 from .inputs import (
     REASONING_EFFORTS,
+    REASONING_MAX_CHARS,
+    REASONING_TRUNCATION_MARKER,
     Message,
     JsonValue,
     TextBlock,
@@ -16,6 +18,7 @@ from .inputs import (
     ToolDefinition,
     ReasoningEffort,
     ToolResultBlock,
+    cap_reasoning,
 )
 from .outputs import (
     LLMEvent,
@@ -43,6 +46,9 @@ __all__ = [
     "ToolDefinition",
     "ModelConfig",
     "REASONING_EFFORTS",
+    "REASONING_MAX_CHARS",
+    "REASONING_TRUNCATION_MARKER",
+    "cap_reasoning",
     "ReasoningEffort",
     # JSON aliases
     "JsonValue",

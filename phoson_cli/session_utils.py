@@ -14,9 +14,13 @@ from pathlib import Path
 from datetime import UTC, datetime
 
 from phoson_agent import Plugin
-from phoson_agent.middleware import AgentMiddleware
+from phoson_agent.middleware import (
+    AgentMiddleware,
+    DoomLoopMiddleware,
+    EnvironmentalContextMiddleware,
+)
 from phoson_agent.permissions import PermissionMiddleware
-from phoson_agent.plugins.offload import OffloadMiddleware
+from phoson_agent.plugins.offload import RetentionPolicy, OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 
 from .config import PhosonConfig
@@ -604,6 +608,10 @@ def build_offload(config: PhosonConfig) -> OffloadMiddleware:
         head_chars=config.offload_head_chars,
         tail_chars=config.offload_tail_chars,
         output_dir=config.compacted_dir,
+        retention=RetentionPolicy(
+            max_age_days=config.offload_ttl_days,
+            max_total_mb=float(config.offload_max_mb),
+        ),
     )
 
 
@@ -622,16 +630,27 @@ def build_middlewares(
       and an offload middleware is provided. It rewrites oversized tool
       results first, so they never reach the summarizer's token accounting.
     - **Summarizer** auto-compacts (when provided) after offload.
-    - **Permission** is always present — it is the security gate
-      (``deny``/``ask``/``allow`` + allow-patterns) and must never be
-      omitted for any engine, REPL, one-shot or sub-agent.
+    - **EnvironmentalContext** (#143) is always present and sits *after* the
+      summarizer, so its ``[env: ...]`` block is appended to the context
+      after any compaction — guaranteeing the block is the final message and
+      the stable prefix (prompt cache) is never busted. (Only the summarizer
+      and this middleware implement ``on_before_llm``; their relative order to
+      the tool hooks below is therefore inert.)
+    - **DoomLoop** (#142) joins when ``config.loop_detect_n > 0``. It sits
+      *before* the permission gate so its ``abort``-mode refusal short-
+      circuits an identical looping call without triggering an interactive
+      permission prompt; it only counts real tool-handler errors (permission
+      refusals never reach its ``on_after_tool``).
+    - **Permission** is always present and always **last** — it is the
+      security gate (``deny``/``ask``/``allow`` + allow-patterns) and must
+      never be omitted for any engine, REPL, one-shot or sub-agent.
 
     Args:
         config: Source of the gating flags.
         offload: Offload middleware to include (None, or the flag off,
             excludes it from the chain).
         summarizer: Summarization middleware to include (None excludes it).
-        permission: The permission gate — always appended.
+        permission: The permission gate — always appended last.
 
     Returns:
         The ordered list to pass to ``AgentEngine(middlewares=...)``.
@@ -641,6 +660,16 @@ def build_middlewares(
         chain.append(offload)
     if summarizer is not None:
         chain.append(summarizer)
+    chain.append(
+        EnvironmentalContextMiddleware(
+            max_iterations=config.max_iterations,
+            run_budget_seconds=config.run_budget_seconds,
+        )
+    )
+    if config.loop_detect_n > 0:
+        chain.append(
+            DoomLoopMiddleware(n=config.loop_detect_n, mode=config.loop_detect_mode)
+        )
     chain.append(permission)
     return chain
 

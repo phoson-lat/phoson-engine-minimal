@@ -21,6 +21,7 @@ from phoson_llm.schemas import (
     ModelConfig,
     LLMDoneEvent,
     ToolCallEvent,
+    ReasoningDoneEvent,
 )
 from phoson_agent.models import AgentEvent, AgentErrorEvent
 
@@ -100,6 +101,10 @@ class LLMStepOutcome:
     usage_event: UsageEvent | None = None
     done_event: LLMDoneEvent | None = None
     error_event: ErrorEvent | None = None
+    # The turn's completed reasoning (``ReasoningDoneEvent``), captured so the
+    # assistant message can carry it back to the model on the next turn
+    # (#134). ``None`` when the turn produced no reasoning.
+    reasoning_done_event: ReasoningDoneEvent | None = None
 
 
 # ─── Internal control sentinels for the iteration generator ──────────────────

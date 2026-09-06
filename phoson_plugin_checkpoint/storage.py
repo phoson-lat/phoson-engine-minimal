@@ -7,6 +7,7 @@ application embedding the engine (e.g. Phoson-Core).
 
 import json
 import asyncio
+import logging
 from typing import Any
 from dataclasses import field, dataclass
 
@@ -28,6 +29,8 @@ from phoson_agent.sessions.serialization import message_to_dict, message_from_di
 
 SESSIONS_TABLE = "phoson_checkpoint_sessions"
 NODES_TABLE = "phoson_checkpoint_nodes"
+
+_LOG = logging.getLogger("phoson_plugin_checkpoint")
 
 _SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {SESSIONS_TABLE} (
@@ -82,6 +85,12 @@ class PostgresStorage(SessionStorage):
     pool_min_size: int = 1
     pool_max_size: int = 10
 
+    #: Name of the UNIQUE (session_id, id) constraint the upsert in
+    #: :meth:`save` relies on (F-52). Fresh installs get it from the
+    #: ``PRIMARY KEY`` in ``_SCHEMA_SQL``; pre-F-52 tables get it via the
+    #: migration in :meth:`_ensure_pool`.
+    _NODES_UQ_CONSTRAINT = "uq_nodes_session_id"
+
     _pool: Any = field(default=None, init=False, repr=False)
     _pool_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -104,8 +113,58 @@ class PostgresStorage(SessionStorage):
                 )
                 async with pool.acquire() as conn:
                     await conn.execute(_SCHEMA_SQL)
+                    await self._ensure_nodes_unique_constraint(conn)
                 self._pool = pool
         return self._pool
+
+    async def _ensure_nodes_unique_constraint(self, conn: Any) -> None:
+        """Ensure the UNIQUE (session_id, id) constraint exists (F-52).
+
+        ``ON CONFLICT (session_id, id) DO NOTHING`` in :meth:`save`
+        requires a unique constraint on that column pair. Fresh installs
+        already have one (the ``PRIMARY KEY`` in ``_SCHEMA_SQL``); this
+        covers pre-F-52 tables created without it.
+
+        Postgres has no ``ADD CONSTRAINT IF NOT EXISTS``, so the
+        constraint is checked first (``pg_constraint``) and the
+        ``ALTER TABLE`` only runs when it is missing. A failure (e.g.
+        duplicate rows the constraint cannot coexist with) is logged,
+        not raised: the storage must stay usable and the caller can
+        clean the duplicates and retry.
+        """
+        # The column attnums of (session_id, id) in the table's column
+        # order — what a UNIQUE constraint on that pair would store in
+        # pg_constraint.conkey.
+        attnums = await conn.fetch(
+            """
+            SELECT attnum FROM pg_attribute
+            WHERE attrelid = $1::regclass AND attname IN ('session_id', 'id')
+            ORDER BY attnum
+            """,
+            NODES_TABLE,
+        )
+        expected = tuple(row["attnum"] for row in attnums)
+        existing = await conn.fetch(
+            "SELECT conkey FROM pg_constraint WHERE conrelid = $1::regclass",
+            NODES_TABLE,
+        )
+        if expected and tuple(expected) in [tuple(row["conkey"]) for row in existing]:
+            return
+        try:
+            await conn.execute(
+                f"""
+                ALTER TABLE {NODES_TABLE}
+                ADD CONSTRAINT {self._NODES_UQ_CONSTRAINT}
+                    UNIQUE (session_id, id)
+                """
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort migration
+            _LOG.warning(
+                "Could not add UNIQUE (session_id, id) constraint to %s: %s. "
+                "save() upserts may misbehave until it is added manually.",
+                NODES_TABLE,
+                exc,
+            )
 
     async def close(self) -> None:
         """Close the connection pool. Safe to call even if never opened."""
@@ -116,7 +175,16 @@ class PostgresStorage(SessionStorage):
     # ── SessionStorage API ───────────────────────────────────────────────
 
     async def save(self, tree: ConversationTree) -> None:
-        """Persist a conversation tree, replacing any nodes it had before."""
+        """Persist a conversation tree incrementally (F-52).
+
+        Append-only upsert: nodes whose ``(session_id, id)`` already
+        exists are skipped via ``ON CONFLICT (session_id, id) DO
+        NOTHING`` instead of the old ``DELETE`` + full re-``INSERT``.
+        A session's nodes only ever grow (compaction appends a new
+        branch; a fresh session gets a fresh id), so skipping existing
+        rows is semantically identical to the old replace — and it turns
+        each save from O(N) writes into O(delta) effective writes.
+        """
         pool = await self._ensure_pool()
         nodes = sorted(tree.nodes.values(), key=lambda n: n.created_at)
 
@@ -140,15 +208,13 @@ class PostgresStorage(SessionStorage):
                 tree.step_count,
                 tree.last_model,
             )
-            await conn.execute(
-                f"DELETE FROM {NODES_TABLE} WHERE session_id = $1", tree.session_id
-            )
             if nodes:
                 await conn.executemany(
                     f"""
                     INSERT INTO {NODES_TABLE}
                         (session_id, id, parent_id, message, metadata, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (session_id, id) DO NOTHING
                     """,
                     [
                         (

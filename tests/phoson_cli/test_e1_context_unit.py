@@ -143,6 +143,7 @@ def _controller(turns: int, **cfg) -> SessionController:
             compact_mode=cfg.get("mode", "balanced"),
             model="test-model",
             reasoning_effort=None,
+            preserve_thinking=None,
         )
         controller.chat = MagicMock()
         controller.chat.complete = AsyncMock(

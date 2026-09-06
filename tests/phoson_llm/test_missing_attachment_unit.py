@@ -121,13 +121,17 @@ class TestGeminiMissingFile:
     def test_missing_image_block_degrades_to_text_part(self):
         from phoson_llm.chats.gemini import _convert_block
 
-        part = _convert_block(self.types, ImageBlock(source=f"file://{GHOST_IMAGE}"))
+        part = _convert_block(
+            self.types, ImageBlock(source=f"file://{GHOST_IMAGE}"), {}
+        )
         assert part.text == missing_attachment_placeholder("image", GHOST_IMAGE)
 
     def test_missing_document_block_degrades_to_text_part(self):
         from phoson_llm.chats.gemini import _convert_block
 
-        part = _convert_block(self.types, DocumentBlock(source=f"file://{GHOST_PDF}"))
+        part = _convert_block(
+            self.types, DocumentBlock(source=f"file://{GHOST_PDF}"), {}
+        )
         assert part.text == missing_attachment_placeholder("document", GHOST_PDF)
 
     def test_missing_image_convert_messages_no_crash(self):

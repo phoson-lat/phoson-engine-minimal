@@ -91,3 +91,31 @@ jobs:
 
       - name: Pyright
         run: uv run pyright
+
+  # Docs↔GitHub parity (issue #146): any issue marked ✅ in ROADMAP.md /
+  # IMPROVEMENTS.md must be closed on GitHub (and vice-versa).
+  #
+  # Note: ROADMAP.md and IMPROVEMENTS.md are outside git (gitignored,
+  # local), so on the CI checkout the script finds no docs and exits 0.
+  # The gate activates once the docs are tracked again.
+  #
+  # `|| [ $? -eq 2 ]`: a GitHub API failure (exit 2) does NOT block the
+  # PR — only real drift (exit 1) does.
+  docs-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install httpx
+        run: pip install httpx
+
+      - name: Check docs parity
+        run: python scripts/check_docs_parity.py || [ $? -eq 2 ]
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -31,6 +31,7 @@ from phoson_llm.schemas import (
     ToolUseBlock,
     LLMStartEvent,
     ToolCallEvent,
+    ReasoningDoneEvent,
     ToolCallDeltaEvent,
     ReasoningTokenEvent,
 )
@@ -178,9 +179,7 @@ class AgentLoop:
             return
 
         if not outcome.done_event.has_tool_calls:
-            history.append(
-                Message(role="assistant", content=outcome.done_event.content)
-            )
+            history.append(_build_assistant_message(outcome))
             yield IterationFinal(
                 final_content=outcome.done_event.content,
                 truncated=(outcome.done_event.stop_reason == "max_tokens"),
@@ -261,6 +260,8 @@ class AgentLoop:
                 outcome.tool_calls.append(event)
             elif isinstance(event, UsageEvent):
                 outcome.usage_event = event
+            elif isinstance(event, ReasoningDoneEvent):
+                outcome.reasoning_done_event = event
             elif isinstance(event, LLMDoneEvent):
                 outcome.done_event = event
             elif isinstance(event, ErrorEvent):
@@ -306,7 +307,13 @@ class AgentLoop:
 
 
 def _build_assistant_message(outcome: LLMStepOutcome) -> Message:
-    """Build the assistant message containing text + tool_use blocks."""
+    """Build the assistant message containing text + tool_use blocks.
+
+    The turn's captured reasoning (``ReasoningDoneEvent``) is attached to the
+    message so it can be re-sent to the model on the next turn (#134). Both the
+    final-answer and the tool-call paths flow through here, so reasoning is
+    preserved whether or not the turn also issued tool calls.
+    """
     if outcome.done_event is None:
         raise PhosonAgentError("_build_assistant_message called without a done_event")
     blocks: list[TextBlock | ToolUseBlock] = []
@@ -320,4 +327,10 @@ def _build_assistant_message(outcome: LLMStepOutcome) -> Message:
                 args=call.args,
             )
         )
-    return Message(role="assistant", content=blocks)
+    reasoning_done = outcome.reasoning_done_event
+    return Message(
+        role="assistant",
+        content=blocks,
+        reasoning=reasoning_done.content if reasoning_done else None,
+        reasoning_signature=reasoning_done.signature if reasoning_done else None,
+    )

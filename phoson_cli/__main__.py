@@ -56,6 +56,7 @@ Options:
   -y, --yes            Skip the install confirmation (plugin install only)
   plugin <command>     Manage plugins: install, list, enable, disable,
                        remove, update, doctor
+  bg list              List saved sessions with run status (read-only)
   -h, --help           Show this help and exit
 """
 
@@ -76,6 +77,7 @@ class CliOptions:
     max_turns: int | None = None
     task: str | None = None
     plugin_args: list[str] | None = None
+    bg_args: list[str] | None = None
     assume_yes: bool = False
 
 
@@ -124,6 +126,9 @@ def parse_args(argv: list[str]) -> CliOptions:
                     value for value in plugin_args if value not in {"--yes", "-y"}
                 ]
             options.plugin_args = plugin_args
+            break
+        if arg == "bg":
+            options.bg_args = argv[i + 1 :]
             break
         if arg in {"-h", "--help"}:
             print(_USAGE)
@@ -513,6 +518,13 @@ def _run_cli() -> None:
             sys.exit(1)
         _run_plugin_command(options.plugin_args, config, assume_yes=options.assume_yes)
         return
+
+    if options.bg_args is not None:
+        # #129: `bg` is a read-only subcommand (no daemon, no agent run) —
+        # it lists local sessions with their run status.
+        from phoson_cli.commands import run_bg_command
+
+        sys.exit(run_bg_command(options.bg_args))
 
     if options.self_update:
         self_update()

@@ -38,6 +38,7 @@ from phoson_llm.schemas import (
     ToolCallDeltaEvent,
     ReasoningStartEvent,
     ReasoningTokenEvent,
+    cap_reasoning,
 )
 
 if TYPE_CHECKING:
@@ -91,6 +92,7 @@ class _MessageDict(TypedDict):
     content: NotRequired[str | list[dict]]
     tool_calls: NotRequired[list[dict]]
     tool_call_id: NotRequired[str]
+    reasoning_content: NotRequired[str]
 
 
 # ─── Message / tool conversion ──────────────────────────────────────────────
@@ -168,8 +170,37 @@ def _convert_content_block(block: "ContentBlock") -> JsonObject:
     }
 
 
-def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
-    """Converts Phoson messages to OpenAI-compatible format."""
+def _reasoning_field(msg: "Message", preserve_thinking: bool | None) -> str | None:
+    """The ``reasoning_content`` value to attach to a historical assistant
+    message, or ``None`` when it should be omitted (#134).
+
+    Emitted when the message carries reasoning and the caller has not
+    explicitly disabled preservation (``preserve_thinking is not False``).
+    ``None`` (the default) lets the adapter decide — OpenAI-compatible
+    reasoning models (Qwen3, vLLM, LM Studio) need the field sent back on
+    assistant turns to stay coherent across turns. The value is capped to
+    :data:`REASONING_MAX_CHARS` so a very long chain of thought cannot
+    inflate the context window.
+    """
+    if msg.role != "assistant" or not msg.reasoning:
+        return None
+    if preserve_thinking is False:
+        return None
+    return cap_reasoning(msg.reasoning)
+
+
+def _convert_messages(
+    messages: list["Message"], preserve_thinking: bool | None = None
+) -> list[_MessageDict]:
+    """Converts Phoson messages to OpenAI-compatible format.
+
+    Args:
+        messages: Phoson conversation messages.
+        preserve_thinking: Whether to re-send captured assistant reasoning as
+            ``reasoning_content`` (#134). ``None`` (default) = emit for
+            assistant turns that carry reasoning; ``False`` = never emit.
+            See :func:`_reasoning_field` for the exact rule.
+    """
     from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
     result: list[_MessageDict] = []
@@ -181,7 +212,10 @@ def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
             continue
 
         if isinstance(msg.content, str):
-            result.append({"role": msg.role, "content": msg.content})
+            d: _MessageDict = {"role": msg.role, "content": msg.content}
+            if rc := _reasoning_field(msg, preserve_thinking):
+                d["reasoning_content"] = rc
+            result.append(d)
             continue
 
         text_blocks = [b for b in msg.content if isinstance(b, TextBlock)]
@@ -194,23 +228,24 @@ def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
         ]
 
         if tool_uses:
-            result.append(
-                {
-                    "role": "assistant",
-                    "content": text_blocks[0].text if text_blocks else "",
-                    "tool_calls": [
-                        {
-                            "id": b.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": b.tool_name,
-                                "arguments": json.dumps(b.args),
-                            },
-                        }
-                        for b in tool_uses
-                    ],
-                }
-            )
+            d = {
+                "role": "assistant",
+                "content": text_blocks[0].text if text_blocks else "",
+                "tool_calls": [
+                    {
+                        "id": b.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": b.tool_name,
+                            "arguments": json.dumps(b.args),
+                        },
+                    }
+                    for b in tool_uses
+                ],
+            }
+            if rc := _reasoning_field(msg, preserve_thinking):
+                d["reasoning_content"] = rc
+            result.append(d)
 
         for b in tool_results:
             result.append(
@@ -227,15 +262,16 @@ def _convert_messages(messages: list["Message"]) -> list[_MessageDict]:
                 parts.insert(
                     0, {"type": "text", "text": " ".join(b.text for b in text_blocks)}
                 )
-            result.append({"role": msg.role, "content": parts})
+            d = {"role": msg.role, "content": parts}
+            if rc := _reasoning_field(msg, preserve_thinking):
+                d["reasoning_content"] = rc
+            result.append(d)
 
         elif text_blocks and not tool_uses and not tool_results:
-            result.append(
-                {
-                    "role": msg.role,
-                    "content": " ".join(b.text for b in text_blocks),
-                }
-            )
+            d = {"role": msg.role, "content": " ".join(b.text for b in text_blocks)}
+            if rc := _reasoning_field(msg, preserve_thinking):
+                d["reasoning_content"] = rc
+            result.append(d)
 
     return result
 
@@ -399,7 +435,7 @@ def _build_request_kwargs(
     kwargs: dict[str, Any] = {
         "model": config.model,
         max_tokens_key: config.max_tokens,
-        "messages": _convert_messages(messages),
+        "messages": _convert_messages(messages, config.preserve_thinking),
         "stream": True,
         "stream_options": {"include_usage": True},
     }

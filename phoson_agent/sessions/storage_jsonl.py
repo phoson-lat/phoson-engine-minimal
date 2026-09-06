@@ -7,7 +7,12 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_agent.exceptions import PhosonSessionNotFoundError
-from phoson_agent.sessions.models import SessionMeta, SessionStorage, ConversationTree
+from phoson_agent.sessions.models import (
+    STATUS_ACTIVE,
+    SessionMeta,
+    SessionStorage,
+    ConversationTree,
+)
 from phoson_agent.sessions.serialization import (
     node_to_dict,
     node_from_dict,
@@ -73,7 +78,12 @@ class JsonlStorage(SessionStorage):
         await asyncio.to_thread(self._delete_sync, session_id)
 
     async def save_meta(self, session_id: str, meta: dict) -> None:
-        """Update session metadata and save."""
+        """Update session metadata and save.
+
+        ``status`` and ``last_run_id`` (#129) are passed through from the
+        meta dict when present; callers that do not manage run status
+        (legacy metrics dicts) leave the tree's current values untouched.
+        """
         tree = await self.load(session_id)
         tree.update_session_meta(
             total_cost=float(meta.get("total_cost_usd", 0.0)),
@@ -84,6 +94,8 @@ class JsonlStorage(SessionStorage):
             step_count=int(meta.get("step_count", 0)),
             last_model=meta.get("last_model") or None,
             title=meta.get("title"),
+            status=meta.get("status"),
+            last_run_id=meta.get("last_run_id"),
         )
         await self.save(tree)
 
@@ -146,18 +158,32 @@ class JsonlStorage(SessionStorage):
         return tree
 
     def _list_sessions_sync(self) -> list[SessionMeta]:
-        sessions: list[SessionMeta] = []
-        for file_path in sorted(self.base_path.glob("*.jsonl")):
-            meta = _read_session_meta(file_path)
-            if meta is not None:
-                sessions.append(meta)
-
-        sessions.sort(key=lambda s: s.updated_at, reverse=True)
-        return sessions
+        return list_session_metas(self.base_path)
 
     def _delete_sync(self, session_id: str) -> None:
         file_path = self._session_file(session_id)
         file_path.unlink(missing_ok=True)
+
+
+def list_session_metas(base_path: Path) -> list[SessionMeta]:
+    """List session metas in *base_path*, most recently updated first.
+
+    Public, storage-instance-free variant of
+    :meth:`JsonlStorage._list_sessions_sync` — used by ``phoson-cli bg
+    list`` (#129), which must read the session directory without
+    instantiating a storage (which would create the directory as a side
+    effect). A missing directory yields an empty list.
+    """
+    sessions: list[SessionMeta] = []
+    if not Path(base_path).is_dir():
+        return sessions
+    for file_path in sorted(Path(base_path).glob("*.jsonl")):
+        meta = _read_session_meta(file_path)
+        if meta is not None:
+            sessions.append(meta)
+
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
+    return sessions
 
 
 def _read_session_meta(file_path: Path) -> SessionMeta | None:
@@ -211,6 +237,11 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
     if meta_values and not has_split:
         # F-34 legacy: only the sum was persisted — surface it under output.
         output_tokens = int(meta_values.get("total_tokens", 0))
+    # #129: legacy files carry no status — default to "active" so they are
+    # treated as "may have died mid-run" (same rule as apply_tree_meta).
+    status = (
+        meta_values.get("status") if meta_values and meta_values.get("status") else None
+    ) or STATUS_ACTIVE
     return SessionMeta(
         id=file_path.stem,
         created_at=created_at,
@@ -223,4 +254,6 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         step_count=int(meta_values.get("step_count", 0)) if meta_values else 0,
         last_model=meta_values.get("last_model") if meta_values else None,
         title=meta_values.get("title") if meta_values else None,
+        status=status,
+        last_run_id=meta_values.get("last_run_id") if meta_values else None,
     )

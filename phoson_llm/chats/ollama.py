@@ -52,6 +52,9 @@ def _convert_messages(messages: list[Message]) -> list[JsonObject]:
     Returns:
         List of formatted messages for Ollama.
     """
+    # TODO(#134): re-send captured assistant reasoning as ``reasoning_content``
+    # (like the OpenAI-compatible adapters). Deferred to #188 — Ollama does not
+    # yet extract the ``think`` channel (F-50), so there is no reasoning to send.
     result: list[JsonObject] = []
 
     for msg in messages:

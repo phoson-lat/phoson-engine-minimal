@@ -64,7 +64,13 @@ from ..theme import (
     build_prompt_style,
     build_picker_style_dict,
 )
-from .render import BlockAnsiCache, windowed_slice, _line_boundaries, render_chat_split
+from .render import (
+    BlockAnsiCache,
+    BlockFormattedTextCache,
+    windowed_slice,
+    _line_boundaries,
+    render_chat_split,
+)
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
@@ -450,6 +456,11 @@ class PhosonApp:
         self._windowed_ansi = ANSI("")
         # Immutable transcript blocks render to ANSI once per width (#perf).
         self._block_ansi_cache = BlockAnsiCache()
+        # T-15 (#172): FormattedText counterpart of the ANSI cache above.
+        # Same append-only blocks, cached as ptk (style, text) fragments.
+        # Kept in sync (init/apply_theme/_reset_transcript); see the
+        # TODO(T-15) in _render_chat for the intended fragment windowing.
+        self._block_ft_cache = BlockFormattedTextCache()
         self._run_task: asyncio.Task | None = None
         # Double-Esc rewind (IMPROVEMENTS.md G1): monotonic timestamp of the
         # last idle Esc press, and the stack of pre-rewind cursors that
@@ -706,6 +717,7 @@ class PhosonApp:
         self.sink.theme = theme
         self._apply_style()
         self._block_ansi_cache.clear(0)
+        self._block_ft_cache.clear(0)
         self._header_cache_key = None  # rebuild header for the new palette
         self.sink.dirty = True
         self.app.invalidate()
@@ -1020,6 +1032,16 @@ class PhosonApp:
         render_ms = 0.0
         if self.sink.dirty or width != self._last_width:
             render_start = time.perf_counter()
+            # TODO(T-15): wire BlockFormattedTextCache into _render_chat —
+            # window the cached FormattedText fragments directly so the pane
+            # skips the per-frame ANSI re-parse. Not done yet on purpose:
+            # the ANSI-string windowing below relies on Rich re-asserting
+            # each line's SGR state after every newline, and a
+            # fragments->ANSI_to_string round trip would drop that
+            # re-assertion and unstyle the window's top line. The FT cache
+            # is already created/cleared alongside the ANSI cache (init,
+            # apply_theme, _reset_transcript), so the switch is a
+            # fragment-windowing change in this method + render_chat_split.
             text, prefix_len = render_chat_split(
                 self.sink, width, self._block_ansi_cache
             )
@@ -1912,6 +1934,7 @@ class PhosonApp:
         self.sink.blocks.clear()
         self.sink.drop_error_notice()
         self._block_ansi_cache.clear(0)
+        self._block_ft_cache.clear(0)
         self._banner_block = None
         self.sink.dirty = True
         self.app.invalidate()

@@ -36,6 +36,18 @@ class ConversationNode:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+#: Session run statuses (#129). ``active`` means "a run was in flight (or
+#: never finished cleanly)" — the only status a *crashed* process can
+#: leave behind, which is exactly what resume uses to detect orphans.
+STATUS_ACTIVE: str = "active"
+STATUS_COMPLETED: str = "completed"
+STATUS_ABORTED: str = "aborted"
+STATUS_ORPHANED: str = "orphaned"
+VALID_STATUSES: frozenset[str] = frozenset(
+    {STATUS_ACTIVE, STATUS_COMPLETED, STATUS_ABORTED, STATUS_ORPHANED}
+)
+
+
 @dataclass
 class SessionMeta:
     """Metadata for a conversation session.
@@ -51,6 +63,10 @@ class SessionMeta:
         total_tokens: Total tokens consumed.
         step_count: Number of agent steps executed.
         last_model: Most recently used model.
+        status: Run status — one of :data:`VALID_STATUSES`. Defaults to
+            ``"active"`` so pre-#129 files (no status recorded) read as
+            "may have died mid-run" and get orphan-checked on resume.
+        last_run_id: UUID of the most recent run, for forensics.
     """
 
     id: str
@@ -68,6 +84,8 @@ class SessionMeta:
     step_count: int = 0
     last_model: str | None = None
     title: str | None = None
+    status: str = STATUS_ACTIVE
+    last_run_id: str | None = None
 
 
 @dataclass
@@ -99,6 +117,10 @@ class ConversationTree:
     step_count: int = 0
     last_model: str | None = None
     title: str | None = None
+    # #129: run status + last run id, persisted in the session_meta record
+    # so resume can detect orphans and ``bg list`` can show run state.
+    status: str = STATUS_ACTIVE
+    last_run_id: str | None = None
 
     @classmethod
     def new(cls, session_id: str | None = None) -> "ConversationTree":
@@ -152,6 +174,37 @@ class ConversationTree:
         while cursor is not None:
             node = self.nodes[cursor]
             path.append(node.message)
+            cursor = node.parent_id
+        path.reverse()
+        return path
+
+    def get_node_path(self, node_id: str | None) -> list[ConversationNode]:
+        """Get the node path from root to the specified node (#129).
+
+        Same walk as :meth:`get_path`, but returning the
+        :class:`ConversationNode` objects (message + metadata + ids)
+        instead of bare messages — the shape needed by
+        :func:`phoson_agent.sessions.serialization.orphan_recovery`.
+
+        Args:
+            node_id: Target node ID, or None to return empty list.
+
+        Returns:
+            List of nodes from root to the target node (inclusive).
+
+        Raises:
+            ValueError: If node_id doesn't exist in the tree.
+        """
+        if node_id is None:
+            return []
+        if node_id not in self.nodes:
+            raise ValueError(f"Node {node_id} does not exist.")
+
+        path: list[ConversationNode] = []
+        cursor: str | None = node_id
+        while cursor is not None:
+            node = self.nodes[cursor]
+            path.append(node)
             cursor = node.parent_id
         path.reverse()
         return path
@@ -279,6 +332,8 @@ class ConversationTree:
                 step_count=self.step_count,
                 last_model=self.last_model,
                 title=self.title,
+                status=self.status,
+                last_run_id=self.last_run_id,
             )
 
         return SessionMeta(
@@ -293,6 +348,8 @@ class ConversationTree:
             step_count=self.step_count,
             last_model=self.last_model,
             title=self.title,
+            status=self.status,
+            last_run_id=self.last_run_id,
         )
 
     def label(self, node_id: str, text: str) -> None:
@@ -326,6 +383,8 @@ class ConversationTree:
         step_count: int | None = None,
         last_model: str | None = None,
         title: str | None = None,
+        status: str | None = None,
+        last_run_id: str | None = None,
     ) -> None:
         """Update session-level metadata."""
         if total_cost is not None:
@@ -342,6 +401,10 @@ class ConversationTree:
             self.last_model = last_model
         if title is not None:
             self.title = title
+        if status is not None:
+            self.status = status
+        if last_run_id is not None:
+            self.last_run_id = last_run_id
 
 
 class SessionStorage(ABC):

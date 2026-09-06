@@ -18,8 +18,10 @@ That's it; the dispatch table picks it up automatically.
 
 import os
 import re
+import sys
 import asyncio
 import inspect
+import datetime
 from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
 from dataclasses import dataclass
@@ -36,6 +38,7 @@ from prompt_toolkit.completion import (
 
 from phoson_agent import Plugin, CliCommandSpec, CliCommandContext, CliCommandInvocation
 from phoson_llm.schemas import REASONING_EFFORTS
+from phoson_agent.sessions.storage_jsonl import list_session_metas
 
 from .theme import get_theme, default_theme_registry
 from .config import (
@@ -1634,3 +1637,94 @@ class CommandHandler:
         for line in summary.splitlines():
             self._r.print_info(line)
         return True
+
+
+# ─── `bg` subcommand (#129) ───────────────────────────────────────────────────
+#
+# ``phoson-cli bg list`` is a *subcommand* (not a slash command), so it does
+# not enter COMMAND_SPECS — the REPL never sees it. It is a pure read over
+# the local session files (``~/.phoson/sessions/*.jsonl``): no daemon, no
+# network, no writes. "Se me murió, ¿dónde quedó?" → this table.
+
+
+def _format_bg_cost(cost: float) -> str:
+    """Compact cost cell: ``$0.00`` under a cent, two decimals otherwise."""
+    if cost < 0.005:
+        return "$0.00"
+    return f"${cost:,.2f}"
+
+
+def _format_bg_activity(dt: datetime.datetime) -> str:
+    """Last-activity cell: ``YYYY-MM-DD HH:MM`` (UTC, as stored)."""
+    return dt.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M")
+
+
+def list_bg_sessions(sessions_dir: Path) -> str:
+    """Render the ``bg list`` table over the local session files (#129).
+
+    Read-only: globs ``*.jsonl`` in *sessions_dir* and reads each file's
+    persisted meta record (status, model, steps, tokens, cost) plus the
+    file's mtime as "last activity". Rows are sorted most-recently-active
+    first. A missing directory or a directory with no sessions renders
+    the same friendly empty message instead of an error.
+    """
+    metas = list_session_metas(Path(sessions_dir))
+    if not metas:
+        return "No sessions found."
+
+    headers = ("ID", "STATUS", "MODEL", "STEPS", "TOKENS", "COST", "LAST ACTIVITY")
+    rows = [
+        (
+            str(m.id)[:8],
+            m.status,
+            m.last_model or "-",
+            str(m.step_count),
+            f"{m.total_tokens:,}",
+            _format_bg_cost(m.total_cost),
+            _format_bg_activity(m.updated_at),
+        )
+        for m in metas
+    ]
+    widths = [
+        max(len(headers[col]), *(len(row[col]) for row in rows))
+        for col in range(len(headers))
+    ]
+    lines = [
+        "  ".join(
+            headers[col].ljust(widths[col]) for col in range(len(headers))
+        ).rstrip(),
+    ]
+    lines.extend(
+        "  ".join(row[col].ljust(widths[col]) for col in range(len(headers))).rstrip()
+        for row in rows
+    )
+    return "\n".join(lines)
+
+
+def run_bg_command(args: list[str]) -> int:
+    """Dispatch the ``bg`` subcommand. Returns a process exit code.
+
+    Slices 1+2 ship only ``bg list``; ``show``/``attach``/``stop`` are
+    planned for the daemon slices (#129 3-5).
+
+    ``bg list`` is a *diagnostic* ("se me murió, ¿dónde quedó?"), so it
+    must stay usable even when the config is broken: it resolves the
+    sessions dir from the config when that loads, and otherwise falls
+    back to the default ``~/.phoson/sessions``.
+    """
+    if not args or args[0] == "list":
+        from pathlib import Path
+
+        from phoson_cli.config import PhosonConfig, load_config
+
+        try:
+            sessions_dir = load_config().sessions_dir
+        except Exception:  # noqa: BLE001 — config is best-effort here
+            sessions_dir = PhosonConfig().sessions_dir
+        print(list_bg_sessions(Path(sessions_dir)))
+        return 0
+    print(
+        f"phoson-cli: unknown bg command {' '.join(args)!r} — available: list",
+        file=sys.stderr,
+    )
+    return 2

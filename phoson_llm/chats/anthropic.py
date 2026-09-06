@@ -45,6 +45,7 @@ from phoson_llm.schemas import (
     ToolCallDeltaEvent,
     ReasoningStartEvent,
     ReasoningTokenEvent,
+    cap_reasoning,
 )
 from phoson_llm.chats.base import BaseLLMChat
 
@@ -148,8 +149,35 @@ def _convert_content_block(block: ContentBlock) -> JsonObject:
     return {"type": "text", "text": f"[Unsupported block: {type(block).__name__}]"}
 
 
+def _thinking_block(msg: Message, preserve_thinking: bool | None) -> JsonObject | None:
+    """Reconstruct the Anthropic ``thinking`` block for a historical assistant
+    message, or ``None`` when it cannot/should not be sent (#134).
+
+    Anthropic requires the signed ``thinking`` block to be returned verbatim
+    on every subsequent turn when extended thinking is enabled; dropping it
+    mid-conversation is a 400. The block is only emitted when the message
+    carries both the reasoning text *and* its opaque ``signature`` — the
+    signature is mandatory for the API to accept the block, so when it is
+    absent we degrade (send the text without the block) rather than fail.
+    ``preserve_thinking=False`` suppresses it entirely.
+    """
+    if msg.role != "assistant" or not msg.reasoning:
+        return None
+    if preserve_thinking is False:
+        return None
+    if not msg.reasoning_signature:
+        return None
+    return {
+        "type": "thinking",
+        "thinking": cap_reasoning(msg.reasoning),
+        "signature": msg.reasoning_signature,
+    }
+
+
 def _convert_messages(
-    messages: list[Message], cache_last: bool = False
+    messages: list[Message],
+    cache_last: bool = False,
+    preserve_thinking: bool | None = None,
 ) -> list[JsonObject]:
     """
     Converts Phoson's internal format to the format expected by Anthropic.
@@ -161,6 +189,10 @@ def _convert_messages(
             breakpoint, so the cached prefix extends across turns as the
             conversation grows. ``tool_use`` blocks are skipped — the API
             does not accept a ``cache_control`` marker on them.
+        preserve_thinking: Whether to re-send captured assistant reasoning as
+            a signed ``thinking`` block (#134). ``None`` (default) = emit for
+            assistant turns that carry a reasoning signature; ``False`` =
+            never emit. See :func:`_thinking_block` for the exact rule.
 
     Returns:
         list[dict]: List of formatted messages for the Anthropic API.
@@ -204,6 +236,13 @@ def _convert_messages(
                 tool_results.append(block)
             else:
                 multimodal_blocks.append(block)
+
+        # The thinking block must lead the assistant turn (Anthropic orders
+        # thinking before any other block), so it is inserted at the front
+        # once the message's own blocks have been collected.
+        thinking = _thinking_block(msg, preserve_thinking)
+        if thinking is not None:
+            blocks.insert(0, thinking)
 
         for b in tool_uses:
             blocks.append(
@@ -279,6 +318,22 @@ def _extract_system(messages: list[Message]) -> str | None:
     return None
 
 
+def _extract_thinking_signature(final_msg: object) -> str | None:
+    """Read the opaque signature from the final message's ``thinking`` block.
+
+    Anthropic exposes the per-thinking-block signature only on the completed
+    message — the streaming deltas carry the text but not the signature — so
+    this is the single place where it can be captured (#134). ``None`` when
+    the turn produced no thinking block; the block is then simply not re-sent
+    on the next turn (degradation, not an error).
+    """
+    content = getattr(final_msg, "content", None) or []
+    for block in content:
+        if getattr(block, "type", None) == "thinking":
+            return getattr(block, "signature", None)
+    return None
+
+
 # ─── Adapter ─────────────────────────────────────────────────────────────────
 
 
@@ -337,7 +392,9 @@ class AnthropicChat(BaseLLMChat):
         kwargs: dict = {
             "model": config.model,
             "max_tokens": config.max_tokens,
-            "messages": _convert_messages(messages, cache_last=True),
+            "messages": _convert_messages(
+                messages, cache_last=True, preserve_thinking=config.preserve_thinking
+            ),
         }
 
         system = config.system or _extract_system(messages)
@@ -429,9 +486,6 @@ class AnthropicChat(BaseLLMChat):
                     elif etype == "content_block_stop":
                         idx = event.index  # type: ignore[union-attr]
 
-                        if reasoning_acc and idx == 0:
-                            yield ReasoningDoneEvent(content=reasoning_acc)
-
                         if idx in tool_args_acc and tool_names.get(idx):
                             raw = tool_args_acc[idx]
                             try:
@@ -457,6 +511,18 @@ class AnthropicChat(BaseLLMChat):
 
                 final_msg = await s.get_final_message()
                 stop_reason = getattr(final_msg, "stop_reason", None)
+
+                # The reasoning text is known as soon as the thinking block
+                # stops, but its *signature* is only present on the completed
+                # message, so the ReasoningDoneEvent is deferred to here
+                # (#134). The agent loop folds both into the assistant message
+                # so the signed thinking block can be re-sent next turn.
+                if reasoning_acc:
+                    yield ReasoningDoneEvent(
+                        content=reasoning_acc,
+                        signature=_extract_thinking_signature(final_msg),
+                    )
+
                 u = final_msg.usage
 
                 usage = TokenUsage(

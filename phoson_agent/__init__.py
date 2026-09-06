@@ -32,6 +32,7 @@ from .exceptions import (
     PhosonAgentError,
     PhosonPluginError,
     PhosonSessionError,
+    DoomLoopDetectedError,
     PhosonPluginLoadError,
     PhosonAgentRunningError,
     PhosonPluginConfigError,
@@ -41,7 +42,12 @@ from .exceptions import (
     PhosonToolReturnTypeError,
     PhosonSessionNotFoundError,
 )
-from .middleware import AgentMiddleware, RetryMiddleware
+from .middleware import (
+    AgentMiddleware,
+    RetryMiddleware,
+    DoomLoopMiddleware,
+    EnvironmentalContextMiddleware,
+)
 from .permissions import PermissionPolicy, ToolBlockedError, PermissionMiddleware
 from .plugin_loader import PluginRegistry, load_plugin, register_loader
 from .cli_extensions import (
@@ -67,6 +73,8 @@ __all__ = [
     "AgentContext",
     "AgentMiddleware",
     "RetryMiddleware",
+    "DoomLoopMiddleware",
+    "EnvironmentalContextMiddleware",
     "Plugin",
     "PluginSpec",
     "PluginLoader",
@@ -123,6 +131,7 @@ __all__ = [
     "PhosonSessionError",
     "PhosonSessionNotFoundError",
     "PhosonSessionCorruptError",
+    "DoomLoopDetectedError",
     # permissions (A1)
     "PermissionMiddleware",
     "PermissionPolicy",
