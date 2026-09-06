@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 
 from phoson_cli.config import PhosonConfig
-from phoson_cli.fullscreen.app import (
+from phoson_cli.fullscreen.app import PhosonApp
+from phoson_cli.fullscreen.header_model import (
     _FOOTER_HINT_IDLE,
     _FOOTER_HINT_PICKER,
     _FOOTER_HINT_RUNNING,
-    PhosonApp,
 )
 
 

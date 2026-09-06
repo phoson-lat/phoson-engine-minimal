@@ -64,6 +64,12 @@ from ..theme import (
     build_prompt_style,
     build_picker_style_dict,
 )
+from .floats import FloatsController
+
+# Re-export for backwards compatibility: ``test_fullscreen_shell_unit`` imports
+# the historical name ``_bash_card_rows`` from this module (moved to
+# :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
+from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
 from .render import (
     BlockAnsiCache,
     BlockFormattedTextCache,
@@ -94,13 +100,14 @@ from .completer import (
     StaticArgCompleter,
     SessionsArgCompleter,
 )
-from ..controller import MAX_RESUME_REPLAY_MESSAGES
-from ..formatting import format_token_indicator
 from .model_cache import ModelCache
 from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
+from .header_model import HeaderModel
+from .header_model import short_cwd as _short_cwd_impl
 from .session_cache import SessionListCache
+from .rewind_controller import RewindController
 
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
 # ``mouse_support=True`` so the scroll wheel can be handled by the app
@@ -128,9 +135,7 @@ from .session_cache import SessionListCache
 # current state, so it never truncates at 80 columns. The full cheatsheet
 # (scroll, reasoning, paste image, clear, rewind, exit, Shift+Drag) lives
 # in ``/keys`` and ``docs/cli/mouse-and-links.md`` — not on every frame.
-_FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
-_FOOTER_HINT_RUNNING = "esc cancel"
-_FOOTER_HINT_PICKER = "enter  ·  esc"
+# (The footer hint strings moved to ``header_model.py`` in #187.)
 
 # How often the subagent panel animation frame advances while active.
 # Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
@@ -153,10 +158,7 @@ _SUBAGENT_TICK_SECONDS = 0.12
 # in flight, and no double-tap state is recorded then.
 _REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0
 
-# How often the header re-checks for AGENTS.md/CLAUDE.md memory files
-# (IMPROVEMENTS.md A3) — the prompt itself re-reads them every turn; this
-# cache only avoids stat-ing the filesystem on every rendered frame.
-_AGENTS_MD_CACHE_SECONDS = 5.0
+# (The AGENTS.md re-check interval moved to ``header_model.py`` in #187.)
 
 # Max height (in lines) the multiline input grows to before it scrolls
 # internally (IMPROVEMENTS.md A2).
@@ -203,11 +205,6 @@ class _ComposerPlaceholderProcessor(Processor):
 # writes (see ``PhosonRepl.run``), so the two front ends share one history.
 # Overridable per-run via ``PhosonConfig.history_file`` (used by tests).
 _DEFAULT_HISTORY_FILE = Path("~/.phoson/history.txt").expanduser()
-
-
-def _one_line(text: str) -> str:
-    """Collapse whitespace to a single line (rewind notices/previews)."""
-    return " ".join(text.split())
 
 
 class ChatScrollbarMargin(Margin):
@@ -387,19 +384,8 @@ def _skill_names() -> list[str]:
         return []
 
 
-def _bash_card_rows(command: str) -> list[tuple[str, str]]:
-    """T-6: the permission card's content fragments (testable unit).
-
-    Title + the command in monospace + the three actions. The Float
-    wrapper (:meth:`PhosonApp.run_float_bash_card`) renders exactly
-    these rows, so the test suite asserts on this function.
-    """
-    return [
-        ("class:title", "  Run bash command?\n\n"),
-        ("class:prompt.model", f"  $ {command}\n"),
-        ("\n", ""),
-        ("class:footer", "  [y] Yes    [a] Always    [n] No / Esc\n"),
-    ]
+# ``_bash_card_rows`` is now :func:`phoson_cli.fullscreen.floats.bash_card_rows`
+# (moved in #187); the import alias keeps the historical name importable.
 
 
 class PhosonApp:
@@ -510,6 +496,9 @@ class PhosonApp:
         self._build_layout()
         self.app: Application = self._build_application()
         self._apply_style()
+        # Modal Float dialogs live in their own controller (#187); ``PhosonApp``
+        # keeps thin delegates so the public ``run_float_*`` surface is unchanged.
+        self._floats = FloatsController(self)
 
         self.sink = FullScreenSink(
             on_invalidate=self.app.invalidate,
@@ -521,6 +510,14 @@ class PhosonApp:
         )
         self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
         self.apply_theme(load_theme(config.theme, registry=self.repl.theme_registry))
+        # Header/footer model (#187). Created after ``self.repl`` exists (it
+        # reads ``repl.session_metrics`` / ``repl.config``); the ptk controls
+        # only invoke the header/footer delegates during rendering, i.e. after
+        # ``__init__`` completes, so this ordering is safe.
+        self._header = HeaderModel(self)
+        # Rewind / undo-jump controller (#187); ``PhosonApp`` keeps thin
+        # delegates so the ``keys.py`` name lookups and the test suite work.
+        self._rewind = RewindController(self)
 
         # T-1: the banner is no longer injected into the sink. The header
         # already carries provider/model/session; the art is available via
@@ -808,165 +805,37 @@ class PhosonApp:
 
     # ── Rendering ────────────────────────────────────────────────────────
 
+    # Header / footer rendering lives in :class:`phoson_cli.fullscreen.
+    # header_model.HeaderModel` (#187); the delegates below keep the ptk
+    # control wiring and the test suite working. The render cache state
+    # (``_header_cache`` / ``_perm_mode_cached`` / ``_agents_md_cached``)
+    # stays on the app so ``cycle_permission_mode`` / ``toggle_reasoning``
+    # can reset it directly.
+
     def _get_header_text(self) -> HTML:
-        """Compact runtime header: brand · model (provider) · cwd · usage · status.
-
-        The header is the single location for session facts in the
-        full-screen UI. The lower line deliberately contains only keyboard
-        hints, so no model/provider/cost/token/cwd value is repeated.
-
-        I-84: the HTML string is cached and only rebuilt when one of its
-        inputs changes — repainting the chat for a spinner glyph must not
-        re-stat the filesystem or reformat the header on every frame.
-        """
-        repl = self.repl
-        cost = repl.session_metrics.total_cost_usd
-        model_provider = f"{repl.current_model} ({repl.config.provider})"
-        cwd = self._short_cwd(Path.cwd())
-        # T-2: cost only when > 0 — an idle/fresh session shows just the
-        # token count, not a $0.0000 that reads as noise.
-        token_cost = (
-            f"{self._token_indicator()} tok · ${cost:.4f}"
-            if cost > 0
-            else f"{self._token_indicator()} tok"
-        )
-
-        attachments = len(repl.attachments)
-        attach_part = f" · 📎{attachments}" if attachments else ""
-        memory_part = " · 📄 agents.md" if self._has_agents_md() else ""
-        # Active-monitors indicator (I-126): the plugin reports it via a
-        # duck-typed hook; the header is the single place for session
-        # facts, so it lives here (in-memory, safe on every paint).
-        monitors = repl._controller.monitor_status()
-        monitors_part = f" · {monitors}" if monitors else ""
-        # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
-        # very end of the header, shown as soon as the background PyPI
-        # check lands and never blocking the paint. The shared REPL is
-        # the single source of truth for the check result in both
-        # front ends (the TUI starts it in ``run_async``).
-        update_part = f" | {repl.update_hint}" if repl.update_hint else ""
-        status = self.sink.status_text()
-        # T-2: the idle status is empty (no "Online"); only show the
-        # separator when there is actually a live status to display.
-        status_part = (
-            f'<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{status}</style>'
-            if status
-            else ""
-        )
-        # Permission-mode chip (T-6): always visible; the accent word for
-        # the *ask* state (confirmations are coming), dim for auto.
-        perm_mode = self._permission_mode()
-        mode_part = (
-            ' <style class="header">ask</style>'
-            if perm_mode == "ask"
-            else ' <style class="header_dim">· auto</style>'
-        )
-        # Reasoning-effort chip (Ctrl+E): dim when off, accent with the
-        # level when set. Read straight from the in-memory config (the
-        # cycle mutates it before invalidating the cache below), so no
-        # throttle like the permission policy file read is needed.
-        effort = self.repl.config.reasoning_effort
-        effort_part = (
-            f' <style class="header">effort: {effort}</style>'
-            if effort in REASONING_EFFORTS
-            else ' <style class="header_dim">· effort off</style>'
-        )
-
-        key = (
-            model_provider,
-            cwd,
-            token_cost,
-            attach_part,
-            memory_part,
-            monitors_part,
-            update_part,
-            status,
-            perm_mode,
-            effort or "",  # None (off) and "" hash identically for cache-key purposes
-        )
-        if self._header_cache_key != key:
-            self._header_cache_key = key
-            extras = f"{attach_part}{memory_part}{monitors_part}"
-            self._header_cache = HTML(
-                '<style class="header"> phoson </style>'
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{model_provider}</style>'
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{cwd}</style>'
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{token_cost}</style>'
-                f"{mode_part}"
-                f"{effort_part}"
-                f'<style class="header_dim">{extras}</style>'
-                f"{status_part}"
-                f'<style class="header_dim">{update_part}</style>'
-            )
-        return self._header_cache
+        """Compact runtime header: brand · model (provider) · cwd · usage."""
+        return self._header.get_header_text()
 
     def _permission_mode(self) -> str:
-        """Current permission mode for the header chip (T-6).
-
-        ``ask`` when the durable policy puts bash on the ask level,
-        ``auto`` otherwise (allow is the default for unlisted tools).
-        The policy file is re-read at most once per second; Shift+Tab
-        (``cycle_permission_mode``) refreshes it immediately.
-        """
-        now = time.monotonic()
-        if self._perm_mode_cached is None or now - self._perm_mode_checked_at >= 1.0:
-            from ..permissions_store import load_policy
-
-            self._perm_mode_cached = (
-                "ask" if load_policy().levels.get("bash") == "ask" else "auto"
-            )
-            self._perm_mode_checked_at = now
-        return self._perm_mode_cached
+        """Current permission mode for the header chip (T-6)."""
+        return self._header.permission_mode()
 
     def _get_footer_text(self) -> HTML:
-        """Contextual footer: at most three hints for the current state.
-
-        Replaces the fixed 8-shortcut cheatsheet (T-9), which truncated at
-        80 columns. The hints are deliberately short so the line survives
-        narrow terminals; the full key map is ``/keys``, and the
-        Shift+Drag text-selection note lives in
-        ``docs/cli/mouse-and-links.md`` (and /keys).
-        """
-        if self._active_float is not None:
-            hint = _FOOTER_HINT_PICKER
-        elif self._is_run_in_flight():
-            hint = _FOOTER_HINT_RUNNING
-        else:
-            hint = _FOOTER_HINT_IDLE
-        return HTML(f'<style class="footer">{hint}</style>')
+        """Contextual footer: at most three hints for the current state."""
+        return self._header.get_footer_text()
 
     def _has_agents_md(self) -> bool:
-        """Whether any AGENTS.md/CLAUDE.md memory file applies here.
-
-        Cached for a short window so the header can render every frame
-        without stat-ing the filesystem each time (IMPROVEMENTS.md A3).
-        """
-        now = time.monotonic()
-        if (
-            self._agents_md_cached is None
-            or now - self._agents_md_checked_at > _AGENTS_MD_CACHE_SECONDS
-        ):
-            from ..agents_md import collect_agents_md_files
-
-            self._agents_md_cached = bool(collect_agents_md_files())
-            self._agents_md_checked_at = now
-        return self._agents_md_cached
+        """Whether any AGENTS.md/CLAUDE.md memory file applies here."""
+        return self._header.has_agents_md()
 
     def _token_indicator(self) -> str:
         """Short token usage string like '12.4k/128k' for the header."""
-        return format_token_indicator(
-            self.repl._context_tokens, self.repl._context_window
-        )
+        return self._header.token_indicator()
 
     @staticmethod
     def _short_cwd(cwd: Path) -> str:
         """Compact display path for the fixed-width header."""
-        parts = cwd.parts
-        return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
+        return _short_cwd_impl(cwd)
 
     def _compute_chat_bounds(self, text: str, prefix_len: int, width: int) -> list[int]:
         """Per-line char offsets for *text*, built incrementally (T-14 follow-up).
@@ -1358,64 +1227,17 @@ class PhosonApp:
         self.app.invalidate()
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
+    # Modal dialog bodies live in :class:`phoson_cli.fullscreen.floats.
+    # FloatsController` (#187); the delegates below keep the public
+    # ``run_float_*`` surface and the ``keys.py`` name lookups working.
 
     async def run_float_picker(self, picker: BasePicker) -> Any:
         """Show ``picker`` as a modal Float; return its result once resolved."""
-        result_future: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        def on_done(result: object) -> None:
-            if not result_future.done():
-                result_future.set_result(result)
-
-        picker._on_done = on_done
-        picker._invalidate = self.app.invalidate
-
-        float_ = picker.as_float()
-        self._open_float(float_, picker._kb, picker._window)
-        try:
-            return await result_future
-        finally:
-            self._close_float(float_)
+        return await self._floats.run_float_picker(picker)
 
     async def run_float_confirm(self, prompt: str) -> bool:
-        """Show a yes/no Float; return the answer (False on cancel/Ctrl+C).
-
-        Resolving "no" on Ctrl+C (rather than leaving it unhandled) matters
-        once this is reused for the bash safe-mode confirmation: cancelling
-        the run must not leave the awaiting tool call hanging on a Float
-        nobody can answer anymore.
-        """
-        result_future: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        def resolve(answer: bool) -> None:
-            if not result_future.done():
-                result_future.set_result(answer)
-
-        kb = KeyBindings()
-        kb.add("y")(lambda event: resolve(True))  # noqa: ARG005
-        kb.add("Y")(lambda event: resolve(True))  # noqa: ARG005
-        kb.add("n")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("N")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("escape")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("c-c")(lambda event: resolve(False))  # noqa: ARG005
-
-        window = Window(
-            content=FormattedTextControl(
-                lambda: [
-                    ("class:title", f"  {prompt}\n\n"),
-                    ("class:footer", "  [y] Yes    [n] No / Esc\n"),
-                ],
-                focusable=True,
-            ),
-            always_hide_cursor=True,
-        )
-        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
-
-        self._open_float(float_, kb, window)
-        try:
-            return await result_future
-        finally:
-            self._close_float(float_)
+        """Show a yes/no Float; return the answer (False on cancel/Ctrl+C)."""
+        return await self._floats.run_float_confirm(prompt)
 
     async def run_float_bash_card(
         self,
@@ -1423,182 +1245,28 @@ class PhosonApp:
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
     ) -> bool:
-        """T-6: the permission card — command in monospace, 3 actions.
-
-        ``y`` runs the command once; ``a`` runs it and remembers this
-        exact command as always-allowed (persisted by the caller through
-        ``on_always``); ``n``/Esc denies. Rendered as a proper card
-        (title + command body + action footer) instead of a generic
-        yes/no modal string.
-        """
-        result_future: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        def resolve(answer: bool, always: bool = False) -> None:
-            if result_future.done():
-                return
-            if always and on_always is not None:
-                try:
-                    self.app.create_background_task(on_always(command))
-                except Exception:
-                    # The Application isn't tracking tasks (unit tests):
-                    # schedule the grant on the running loop instead.
-                    try:
-                        asyncio.get_running_loop().create_task(on_always(command))
-                    except RuntimeError:  # pragma: no cover - no loop at all
-                        pass
-            result_future.set_result(answer)
-
-        kb = KeyBindings()
-        kb.add("y")(lambda event: resolve(True))  # noqa: ARG005
-        kb.add("Y")(lambda event: resolve(True))  # noqa: ARG005
-        kb.add("a")(lambda event: resolve(True, always=True))  # noqa: ARG005
-        kb.add("A")(lambda event: resolve(True, always=True))  # noqa: ARG005
-        kb.add("n")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("N")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("escape")(lambda event: resolve(False))  # noqa: ARG005
-        kb.add("c-c")(lambda event: resolve(False))  # noqa: ARG005
-
-        window = Window(
-            content=FormattedTextControl(
-                lambda: _bash_card_rows(command),
-                focusable=True,
-            ),
-            always_hide_cursor=True,
-        )
-        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
-
-        self._open_float(float_, kb, window)
-        try:
-            return await result_future
-        finally:
-            self._close_float(float_)
+        """T-6: the permission card — command in monospace, 3 actions."""
+        return await self._floats.run_float_bash_card(command, on_always=on_always)
 
     async def run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]
     ) -> str | None:
         """Show a simple keyboard selector for a plugin interaction."""
-        if not choices:
-            return None
-        result_future: asyncio.Future[str | None] = (
-            asyncio.get_running_loop().create_future()
-        )
-        selected = 0
-        kb = KeyBindings()
-
-        def resolve(value: str | None) -> None:
-            if not result_future.done():
-                result_future.set_result(value)
-
-        def move(delta: int) -> None:
-            nonlocal selected
-            selected = (selected + delta) % len(choices)
-            self.app.invalidate()
-
-        kb.add("up")(lambda event: move(-1))  # noqa: ARG005
-        kb.add("down")(lambda event: move(1))  # noqa: ARG005
-        kb.add("c-p")(lambda event: move(-1))  # noqa: ARG005
-        kb.add("c-n")(lambda event: move(1))  # noqa: ARG005
-        kb.add("enter")(lambda event: resolve(choices[selected].id))  # noqa: ARG005
-        kb.add("escape")(lambda event: resolve(None))  # noqa: ARG005
-        kb.add("c-c")(lambda event: resolve(None))  # noqa: ARG005
-
-        def content() -> list[tuple[str, str]]:
-            lines = [
-                ("class:title", f"  {title}\n"),
-                ("class:header", f"  {message}\n"),
-            ]
-            for index, choice in enumerate(choices):
-                marker = "▸" if index == selected else " "
-                style = "class:row.selected" if index == selected else "class:row"
-                detail = f" — {choice.detail}" if choice.detail else ""
-                lines.append((style, f"  {marker} {choice.label}{detail}\n"))
-            lines.append(
-                ("class:footer", "  ↑/↓ navigate  ·  Enter select  ·  Esc cancel\n")
-            )
-            return lines
-
-        window = Window(
-            content=FormattedTextControl(content, focusable=True),
-            always_hide_cursor=True,
-        )
-        float_ = Float(content=Frame(window), left=4, right=4, top=4, bottom=4)
-        self._open_float(float_, kb, window)
-        try:
-            return await result_future
-        finally:
-            self._close_float(float_)
+        return await self._floats.run_float_select(title, message, choices)
 
     async def run_float_form(
         self, title: str, fields: Sequence[FormField]
     ) -> dict[str, str] | None:
         """Collect a small plugin form in a modal, never exposing widgets to plugins."""
-        values: dict[str, TextArea] = {}
-        widgets = []
-        for field in fields:
-            area = TextArea(
-                text=field.default or "",
-                password=field.kind == "password",
-                height=1,
-                multiline=False,
-            )
-            values[field.id] = area
-            widgets.extend(
-                [
-                    Window(
-                        content=FormattedTextControl(f"  {field.label}\n"), height=1
-                    ),
-                    area,
-                ]
-            )
-        result_future: asyncio.Future[dict[str, str] | None] = (
-            asyncio.get_running_loop().create_future()
-        )
-        kb = KeyBindings()
-
-        def resolve() -> None:
-            result: dict[str, str] = {}
-            for field in fields:
-                value = values[field.id].text.strip()
-                if field.required and not value:
-                    return
-                if field.kind == "integer" and value:
-                    try:
-                        int(value)
-                    except ValueError:
-                        return
-                result[field.id] = value
-            if not result_future.done():
-                result_future.set_result(result)
-
-        kb.add("enter")(lambda event: resolve())  # noqa: ARG005
-        kb.add("escape")(lambda event: result_future.set_result(None))  # noqa: ARG005
-        kb.add("c-c")(lambda event: result_future.set_result(None))  # noqa: ARG005
-        body = HSplit(widgets)
-        float_ = Float(
-            content=Frame(body, title=title), left=4, right=4, top=4, bottom=4
-        )
-        self._open_float(float_, kb, next(iter(values.values()), self._prompt_input))
-        try:
-            return await result_future
-        finally:
-            self._close_float(float_)
+        return await self._floats.run_float_form(title, fields)
 
     def _open_float(
         self, float_: Float, kb: KeyBindings, focus_target: FocusableElement
     ) -> None:
-        self._root_container.floats.append(float_)
-        self._float_kb = kb
-        self._active_float = float_
-        self.app.layout.focus(focus_target)
-        self.app.invalidate()
+        self._floats.open_float(float_, kb, focus_target)
 
     def _close_float(self, float_: Float) -> None:
-        if float_ in self._root_container.floats:
-            self._root_container.floats.remove(float_)
-        self._float_kb = None
-        self._active_float = None
-        self.app.layout.focus(self._prompt_input)
-        self.app.invalidate()
+        self._floats.close_float(float_)
 
     def clear(self) -> None:
         self.sink.blocks.clear()
@@ -1797,147 +1465,27 @@ class PhosonApp:
             return
         self._last_escape_at = now
 
+    # Rewind / undo-jump (G1) lives in :class:`phoson_cli.fullscreen.
+    # rewind_controller.RewindController` (#187); the delegates below keep the
+    # ``keys.py`` name lookups and the test suite (``app._rewind_stack`` /
+    # ``app._apply_rewind`` / ``app._reset_transcript``) working. The
+    # ``_rewind_stack`` state stays on the app.
+
     async def handle_rewind(self) -> None:
-        """Double-Esc (idle): pick an earlier user message and rewind (G1).
-
-        The picker lists the user turns of the active path; selecting one
-        lands the cursor on the node *before* it (Claude Code's UX), the
-        previous cursor is pushed on the undo stack (``undo_jump``,
-        default Ctrl+Z, restores it), and the chat pane is redrawn from
-        the tree up to the new cursor. The discarded messages are not
-        deleted — they remain as an abandoned branch (visible via
-        ``/tree``), and the composer is pre-filled with the selected
-        turn's text so editing and resending is one Enter away.
-        """
-        if self._active_float is not None or self._is_run_in_flight():
-            return
-        candidates = self.repl.jump_candidates()
-        if not candidates:
-            self.sink.notify("info", "Nothing to rewind to in this session.")
-            return
-
-        from ..rewind_picker import build_rewind_picker
-
-        picker = build_rewind_picker(
-            candidates, theme=self.theme, invalidate=self.app.invalidate
-        )
-        result = await self.run_float_picker(picker)
-        if result.cancelled or result.node_id is None:
-            return
-        await self._apply_rewind(result.node_id)
+        """Double-Esc (idle): pick an earlier user message and rewind (G1)."""
+        await self._rewind.handle_rewind()
 
     async def _apply_rewind(self, user_node_id: str) -> None:
-        """Rewind to just before ``user_node_id`` and redraw the pane.
-
-        Each rewind pushes the previous cursor onto ``_rewind_stack``
-        (``undo_jump`` pops them back in reverse order), so consecutive
-        rewinds are individually restorable with repeated Ctrl+Z.
-        """
-        previous_cursor = self.repl.current_node_id
-        ok, info = self.repl.jump_to_user_turn(user_node_id)
-        if not ok:
-            self.sink.notify("error", str(info))
-            return
-
-        # The pre-rewind cursor is restorable (undo_jump) as long as the
-        # session doesn't change underneath (a new/load/compact replaces
-        # the tree, after which a stale node id is rejected by
-        # ``jump_to_node`` and the stack entry is dropped).
-        if previous_cursor is not None:
-            self._rewind_stack.append(previous_cursor)
-        try:
-            path = self.repl.tree.get_path(self.repl.current_node_id)
-        except (ValueError, AttributeError, TypeError):
-            self.sink.notify("error", "Could not redraw after rewind — cursor lost.")
-            return
-
-        self._reset_transcript()
-        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
-        else:
-            self.sink.print_history(path)
-        self.repl._context_tokens = self.repl._controller.estimate_active_path()
-        self._auto_scroll = True
-        self._chat_scroll_top = 0
-        self.app.invalidate()
-
-        # Re-populate the composer with the turn being rewound — editing
-        # it and resending replaces the abandoned branch in one Enter.
-        turn_text = self.repl.message_text(user_node_id).strip()
-        if turn_text:
-            self._prompt_input.text = turn_text
-
-        self.sink.notify(
-            "info",
-            f"Rewound to just before “{_one_line(turn_text)[:40]}” "
-            f"(cursor → {info[:8]}) — Ctrl+Z to restore, "
-            "edit and Enter to re-send.",
-        )
+        """Rewind to just before ``user_node_id`` and redraw the pane."""
+        await self._rewind.apply_rewind(user_node_id)
 
     def undo_jump(self) -> None:
-        """Ctrl+Z: undo the last rewind jump (G1) and redraw to that point.
-
-        Pops the pre-rewind cursor pushed by ``_apply_rewind`` (the
-        session's continuation point) and redraws the transcript up to
-        it. A plain Esc is *not* used: it would race the single-Esc run
-        cancel (#68) and the picker overlays' own Esc. The binding is
-        remappable (``undo_jump`` in ``[keys]``); the composer's buffer
-        ignores Ctrl+Z, so the key is free.
-        """
-        if self._active_float is not None or self._is_run_in_flight():
-            return
-        if not self._rewind_stack:
-            self.sink.notify("info", "No rewind to undo.")
-            return
-        cursor = self._rewind_stack.pop()
-        ok, info = self.repl.jump_to_node(cursor)
-        if not ok:
-            # The tree changed underneath (new/resume/compact replaced
-            # the session): every remaining stack entry is stale too, so
-            # drop the whole stack instead of warning per entry.
-            self._rewind_stack = []
-            self.sink.notify("warn", str(info))
-            return
-        try:
-            path = self.repl.tree.get_path(cursor)
-        except (ValueError, AttributeError, TypeError):
-            self.sink.notify("error", "Could not redraw — the node no longer exists.")
-            self._rewind_stack = []
-            return
-        self._reset_transcript()
-        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
-        else:
-            self.sink.print_history(path)
-        self.repl._context_tokens = self.repl._controller.estimate_active_path()
-        self._auto_scroll = True
-        self._chat_scroll_top = 0
-        self.app.invalidate()
-        self.sink.notify(
-            "info",
-            f"Back to the previous point (cursor → {info[:8]})."
-            + (
-                f" Ctrl+Z again — {len(self._rewind_stack)} more rewind(s) "
-                "on the stack."
-                if self._rewind_stack
-                else ""
-            ),
-        )
+        """Ctrl+Z: undo the last rewind jump (G1) and redraw to that point."""
+        self._rewind.undo_jump()
 
     def _reset_transcript(self) -> None:
-        """Drop the transcript and its ANSI cache.
-
-        Rewind/undo-redraws (G1) rebuild the pane from the tree; the
-        immutable-block cache must be dropped too, otherwise old
-        (discarded) block ids could shadow freshly rendered ones.
-        """
-        self.sink.blocks.clear()
-        self.sink.drop_error_notice()
-        self._block_ansi_cache.clear(0)
-        self._block_ft_cache.clear(0)
-        self._banner_block = None
-        self.sink.dirty = True
-        self.app.invalidate()
+        """Drop the transcript and its ANSI cache (see RewindController)."""
+        self._rewind.reset_transcript()
 
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
