@@ -31,6 +31,7 @@ from phoson_cli.formatting import (
     render_streaming_panel,
     render_tool_start_line,
     _sanitize_error_message,
+    render_monitor_wake_turn,
     subagent_tasks_from_args,
     render_subagent_start_line,
 )
@@ -330,6 +331,75 @@ def test_sanitize_error_message_empty_and_non_json() -> None:
 def test_render_user_turn_shows_text() -> None:
     output = _render(render_user_turn("hello there", DARK))
     assert "hello there" in output
+
+
+def test_render_user_turn_plain_message_is_single_untinted_text() -> None:
+    """A regular user message keeps the legacy single-style render."""
+    from rich.text import Text
+
+    group = render_user_turn("hello there", DARK)
+    body = group.renderables[1]
+    assert isinstance(body, Text)
+    # No per-character spans (whole message in one base ``text`` style): the
+    # monitor-wake tinting path must not kick in for ordinary input.
+    assert len(body.spans) == 0
+
+
+def test_render_monitor_wake_tints_without_changing_text() -> None:
+    """The dedicated ``render_monitor_wake_turn`` tints a wake header but keeps
+    the plain text byte-for-byte identical (prompt-safe): colour lives only in
+    the Rich style spans, so layout and the model-visible message are intact."""
+    from rich.text import Text
+
+    from phoson_plugin_monitor import render_wake_message
+    from phoson_plugin_monitor.storage import WakeEvent
+
+    event = WakeEvent.create(
+        "loop_free_sweep",
+        "command",
+        "sess",
+        {
+            "command": "grep -E 'RUN|END' log",
+            "returncode": 0,
+            "timed_out": False,
+            "output_tail": (
+                "--- estado ---\n### SWEEP START ###\nmmLu=50.18\n\nSWEEP: en curso"
+            ),
+        },
+    )
+    original = render_wake_message([event])
+
+    body = render_monitor_wake_turn(original, DARK).renderables[1]
+    # The model-visible text is preserved exactly (layout + prompt safety).
+    assert body.plain == original
+    # And it is actually tinted: more than one styled span across the block.
+    assert isinstance(body, Text)
+    assert len(body.spans) > 3
+    # The field separator must survive tinting (regression: the colon was
+    # dropped from the rendered output on the first attempt).
+    assert "command:" in body.plain
+    assert "returncode:" in body.plain
+
+
+def test_render_user_turn_delegates_monitor_wake_to_dedicated_renderer() -> None:
+    """``render_user_turn`` is the detection seam: a wake header routes to the
+    tinted renderer, while ordinary input keeps the plain single-style body."""
+    from rich.text import Text
+
+    from phoson_plugin_monitor import render_wake_message
+    from phoson_plugin_monitor.storage import WakeEvent
+
+    event = WakeEvent.create("watcher", "file", "sess", {"note": "hello"})
+    original = render_wake_message([event])
+
+    # Wake header: tinted body (same renderer as the dedicated function).
+    wake_group = render_user_turn(original, DARK)
+    assert wake_group.renderables[1] is not None
+    assert wake_group.renderables[1].plain == original
+    # Ordinary input: plain single-style body.
+    plain_group = render_user_turn("hello there", DARK)
+    assert isinstance(plain_group.renderables[1], Text)
+    assert len(plain_group.renderables[1].spans) == 0
 
 
 def test_render_notice_variants() -> None:

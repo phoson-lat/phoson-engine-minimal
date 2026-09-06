@@ -863,7 +863,7 @@ def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
 
     text = app._get_header_text().value
 
-    assert "12.4k/128.0k" in text or "12.4k/128k" in text
+    assert "12.4K/128K" in text
     assert f"{app.repl.current_model} ({app.repl.config.provider})" in text
     assert "$0.0123" in text
     assert app._short_cwd(Path.cwd()) in text

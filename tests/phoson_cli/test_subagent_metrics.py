@@ -197,3 +197,64 @@ def test_summary_without_fallback_has_no_caption() -> None:
     table = render_subagent_summary(metrics)
     assert table is not None
     assert table.caption is None
+
+
+# ── Cell formatters (Time / Tokens / Cost) ────────────────────────────────────
+
+
+def test_format_duration_units() -> None:
+    from phoson_cli.tools.subagent_panel import _format_duration
+
+    assert _format_duration(0) == "0ms"
+    assert _format_duration(450) == "450ms"
+    assert _format_duration(999) == "999ms"
+    # Seconds keep one decimal (dropped when whole).
+    assert _format_duration(1000) == "1s"
+    assert _format_duration(4200) == "4.2s"
+    assert _format_duration(9999) == "10s"  # rounds 9.999s up
+    assert _format_duration(12300) == "12.3s"
+    # Minutes / hours accumulate h:m:s with no padding.
+    assert _format_duration(60000) == "1m0s"
+    assert _format_duration(123000) == "2m3s"
+    assert _format_duration(3600000) == "1h0m0s"
+    assert _format_duration(3662000) == "1h1m2s"
+    assert _format_duration(7325000) == "2h2m5s"
+
+
+def test_abbr_tokens_units_and_overflow() -> None:
+    from phoson_cli.formatting import abbr_tokens
+
+    # Below 1000 stays raw.
+    assert abbr_tokens(0) == "0"
+    assert abbr_tokens(42) == "42"
+    assert abbr_tokens(999) == "999"
+    # K / M / B, trailing zeros dropped.
+    assert abbr_tokens(1000) == "1K"
+    assert abbr_tokens(1050) == "1.1K"
+    assert abbr_tokens(1200) == "1.2K"
+    assert abbr_tokens(1_000_000) == "1M"
+    assert abbr_tokens(1_234_567) == "1.2M"
+    assert abbr_tokens(1_500_000_000) == "1.5B"
+    # Rounding must not overflow a unit: 999999 -> 1M, not 1000K.
+    assert abbr_tokens(999_999) == "1M"
+    assert abbr_tokens(999_999_999) == "1B"
+
+
+def test_format_tokens_abbreviates_and_keeps_small_values() -> None:
+    from phoson_cli.tools.subagent_panel import _format_tokens
+
+    # Zero stays an em-dash; small values unchanged (backwards compatible).
+    assert _format_tokens(0, 0) == "—"
+    assert _format_tokens(42, 17) == "42in / 17out"
+    # Each side abbreviates independently above 1000.
+    assert _format_tokens(1200, 3400) == "1.2Kin / 3.4Kout"
+    assert _format_tokens(1_200_000, 3_400_000) == "1.2Min / 3.4Mout"
+    # One side can overflow while the other stays raw.
+    assert _format_tokens(999_999, 1200) == "1Min / 1.2Kout"
+
+
+def test_format_cost_unchanged() -> None:
+    from phoson_cli.tools.subagent_panel import _format_cost
+
+    assert _format_cost(0) == "—"
+    assert _format_cost(0.0015) == "$0.00150"

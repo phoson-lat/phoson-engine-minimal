@@ -69,9 +69,18 @@ def render_wake_message(events: list[WakeEvent]) -> str:
         if event.payload:
             for key, value in event.payload.items():
                 if isinstance(value, str):
-                    lines.append(f"  {key}: {value}")
+                    rendered = value
                 else:
-                    lines.append(f"  {key}: {json.dumps(value)}")
+                    rendered = json.dumps(value)
+                # Multi-line values (e.g. a command monitor's output_tail)
+                # are indented on every continuation line so the payload
+                # block reads as a coherent, aligned unit rather than a
+                # wall of text bleeding into column zero. Trailing
+                # whitespace is stripped so blank lines stay blank.
+                rendered_lines = rendered.split("\n")
+                lines.append(f"  {key}: {rendered_lines[0]}")
+                for cont in rendered_lines[1:]:
+                    lines.append(f"    {cont}" if cont else "")
     return "\n".join(lines)
 
 

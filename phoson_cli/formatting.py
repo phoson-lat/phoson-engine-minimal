@@ -311,8 +311,90 @@ def render_user_turn(text: str, theme: Theme) -> Group:
 
     The filled `` user `` badge chip is gone — a thin accent gutter reads
     as a chat speaker marker without the IM-style chip.
+
+    Monitor-wake turns (text beginning with the ``[MONITOR EVENTS]`` header
+    that ``phoson_plugin_monitor.render_wake_message`` produces) are
+    delegated to :func:`render_monitor_wake_turn`, which tints them. Every
+    other user message keeps the legacy single-style render. Detection lives
+    here — the one seam both front ends share — so sinks keep calling a
+    single function and never special-case monitor wakes themselves.
     """
+    if text.lstrip().startswith(_MONITOR_WAKE_HEADER):
+        return render_monitor_wake_turn(text, theme)
     return Group(Text("›  ", style=theme.accent_soft), Text(text, style=theme.text))
+
+
+# ── Monitor-wake turn tinting (I-126 presentation) ───────────────────────────
+#
+# The monitor plugin ships *plain* text on purpose: it has no access to the
+# CLI theme, and its output doubles as the model's prompt, so colour codes
+# must never leak into context. The tinting therefore lives here, in the
+# presentation layer, where the active theme and the user's NO_COLOR /
+# custom-theme choices are honoured. Plain text is preserved byte-for-byte —
+# only Rich style spans are added, so layout and the model-visible message
+# are unchanged.
+
+_MONITOR_WAKE_HEADER: Final = "[MONITOR EVENTS]"
+# ``[monitor-name] kind=command fired_at=...`` — the per-event header line.
+_MONITOR_EVENT_HEADER_RE = re.compile(r"^(\[[A-Za-z0-9._-]+\])\s+(kind=.*)$")
+# ``  key: value`` — a payload field (exactly two leading spaces).
+_MONITOR_FIELD_RE = re.compile(r"^(\s{2})([A-Za-z_][A-Za-z0-9_]*):(\s+)(.*)$")
+
+
+def render_monitor_wake_turn(text: str, theme: Theme) -> Group:
+    """Render a ``[MONITOR EVENTS]`` wake turn as ``›`` gutter + tinted body.
+
+    The banner, each per-monitor event header and each ``key: value`` payload
+    field get their own style so the findings read as a structured block
+    rather than a wall of text. Defensive: any line matching none of the
+    rules falls back to the plain ``text`` style, so a malformed header still
+    renders readably instead of crashing the turn.
+    """
+    gutter = Text("›  ", style=theme.accent_soft)
+    body = _style_monitor_wake_body(text, theme)
+    return Group(gutter, body)
+
+
+def _style_monitor_wake_body(text: str, theme: Theme) -> Text:
+    """Tint a wake header line-by-line, joined back with single newlines.
+
+    Empty theme tokens (``system``/``no-color`` tiers) degrade to the
+    terminal's own colours, which is the intended behaviour there.
+    """
+    segments: list[Text] = [_style_wake_line(line, theme) for line in text.split("\n")]
+    body = Text()
+    for i, seg in enumerate(segments):
+        body.append(seg)
+        if i < len(segments) - 1:
+            body.append("\n")
+    return body
+
+
+def _style_wake_line(line: str, theme: Theme) -> Text:
+    """Return one tinted ``Text`` segment for a single wake-header line."""
+    if not line.strip():
+        return Text("")
+    if line.lstrip().startswith(_MONITOR_WAKE_HEADER):
+        return Text(line, style=f"bold {theme.accent}".strip())
+    event = _MONITOR_EVENT_HEADER_RE.match(line)
+    if event:
+        body = Text()
+        body.append(event.group(1), style=f"bold {theme.accent_soft}".strip())
+        body.append(" " + event.group(2), style=theme.muted)
+        return body
+    field = _MONITOR_FIELD_RE.match(line)
+    if field:
+        body = Text()
+        body.append(field.group(1), style=theme.text)
+        body.append(field.group(2) + ":", style=theme.muted)
+        body.append(field.group(3), style=theme.muted_deep)
+        body.append(field.group(4), style=theme.text)
+        return body
+    if line.startswith("    "):
+        # Continuation of a multi-line value (e.g. a command monitor's
+        # output_tail): muted raw output.
+        return Text(line, style=theme.muted)
+    return Text(line, style=theme.text)
 
 
 def render_notice(kind: str, message: str, theme: Theme) -> Text:
@@ -864,23 +946,35 @@ def error_hint(code: str | None) -> str | None:
     return _ERROR_HINTS.get(code)
 
 
+def abbr_tokens(n: int) -> str:
+    """Abbreviate a token count with SI-style suffixes: ``42``, ``1.2K``,
+    ``3.4M``, ``1.5B`` (trailing zeros dropped).
+
+    The canonical token-abbreviation used by both the context-usage header
+    (:func:`format_token_indicator`) and the sub-agent metrics table — one
+    definition so the two can never drift. The unit is chosen from the
+    *rounded* value so a count like 999999 shows as ``1M`` (round(999.999, 1)
+    == 1000 overflows K) rather than ``1000K``.
+    """
+    if n < 1000:
+        return str(n)
+    for suffix, threshold in (("K", 1e3), ("M", 1e6), ("B", 1e9)):
+        value = n / threshold
+        if round(value, 1) >= 1000:  # overflows this unit; try the bigger one
+            continue
+        return f"{value:.1f}".rstrip("0").rstrip(".") + suffix
+    return f"{n / 1e9:.1f}".rstrip("0").rstrip(".") + "B"  # >= ~1e12
+
+
 def format_token_indicator(used: int, window: int) -> str:
-    """Short context-usage string like ``12.4k/128k`` (``?`` when unknown).
+    """Short context-usage string like ``12.4K/128K`` (``?`` when unknown).
 
     Shared by the classic REPL's prompt line and the full-screen header —
     the two front ends must show the same number for the same state.
     """
     if window <= 0:
         return "?"
-
-    def _fmt(n: int) -> str:
-        if n >= 1_000_000:
-            return f"{n / 1_000_000:.1f}M"
-        if n >= 1_000:
-            return f"{n / 1_000:.1f}k"
-        return str(n)
-
-    return f"{_fmt(used)}/{_fmt(window)}"
+    return f"{abbr_tokens(used)}/{abbr_tokens(window)}"
 
 
 __all__ = [
@@ -897,6 +991,7 @@ __all__ = [
     "render_error_panel",
     "render_error_notice",
     "render_user_turn",
+    "render_monitor_wake_turn",
     "render_notice",
     "render_history",
     "tool_args_preview",
@@ -908,4 +1003,5 @@ __all__ = [
     "unified_diff",
     "error_hint",
     "format_token_indicator",
+    "abbr_tokens",
 ]

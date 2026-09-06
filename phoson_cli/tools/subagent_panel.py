@@ -17,6 +17,7 @@ from rich.table import Table
 
 from phoson_cli.theme import Theme, load_theme
 from phoson_cli.animations import SPINNER_FRAMES
+from phoson_cli.formatting import abbr_tokens
 
 
 class AgentStatus(Enum):
@@ -187,8 +188,8 @@ def _build_running_table(
     table.add_column("#", style=theme.muted, width=3, justify="right")
     table.add_column("Status", style=theme.accent_soft, width=8)
     table.add_column("Task", style=theme.text)
-    table.add_column("Time", style=theme.muted, width=8)
-    table.add_column("Tokens", style=theme.muted, width=14)
+    table.add_column("Time", style=theme.muted, width=9)
+    table.add_column("Tokens", style=theme.muted, width=16)
     table.add_column("Cost", style=theme.muted, width=10)
 
     progress_tasks = _progress_tasks(progress)
@@ -246,17 +247,34 @@ def _status_cell(p: SubagentProgress, frame_index: int, idx: int) -> str:
 
 
 def _format_duration(ms: int) -> str:
-    """Format duration in human-readable form."""
+    """Format a duration in the smallest sensible unit (ms → s → m → h).
+
+    Compact, space-free units so the cell stays narrow: ``450ms``, ``45s``,
+    ``2m3s``, ``1h2m3s``. Sub-minute seconds keep one decimal (dropped when
+    whole) so short runs don't collapse to ``0s`` and mid-second precision
+    survives.
+    """
     if ms < 1000:
         return f"{ms}ms"
-    return f"{ms / 1000:.1f}s"
+    total_seconds = ms / 1000
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds // 60) % 60)
+    seconds = total_seconds % 60
+    if hours:
+        return f"{hours}h{minutes}m{int(seconds)}s"
+    if minutes:
+        return f"{minutes}m{int(seconds)}s"
+    secs = f"{seconds:.1f}".rstrip("0").rstrip(".")
+    return f"{secs}s"
 
 
 def _format_tokens(in_tok: int, out_tok: int) -> str:
-    """Format token count."""
+    """Format token count, abbreviating each side (``42in / 17out`` →
+    ``1.2Kin / 3.4Kout`` above 1000). Uses the shared :func:`abbr_tokens`
+    so this table and the context-usage header can never diverge."""
     if in_tok == 0 and out_tok == 0:
         return "—"
-    return f"{in_tok}in / {out_tok}out"
+    return f"{abbr_tokens(in_tok)}in / {abbr_tokens(out_tok)}out"
 
 
 def _format_cost(cost: float) -> str:
@@ -364,8 +382,8 @@ def render_subagent_summary(
     table.add_column("#", style=theme.muted, width=3, justify="right")
     table.add_column("Status", style=theme.accent_soft, width=8)
     table.add_column("Task", style=theme.text)
-    table.add_column("Time", style=theme.muted, width=8)
-    table.add_column("Tokens", style=theme.muted, width=14)
+    table.add_column("Time", style=theme.muted, width=9)
+    table.add_column("Tokens", style=theme.muted, width=16)
     table.add_column("Cost", style=theme.muted, width=10)
     total_duration, total_input, total_output, total_cost = 0, 0, 0, 0.0
     fallback_notes: list[str] = []
