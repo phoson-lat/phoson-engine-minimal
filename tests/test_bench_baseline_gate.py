@@ -61,10 +61,11 @@ def test_regression_when_below_baseline_minus_noise() -> None:
     assert v.threshold == 1.0
 
 
-def test_tie_is_rejected() -> None:
-    # current exactly equals baseline − noise (noise 0) → NOT a pass.
+def test_tie_at_floor_passes() -> None:
+    # current exactly equals baseline − noise (noise 0) → passes: equality
+    # at the floor is allowed; only a strict drop below it is a regression.
     v = B.evaluate([0.8, 0.8, 0.8], 0.8)
-    assert not v.ok and v.status == "regression"
+    assert v.ok and v.status == "pass"
 
 
 def test_noise_floor_widens_threshold() -> None:
