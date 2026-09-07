@@ -21,7 +21,7 @@ and the middleware chain construction; everything else is delegated.
 import asyncio
 import logging
 from typing import Any
-from dataclasses import field, dataclass
+from dataclasses import field, replace, dataclass
 from collections.abc import AsyncIterator
 
 from phoson_agent._loop import AgentLoop
@@ -61,6 +61,7 @@ from phoson_agent.exceptions import (
 from phoson_agent.middleware import AgentMiddleware
 from phoson_agent._tool_runner import ToolRunner
 from phoson_agent.plugin_loader import load_plugin
+from phoson_agent.reasoning_effort import EffortScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,16 @@ class AgentEngine:
             ``credits`` field on :class:`RunStep`. Defaults to 1.0.
         max_iterations: Maximum ReAct iterations before the engine
             gives up with ``code="max_iterations"``.
+        effort_scheduler: Optional per-iteration reasoning-effort override
+            (the "reasoning sandwich", #145).  A callable with signature
+            ``(iteration_index: int, last_tool_error: bool) -> str | None``
+            (see :func:`phoson_agent.reasoning_effort.build_effort_scheduler`).
+            When set, the engine derives ``reasoning_effort`` per iteration
+            from the scheduler and passes it to the LLM in a shallow copy of
+            ``config``.  When ``None`` (the default) the behaviour is
+            unchanged: ``config.reasoning_effort`` is used for every
+            iteration, so a user's explicit ``/reasoning-effort`` is always
+            respected.
     """
 
     chat: BaseLLMChat
@@ -108,6 +119,7 @@ class AgentEngine:
     context: AgentContext = field(default_factory=AgentContext)
     phoson_weight: float = 1.0
     max_iterations: int = 12
+    effort_scheduler: EffortScheduler | None = field(default=None, repr=False)
 
     # Internal state
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
@@ -373,6 +385,15 @@ class AgentEngine:
         total_cost_usd = 0.0
         total_credits = 0.0
 
+        # Reasoning sandwich (#145): per-iteration effort scheduling.  When no
+        # scheduler is installed these stay inert and every iteration reuses
+        # the caller's ``config`` untouched — the behaviour is identical to
+        # the pre-#145 loop.  ``iteration_index`` drives the planning/exec/
+        # verify heuristic; ``last_tool_error`` is set when a tool call in the
+        # previous iteration produced an error (see the loop below).
+        iteration_index = 0
+        last_tool_error = False
+
         tool_definitions = [
             ToolDefinition(
                 name=tool.name,
@@ -392,16 +413,32 @@ class AgentEngine:
         )
 
         for _ in range(self.max_iterations):
-            history = await self._apply_before_llm(history, config)
+            # Reasoning sandwich (#145): derive this iteration's effort from
+            # the scheduler (if any) and shallow-copy the config so the
+            # per-request effort can vary across iterations without mutating
+            # the caller's config.  Inert when no scheduler is installed.
+            iteration_config = config
+            if self.effort_scheduler is not None:
+                effort = self.effort_scheduler(iteration_index, last_tool_error)
+                iteration_config = replace(config, reasoning_effort=effort)
+
+            tool_error_this_iteration = False
+            history = await self._apply_before_llm(history, iteration_config)
             self._history = history
 
             iteration_done = False
             async for event in self._loop.run_iteration(
                 history=history,
-                config=config,
+                config=iteration_config,
                 llm_call=llm_call,
                 steps=steps,
             ):
+                # Track tool failures for the sandwich's verification phase:
+                # the iteration *after* a failed tool call is a verification
+                # step (the model needs to reason about the failure).
+                if isinstance(event, AgentToolDoneEvent) and event.error is not None:
+                    tool_error_this_iteration = True
+
                 if isinstance(event, IterationCost):
                     total_cost_usd += event.cost_usd
                     total_credits += event.credits
@@ -427,6 +464,10 @@ class AgentEngine:
                     return
 
                 yield event
+
+            # Advance the sandwich state for the next iteration.
+            iteration_index += 1
+            last_tool_error = tool_error_this_iteration
 
             if iteration_done:
                 return
