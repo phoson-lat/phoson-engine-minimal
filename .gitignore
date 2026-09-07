@@ -31,3 +31,7 @@ docs/superpowers
 /REVISION-*.md
 /2026-05-13-ai-providers-expansion.md
 /docs/plans/
+
+# Vendored third-party C++ (abseil) extracted into the repo root — not part of
+# this Python project; kept out of the ruff/compileall push gate.
+/abseil-cpp/
