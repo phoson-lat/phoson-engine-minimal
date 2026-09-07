@@ -7,11 +7,12 @@ model. The nightly workflow feeds it the pass rates measured by
 
 The gate is a **regression gate**, exactly as the issue specifies:
 
-* **Fail** if the current pass rate drops *below* ``baseline − noise``.
-* **Ties are rejected**: a current rate that merely *equals*
-  ``baseline − noise`` does not pass (you must be strictly above the
-  noise floor). This keeps a genuinely flat-but-noisy result from being
-  waved through.
+* **Fail** only if the current pass rate drops *strictly below*
+  ``baseline − noise``. A rate that merely *reaches* the floor passes
+  (equality is allowed). Allowing the boundary keeps a stable run —
+  including a bottomed-out (``0.0``) or a perfect (``1.0``) baseline —
+  from being waved through as a false regression, while any real drop
+  below the floor is still caught.
 * **Bootstrap**: when there is no baseline yet (``pass_rate is None``),
   the run *records* the baseline instead of gating on it — the first
   real nightly run seeds ``bench/baseline.json``; later runs gate
@@ -111,8 +112,10 @@ def evaluate(
             of this and the current run's noise is used.
         min_margin: Optional extra strictness added to the noise floor.
 
-    Rule: pass iff ``mean(current) > (baseline − floor)``; bootstrap
-    (``baseline_rate is None``) always passes (and should be recorded).
+    Rule: pass iff ``mean(current) >= (baseline − floor)`` (equality at the
+    floor is allowed; only a strict drop below it is a regression);
+    bootstrap (``baseline_rate is None``) always passes (and should be
+    recorded).
     """
     if not run_rates:
         return Verdict(
@@ -141,9 +144,11 @@ def evaluate(
 
     floor = max(noise(run_rates), baseline_noise or 0.0, 0.0) + min_margin
     threshold = baseline_rate - floor
-    # Strictly-above with an epsilon: a rate merely *touching*
-    # ``baseline − noise`` (within float noise) does not pass.
-    ok = current > threshold + EPS
+    # At-or-above the floor passes; only a strict drop below it (beyond
+    # float noise) is a regression. Allowing equality keeps a stable run —
+    # including a bottomed-out (0.0) or a perfect (1.0) baseline — from
+    # being flagged as a false regression.
+    ok = current >= threshold - EPS
     status = "pass" if ok else "regression"
     detail = (
         f"current {current:.3f} vs baseline {baseline_rate:.3f} "
