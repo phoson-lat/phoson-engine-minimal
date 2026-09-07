@@ -14,10 +14,14 @@ class SessionListCache:
         self.sessions: list[SessionMeta] = []
         self._max = max_sessions
 
-    async def refresh(self, storage) -> None:
-        """Refetch session metadata (most recent first)."""
+    async def refresh(self, storage, cwd: str | None = None) -> None:
+        """Refetch session metadata (most recent first).
+
+        When *cwd* is given the list is scoped to sessions started in that
+        working directory (plus legacy/global ones) — #212.
+        """
         try:
-            metas = await storage.list_meta()
+            metas = await storage.list_meta(cwd=cwd)
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Session cache refresh failed", exc_info=True)
             return

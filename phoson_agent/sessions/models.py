@@ -86,6 +86,10 @@ class SessionMeta:
     title: str | None = None
     status: str = STATUS_ACTIVE
     last_run_id: str | None = None
+    #: Working directory the session was started in (#212). A session is
+    #: scoped to this directory: the picker only lists sessions whose ``cwd``
+    #: matches the current one (``None`` = legacy/global, shown everywhere).
+    cwd: str | None = None
 
 
 @dataclass
@@ -121,6 +125,10 @@ class ConversationTree:
     # so resume can detect orphans and ``bg list`` can show run state.
     status: str = STATUS_ACTIVE
     last_run_id: str | None = None
+    # #212: working directory the session was started in — the picker scopes
+    # the session list to it. Set once at creation (the process cwd is stable
+    # for a session's lifetime) and preserved across resume.
+    cwd: str | None = None
 
     @classmethod
     def new(cls, session_id: str | None = None) -> "ConversationTree":
@@ -334,6 +342,7 @@ class ConversationTree:
                 title=self.title,
                 status=self.status,
                 last_run_id=self.last_run_id,
+                cwd=self.cwd,
             )
 
         return SessionMeta(
@@ -350,6 +359,7 @@ class ConversationTree:
             title=self.title,
             status=self.status,
             last_run_id=self.last_run_id,
+            cwd=self.cwd,
         )
 
     def label(self, node_id: str, text: str) -> None:

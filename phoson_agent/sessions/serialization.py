@@ -209,6 +209,7 @@ def tree_meta_to_dict(tree: ConversationTree) -> dict[str, Any]:
         "title": tree.title,
         "status": tree.status,
         "last_run_id": tree.last_run_id,
+        "cwd": tree.cwd,
     }
 
 
@@ -237,6 +238,9 @@ def apply_tree_meta(tree: ConversationTree, data: dict[str, Any]) -> None:
         status=status,
         last_run_id=data.get("last_run_id"),
     )
+    # #212: the session's working directory (absent in legacy files → None,
+    # which the picker treats as "global / shown everywhere").
+    tree.cwd = data.get("cwd")
 
 
 # ── Orphan recovery (#129) ────────────────────────────────────────────────────

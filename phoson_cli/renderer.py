@@ -6,6 +6,7 @@ isolated in :class:`WaitingSpinner` and :class:`SubagentSpinner` so that
 :class:`Renderer` only holds rendering state.
 """
 
+import datetime
 import threading
 from time import sleep
 from typing import TYPE_CHECKING, cast
@@ -602,7 +603,10 @@ class Renderer:
 
     def print_user_turn(self, text: str) -> None:
         """Render a user message with a lightweight badge + plain text."""
-        self.console.print(render_user_turn(text, self.theme))
+        # #212: stamp the message with its send time (local).
+        self.console.print(
+            render_user_turn(text, self.theme, at=datetime.datetime.now())
+        )
 
     def print_info(self, message: str) -> None:
         """Print an informational message."""
@@ -626,15 +630,24 @@ class Renderer:
     def remove_plugin_block(self, block_id: str) -> None:  # noqa: ARG002
         pass
 
-    def print_history(self, messages: "list[Message]", tail: int | None = None) -> None:
+    def print_history(
+        self,
+        messages: "list[Message]",
+        tail: int | None = None,
+        timestamps: "list[datetime.datetime | None] | None" = None,
+    ) -> None:
         """Re-render a list of Message objects as a conversation replay.
 
         Args:
             messages: List of conversation messages to display.
             tail: If set, only render the last ``tail`` messages and print
                   a ``"N messages above"`` rule when the list is longer.
+            timestamps: Optional per-message local times (#212), aligned with
+                  *messages* before any tail trim.
         """
-        self.console.print(render_history(messages, self.theme, tail=tail))
+        self.console.print(
+            render_history(messages, self.theme, tail=tail, timestamps=timestamps)
+        )
 
     def print_sessions_table(self, sessions: "list[SessionMeta]") -> None:
         """Print a table of sessions."""
@@ -759,8 +772,13 @@ class ClassicSink:
         """
         self._renderer._subagent_spinner.set_progress(progress)
 
-    def print_history(self, path: list["Message"], tail: int | None = None) -> None:
-        self._renderer.print_history(path, tail=tail)
+    def print_history(
+        self,
+        path: list["Message"],
+        tail: int | None = None,
+        timestamps: "list[datetime.datetime | None] | None" = None,
+    ) -> None:
+        self._renderer.print_history(path, tail=tail, timestamps=timestamps)
 
     def notify(self, kind: str, message: str) -> None:
         method = getattr(self._renderer, f"print_{kind}", None)

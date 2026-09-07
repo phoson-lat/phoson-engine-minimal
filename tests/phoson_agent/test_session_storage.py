@@ -73,6 +73,54 @@ async def test_save_and_load_tree_with_nodes(temp_dir, populated_tree):
 
 
 @pytest.mark.asyncio
+async def test_save_and_load_preserves_cwd(temp_dir):
+    """#212: the session's working directory round-trips through storage."""
+    tree = ConversationTree.new(session_id="cwd-session")
+    tree.append(parent_id=None, message=Message(role="user", content="hi"))
+    tree.cwd = "/home/user/projects"
+    storage = JsonlStorage(base_path=temp_dir)
+    await storage.save(tree)
+
+    loaded = await storage.load("cwd-session")
+    assert loaded.cwd == "/home/user/projects"
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_scoped_by_cwd(temp_dir):
+    """#212: ``list_meta(cwd=...)`` returns only sessions started in that
+    working directory (plus legacy/global ones), not sessions from other
+    directories. A session with no recorded cwd is shown everywhere."""
+    home = ConversationTree.new(session_id="in-home")
+    home.append(parent_id=None, message=Message(role="user", content="a"))
+    home.cwd = "/home/user"
+
+    work = ConversationTree.new(session_id="in-work")
+    work.append(parent_id=None, message=Message(role="user", content="b"))
+    work.cwd = "/home/user/work"
+
+    legacy = ConversationTree.new(session_id="legacy")
+    legacy.append(parent_id=None, message=Message(role="user", content="c"))
+    # cwd intentionally left None (legacy / global).
+
+    storage = JsonlStorage(base_path=temp_dir)
+    for t in (home, work, legacy):
+        await storage.save(t)
+
+    in_home = await storage.list_meta(cwd="/home/user")
+    ids = {m.id for m in in_home}
+    assert "in-home" in ids
+    assert "legacy" in ids  # legacy/global shows from every directory
+    assert "in-work" not in ids
+
+    in_work = await storage.list_meta(cwd="/home/user/work")
+    assert {m.id for m in in_work} == {"in-work", "legacy"}
+
+    # No cwd → everything.
+    all_ids = {m.id for m in await storage.list_meta()}
+    assert all_ids == {"in-home", "in-work", "legacy"}
+
+
+@pytest.mark.asyncio
 async def test_save_and_load_preserves_message_content(temp_dir):
     tree = ConversationTree.new(session_id="test-content-001")
     tree.append(

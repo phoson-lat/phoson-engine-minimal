@@ -45,6 +45,7 @@ from phoson_agent.sessions import (
     ConversationTree,
     orphan_recovery,
 )
+from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.reasoning_effort import make_live_scheduler
 from phoson_agent.plugins.summarizer import safe_cut_index
@@ -102,6 +103,18 @@ except ImportError:  # pragma: no cover
 MAX_RESUME_REPLAY_MESSAGES = 200
 
 _LOGGER = logging.getLogger("phoson_cli.controller")
+
+
+def _drop_env_context(messages: list[Message]) -> list[Message]:
+    """Strip environmental-context blocks from a message list.
+
+    The engine's ``result.history`` / partial history carry the ``[env: ...]``
+    request artifact (one per LLM call, re-injected by the env middleware).
+    Those are *not* genuine turns: they would show up in the tree (and thus in
+    the rewind picker and ``/tree``) and inflate ``message_count`` (#212).
+    We drop them before anything is appended to the tree.
+    """
+    return [m for m in messages if not is_env_context(m)]
 
 
 @dataclass
@@ -171,6 +184,10 @@ class SessionController:
         self.confirmation = confirmation
         self.storage = JsonlStorage(base_path=config.sessions_dir)
         self._session = SessionState.new()
+        # #212: scope this (new) session to the working directory it starts in.
+        # Resumed sessions replace this tree in load_session() and carry their
+        # own recorded cwd, so they are never re-stamped here.
+        self._session.tree.cwd = str(Path.cwd())
         self.attachments = AttachmentManager()
         self.current_model = config.model
         self.current_task: asyncio.Task | None = None
@@ -751,7 +768,7 @@ class SessionController:
         if self._rebase_after_compaction(done_event.result.history):
             return
 
-        new_messages = done_event.result.history[base_count:]
+        new_messages = _drop_env_context(done_event.result.history[base_count:])
         if new_messages:
             created = self.tree.append_many(self.current_node_id, new_messages)
             self.current_node_id = created[-1].id
@@ -766,7 +783,7 @@ class SessionController:
         partial = self.engine.get_partial_history()
         if self._rebase_after_compaction(partial):
             return
-        new_messages = partial[base_count:]
+        new_messages = _drop_env_context(partial[base_count:])
         if new_messages:
             created = self.tree.append_many(self.current_node_id, new_messages)
             self.current_node_id = created[-1].id
@@ -791,7 +808,7 @@ class SessionController:
             return False
         if not history:
             return False
-        created = self.tree.append_many(None, history)
+        created = self.tree.append_many(None, _drop_env_context(history))
         self.current_node_id = created[-1].id
         self._context_tokens = self.estimate_active_path()
         self.sink.notify(
@@ -1551,11 +1568,17 @@ class SessionController:
             # are capped to keep resume instant; a notice states how
             # much was truncated (see render_history's tail rule).
             try:
-                path = self.tree.get_path(self.current_node_id)
+                node_path = self.tree.get_node_path(self.current_node_id)
+                path = [n.message for n in node_path]
+                timestamps = [n.created_at for n in node_path]
                 if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-                    self.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+                    self.sink.print_history(
+                        path,
+                        tail=MAX_RESUME_REPLAY_MESSAGES,
+                        timestamps=timestamps,
+                    )
                 else:
-                    self.sink.print_history(path)
+                    self.sink.print_history(path, timestamps=timestamps)
             except (ValueError, AttributeError, TypeError):
                 _LOGGER.debug(
                     "Could not replay session history — node may be corrupted",
@@ -1710,6 +1733,11 @@ class SessionController:
         for node in reversed(self._node_path()):
             message = node.message
             if message.role != "user" or node.parent_id is None:
+                continue
+            # Env-context blocks are request artifacts (role "user", str),
+            # not genuine turns — never offer them as rewind targets (#212).
+            # This also catches env nodes persisted before the leak fix.
+            if is_env_context(message):
                 continue
             content = message.content
             if isinstance(content, str):

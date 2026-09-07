@@ -461,8 +461,8 @@ def test_render_done_line_flags_truncated() -> None:
     line = render_done_line(AgentDoneEvent(result=truncated), theme)
     assert line is not None
     assert "truncated" in line.plain
-    # The cost + step count are still shown alongside the truncation badge.
-    assert "step" in line.plain
+    # The step count is replaced by the turn-end time (no longer shown).
+    assert "steps" not in line.plain
 
     clean = AgentRunResult(
         final_content="x",

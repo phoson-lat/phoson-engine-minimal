@@ -7,6 +7,7 @@ front end is a sink, not a fork.
 
 import datetime
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -66,7 +67,7 @@ class FakeSink:
     def set_session(self, session_id) -> None:
         self.session_ids.append(session_id)
 
-    def print_history(self, path, tail=None) -> None:
+    def print_history(self, path, tail=None, timestamps=None) -> None:
         self.history_calls.append((path, tail))
 
     def notify(self, kind, message) -> None:
@@ -171,6 +172,14 @@ def test_controller_cleans_initialized_plugins_when_extension_validation_fails(
         SessionController(config, FakeSink())
 
     assert plugin.cleaned is True
+
+
+def test_new_session_scoped_to_cwd(tmp_path) -> None:
+    """#212: a newly created session is scoped to the working directory it
+    starts in (persisted on first save); the picker then only lists it from
+    that directory."""
+    controller, _sink = _make_controller(tmp_path)
+    assert controller.tree.cwd == str(Path.cwd())
 
 
 def test_controller_requires_no_ui_dependencies(tmp_path) -> None:
@@ -307,6 +316,42 @@ async def test_run_turn_success_end_to_end(tmp_path) -> None:
     node = controller.tree.nodes[controller.current_node_id]
     assert node.message.role == "assistant"
     # Session persisted.
+    loaded = await controller.storage.load(controller.tree.session_id)
+    assert len(loaded.nodes) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_turn_drops_env_context_from_tree(tmp_path) -> None:
+    """#212: env-context blocks (per-LLM-call request artifacts) must not be
+    persisted to the tree — they would show up in the rewind picker and
+    ``/tree`` and inflate ``message_count``."""
+    from phoson_agent.middleware import is_env_context
+
+    controller, _sink = _make_controller(tmp_path)
+    env = Message(
+        role="user", content="[env: step 1/20, time 0s elapsed, 600s remaining]"
+    )
+    done = AgentDoneEvent(
+        result=AgentRunResult(
+            final_content="hello",
+            history=[
+                Message(role="user", content="q"),
+                env,
+                Message(role="assistant", content="hello"),
+            ],
+            input_messages=[Message(role="user", content="q")],
+            steps=[],
+        )
+    )
+    controller.engine.stream = _fake_stream(
+        [AgentStartEvent(model="m", message_count=1, max_iterations=50), done]
+    )
+
+    await controller.run_turn("q")
+
+    # Only the genuine user + assistant nodes land in the tree.
+    assert len(controller.tree.nodes) == 2
+    assert not any(is_env_context(n.message) for n in controller.tree.nodes.values())
     loaded = await controller.storage.load(controller.tree.session_id)
     assert len(loaded.nodes) == 2
 

@@ -4,7 +4,7 @@ import pytest
 
 from phoson_llm.schemas import Message, ModelConfig
 from phoson_agent.models import AgentStartEvent, AgentTokenEvent
-from phoson_agent.middleware import EnvironmentalContextMiddleware
+from phoson_agent.middleware import EnvironmentalContextMiddleware, is_env_context
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -68,6 +68,24 @@ class TestBlockShape:
         mw = EnvironmentalContextMiddleware(max_iterations=20)
         result = await mw.on_before_llm(_msgs(), _config())
         assert "step 1/20" in _block_text(result)
+
+    async def test_prior_env_block_stripped_no_accumulation(self):
+        """#212: the env block is a request artifact. When the engine feeds
+        a history that already carries an env block back in, exactly one must
+        survive — otherwise it accumulates (one per LLM call) and, since the
+        engine folds ``on_before_llm`` output into the persistent history, it
+        leaks into the tree / rewind picker."""
+        mw = EnvironmentalContextMiddleware(max_iterations=20)
+        first = await mw.on_before_llm(_msgs(3), _config())
+        assert sum(1 for m in first if is_env_context(m)) == 1
+        # The engine appends the assistant reply, then calls again with that.
+        second = await mw.on_before_llm(
+            first + [Message(role="assistant", content="a")], _config()
+        )
+        assert sum(1 for m in second if is_env_context(m)) == 1
+        assert _block_text(second).startswith("[env: ")
+        # And the original input list is still never mutated.
+        assert sum(1 for m in _msgs(3) if is_env_context(m)) == 0
 
 
 # ── step counting ────────────────────────────────────────────────────────────
