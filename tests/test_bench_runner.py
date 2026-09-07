@@ -249,15 +249,23 @@ def test_run_gate_reports_heldout_separately(bench, tmp_path, capsys) -> None:
     assert "held-out (1 tasks): 0.000" in out
 
 
-def test_committed_sentinel_baseline_is_none(bench) -> None:
-    """The committed bench/baseline.json sentinel reads as 'no baseline'
-    so the first real run self-seeds (issue #139 bootstrap)."""
+def test_committed_baseline_is_well_formed(bench) -> None:
+    """The committed bench/baseline.json must be in a valid lifecycle state.
+
+    issue #139: the committed file is the *live* baseline — the nightly
+    overwrites the bootstrap sentinel (``pass_rate: null``) with a recorded
+    baseline on its first real run. So the committed file is valid in
+    EITHER state: the bootstrap sentinel (no baseline yet → first real run
+    self-seeds) or a recorded baseline (a pass rate in [0, 1]). The old
+    ``..._is_none`` assertion only held pre-bootstrap and broke main the
+    moment the nightly seeded a real baseline."""
     src = _BENCH_DIR / "baseline.json"
     if not src.exists():
         pytest.skip("committed baseline.json not present")
     doc = json.loads(src.read_text())
-    assert bench.B.baseline_rate(doc) is None  # B is run_bench's baseline mod
-    assert doc.get("status") in (None, "pending")
+    rate = bench.B.baseline_rate(doc)  # B is run_bench's baseline mod
+    assert rate is None or 0.0 <= rate <= 1.0
+    assert doc.get("status") in (None, "pending", "recorded")
 
 
 def test_load_tasks_heldout_split(bench, monkeypatch, tmp_path) -> None:
