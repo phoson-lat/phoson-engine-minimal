@@ -937,9 +937,12 @@ def render_history(
     items.append(Text(" session history ", style=theme.muted))
 
     def _stamp(idx: int) -> Text | None:
-        if timestamps is None or idx >= len(timestamps) or timestamps[idx] is None:
+        if timestamps is None or idx >= len(timestamps):
             return None
-        return Text(f" ·  {format_timestamp(timestamps[idx])}", style=theme.muted_deep)
+        ts = timestamps[idx]
+        if ts is None:
+            return None
+        return Text(f" ·  {format_timestamp(ts)}", style=theme.muted_deep)
 
     for idx, msg in enumerate(messages):
         role = getattr(msg, "role", "?")
