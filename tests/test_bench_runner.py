@@ -172,6 +172,52 @@ def test_run_gate_fails_on_regression(bench, tmp_path) -> None:
     assert bench.run_gate(results, baseline_path=p) == 1
 
 
+def test_run_gate_perfect_baseline_tie_passes(bench, tmp_path) -> None:
+    """A perfect (1.0) baseline with a perfect current run and no noise must
+    PASS, not false-positive as a regression. The old strictly-greater rule
+    could never exceed 1.0, so a stable-perfect model red-flagged every run
+    (the symmetric twin of the bottomed-out 0.0 case)."""
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 1.0,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 1.0, "b": 1.0},
+            }
+        )
+    )
+    # current stays perfect (1.0) → at the floor (1.0 − 0) → pass
+    results = [_res(bench, "a#1", True), _res(bench, "b#1", True)]
+    assert bench.run_gate(results, baseline_path=p) == 0
+
+
+def test_run_gate_bottomed_baseline_tie_passes(bench, tmp_path) -> None:
+    """A bottomed-out (0.0) baseline with a 0.0 current run must PASS, not
+    false-positive. A model that reliably scores 0 (e.g. a too-small local
+    model) used to red-flag every run because the strict rule demanded
+    current > 0.0 — nothing can score below 0."""
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 0.0,
+                "noise": 0.0,
+                "commit": "abc",
+                "model": "m",
+                "provider": "p",
+                "per_task": {"a": 0.0, "b": 0.0},
+            }
+        )
+    )
+    # current stays 0.0 → at the floor (0.0 − 0) → pass
+    results = [_res(bench, "a#1", False), _res(bench, "b#1", False)]
+    assert bench.run_gate(results, baseline_path=p) == 0
+
+
 def test_run_gate_bootstraps_on_null_sentinel(bench, tmp_path) -> None:
     """A committed sentinel (pass_rate: null) is treated as 'no baseline'."""
     p = tmp_path / "baseline.json"
@@ -242,9 +288,10 @@ def test_run_gate_reports_heldout_separately(bench, tmp_path, capsys) -> None:
     # a passes, b fails → full rate 0.5; held-out = {b} → 0.0
     results = [_res(bench, "a#1", True), _res(bench, "b#1", False)]
     rc = bench.run_gate(results, baseline_path=p, heldout={"b"})
-    # 0.5 > 0.5? No — tie → regression (ties rejected). Verdict independent
-    # of the held-out line.
-    assert rc == 1
+    # 0.5 reaches the 0.5 baseline — equality at the floor now passes (the
+    # gate only rejects a strict drop below it). The held-out line is
+    # reported independently of the verdict.
+    assert rc == 0
     out = capsys.readouterr().out
     assert "held-out (1 tasks): 0.000" in out
 
