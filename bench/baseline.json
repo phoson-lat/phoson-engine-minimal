@@ -1,5 +1,28 @@
 {
-  "pass_rate": null,
-  "status": "pending",
-  "note": "Bootstrap sentinel. The first real gated run (bench/run_bench.py --gate, on a runner with a local model) self-seeds this file with the measured pass_rate, model, provider, noise, commit and date. Do not hand-edit pass_rate; re-seed deliberately with `run_bench.py --gate --bootstrap`."
+  "model": "qwen2.5:1.5b",
+  "provider": "ollama",
+  "commit": "cd24b6b",
+  "date": "2026-09-06T08:05:09Z",
+  "runs": 3,
+  "pass_rate": 0.0,
+  "noise": 0.0,
+  "task_count": 15,
+  "per_task": {
+    "bump-version-files": 0.0,
+    "count-defs-in-tree": 0.0,
+    "create-json-config": 0.0,
+    "create-nested-file": 0.0,
+    "csv-stats": 0.0,
+    "csv-to-json": 0.0,
+    "find-call-sites": 0.0,
+    "fix-deep-traceback": 0.0,
+    "fix-failing-script": 0.0,
+    "fix-import-error": 0.0,
+    "locate-definition": 0.0,
+    "log-error-count": 0.0,
+    "merge-sorted-lists": 0.0,
+    "parse-noisy-config": 0.0,
+    "rename-symbol": 0.0
+  },
+  "status": "recorded"
 }

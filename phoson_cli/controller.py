@@ -46,6 +46,7 @@ from phoson_agent.sessions import (
     orphan_recovery,
 )
 from phoson_agent.plugins.offload import RetentionPolicy
+from phoson_agent.reasoning_effort import make_live_scheduler
 from phoson_agent.plugins.summarizer import safe_cut_index
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
@@ -438,12 +439,27 @@ class SessionController:
         # wrong. The tool carries no visible args; it injects ``do_compact``
         # (bound below) which does the work in the controller.
         engine_tools = [*self.tools, compact_context]
+        # Reasoning sandwich (#145): install a per-iteration effort scheduler
+        # only when the feature is opted in.  The scheduler is *live* — it
+        # re-reads ``self.config`` on every iteration so a mid-session
+        # ``/reasoning-effort`` (which mutates ``config.reasoning_effort``)
+        # wins over the per-phase profile on the very next step, and a
+        # ``/reasoning-effort off`` (``None``) falls back to the profile.
+        # When the feature is off, ``effort_scheduler`` stays ``None`` and the
+        # engine reuses ``config.reasoning_effort`` unchanged.
+        effort_scheduler = None
+        if self.config.reasoning_sandwich:
+            effort_scheduler = make_live_scheduler(
+                get_override=lambda: self.config.reasoning_effort,
+                get_profile=lambda: self.config.reasoning_effort_profile,
+            )
         self.engine = AgentEngine(
             chat=self.chat,
             tools=engine_tools,
             middlewares=middlewares,
             plugins=plugins,
             max_iterations=self.config.max_iterations,
+            effort_scheduler=effort_scheduler,
         )
         self._command_catalog_version += 1
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
