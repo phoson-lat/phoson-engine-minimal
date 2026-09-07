@@ -13,6 +13,7 @@ prototype's "mutate state, then invalidate" streaming pattern.
 
 import time
 import asyncio
+import datetime
 from typing import Any
 from dataclasses import dataclass
 
@@ -446,7 +447,10 @@ class FullScreenSink:
     # ── AgentEventSink ───────────────────────────────────────────────────
 
     def on_user_message(self, text: str, message: Message) -> None:
-        self.blocks.append(render_user_turn(text, self.theme))
+        # #212: stamp the message with its send time (local).
+        self.blocks.append(
+            render_user_turn(text, self.theme, at=datetime.datetime.now())
+        )
         self._touch()
 
     def on_attachments(self, sources: list[str]) -> None:
@@ -758,15 +762,26 @@ class FullScreenSink:
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
 
-    def print_history(self, path: list[Message], tail: int | None = None) -> None:
+    def print_history(
+        self,
+        path: list[Message],
+        tail: int | None = None,
+        timestamps: "list[datetime.datetime | None] | None" = None,
+    ) -> None:
         """Replay conversation history into the chat pane.
 
         By default the *full* path is rendered (#56): the chat window can
         only scroll through what lands in ``blocks``, so a fixed tail
         made older messages unreachable after resuming. Pass ``tail`` to
         deliberately truncate (a "N messages above" rule is shown).
+
+        ``timestamps`` (#212) optionally carries each message's local time so
+        the replay shows a date/time per message (aligned with *path* before
+        any tail trim).
         """
-        self.blocks.append(render_history(path, self.theme, tail=tail))
+        self.blocks.append(
+            render_history(path, self.theme, tail=tail, timestamps=timestamps)
+        )
         self._touch()
 
     def notify(self, kind: str, message: str) -> None:

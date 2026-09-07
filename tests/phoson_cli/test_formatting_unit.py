@@ -18,8 +18,11 @@ from phoson_agent.models import (
     AgentToolStartEvent,
 )
 from phoson_cli.formatting import (
+    format_hhmm,
     render_notice,
     render_history,
+    format_full_date,
+    format_timestamp,
     render_done_line,
     render_user_turn,
     render_start_line,
@@ -220,7 +223,12 @@ def test_bash_body_truncated_csi_stays_plain() -> None:
     assert "✓" in output
 
 
-def test_render_done_line_shows_cost_and_steps() -> None:
+def test_render_done_line_shows_cost_and_end_time() -> None:
+    """#212: the done line reports when the turn ended (full local date +
+    ``HH:MM``), not the step count (the latter stays available via ``/steps``)."""
+    import datetime
+
+    ended = datetime.datetime(2026, 9, 7, 14, 32)
     result = AgentRunResult(
         final_content="done",
         history=[],
@@ -228,18 +236,125 @@ def test_render_done_line_shows_cost_and_steps() -> None:
         steps=[object(), object()],
         total_cost_usd=0.01234,
     )
-    line = render_done_line(AgentDoneEvent(result=result), DARK)
+    line = render_done_line(AgentDoneEvent(result=result), DARK, ended_at=ended)
     output = _render(line)
     assert "0.01234" in output
-    assert "2 steps" in output
+    # Full date (weekday, day, month, year) + local time, not just the hour.
+    assert "ended Monday 7 September 2026 14:32" in output
+    assert "steps" not in output
 
 
-def test_render_done_line_none_when_nothing_to_show() -> None:
-    # A run with zero steps and zero cost still reports "0 steps" (never None).
+def test_render_done_line_always_shows_end_time() -> None:
+    # #212: even a zero-step, zero-cost turn reports when it ended (never None).
+    import datetime
+
+    ended = datetime.datetime(2026, 9, 7, 9, 5)
     result = AgentRunResult(final_content="", history=[], input_messages=[])
-    line = render_done_line(AgentDoneEvent(result=result), DARK)
+    line = render_done_line(AgentDoneEvent(result=result), DARK, ended_at=ended)
     assert line is not None
-    assert "0 steps" in _render(line)
+    assert "ended Monday 7 September 2026 09:05" in _render(line)
+
+
+def test_format_hhmm_24h() -> None:
+    import datetime
+
+    assert format_hhmm(datetime.datetime(2026, 9, 7, 14, 32)) == "14:32"
+    assert format_hhmm(datetime.datetime(2026, 9, 7, 9, 5)) == "09:05"
+
+
+def test_format_full_date_day_month_year() -> None:
+    """#212: the done-line date is weekday + day (no zero-pad) + month + year,
+    in local time. Uses real calendar weekdays (2026-07-07 = Tuesday,
+    2026-07-12 = Sunday)."""
+    import datetime
+
+    assert (
+        format_full_date(datetime.datetime(2026, 7, 7, 9, 5)) == "Tuesday 7 July 2026"
+    )
+    assert (
+        format_full_date(datetime.datetime(2026, 7, 12, 0, 0)) == "Sunday 12 July 2026"
+    )
+
+
+def test_format_timestamp_same_day_vs_other_day() -> None:
+    """#212: today → ``HH:MM``; a different calendar day → ``MM-DD HH:MM``
+    (sessions spanning midnight/days stay unambiguous)."""
+    import datetime
+
+    now = datetime.datetime(2026, 9, 7, 14, 32)
+    today = datetime.datetime(2026, 9, 7, 8, 5)
+    other_day = datetime.datetime(2026, 9, 6, 23, 58)
+    assert format_timestamp(today, now=now) == "08:05"
+    assert format_timestamp(other_day, now=now) == "09-06 23:58"
+
+
+def test_format_timestamp_converts_utc_to_local() -> None:
+    """#212: node ``created_at`` is stored UTC-aware; the stamp must be the
+    user's *local* wall-clock time ("usar la local del sistema"), not UTC.
+
+    Timezone-independent: take the aware-UTC "now", convert to the system's
+    local wall clock, and assert the formatter yields exactly that — whatever
+    the machine's UTC offset is.
+    """
+    import datetime
+
+    now_utc = datetime.datetime.now(datetime.UTC)
+    expected = now_utc.astimezone().replace(tzinfo=None).strftime("%H:%M")
+    assert format_timestamp(now_utc, now=now_utc) == expected
+    assert format_hhmm(now_utc) == expected
+
+
+def test_render_user_turn_shows_timestamp_when_given() -> None:
+    """#212: an optional ``at`` stamps the gutter line with the local time."""
+    import datetime
+
+    at = datetime.datetime(2026, 9, 7, 14, 32)
+    output = _render(render_user_turn("hello", DARK, at=at))
+    assert "14:32" in output
+    assert "hello" in output
+
+
+def test_render_user_turn_no_timestamp_untouched() -> None:
+    """#212: without ``at`` no time stamp is rendered (back-compat)."""
+    output = _render(render_user_turn("hello", DARK))
+    assert "·" not in output
+    assert "hello" in output
+
+
+def test_render_history_shows_timestamps() -> None:
+    """#212: ``render_history`` with a per-message ``timestamps`` list stamps
+    both the user gutter and the assistant line with the local time."""
+    import datetime
+
+    from phoson_llm.schemas import Message
+
+    msgs = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello there"),
+    ]
+    ts = [
+        datetime.datetime(2026, 9, 7, 10, 1),
+        datetime.datetime(2026, 9, 7, 10, 2),
+    ]
+    output = _render(render_history(msgs, DARK, timestamps=ts))
+    assert "10:01" in output
+    assert "10:02" in output
+    assert "hi" in output
+    assert "hello there" in output
+
+
+def test_render_history_no_timestamps_back_compat() -> None:
+    """#212: without ``timestamps`` the replay has no time stamps."""
+
+    from phoson_llm.schemas import Message
+
+    msgs = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello there"),
+    ]
+    output = _render(render_history(msgs, DARK))
+    assert "·" not in output
+    assert "hi" in output
 
 
 def test_render_error_panel_shows_message_and_code() -> None:

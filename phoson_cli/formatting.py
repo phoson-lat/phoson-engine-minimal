@@ -13,6 +13,7 @@ import re
 import json
 import difflib
 import logging
+import datetime
 from typing import TYPE_CHECKING, Any, Final
 from dataclasses import dataclass
 from collections.abc import Sequence, Collection
@@ -197,21 +198,84 @@ def render_subagent_start_line(event: AgentToolStartEvent, theme: Theme) -> Text
     return line
 
 
-def render_done_line(event: AgentDoneEvent, theme: Theme) -> Text | None:
-    """Run summary line (cost + step count), or None when there's nothing to show.
+def _to_local(dt: datetime.datetime) -> datetime.datetime:
+    """Normalize *dt* to naive local wall-clock time.
+
+    Node ``created_at`` values are stored UTC-aware (see
+    :func:`phoson_agent.sessions.models._utc_now`), while the live path passes
+    a naive local ``datetime.now()``. Both must render as the user's local
+    wall-clock time (#212: "Zona horaria: usar la local del sistema"). An aware
+    *dt* is converted to the system's local timezone; a naive *dt* is assumed
+    to already be local.
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
+def format_hhmm(dt: datetime.datetime) -> str:
+    """Local wall-clock time as ``HH:MM`` (24-hour).
+
+    Used for the turn-end stamp (#212) and per-message timestamps. An aware
+    *dt* (node ``created_at`` is stored UTC) is converted to the system's local
+    time first; a naive *dt* is already local.
+    """
+    return _to_local(dt).strftime("%H:%M")
+
+
+def format_full_date(dt: datetime.datetime) -> str:
+    """Full local date as ``Monday 12 July 2026`` (#212 turn-end stamp).
+
+    Weekday, day (no zero-pad), full month name and year — the human-friendly
+    "when did this happen" label the done line shows alongside the time. An
+    aware *dt* (node ``created_at`` is stored UTC) is converted to local first.
+    """
+    dt = _to_local(dt)
+    return f"{dt.strftime('%A')} {dt.day} {dt.strftime('%B')} {dt.year}"
+
+
+def format_timestamp(
+    dt: datetime.datetime, now: "datetime.datetime | None" = None
+) -> str:
+    """Compact local timestamp for a message (#212).
+
+    ``HH:MM`` when *dt* falls on the same calendar day as *now* (the common
+    case for a live session), else ``MM-DD HH:MM`` so a session that spans
+    midnight or several days stays unambiguous (a #212 acceptance criterion).
+    Aware datetimes (node ``created_at`` is stored UTC) are converted to local
+    first so the stamp is the user's wall-clock time. *now* is injectable for
+    deterministic tests.
+    """
+    now = _to_local(now) if now is not None else datetime.datetime.now()
+    dt = _to_local(dt)
+    if dt.date() == now.date():
+        return dt.strftime("%H:%M")
+    return dt.strftime("%m-%d %H:%M")
+
+
+def render_done_line(
+    event: AgentDoneEvent, theme: Theme, *, ended_at: "datetime.datetime | None" = None
+) -> Text | None:
+    """Run summary line (cost + end time), or None when there's nothing to show.
+
+    The line reports *when the turn ended* (local time) rather than the step
+    count (#212): at a glance the user cares about "when did it finish" more
+    than "how many LLM calls it took". The step count remains available via
+    ``/steps``.
 
     When the run was cut off at the model's token budget (``result.truncated``,
     F-13) a leading ``⚠ truncated`` badge is added in the warning tone so the
     user knows the answer is incomplete rather than a clean completion.
+
+    ``ended_at`` is the turn's end time; it defaults to "now" (the done line
+    renders the moment the turn completes) and is injectable for tests.
     """
     r = event.result
+    ended = ended_at if ended_at is not None else datetime.datetime.now()
     parts: list[str] = []
     if r.total_cost_usd > 0:
         parts.append(f"${r.total_cost_usd:.5f}")
-    steps = len(r.steps)
-    parts.append(f"{steps} step{'s' if steps != 1 else ''}")
-    if not parts and not r.truncated:
-        return None
+    parts.append(f"ended {format_full_date(ended)} {format_hhmm(ended)}")
     line = Text()
     if r.truncated:
         line.append("  ⚠ truncated", style=theme.warn)
@@ -306,7 +370,9 @@ def render_error_panel(event: AgentErrorEvent, theme: Theme) -> Panel:
     )
 
 
-def render_user_turn(text: str, theme: Theme) -> Group:
+def render_user_turn(
+    text: str, theme: Theme, at: "datetime.datetime | None" = None
+) -> Group:
     """Render a user message as a ``›`` gutter + plain text (T-2).
 
     The filled `` user `` badge chip is gone — a thin accent gutter reads
@@ -318,10 +384,18 @@ def render_user_turn(text: str, theme: Theme) -> Group:
     other user message keeps the legacy single-style render. Detection lives
     here — the one seam both front ends share — so sinks keep calling a
     single function and never special-case monitor wakes themselves.
+
+    ``at`` (#212) optionally stamps the message's local time on the gutter
+    line (``›  · 14:32``) so session messages carry a date/time. The body
+    (``renderables[1]``) is left untouched, preserving the single-style
+    contract the front ends rely on.
     """
     if text.lstrip().startswith(_MONITOR_WAKE_HEADER):
         return render_monitor_wake_turn(text, theme)
-    return Group(Text("›  ", style=theme.accent_soft), Text(text, style=theme.text))
+    gutter = Text("›  ", style=theme.accent_soft)
+    if at is not None:
+        gutter = gutter + Text(f" ·  {format_timestamp(at)}", style=theme.muted_deep)
+    return Group(gutter, Text(text, style=theme.text))
 
 
 # ── Monitor-wake turn tinting (I-126 presentation) ───────────────────────────
@@ -837,9 +911,18 @@ def _bash_output_body(result: str, theme: Theme) -> list[RenderableType]:
 
 
 def render_history(
-    messages: "list[Message]", theme: Theme, tail: int | None = None
+    messages: "list[Message]",
+    theme: Theme,
+    tail: int | None = None,
+    timestamps: "list[datetime.datetime | None] | None" = None,
 ) -> Group:
-    """Re-render a list of Message objects as a conversation replay."""
+    """Re-render a list of Message objects as a conversation replay.
+
+    ``timestamps`` (#212) is an optional per-message parallel list of local
+    datetimes (``None`` entries = no stamp). When given, each user message's
+    gutter and each assistant message is stamped with its time, matching the
+    live turn. It must align with *messages* **before** any tail trim.
+    """
     from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
     items: list[RenderableType] = []
@@ -848,10 +931,17 @@ def render_history(
         above = len(messages) - tail
         items.append(Rule(f"{above} messages above", style=theme.muted_deep))
         messages = messages[-tail:]
+        if timestamps is not None:
+            timestamps = timestamps[-tail:]
 
     items.append(Text(" session history ", style=theme.muted))
 
-    for msg in messages:
+    def _stamp(idx: int) -> Text | None:
+        if timestamps is None or idx >= len(timestamps) or timestamps[idx] is None:
+            return None
+        return Text(f" ·  {format_timestamp(timestamps[idx])}", style=theme.muted_deep)
+
+    for idx, msg in enumerate(messages):
         role = getattr(msg, "role", "?")
         content = getattr(msg, "content", "")
 
@@ -865,7 +955,11 @@ def render_history(
                 continue
             # T-2: same › gutter as the live turn (render_user_turn), no
             # filled badge — history replay reuses the live primitives.
-            items.append(Text("›  ", style=theme.accent_soft))
+            gutter = Text("›  ", style=theme.accent_soft)
+            stamp = _stamp(idx)
+            if stamp is not None:
+                gutter = gutter + stamp
+            items.append(gutter)
             if isinstance(content, str):
                 items.append(Text(content, style=theme.text))
             else:
@@ -874,6 +968,9 @@ def render_history(
                         items.append(Text(block.text, style=theme.text))
 
         elif role == "assistant":
+            stamp = _stamp(idx)
+            if stamp is not None:
+                items.append(Text("  " + stamp.plain, style=theme.muted_deep))
             # T-2: bare Markdown, no " assistant " badge or Rule separator
             # (matches render_streaming_panel, which no longer labels).
             if isinstance(content, str) and content.strip():
@@ -1004,4 +1101,7 @@ __all__ = [
     "error_hint",
     "format_token_indicator",
     "abbr_tokens",
+    "format_hhmm",
+    "format_full_date",
+    "format_timestamp",
 ]

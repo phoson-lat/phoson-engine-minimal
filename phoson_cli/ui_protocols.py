@@ -47,8 +47,17 @@ class AgentEventSink(Protocol):
     def set_session(self, session_id: str) -> None:
         """Update the displayed session id."""
 
-    def print_history(self, path: list[Message], tail: int | None = None) -> None:
-        """Replay the tail of a loaded session."""
+    def print_history(
+        self,
+        path: list[Message],
+        tail: int | None = None,
+        timestamps: "list | None" = None,
+    ) -> None:
+        """Replay the tail of a loaded session.
+
+        ``timestamps`` (#212) optionally carries each message's local time so
+        the replay shows a date/time per message.
+        """
 
     def notify(self, kind: str, message: str) -> None:
         """Show a status message. ``kind`` is info, warn or error."""

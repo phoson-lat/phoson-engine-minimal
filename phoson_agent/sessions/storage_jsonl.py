@@ -69,9 +69,13 @@ class JsonlStorage(SessionStorage):
         """Load a conversation tree from a JSONL file."""
         return await asyncio.to_thread(self._load_sync, session_id)
 
-    async def list_sessions(self) -> list[SessionMeta]:
-        """List all available sessions, most recently updated first."""
-        return await asyncio.to_thread(self._list_sessions_sync)
+    async def list_sessions(self, cwd: str | None = None) -> list[SessionMeta]:
+        """List available sessions, most recently updated first.
+
+        When *cwd* is given, only sessions started in that working directory
+        are returned (plus legacy sessions with no recorded cwd) — #212.
+        """
+        return await asyncio.to_thread(self._list_sessions_sync, cwd)
 
     async def delete(self, session_id: str) -> None:
         """Delete a session file."""
@@ -99,8 +103,8 @@ class JsonlStorage(SessionStorage):
         )
         await self.save(tree)
 
-    async def list_meta(self) -> list[SessionMeta]:
-        return await self.list_sessions()
+    async def list_meta(self, cwd: str | None = None) -> list[SessionMeta]:
+        return await self.list_sessions(cwd=cwd)
 
     # ── Sync internals (run inside ``asyncio.to_thread``) ───────────────
 
@@ -157,15 +161,15 @@ class JsonlStorage(SessionStorage):
                 tree.add_node(node_from_dict(data))
         return tree
 
-    def _list_sessions_sync(self) -> list[SessionMeta]:
-        return list_session_metas(self.base_path)
+    def _list_sessions_sync(self, cwd: str | None = None) -> list[SessionMeta]:
+        return list_session_metas(self.base_path, cwd=cwd)
 
     def _delete_sync(self, session_id: str) -> None:
         file_path = self._session_file(session_id)
         file_path.unlink(missing_ok=True)
 
 
-def list_session_metas(base_path: Path) -> list[SessionMeta]:
+def list_session_metas(base_path: Path, cwd: str | None = None) -> list[SessionMeta]:
     """List session metas in *base_path*, most recently updated first.
 
     Public, storage-instance-free variant of
@@ -173,6 +177,10 @@ def list_session_metas(base_path: Path) -> list[SessionMeta]:
     list`` (#129), which must read the session directory without
     instantiating a storage (which would create the directory as a side
     effect). A missing directory yields an empty list.
+
+    When *cwd* is given, only sessions started in that working directory are
+    returned, plus legacy sessions with no recorded ``cwd`` (treated as
+    global) — #212 per-directory session scoping.
     """
     sessions: list[SessionMeta] = []
     if not Path(base_path).is_dir():
@@ -180,6 +188,10 @@ def list_session_metas(base_path: Path) -> list[SessionMeta]:
     for file_path in sorted(Path(base_path).glob("*.jsonl")):
         meta = _read_session_meta(file_path)
         if meta is not None:
+            # A session with no recorded cwd (legacy/global) is shown from
+            # every directory; a scoped one only from its own.
+            if cwd is not None and meta.cwd not in (None, cwd):
+                continue
             sessions.append(meta)
 
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
@@ -256,4 +268,5 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         title=meta_values.get("title") if meta_values else None,
         status=status,
         last_run_id=meta_values.get("last_run_id") if meta_values else None,
+        cwd=meta_values.get("cwd") if meta_values else None,
     )

@@ -812,7 +812,7 @@ class PhosonApp:
             # Session list may have changed (load/new/delete) — refresh the
             # /sessions autocomplete cache in the background as well.
             self.app.create_background_task(
-                self.session_cache.refresh(self.repl.storage)
+                self.session_cache.refresh(self.repl.storage, cwd=str(Path.cwd()))
             )
         if not should_continue:
             self.app.exit()
@@ -1357,7 +1357,9 @@ class PhosonApp:
         # delaying first paint. Plain create_task (not create_background_task)
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.repl.config))
-        asyncio.create_task(self.session_cache.refresh(self.repl.storage))
+        asyncio.create_task(
+            self.session_cache.refresh(self.repl.storage, cwd=str(Path.cwd()))
+        )
         # Autonomous monitor wake loop (I-126): the full-screen front end
         # has its own event loop entry point (no PhosonRepl.run), so it
         # starts the loop here. No-op when enable_monitors is off.

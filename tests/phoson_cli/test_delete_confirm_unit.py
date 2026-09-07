@@ -44,7 +44,7 @@ class _FakeStorage:
             )
         ]
 
-    async def list_meta(self):
+    async def list_meta(self, cwd=None):
         return list(self._metas)
 
     async def delete(self, session_id: str) -> None:

@@ -281,6 +281,30 @@ class DoomLoopMiddleware(AgentMiddleware):
 
 # ── Environmental context (#143) ─────────────────────────────────────────
 
+#: Prefix of the environmental-context block. The block is a per-LLM-call
+#: request artifact (``role="user"`` with a plain ``[env: ...]`` string),
+#: appended by :class:`EnvironmentalContextMiddleware`. It is *not* a
+#: genuine user turn: the middleware strips it before each call (so exactly
+#: one survives instead of one per call) and the CLI persistence layer drops
+#: it before writing to the conversation tree, so it never leaks into
+#: sessions or the rewind picker (#212).
+ENV_CONTEXT_PREFIX = "[env: "
+
+
+def is_env_context(message: Message) -> bool:
+    """True when *message* is an environmental-context block.
+
+    The env block is a per-LLM-call artifact (see
+    :class:`EnvironmentalContextMiddleware`), not a genuine user turn. Both
+    the middleware (to avoid accumulating a block per call) and the CLI
+    persistence layer (to keep it out of the stored tree) use this predicate.
+    """
+    return (
+        message.role == "user"
+        and isinstance(message.content, str)
+        and message.content.startswith(ENV_CONTEXT_PREFIX)
+    )
+
 
 class EnvironmentalContextMiddleware(AgentMiddleware):
     """Appends a one-line environmental context block before each LLM call.
@@ -351,7 +375,11 @@ class EnvironmentalContextMiddleware(AgentMiddleware):
             remaining = max(0.0, self._run_budget - elapsed)
             parts.append(f"time {int(elapsed)}s elapsed, {int(remaining)}s remaining")
 
-        env_text = f"[env: {', '.join(parts)}]"
-        updated = list(messages)
+        env_text = f"{ENV_CONTEXT_PREFIX}{', '.join(parts)}]"
+        # Drop any prior env block so exactly one survives: the engine folds
+        # ``on_before_llm`` output into the persistent history, so without
+        # this the block would accumulate (one per LLM call) within a run
+        # (#212). The input list is not mutated (we build a new one).
+        updated = [m for m in messages if not is_env_context(m)]
         updated.append(Message(role="user", content=env_text))
         return updated

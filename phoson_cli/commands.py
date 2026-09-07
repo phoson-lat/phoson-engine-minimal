@@ -1284,7 +1284,7 @@ class CommandHandler:
             r.print_warn("A turn is running — press Esc (or Ctrl+C) first (F-35).")
             return True
 
-        sessions = await self.repl.storage.list_meta()
+        sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
         matches = [s for s in sessions if str(s.id).startswith(query)]
         if not matches:
             r.print_error(f"No session matching {query!r}. Run /sessions to list.")
@@ -1501,7 +1501,7 @@ class CommandHandler:
             if not num_part.isdigit():
                 r.print_info("Usage:  /sessions load <number>  (see /sessions)")
                 return True
-            sessions = await self.repl.storage.list_meta()
+            sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
             idx = int(num_part) - 1
             if idx < 0 or idx >= len(sessions):
                 r.print_error(f"No session #{num_part}. Run /sessions to list.")
@@ -1511,7 +1511,7 @@ class CommandHandler:
                 r.print_info(f"Loaded session  {str(sessions[idx].id)[:8]}")
             return True
 
-        sessions = await self.repl.storage.list_meta()
+        sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
         if not sessions:
             r.print_info("No saved sessions.")
             return True
@@ -1659,7 +1659,7 @@ def _format_bg_activity(dt: datetime.datetime) -> str:
     return dt.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M")
 
 
-def list_bg_sessions(sessions_dir: Path) -> str:
+def list_bg_sessions(sessions_dir: Path, cwd: str | None = None) -> str:
     """Render the ``bg list`` table over the local session files (#129).
 
     Read-only: globs ``*.jsonl`` in *sessions_dir* and reads each file's
@@ -1667,8 +1667,11 @@ def list_bg_sessions(sessions_dir: Path) -> str:
     file's mtime as "last activity". Rows are sorted most-recently-active
     first. A missing directory or a directory with no sessions renders
     the same friendly empty message instead of an error.
+
+    When *cwd* is given the list is scoped to sessions started in that
+    working directory (plus legacy/global ones) — #212.
     """
-    metas = list_session_metas(Path(sessions_dir))
+    metas = list_session_metas(Path(sessions_dir), cwd=cwd)
     if not metas:
         return "No sessions found."
 
@@ -1721,7 +1724,7 @@ def run_bg_command(args: list[str]) -> int:
             sessions_dir = load_config().sessions_dir
         except Exception:  # noqa: BLE001 — config is best-effort here
             sessions_dir = PhosonConfig().sessions_dir
-        print(list_bg_sessions(Path(sessions_dir)))
+        print(list_bg_sessions(Path(sessions_dir), cwd=str(Path.cwd())))
         return 0
     print(
         f"phoson-cli: unknown bg command {' '.join(args)!r} — available: list",

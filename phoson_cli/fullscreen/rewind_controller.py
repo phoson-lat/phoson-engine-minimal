@@ -83,16 +83,20 @@ class RewindController:
         if previous_cursor is not None:
             app._rewind_stack.append(previous_cursor)
         try:
-            path = app.repl.tree.get_path(app.repl.current_node_id)
+            node_path = app.repl.tree.get_node_path(app.repl.current_node_id)
         except (ValueError, AttributeError, TypeError):
             app.sink.notify("error", "Could not redraw after rewind — cursor lost.")
             return
+        path = [n.message for n in node_path]
+        timestamps = [n.created_at for n in node_path]
 
         self.reset_transcript()
         if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            app.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+            app.sink.print_history(
+                path, tail=MAX_RESUME_REPLAY_MESSAGES, timestamps=timestamps
+            )
         else:
-            app.sink.print_history(path)
+            app.sink.print_history(path, timestamps=timestamps)
         app.repl._context_tokens = app.repl._controller.estimate_active_path()
         app._auto_scroll = True
         app._chat_scroll_top = 0
@@ -137,16 +141,20 @@ class RewindController:
             app.sink.notify("warn", str(info))
             return
         try:
-            path = app.repl.tree.get_path(cursor)
+            node_path = app.repl.tree.get_node_path(cursor)
         except (ValueError, AttributeError, TypeError):
             app.sink.notify("error", "Could not redraw — the node no longer exists.")
             app._rewind_stack = []
             return
+        path = [n.message for n in node_path]
+        timestamps = [n.created_at for n in node_path]
         self.reset_transcript()
         if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            app.sink.print_history(path, tail=MAX_RESUME_REPLAY_MESSAGES)
+            app.sink.print_history(
+                path, tail=MAX_RESUME_REPLAY_MESSAGES, timestamps=timestamps
+            )
         else:
-            app.sink.print_history(path)
+            app.sink.print_history(path, timestamps=timestamps)
         app.repl._context_tokens = app.repl._controller.estimate_active_path()
         app._auto_scroll = True
         app._chat_scroll_top = 0

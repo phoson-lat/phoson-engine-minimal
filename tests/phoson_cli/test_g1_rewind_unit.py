@@ -166,6 +166,26 @@ def test_jump_candidates_keeps_user_turn_with_empty_text(tmp_path) -> None:
     assert candidates[0][0] == empty_user.id
 
 
+def test_jump_candidates_excludes_env_context_nodes(tmp_path) -> None:
+    """#212: env-context blocks (role "user", plain ``[env: ...]`` str) on the
+    active path must not be offered as rewind targets — even if a legacy
+    session persisted them before the leak fix."""
+    repl = _make_repl(tmp_path, "first", "second")
+    env_id, _ = repl._append_user_turn(
+        Message(
+            role="user", content="[env: step 1/20, time 0s elapsed, 600s remaining]"
+        )
+    )
+    reply = repl.tree.append(env_id, Message(role="assistant", content="ok"))
+    repl.current_node_id = reply.id
+
+    candidates = repl._controller.jump_candidates()
+    assert env_id not in [node_id for node_id, _ in candidates]
+    assert "[env:" not in "".join(preview for _, preview in candidates)
+    # The only genuine non-root turn is still offered ("first" is the root).
+    assert [preview for _, preview in candidates] == ["second"]
+
+
 def test_jump_to_user_turn_lands_before_the_selected_turn(tmp_path) -> None:
     repl = _make_repl(tmp_path, "first", "second", "third")
     controller = repl._controller

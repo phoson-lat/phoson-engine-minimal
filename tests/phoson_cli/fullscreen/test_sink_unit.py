@@ -185,7 +185,9 @@ def test_start_token_done_builds_streaming_panel_then_finalizes() -> None:
     assert sink.current_turn is None
     text = render_chat(sink, width=80)
     assert "Hello world" in text
-    assert "1 step" in text
+    # The done line shows the turn-end time (replacing the old step count).
+    assert "ended" in text
+    assert "1 step" not in text
     # The in-chat spinner is transient, never part of finished scrollback.
     assert "Thinking" not in text
     assert "Streaming…" not in text
