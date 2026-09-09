@@ -46,11 +46,11 @@ class _TeeWriter:
         self._log_path = log_path
         self._tail = tail
         self._lock = threading.Lock()
-        self._fh: object | None = None
+        self._fh: io.TextIOBase | None = None
         self.encoding = "utf-8"
         self.errors = "backslashreplace"
 
-    def _ensure_file(self):
+    def _ensure_file(self) -> io.TextIOBase:
         if self._fh is None:
             try:
                 self._log_path.parent.mkdir(parents=True, exist_ok=True)

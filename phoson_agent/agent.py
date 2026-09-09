@@ -231,8 +231,9 @@ class AgentEngine:
         self._tool_catalog = ToolCatalog(core, hidden, self.tool_budget_tokens)
         if self._tool_catalog.active:
             discover = self._tool_catalog.discover_tool
-            self.tools.insert(0, discover)
-            self._tools_by_name[discover.name] = discover
+            if discover is not None:
+                self.tools.insert(0, discover)
+                self._tools_by_name[discover.name] = discover
 
     def visible_tools(self) -> list[AgentTool]:
         """The tools actually sent to the LLM (issue #148).

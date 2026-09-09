@@ -9,7 +9,7 @@ front end — can use them without importing the prompt_toolkit REPL.
 import sys
 import logging
 import warnings
-from typing import Any
+from typing import Any, cast
 from pathlib import Path
 from datetime import UTC, datetime
 
@@ -326,20 +326,24 @@ def build_system_prompt(
     )
 
 
-def engine_visible_tools(engine) -> list:
+def engine_visible_tools(engine: Any) -> list:
     """The tools the engine actually sends to the LLM (masking-aware, #148).
 
     Falls back to the raw registry for engine fakes (and sub-agent
     constructors) that predate the discovery API.
     """
     visible = getattr(engine, "visible_tools", None)
-    return list(visible() if callable(visible) else engine.tools)
+    if callable(visible):
+        return list(cast(Any, visible)())
+    return list(engine.tools)
 
 
-def engine_masked_count(engine) -> int:
+def engine_masked_count(engine: Any) -> int:
     """Tools masked behind ``discover`` (0 when the fakes/engine lack it)."""
     count = getattr(engine, "masked_tool_count", None)
-    return int(count() if callable(count) else 0)
+    if callable(count):
+        return int(cast(Any, count)())
+    return 0
 
 
 def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:

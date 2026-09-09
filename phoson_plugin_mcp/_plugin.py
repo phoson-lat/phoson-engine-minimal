@@ -42,7 +42,8 @@ def _sanitize_tool_parameters(parameters: Any) -> dict[str, Any]:
         cleaned["type"] = "object"
     props = cleaned.get("properties")
     if not isinstance(props, dict):
-        cleaned["properties"] = {}
+        props = {}
+        cleaned["properties"] = props
     req = cleaned.get("required")
     if not isinstance(req, list):
         cleaned.pop("required", None)
