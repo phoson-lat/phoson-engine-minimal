@@ -49,7 +49,14 @@ def _sanitize_tool_parameters(parameters: Any) -> dict[str, Any]:
         cleaned.pop("required", None)
     else:
         valid = {str(k) for k in props}
-        cleaned["required"] = [r for r in req if r in valid]
+        kept = [r for r in req if r in valid]
+        if kept:
+            cleaned["required"] = kept
+        else:
+            # No surviving required entries: drop the key entirely rather
+            # than emit "required": [] (valid JSON Schema, but a few strict
+            # providers reject it).
+            cleaned.pop("required", None)
     return cleaned
 
 

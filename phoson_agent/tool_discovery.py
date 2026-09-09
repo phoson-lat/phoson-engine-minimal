@@ -156,6 +156,23 @@ class ToolCatalog:
         """The tools actually sent to the LLM (masked tail excluded)."""
         return self._visible_tools()
 
+    def prompt_tools(self) -> list[AgentTool]:
+        """Stable tool set for system-prompt construction.
+
+        When active, the initial visible prefix (``discover`` + core), which
+        never changes during a session — revealed tools are deliberately
+        excluded so the system prompt stays a cache-friendly stable prefix
+        (the model still sees revealed schemas in the ``tools`` payload).
+        When inactive, the full registry (also stable).
+        """
+        if not self.active:
+            return list(self._core) + list(self._hidden.values())
+        out: list[AgentTool] = []
+        if self._discover_tool is not None:
+            out.append(self._discover_tool)
+        out.extend(self._core)
+        return out
+
     # ── reveal / discover ─────────────────────────────────────────────
 
     def reveal(self, names: list[str]) -> list[str]:

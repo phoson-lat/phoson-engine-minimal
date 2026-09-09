@@ -7,9 +7,10 @@ front end — can use them without importing the prompt_toolkit REPL.
 """
 
 import sys
+import types
 import logging
 import warnings
-from typing import Any, cast
+from typing import Any
 from pathlib import Path
 from datetime import UTC, datetime
 
@@ -235,7 +236,6 @@ def build_system_prompt(
     tools: list,
     agents_md_max_tokens: int | None = None,
     skills_max_tokens: int | None = None,
-    masked_count: int | None = None,
 ) -> str:
     """Build the system prompt for the loaded tools.
 
@@ -263,12 +263,11 @@ def build_system_prompt(
     # Cache-aware tool masking (#148): when the catalog is over the budget,
     # the visible list above is the *core* set — tell the model the rest
     # exists and how to reach it, without paying for the schemas.
-    if masked_count:
+    if any(t.name == "discover" for t in tools):
         mcp_note += (
-            f" Additionally, {masked_count} tools are masked to save "
-            "context; use the `discover` tool to search for and reveal "
-            "them by keyword or category before concluding a capability "
-            "does not exist."
+            " Additionally, more tools are masked to save context; use the "
+            "`discover` tool to search for and reveal them by keyword or "
+            "category before concluding a capability does not exist."
         )
     tool_names_list = [t.name for t in tools]
     tool_names = set(tool_names_list)
@@ -330,20 +329,42 @@ def engine_visible_tools(engine: Any) -> list:
     """The tools the engine actually sends to the LLM (masking-aware, #148).
 
     Falls back to the raw registry for engine fakes (and sub-agent
-    constructors) that predate the discovery API.
+    constructors) that predate the discovery API. Only a real
+    function/method counts as the discovery API — this keeps an
+    auto-generated ``MagicMock`` child attribute from being mistaken for a
+    genuine ``visible_tools`` (which would yield a bogus empty list /
+    masked count instead of the raw registry).
     """
     visible = getattr(engine, "visible_tools", None)
-    if callable(visible):
-        return list(cast(Any, visible)())
+    if isinstance(visible, (types.FunctionType, types.MethodType)):
+        return list(visible())
     return list(engine.tools)
 
 
 def engine_masked_count(engine: Any) -> int:
-    """Tools masked behind ``discover`` (0 when the fakes/engine lack it)."""
+    """Tools masked behind ``discover`` (0 when the fakes/engine lack it).
+
+    Uses the same real-function/method check as :func:`engine_visible_tools`
+    so an auto-generated ``MagicMock`` child is not mistaken for a real
+    ``masked_tool_count`` (which would report a spurious non-zero count).
+    """
     count = getattr(engine, "masked_tool_count", None)
-    if callable(count):
-        return int(cast(Any, count)())
+    if isinstance(count, (types.FunctionType, types.MethodType)):
+        return int(count())
     return 0
+
+
+def engine_prompt_tools(engine: Any) -> list:
+    """Stable tool set for the system prompt (#148 review, option b).
+
+    Uses the engine's ``prompt_tools()`` when available (``discover`` + core,
+    excluding revealed tools so the prompt is a stable prefix); falls back to
+    the visible set for fakes that predate the API.
+    """
+    pt = getattr(engine, "prompt_tools", None)
+    if isinstance(pt, (types.FunctionType, types.MethodType)):
+        return list(pt())
+    return engine_visible_tools(engine)
 
 
 def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
