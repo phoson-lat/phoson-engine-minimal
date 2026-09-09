@@ -85,7 +85,9 @@ from .session_utils import (
     build_plugin_specs,
     build_system_prompt,
     drain_monitor_wakes,
+    engine_masked_count,
     find_monitor_plugin,
+    engine_visible_tools,
 )
 from .tools.compact import compact_context
 from .permissions_store import build_permission_middleware
@@ -477,6 +479,7 @@ class SessionController:
             plugins=plugins,
             max_iterations=self.config.max_iterations,
             effort_scheduler=effort_scheduler,
+            tool_budget_tokens=self.config.tool_budget_tokens or None,
         )
         self._command_catalog_version += 1
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
@@ -525,7 +528,7 @@ class SessionController:
                 description=tool.description,
                 parameters=tool.parameters,
             )
-            for tool in self.engine.tools
+            for tool in engine_visible_tools(self.engine)
         ]
         self.engine.context.extra["available_tools"] = self.tools_dict
         # #147: the ``compact_context`` tool's injected callable. It runs the
@@ -829,7 +832,10 @@ class SessionController:
         path = self.tree.get_path(self.current_node_id)
         return self.summarizer.estimate_request(
             path,
-            system=build_system_prompt(self.engine.tools),
+            system=build_system_prompt(
+                engine_visible_tools(self.engine),
+                masked_count=engine_masked_count(self.engine),
+            ),
             tools=self.summarizer.tool_definitions,
         )
 
@@ -984,9 +990,24 @@ class SessionController:
         reasoning_effort = self.config.reasoning_effort
         if reasoning_effort not in REASONING_EFFORTS:
             reasoning_effort = None
+        # Mirror the *visible* tool set (masking-aware, #148) into the
+        # summarizer at run start so the in-flight estimate and the
+        # auto-compact gate count what the LLM actually receives — the
+        # masked tail stays out of both.
+        self.summarizer.tool_definitions = [
+            ToolDefinition(
+                name=tool.name,
+                description=tool.description,
+                parameters=tool.parameters,
+            )
+            for tool in engine_visible_tools(self.engine)
+        ]
         config = ModelConfig(
             model=self.current_model,
-            system=build_system_prompt(self.engine.tools),
+            system=build_system_prompt(
+                engine_visible_tools(self.engine),
+                masked_count=engine_masked_count(self.engine),
+            ),
             reasoning_effort=reasoning_effort,
             # Stable per-conversation key: OpenRouter uses it for sticky
             # routing so the upstream prompt cache stays warm (G2 / #69).
@@ -1159,7 +1180,10 @@ class SessionController:
 
     def build_system_prompt(self) -> str:
         """System prompt for the next run (built-in + loaded MCP tools)."""
-        return build_system_prompt(self.engine.tools)
+        return build_system_prompt(
+            engine_visible_tools(self.engine),
+            masked_count=engine_masked_count(self.engine),
+        )
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""

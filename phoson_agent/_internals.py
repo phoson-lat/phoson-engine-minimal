@@ -11,7 +11,7 @@ import asyncio
 import datetime
 from typing import TYPE_CHECKING, Any
 from dataclasses import field, dataclass
-from collections.abc import AsyncIterator
+from collections.abc import Callable, AsyncIterator
 
 from phoson_llm.schemas import (
     Message,
@@ -150,7 +150,7 @@ class IterationFailed(AgentEvent):
 def build_llm_call_chain(
     chat: "BaseLLMChat",
     middlewares: "list[AgentMiddleware]",
-    tool_definitions: "list[ToolDefinition]",
+    tool_definitions: ("list[ToolDefinition] | Callable[[], list[ToolDefinition]]"),
 ) -> "LLMCallNext":
     """Build the middleware execution chain for an LLM call.
 
@@ -162,7 +162,9 @@ def build_llm_call_chain(
     Args:
         chat: LLM adapter used as the innermost call.
         middlewares: Ordered list of middlewares to wrap.
-        tool_definitions: Tool schemas forwarded to ``chat.stream``.
+        tool_definitions: Tool schemas forwarded to ``chat.stream`` —
+            a static list, or a zero-arg callable re-resolved on every
+            call (cache-aware tool discovery, #148).
 
     Returns:
         A callable matching the :data:`~phoson_agent.middleware.LLMCallNext`
@@ -173,7 +175,13 @@ def build_llm_call_chain(
         messages: list[Message],
         config: ModelConfig,
     ) -> AsyncIterator[LLMEvent]:
-        async for event in chat.stream(messages, config, tool_definitions):
+        # A callable (ToolCatalog.definitions) re-resolves per call so
+        # tools revealed mid-run via `discover` join the catalog from the
+        # next LLM call — append-only, prefix-stable (KV cache, #148).
+        definitions = (
+            tool_definitions() if callable(tool_definitions) else tool_definitions
+        )
+        async for event in chat.stream(messages, config, definitions):
             yield event
 
     call_next: LLMCallNext = base_call

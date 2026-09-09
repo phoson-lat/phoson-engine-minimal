@@ -96,6 +96,18 @@ class AgentStartEvent(AgentEvent):
     model: str = ""
     message_count: int = 0
     max_iterations: int = 0
+    #: Number of tools registered for this run (built-in + plugins + MCP).
+    #: The tool set is fixed for the whole run: the engine serializes it
+    #: once and sends the same definitions with every LLM call.
+    tool_count: int = 0
+    #: Estimated tokens the serialized tool definitions add to *every*
+    #: request of this run (#148). Counted with the same estimator and
+    #: canonical serialization as the auto-compact gate
+    #: (``TokenEstimator.count_tools``), so the figure cannot drift from
+    #: what the CLI's context indicator already shows.
+    tool_definitions_tokens: int = 0
+    #: Tools masked behind `discover` (cache-aware budget, #148).
+    tool_masked: int = 0
 
 
 @dataclass(kw_only=True)

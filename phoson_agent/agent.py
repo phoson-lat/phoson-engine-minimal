@@ -74,6 +74,24 @@ __all__ = [
 ]
 
 
+def _count_tool_definition_tokens(tool_definitions: list[ToolDefinition]) -> int:
+    """Estimate the token weight of a run's tool schemas (#148).
+
+    Uses the same estimator and canonical serialization as the auto-compact
+    gate (``TokenEstimator.count_tools``) so the figure consumers read from
+    ``AgentStartEvent`` cannot drift from what the CLI's context indicator
+    already reports. The import is lazy: the core engine stays importable
+    without pulling the summarizer plugin (and its tiktoken encoding
+    lookup) at module-import time; the cost is paid once per run, not per
+    iteration — the tool set is fixed for the whole run.
+    """
+    if not tool_definitions:
+        return 0
+    from phoson_agent.plugins.summarizer import TokenEstimator
+
+    return TokenEstimator().count_tools(tool_definitions)
+
+
 @dataclass
 class AgentEngine:
     """Main engine for running LLM-based agents.
@@ -119,6 +137,7 @@ class AgentEngine:
     context: AgentContext = field(default_factory=AgentContext)
     phoson_weight: float = 1.0
     max_iterations: int = 12
+    tool_budget_tokens: int | None = field(default=None, repr=False)
     effort_scheduler: EffortScheduler | None = field(default=None, repr=False)
 
     # Internal state
@@ -140,6 +159,7 @@ class AgentEngine:
         explicitly named. Subclasses and test fixtures can call it directly
         without relying on dataclass construction mechanics.
         """
+        self._constructor_tool_names = {t.name for t in self.tools}
         self._loaded_plugins = []
         for plugin_spec in self.plugins:
             # A plugin spec is optional/declarative: a single bad spec (a
@@ -185,6 +205,51 @@ class AgentEngine:
             prepare_event=self._prepare_event,
             phoson_weight=self.phoson_weight,
         )
+        self._setup_tool_discovery()
+
+    def _setup_tool_discovery(self) -> None:
+        """Build the cache-aware tool catalog (issue #148).
+
+        Core tools (passed at construction) are always visible; plugin
+        tools (MCP servers, ...) start masked when the full catalog
+        exceeds ``tool_budget_tokens``.  Without a budget — or when the
+        catalog fits — behaviour is unchanged.
+        """
+        from phoson_agent.tool_discovery import ToolCatalog
+
+        core: list[AgentTool] = []
+        hidden: list[AgentTool] = []
+        seen: set[str] = set()
+        for tool in self.tools:
+            if tool.name in seen:
+                continue
+            seen.add(tool.name)
+            if tool.name in self._constructor_tool_names:
+                core.append(tool)
+            else:
+                hidden.append(tool)
+        self._tool_catalog = ToolCatalog(core, hidden, self.tool_budget_tokens)
+        if self._tool_catalog.active:
+            discover = self._tool_catalog.discover_tool
+            self.tools.insert(0, discover)
+            self._tools_by_name[discover.name] = discover
+
+    def visible_tools(self) -> list[AgentTool]:
+        """The tools actually sent to the LLM (issue #148).
+
+        With an active catalog this is the discover meta-tool plus the core
+        tools and any revealed ones — the masked tail is excluded.  Without
+        a catalog it is the full registry.  Callers that must mirror the
+        real ``tools`` payload (system prompt, context indicator,
+        auto-compact gate) use this instead of ``self.tools``.
+        """
+        return self._tool_catalog.visible_tools()
+
+    def masked_tool_count(self) -> int:
+        """Tools currently hidden behind ``discover`` (0 when inactive)."""
+        if self._tool_catalog.active:
+            return self._tool_catalog.hidden_count()
+        return 0
 
     # ── Public API ──────────────────────────────────────────────────────
 
@@ -394,21 +459,39 @@ class AgentEngine:
         iteration_index = 0
         last_tool_error = False
 
-        tool_definitions = [
-            ToolDefinition(
-                name=tool.name,
-                description=tool.description,
-                parameters=tool.parameters,
-            )
-            for tool in self.tools
-        ]
-        llm_call = build_llm_call_chain(self.chat, self.middlewares, tool_definitions)
+        # Cache-aware tool masking (#148): when the catalog is over the
+        # budget the bound ``definitions()`` goes through the chain —
+        # re-resolved on every LLM call so tools revealed via `discover`
+        # appear from the next step, while the already-sent prefix stays
+        # byte-stable (KV cache).
+        if self._tool_catalog.active:
+            llm_tools = self._tool_catalog.definitions
+        else:
+            llm_tools = [
+                ToolDefinition(
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.parameters,
+                )
+                for tool in self.tools
+            ]
+        llm_call = build_llm_call_chain(self.chat, self.middlewares, llm_tools)
+        visible_definitions = llm_tools() if callable(llm_tools) else llm_tools
 
         yield await self._prepare_event(
             AgentStartEvent(
                 model=config.model,
                 message_count=len(messages),
                 max_iterations=self.max_iterations,
+                tool_count=len(visible_definitions),
+                tool_definitions_tokens=_count_tool_definition_tokens(
+                    visible_definitions
+                ),
+                tool_masked=(
+                    self._tool_catalog.hidden_count()
+                    if self._tool_catalog.active
+                    else 0
+                ),
             )
         )
 

@@ -197,6 +197,15 @@ class OtelTracingMiddleware(AgentMiddleware):
         state.run_span.set_attribute("phoson.model", event.model)
         state.run_span.set_attribute("phoson.message_count", event.message_count)
         state.run_span.set_attribute("phoson.max_iterations", event.max_iterations)
+        # Tool budget of the run (#148): the definitions are fixed for the
+        # whole run, so the run span — not each llm_call child — carries
+        # their weight. Consumers divide by a llm_call's input tokens to
+        # get the per-request fraction.
+        state.run_span.set_attribute("phoson.tool_count", event.tool_count)
+        state.run_span.set_attribute(
+            "phoson.tool_definitions_tokens", event.tool_definitions_tokens
+        )
+        state.run_span.set_attribute("phoson.tool_masked", event.tool_masked)
         self._current.set(state)
 
     def _on_step(self, step: RunStep) -> None:

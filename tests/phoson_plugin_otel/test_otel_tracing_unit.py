@@ -161,8 +161,28 @@ class TestSpanTree:
         assert attrs["phoson.max_iterations"] == 5
         assert attrs["phoson.step_count"] == 3
         assert attrs["phoson.total_cost_usd"] == pytest.approx(0.03)
+        # #148: default-constructed start events carry a zero tool budget.
+        assert attrs["phoson.tool_count"] == 0
+        assert attrs["phoson.tool_definitions_tokens"] == 0
         assert state.run_span.status == 1  # OK
         assert "phoson.run.id" in state.run_span.attributes
+
+    def test_run_span_tool_budget_attributes(self) -> None:
+        collected: list[_RunState] = []
+        mw = _make_mw(collected)
+        mw._on_start(
+            AgentStartEvent(
+                model="m",
+                message_count=1,
+                tool_count=13,
+                tool_definitions_tokens=4210,
+            )
+        )
+        mw._on_done(AgentDoneEvent(result=AgentRunResult("x", [], [])))
+        (state,) = collected
+        attrs = _attrs(state.run_span)
+        assert attrs["phoson.tool_count"] == 13
+        assert attrs["phoson.tool_definitions_tokens"] == 4210
 
     def test_llm_span_attributes(self) -> None:
         collected: list[_RunState] = []
