@@ -382,6 +382,8 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         build_offload,
         build_summarizer,
         build_middlewares,
+        engine_masked_count,
+        engine_visible_tools,
     )
     from phoson_cli.permissions_store import build_permission_middleware
 
@@ -409,6 +411,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
             middlewares=middlewares,
             plugins=build_plugin_specs(config),
             max_iterations=config.max_iterations,
+            tool_budget_tokens=config.tool_budget_tokens or None,
         )
         # Same sub-agent runtime context as the interactive REPL.
         engine.context.extra["safe_mode"] = config.safe_mode
@@ -438,7 +441,10 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
                 [Message(role="user", content=task)],
                 ModelConfig(
                     model=config.model,
-                    system=build_system_prompt(engine.tools),
+                    system=build_system_prompt(
+                        engine_visible_tools(engine),
+                        masked_count=engine_masked_count(engine),
+                    ),
                 ),
             )
         )
@@ -605,9 +611,17 @@ def _run_cli() -> None:
         renderer = getattr(repl, "renderer", None)
         if renderer is not None:
             warnings_hook.notice_printer = renderer.print_warn
+        # Backstop: capture stray stderr (stray prints/logging) to a log
+        # file + in-memory tail while the front end runs, so it cannot tear
+        # the render. stdout is left alone (it is the paint/result channel).
+        from phoson_cli.output_guard import OutputGuard
+
+        guard = OutputGuard()
+        guard.install()
         try:
             asyncio.run(repl.run())
         finally:
+            guard.restore()
             warnings_hook.reset_notice_printer()
         return
 
@@ -619,7 +633,17 @@ def _run_cli() -> None:
         # with the same friendly message as every other config error.
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    asyncio.run(app.run_async())
+    # Backstop: capture stray stderr (stray prints/logging) to a log file +
+    # in-memory tail while the front end runs, so it cannot tear the render.
+    # stdout is left alone (it is the prompt_toolkit paint channel).
+    from phoson_cli.output_guard import OutputGuard
+
+    guard = OutputGuard()
+    guard.install()
+    try:
+        asyncio.run(app.run_async())
+    finally:
+        guard.restore()
 
 
 if __name__ == "__main__":

@@ -144,6 +144,7 @@ class PhosonConfig:
     notify_on_completion: str = "off"
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
+    tool_budget_tokens: int = 8000
     # Official monitor plugin (I-126): background watchers that wake the
     # agent. Off by default because it runs long-lived tasks; state lives
     # in monitors_data_dir.
@@ -789,6 +790,9 @@ def load_config() -> PhosonConfig:
                 "PHOSON_MCP_CONFIG", "mcp_config_file", fd, str(d.mcp_config_file)
             )
         ).expanduser(),
+        tool_budget_tokens=_resolve_int(
+            "PHOSON_TOOL_BUDGET", "tool_budget_tokens", fd, d.tool_budget_tokens
+        ),
         enable_monitors=_resolve_bool(
             "PHOSON_ENABLE_MONITORS", "enable_monitors", fd, d.enable_monitors
         ),

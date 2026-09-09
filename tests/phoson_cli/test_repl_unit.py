@@ -398,10 +398,27 @@ def test_system_prompt_mentions_mcp_tools_when_loaded(repl: PhosonRepl) -> None:
     plain_tool = MagicMock()
     plain_tool.name = "bash"
     repl.engine.tools = [plain_tool, fake_mcp_tool]
+    # #148: the system prompt reflects the *visible* tool set (the catalog
+    # view), not the raw registry — stub it so the fake MCP tool is visible.
+    repl.engine.visible_tools = lambda: [plain_tool, fake_mcp_tool]
 
     prompt = repl._build_system_prompt()
 
     assert "MCP tools (names prefixed 'mcp_') are also available" in prompt
+
+
+def test_system_prompt_mentions_masked_tools(repl: PhosonRepl) -> None:
+    """#148: when the catalog masks tools, the prompt points at `discover`."""
+    plain_tool = MagicMock()
+    plain_tool.name = "bash"
+    repl.engine.tools = [plain_tool]
+    repl.engine.visible_tools = lambda: [plain_tool]
+    repl.engine.masked_tool_count = lambda: 654
+
+    prompt = repl._build_system_prompt()
+
+    assert "654 tools are masked to save context" in prompt
+    assert "discover" in prompt
 
 
 # ── PhosonRepl.undo_last_turn ─────────────────────────────────────────────────

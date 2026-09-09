@@ -9,7 +9,7 @@ front end — can use them without importing the prompt_toolkit REPL.
 import sys
 import logging
 import warnings
-from typing import Any
+from typing import Any, cast
 from pathlib import Path
 from datetime import UTC, datetime
 
@@ -235,6 +235,7 @@ def build_system_prompt(
     tools: list,
     agents_md_max_tokens: int | None = None,
     skills_max_tokens: int | None = None,
+    masked_count: int | None = None,
 ) -> str:
     """Build the system prompt for the loaded tools.
 
@@ -259,6 +260,16 @@ def build_system_prompt(
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
     if not has_mcp:
         mcp_note = ""
+    # Cache-aware tool masking (#148): when the catalog is over the budget,
+    # the visible list above is the *core* set — tell the model the rest
+    # exists and how to reach it, without paying for the schemas.
+    if masked_count:
+        mcp_note += (
+            f" Additionally, {masked_count} tools are masked to save "
+            "context; use the `discover` tool to search for and reveal "
+            "them by keyword or category before concluding a capability "
+            "does not exist."
+        )
     tool_names_list = [t.name for t in tools]
     tool_names = set(tool_names_list)
     tool_names_str = ", ".join(sorted(tool_names))
@@ -313,6 +324,26 @@ def build_system_prompt(
         env_block=env_block,
         safety_block=safety_block,
     )
+
+
+def engine_visible_tools(engine: Any) -> list:
+    """The tools the engine actually sends to the LLM (masking-aware, #148).
+
+    Falls back to the raw registry for engine fakes (and sub-agent
+    constructors) that predate the discovery API.
+    """
+    visible = getattr(engine, "visible_tools", None)
+    if callable(visible):
+        return list(cast(Any, visible)())
+    return list(engine.tools)
+
+
+def engine_masked_count(engine: Any) -> int:
+    """Tools masked behind ``discover`` (0 when the fakes/engine lack it)."""
+    count = getattr(engine, "masked_tool_count", None)
+    if callable(count):
+        return int(cast(Any, count)())
+    return 0
 
 
 def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
