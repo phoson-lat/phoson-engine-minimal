@@ -252,6 +252,14 @@ class AgentEngine:
             return self._tool_catalog.hidden_count()
         return 0
 
+    def prompt_tools(self) -> list[AgentTool]:
+        """Stable tool set for the system prompt (#148 review, option b).
+
+        Excludes revealed tools when the discovery catalog is active so the
+        prompt remains a stable, cache-friendly prefix across reveals.
+        """
+        return self._tool_catalog.prompt_tools()
+
     # ── Public API ──────────────────────────────────────────────────────
 
     def get_partial_history(self) -> list[Message]:

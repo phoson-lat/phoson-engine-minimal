@@ -85,7 +85,7 @@ from .session_utils import (
     build_plugin_specs,
     build_system_prompt,
     drain_monitor_wakes,
-    engine_masked_count,
+    engine_prompt_tools,
     find_monitor_plugin,
     engine_visible_tools,
 )
@@ -833,8 +833,7 @@ class SessionController:
         return self.summarizer.estimate_request(
             path,
             system=build_system_prompt(
-                engine_visible_tools(self.engine),
-                masked_count=engine_masked_count(self.engine),
+                engine_prompt_tools(self.engine),
             ),
             tools=self.summarizer.tool_definitions,
         )
@@ -1005,8 +1004,7 @@ class SessionController:
         config = ModelConfig(
             model=self.current_model,
             system=build_system_prompt(
-                engine_visible_tools(self.engine),
-                masked_count=engine_masked_count(self.engine),
+                engine_prompt_tools(self.engine),
             ),
             reasoning_effort=reasoning_effort,
             # Stable per-conversation key: OpenRouter uses it for sticky
@@ -1181,8 +1179,7 @@ class SessionController:
     def build_system_prompt(self) -> str:
         """System prompt for the next run (built-in + loaded MCP tools)."""
         return build_system_prompt(
-            engine_visible_tools(self.engine),
-            masked_count=engine_masked_count(self.engine),
+            engine_prompt_tools(self.engine),
         )
 
     def new_session(self) -> None:

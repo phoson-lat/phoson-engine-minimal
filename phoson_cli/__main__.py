@@ -382,8 +382,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         build_offload,
         build_summarizer,
         build_middlewares,
-        engine_masked_count,
-        engine_visible_tools,
+        engine_prompt_tools,
     )
     from phoson_cli.permissions_store import build_permission_middleware
 
@@ -442,8 +441,7 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
                 ModelConfig(
                     model=config.model,
                     system=build_system_prompt(
-                        engine_visible_tools(engine),
-                        masked_count=engine_masked_count(engine),
+                        engine_prompt_tools(engine),
                     ),
                 ),
             )
