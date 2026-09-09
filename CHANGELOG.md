@@ -27,6 +27,29 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   buffer partial lines in the stderr tail writer (#218)
 - **mcp**: drop an empty `required` list when sanitizing tool schemas (#218)
 
+## v0.29.0 (2026-09-07)
+
+### Feat
+
+- **cli**: show date/time on session messages + turn-end, scope sessions by
+  dir (#212)
+- **agent**: per-phase reasoning effort (reasoning sandwich) (#145)
+- **sprint**: Sprint C/D/E — seven issues (T-15, preserved thinking, doom
+  loop, env context, docs parity, background agents, adapters,
+  offload/postgres)
+
+### Fix
+
+- **cli**: narrow history timestamp for pyright (#212)
+- **bench**: pass the gate when the floor is reached + real baseline (#210)
+- **bench**: accept a recorded baseline in the committed-baseline test (#139)
+
+### Refactor
+
+- **fullscreen**: extract ChatPane (scroll + windowed render + bounds)
+  (F-45, #187)
+- **fullscreen**: extract floats / HeaderModel / RewindController (F-45, #187)
+
 ## v0.28.1 (2026-09-06)
 
 ### Feat
