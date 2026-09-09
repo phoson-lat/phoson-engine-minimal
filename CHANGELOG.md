@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.30.0 (2026-09-09)
+
+### Feat
+
+- **agent**: cache-aware tool discovery for large tool catalogs — mask the tail
+  beyond a token budget and reveal on demand via the `discover` meta-tool
+  without invalidating the KV-cache (mask, don't remove) (#148)
+- **cli**: stray-stderr output guard for the TUI + `tool_budget_tokens` config
+  (env `PHOSON_TOOL_BUDGET`, `0` = off) (#148)
+- **cli**: keep the system prompt a stable, cache-friendly prefix across
+  `discover` reveals (option b from the #218 review) (#218)
+
+### Fix
+
+- **mcp**: route each stdio server's stderr to a per-server log file and
+  sanitize broken tool `inputSchema`s so one malformed tool no longer 400s the
+  whole request (#148)
+- **cli**: harden discovery helpers against auto-generated mock attributes and
+  buffer partial lines in the stderr tail writer (#218)
+- **mcp**: drop an empty `required` list when sanitizing tool schemas (#218)
+
 ## v0.28.1 (2026-09-06)
 
 ### Feat
