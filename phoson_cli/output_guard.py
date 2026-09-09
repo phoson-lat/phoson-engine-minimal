@@ -47,6 +47,7 @@ class _TeeWriter:
         self._tail = tail
         self._lock = threading.Lock()
         self._fh: io.TextIOBase | None = None
+        self._buf = ""
         self.encoding = "utf-8"
         self.errors = "backslashreplace"
 
@@ -68,13 +69,21 @@ class _TeeWriter:
             fh.flush()
         except Exception:  # noqa: BLE001
             pass
+        # ``print`` splits each call into a content write plus a separate
+        # ``"\n"`` write, so buffer until a newline arrives before recording
+        # a (complete) line — otherwise every print would leave a spurious
+        # empty line in the tail.
         with self._lock:
-            ts = time.strftime("%H:%M:%S")
-            for line in data.rstrip("\n").split("\n"):
-                self._tail.append(f"{ts} {line}")
-            while len(self._tail) > _TAIL_LIMIT:
-                self._tail.pop(0)
+            self._buf += data
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                self._record(line)
         return len(data)
+
+    def _record(self, line: str) -> None:
+        self._tail.append(f"{time.strftime('%H:%M:%S')} {line}")
+        while len(self._tail) > _TAIL_LIMIT:
+            self._tail.pop(0)
 
     def flush(self) -> None:
         if self._fh is not None and not isinstance(self._fh, io.StringIO):
@@ -82,6 +91,10 @@ class _TeeWriter:
                 self._fh.flush()
             except Exception:  # noqa: BLE001
                 pass
+        with self._lock:
+            if self._buf:
+                self._record(self._buf)
+                self._buf = ""
 
     def isatty(self) -> bool:
         return False

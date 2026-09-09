@@ -7,9 +7,10 @@ front end — can use them without importing the prompt_toolkit REPL.
 """
 
 import sys
+import types
 import logging
 import warnings
-from typing import Any, cast
+from typing import Any
 from pathlib import Path
 from datetime import UTC, datetime
 
@@ -330,19 +331,28 @@ def engine_visible_tools(engine: Any) -> list:
     """The tools the engine actually sends to the LLM (masking-aware, #148).
 
     Falls back to the raw registry for engine fakes (and sub-agent
-    constructors) that predate the discovery API.
+    constructors) that predate the discovery API. Only a real
+    function/method counts as the discovery API — this keeps an
+    auto-generated ``MagicMock`` child attribute from being mistaken for a
+    genuine ``visible_tools`` (which would yield a bogus empty list /
+    masked count instead of the raw registry).
     """
     visible = getattr(engine, "visible_tools", None)
-    if callable(visible):
-        return list(cast(Any, visible)())
+    if isinstance(visible, (types.FunctionType, types.MethodType)):
+        return list(visible())
     return list(engine.tools)
 
 
 def engine_masked_count(engine: Any) -> int:
-    """Tools masked behind ``discover`` (0 when the fakes/engine lack it)."""
+    """Tools masked behind ``discover`` (0 when the fakes/engine lack it).
+
+    Uses the same real-function/method check as :func:`engine_visible_tools`
+    so an auto-generated ``MagicMock`` child is not mistaken for a real
+    ``masked_tool_count`` (which would report a spurious non-zero count).
+    """
     count = getattr(engine, "masked_tool_count", None)
-    if callable(count):
-        return int(cast(Any, count)())
+    if isinstance(count, (types.FunctionType, types.MethodType)):
+        return int(count())
     return 0
 
 
