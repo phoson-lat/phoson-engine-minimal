@@ -3,8 +3,10 @@ MCP Plugin implementation.
 """
 
 import re
+import sys
 import json
 import asyncio
+import logging
 from typing import Any
 from pathlib import Path
 from contextlib import AsyncExitStack
@@ -20,6 +22,34 @@ try:
     MCP_AVAILABLE = True
 except ImportError:
     MCP_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+
+def _sanitize_tool_parameters(parameters: Any) -> dict[str, Any]:
+    """Coerce an MCP ``inputSchema`` into the shape providers validate.
+
+    vLLM and friends reject the WHOLE request (HTTP 400, "Tool N
+    function has invalid ...") when one tool's parameters schema is not
+    a JSON object mapping — e.g. a server shipping ``{"type":
+    "object"}`` without ``properties`` or a non-dict schema.  Sanitize
+    instead of surfacing: one broken tool must not 400 the session.
+    """
+    if not isinstance(parameters, dict):
+        parameters = {}
+    cleaned: dict[str, Any] = {k: v for k, v in parameters.items() if k != "$schema"}
+    if cleaned.get("type") not in (None, "object"):
+        cleaned["type"] = "object"
+    props = cleaned.get("properties")
+    if not isinstance(props, dict):
+        cleaned["properties"] = {}
+    req = cleaned.get("required")
+    if not isinstance(req, list):
+        cleaned.pop("required", None)
+    else:
+        valid = {str(k) for k in props}
+        cleaned["required"] = [r for r in req if r in valid]
+    return cleaned
 
 
 class MCPPlugin(Plugin):
@@ -98,6 +128,9 @@ class MCPPlugin(Plugin):
         self._exit_stack = AsyncExitStack()
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._server_tool_lists: dict[str, list[Any]] = {}
+        # Per-server stderr sinks (see _open_errlog): the stdio transport
+        # pipes each subprocess's stderr here instead of the terminal.
+        self._errlog_files: dict[str, Any] = {}
 
     @property
     def name(self) -> str:
@@ -299,10 +332,15 @@ class MCPPlugin(Plugin):
             description = remote_tool.description or (
                 f"MCP tool '{remote_tool_name}' from server '{server_name}'"
             )
-            parameters = remote_tool.inputSchema or {
-                "type": "object",
-                "properties": {},
-            }
+            raw_parameters = remote_tool.inputSchema
+            if not isinstance(raw_parameters, dict):
+                logger.warning(
+                    "MCP server %r tool %r has a non-object inputSchema; "
+                    "replacing with an empty object schema.",
+                    server_name,
+                    remote_tool_name,
+                )
+            parameters = _sanitize_tool_parameters(raw_parameters or {})
 
             async def mcp_tool_handler(
                 args: dict[str, Any],
@@ -421,8 +459,12 @@ class MCPPlugin(Plugin):
                 server_params = StdioServerParameters(
                     command=command, args=args, env=env if env else None
                 )
+                # Route the server's stderr to a per-server log file rather
+                # than the terminal (the default errlog=sys.stderr floods the
+                # CLI/TUI with raw JSON logs, e.g. AxiosClient pings).
+                errlog = self._open_errlog(server_name)
                 read, write = await self._exit_stack.enter_async_context(
-                    stdio_client(server_params)
+                    stdio_client(server_params, errlog=errlog)
                 )
             elif transport == "sse":
                 url = server_config.get("url")
@@ -616,6 +658,37 @@ class MCPPlugin(Plugin):
         normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
         return normalized or "tool"
 
+    def _open_errlog(self, server_name: str) -> Any:
+        """Open (or reuse) the per-server stderr log file.
+
+        The MCP stdio transport pipes the subprocess's stderr to ``errlog``
+        (default ``sys.stderr``), which leaks raw JSON logs straight into
+        the terminal and tears the TUI render. Route it to
+        ``~/.phoson/logs/mcp/<server>.log`` instead. Falls back to
+        ``sys.stderr`` (prior behaviour) if the log path is unwritable.
+        """
+        existing = self._errlog_files.get(server_name)
+        if existing is not None:
+            return existing
+        safe = self._safe_tool_name_part(server_name)
+        path = Path.home() / ".phoson" / "logs" / "mcp" / f"{safe}.log"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = open(path, "a", encoding="utf-8")
+        except Exception:  # noqa: BLE001 - degrade to prior behaviour
+            fh = sys.stderr
+        self._errlog_files[server_name] = fh
+        return fh
+
+    def _close_errlogs(self) -> None:
+        for fh in self._errlog_files.values():
+            if fh is not None and fh is not sys.stderr:
+                try:
+                    fh.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        self._errlog_files.clear()
+
     def is_server_enabled(self, server_name: str) -> bool:
         """Return whether ``server_name`` is active (default: enabled).
 
@@ -663,6 +736,7 @@ class MCPPlugin(Plugin):
                 pass
             self._exit_stack = AsyncExitStack()
 
+        self._close_errlogs()
         self.sessions.clear()
         self._server_tool_lists.clear()
         self.tools_cache.clear()
@@ -675,6 +749,7 @@ class MCPPlugin(Plugin):
         """
         await self._exit_stack.aclose()
         self._exit_stack = AsyncExitStack()
+        self._close_errlogs()
         self.sessions.clear()
         self._server_tool_lists.clear()
         self.tools_cache.clear()
