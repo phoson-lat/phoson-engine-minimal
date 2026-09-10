@@ -32,6 +32,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "aws": "AWS Bedrock",
     "fireworks": "Fireworks AI",
     "cohere": "Cohere",
+    "omniroute": "OmniRoute",
 }
 
 

@@ -137,6 +137,7 @@ class SetupWizard:
             "bedrock",
             "fireworks",
             "cohere",
+            "omniroute",
         ]
         selected = set(self.enabled_providers)
 
@@ -303,6 +304,15 @@ class SetupWizard:
                 "Cohere API key",
                 config.cohere_api_key,
             )
+        if "omniroute" in self.enabled_providers:
+            config.omniroute_base_url = await self._prompt_text(
+                "OmniRoute base URL",
+                config.omniroute_base_url or "http://localhost:20128/v1",
+            )
+            config.omniroute_api_key = await self._secret_prompt(
+                "OmniRoute API key (optional, press Enter to skip)",
+                config.omniroute_api_key,
+            )
         return config
 
     async def _configure_defaults(self, config: PhosonConfig) -> PhosonConfig:
@@ -435,6 +445,8 @@ class SetupWizard:
         )
         table.add_row("Fireworks", self._mask_secret(config.fireworks_api_key))
         table.add_row("Cohere", self._mask_secret(config.cohere_api_key))
+        table.add_row("OmniRoute", config.omniroute_base_url or "—")
+        table.add_row("OmniRoute key", self._mask_secret(config.omniroute_api_key))
         table.add_row("Sessions dir", str(config.sessions_dir))
         table.add_row("Max iterations", str(config.max_iterations))
         table.add_row("Safe mode", "on" if config.safe_mode else "off")
@@ -636,6 +648,12 @@ class SetupWizard:
             enabled.append("fireworks")
         if config.cohere_api_key or config.provider == "cohere":
             enabled.append("cohere")
+        if (
+            config.omniroute_api_key
+            or config.omniroute_base_url
+            or config.provider == "omniroute"
+        ):
+            enabled.append("omniroute")
         return enabled or [config.provider]
 
 

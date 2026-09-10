@@ -33,6 +33,7 @@ from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.fireworks import FireworksChat
+from phoson_llm.chats.omniroute import OmniRouteChat
 from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.chats.github_models import GitHubModelsChat
@@ -48,7 +49,7 @@ class PhosonConfigError(Exception):
 #: Single source of truth for the "configured?" checks in the CLI entry
 #: point and in :func:`has_configured_provider`.
 NO_CREDENTIAL_PROVIDERS: frozenset[str] = frozenset(
-    {"ollama", "bedrock", "aws", "vllm", "lmstudio"}
+    {"ollama", "bedrock", "aws", "vllm", "lmstudio", "omniroute"}
 )
 
 
@@ -97,6 +98,8 @@ class PhosonConfig:
     mistral_api_key: str | None = None
     fireworks_api_key: str | None = None
     cohere_api_key: str | None = None
+    omniroute_api_key: str | None = None
+    omniroute_base_url: str | None = None
     vllm_base_url: str | None = None
     vllm_api_key: str | None = None
     lmstudio_base_url: str | None = None
@@ -731,6 +734,12 @@ def load_config() -> PhosonConfig:
         cohere_api_key=_resolve_optional_str(
             "COHERE_API_KEY", "cohere_api_key", fd, d.cohere_api_key
         ),
+        omniroute_api_key=_resolve_optional_str(
+            "OMNIROUTE_API_KEY", "omniroute_api_key", fd, d.omniroute_api_key
+        ),
+        omniroute_base_url=_resolve_optional_str(
+            "OMNIROUTE_BASE_URL", "omniroute_base_url", fd, d.omniroute_base_url
+        ),
         vllm_base_url=_resolve_optional_str(
             "VLLM_BASE_URL", "vllm_base_url", fd, d.vllm_base_url
         ),
@@ -929,6 +938,7 @@ _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
     "azure_openai_api_key": "AZURE_OPENAI_API_KEY",
     "gemini_api_key": "GEMINI_API_KEY",
     "mistral_api_key": "MISTRAL_API_KEY",
+    "omniroute_api_key": "OMNIROUTE_API_KEY",
     "vllm_api_key": "VLLM_API_KEY",
 }
 
@@ -1047,6 +1057,8 @@ def save_config(
         ("mistral_api_key", getattr(config, "mistral_api_key", None)),
         ("fireworks_api_key", getattr(config, "fireworks_api_key", None)),
         ("cohere_api_key", getattr(config, "cohere_api_key", None)),
+        ("omniroute_api_key", getattr(config, "omniroute_api_key", None)),
+        ("omniroute_base_url", getattr(config, "omniroute_base_url", None)),
         ("vllm_base_url", getattr(config, "vllm_base_url", None)),
         ("vllm_api_key", getattr(config, "vllm_api_key", None)),
         ("lmstudio_base_url", getattr(config, "lmstudio_base_url", None)),
@@ -1202,6 +1214,10 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("fireworks")
     if getattr(config, "cohere_api_key", None):
         providers.append("cohere")
+    if getattr(config, "omniroute_api_key", None) or getattr(
+        config, "omniroute_base_url", None
+    ):
+        providers.append("omniroute")
     if getattr(config, "vllm_base_url", None) or getattr(config, "vllm_api_key", None):
         providers.append("vllm")
     if getattr(config, "lmstudio_base_url", None):
@@ -1324,6 +1340,11 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
         return FireworksChat(api_key=config.fireworks_api_key, base_url=base_url)
     if provider == "cohere":
         return CohereChat(api_key=config.cohere_api_key, base_url=base_url)
+    if provider == "omniroute":
+        return OmniRouteChat(
+            api_key=config.omniroute_api_key,
+            base_url=base_url or config.omniroute_base_url,
+        )
     if provider == "vllm":
         return VLLMChat(
             base_url=base_url or config.vllm_base_url or "http://localhost:8000/v1",

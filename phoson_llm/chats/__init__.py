@@ -15,6 +15,7 @@ from phoson_llm.chats.lmstudio import LMStudioChat
 from phoson_llm.chats.together import TogetherChat
 from phoson_llm.chats.anthropic import AnthropicChat
 from phoson_llm.chats.fireworks import FireworksChat
+from phoson_llm.chats.omniroute import OmniRouteChat
 from phoson_llm.chats.openrouter import OpenRouterChat
 from phoson_llm.chats.perplexity import PerplexityChat
 from phoson_llm.chats.github_models import GitHubModelsChat
@@ -42,4 +43,5 @@ __all__ = [
     "BedrockChat",
     "FireworksChat",
     "CohereChat",
+    "OmniRouteChat",
 ]

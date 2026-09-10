@@ -18,6 +18,7 @@ def test_configured_provider_detects_all_credentials() -> None:
     assert has_configured_provider(PhosonConfig(provider="ollama"))
     assert has_configured_provider(PhosonConfig(provider="bedrock"))
     assert has_configured_provider(PhosonConfig(provider="vllm"))
+    assert has_configured_provider(PhosonConfig(provider="omniroute"))
     # Remote provider with no credential at all.
     assert not has_configured_provider(PhosonConfig(provider="openrouter"))
     assert not has_configured_provider(

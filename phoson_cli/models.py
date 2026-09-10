@@ -59,7 +59,7 @@ def models_file_path(home: str | Path | None = None) -> Path:
 #: ``vendor/model`` id (e.g. OpenRouter serves ``openai/gpt-4o``). For a
 #: router, a vendor prefix in the model id does NOT identify the serving
 #: provider.
-ROUTER_PROVIDERS: frozenset[str] = frozenset({"openrouter", "github"})
+ROUTER_PROVIDERS: frozenset[str] = frozenset({"openrouter", "github", "omniroute"})
 
 #: Provider aliases normalized to their canonical name.
 PROVIDER_ALIASES: dict[str, str] = {
@@ -89,6 +89,7 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "mistral",
         "fireworks",
         "cohere",
+        "omniroute",
         "bedrock",
         "aws",
         "vllm",
