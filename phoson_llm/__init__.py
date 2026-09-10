@@ -34,6 +34,7 @@ from phoson_llm.chats import (
     TogetherChat,
     AnthropicChat,
     FireworksChat,
+    OmniRouteChat,
     OpenRouterChat,
     PerplexityChat,
     GitHubModelsChat,
@@ -99,6 +100,7 @@ __all__ = [
     "BedrockChat",
     "FireworksChat",
     "CohereChat",
+    "OmniRouteChat",
     "build_chat",
     # schemas - inputs
     "Message",

@@ -109,6 +109,8 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_vllm_models(config)
     if provider == "lmstudio":
         return await _list_lmstudio_models(config)
+    if provider == "omniroute":
+        return await _list_omniroute_models(config)
     return [ModelOption(id=config.model, label=config.model, provider=provider)]
 
 
@@ -675,6 +677,37 @@ async def _list_lmstudio_models(config: PhosonConfig) -> list[ModelOption]:
     options = [
         ModelOption(
             id=item.get("id", ""), label=item.get("id", ""), provider="lmstudio"
+        )
+        for item in data.get("data", [])
+        if item.get("id")
+    ]
+    return _prioritize_current(options, config.model)
+
+
+async def _list_omniroute_models(config: PhosonConfig) -> list[ModelOption]:
+    from phoson_llm.chats.omniroute import OMNIROUTE_DEFAULT_BASE_URL
+
+    base_url = (
+        getattr(config, "omniroute_base_url", None) or OMNIROUTE_DEFAULT_BASE_URL
+    ).rstrip("/")
+    url = f"{base_url}/models"
+    headers: dict[str, str] = {}
+    api_key = getattr(config, "omniroute_api_key", None)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url, headers=headers or None)
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ModelListingError(f"Failed to fetch OmniRoute models: {exc}") from exc
+    options = [
+        ModelOption(
+            id=item.get("id", ""),
+            label=item.get("id", ""),
+            provider="omniroute",
+            description=item.get("owned_by") or item.get("name") or "",
         )
         for item in data.get("data", [])
         if item.get("id")

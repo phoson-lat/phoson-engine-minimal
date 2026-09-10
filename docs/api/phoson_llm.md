@@ -19,7 +19,7 @@ Unified LLM chat interface providing a normalized API across multiple providers.
 - **Mistral AI** — Mistral Large, Mistral Small, Codestral (Native SDK support)
 - **AWS Bedrock** — Enterprise-grade access to Anthropic, Meta, Mistral models (Native SDK support)
 - **Azure OpenAI** — Enterprise OpenAI deployments with custom URL support
-- **And many others** — Together AI, Perplexity, Fireworks, Cohere, LM Studio, vLLM
+- **And many others** — Together AI, Perplexity, Fireworks, Cohere, OmniRoute, LM Studio, vLLM
 
 ## Chat Adapters
 
@@ -101,6 +101,7 @@ Many providers use the OpenAI API format. Phoson provides dedicated classes for 
 | `PerplexityChat` | Perplexity | `PERPLEXITY_API_KEY` |
 | `FireworksChat` | Fireworks AI | `FIREWORKS_API_KEY` |
 | `CohereChat` | Cohere | `COHERE_API_KEY` |
+| `OmniRouteChat` | OmniRoute | `OMNIROUTE_API_KEY` (optional) |
 | `LMStudioChat` | LM Studio | N/A (local) |
 | `VLLMChat` | vLLM | N/A (local) |
 
@@ -363,7 +364,7 @@ from phoson_llm import (
     # Chat adapters
     BaseLLMChat, OpenAIChat, AnthropicChat, OllamaChat, OpenRouterChat,
     GitHubModelsChat, NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
-    TogetherChat, PerplexityChat, FireworksChat, CohereChat,
+    TogetherChat, PerplexityChat, FireworksChat, CohereChat, OmniRouteChat,
     LMStudioChat, VLLMChat, AzureChat,
     GeminiChat, MistralChat, BedrockChat,
     # Factory
