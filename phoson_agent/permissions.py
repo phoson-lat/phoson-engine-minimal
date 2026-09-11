@@ -32,10 +32,11 @@ both the user and the agent.
 import fnmatch
 from typing import Any
 from dataclasses import field, dataclass
-from collections.abc import Callable, Awaitable
+from collections.abc import Callable, Iterable, Awaitable
 
 from phoson_llm.schemas import ToolCallEvent
 
+from .models import AgentTool
 from .exceptions import PhosonAgentError
 from .middleware import AgentMiddleware
 
@@ -57,6 +58,85 @@ VALID_LEVELS = frozenset({LEVEL_ALLOW, LEVEL_ASK, LEVEL_DENY})
 
 #: Callback signature: return True to let the call through.
 AskCallback = Callable[[str, dict[str, Any]], Awaitable[bool]]
+
+
+# ── Tool risk hints (issue #144, phase 2) ────────────────────────────────────
+#
+# Some tools ship their own risk metadata — notably MCP servers, whose
+# ``ToolAnnotations`` carry ``readOnlyHint`` / ``destructiveHint`` /
+# ``idempotentHint`` / ``openWorldHint``. We consume it as a *signal*, never
+# as a contract: it can only ever make the gate *stricter* than the tool-name
+# default (never bypass a user rule), and an absent/partial annotation
+# degrades to the safe default. This gives the permission decision risk
+# vocabulary beyond "tool name", without the intent taxonomy of phase 1.
+
+#: Metadata key under which a tool (the MCP plugin) publishes its hints.
+MCP_ANNOTATIONS_KEY = "mcp_annotations"
+
+
+@dataclass(frozen=True)
+class ToolHints:
+    """Normalized risk hints derived from a tool's own metadata.
+
+    Defaults are the *conservative* MCP defaults: an unannotated write tool
+    is treated as destructive and open-world. Only an explicit, unambiguous
+    ``readOnlyHint`` (annotated, read-only, not destructive) lowers the
+    derived level to ``allow``; everything else resolves to ``ask`` so a
+    human stays in the loop. A user's explicit level in ``permissions.json``
+    always wins over these hints (see :meth:`PermissionPolicy.check`).
+    """
+
+    annotated: bool = False
+    read_only: bool = False
+    destructive: bool = True
+    idempotent: bool = False
+    open_world: bool = True
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any] | None) -> "ToolHints | None":
+        """Build hints from a tool's ``metadata`` dict, or None if absent.
+
+        Returns ``None`` when the tool carries no annotations at all, so
+        tools without hints (all built-ins) keep their current behaviour
+        and are never forced into the safe default by this mechanism.
+        """
+        raw = metadata.get(MCP_ANNOTATIONS_KEY) if isinstance(metadata, dict) else None
+        if not isinstance(raw, dict):
+            return None
+        return cls(
+            annotated=bool(raw.get("annotated", False)),
+            read_only=bool(raw.get("read_only", False)),
+            destructive=bool(raw.get("destructive", True)),
+            idempotent=bool(raw.get("idempotent", False)),
+            open_world=bool(raw.get("open_world", True)),
+        )
+
+    def derived_level(self) -> str:
+        """The safe level implied by the hints: allow read-only, else ask."""
+        if self.annotated and self.read_only and not self.destructive:
+            return LEVEL_ALLOW
+        return LEVEL_ASK
+
+
+def collect_tool_hints(tools: Iterable[AgentTool]) -> dict[str, ToolHints]:
+    """Map tool name → :class:`ToolHints` for tools that publish hints.
+
+    Hosts call this once plugins are loaded (MCP tool discovery is
+    synchronous but happens during plugin initialization) and merge the
+    result into the policy — e.g. in the CLI::
+
+        policy.hints = collect_tool_hints(engine.tools)
+
+    Tools without recognisable metadata are skipped, so built-in tools keep
+    their (allow-by-default) behaviour and only annotated tool families are
+    subject to the safe default.
+    """
+    hints: dict[str, ToolHints] = {}
+    for tool in tools:
+        parsed = ToolHints.from_metadata(getattr(tool, "metadata", None))
+        if parsed is not None:
+            hints[tool.name] = parsed
+    return hints
 
 
 # ── Bash allow-pattern safety (F-03, F-07, #175) ─────────────────────────────
@@ -161,10 +241,15 @@ class PermissionPolicy:
             For bash the command line must be a single simple command for
             a pattern to match (see :func:`pattern_allows`), so a pattern
             cannot bless a chained or substituted shell line.
+        hints: Mapping of tool name → :class:`ToolHints` derived from the
+            tool's own metadata (MCP annotations, #144 phase 2). Consulted
+            *after* an explicit level and *before* the allow-by-default
+            fallback, so it can only tighten — never loosen — the gate.
     """
 
     levels: dict[str, str] = field(default_factory=dict)
     allow_patterns: dict[str, list[str]] = field(default_factory=dict)
+    hints: dict[str, ToolHints] = field(default_factory=dict)
 
     def normalized_levels(self) -> dict[str, str]:
         """Levels with invalid entries dropped."""
@@ -173,12 +258,20 @@ class PermissionPolicy:
     def check(self, tool_name: str, match_text: str | None = None) -> str:
         """Resolve the effective decision for one call.
 
+        Precedence, highest first:
+
+        1. an allow-pattern hit short-circuits to *allow*;
+        2. the tool's explicit level in ``levels`` (always wins over hints,
+           so ``/permissions <tool> allow`` can relax an annotated tool);
+        3. the level derived from :attr:`hints` (MCP annotations): read-only
+           → allow, otherwise the safe default (ask);
+        4. unlisted tools with no hints default to *allow*, preserving the
+           pre-#144 behaviour for built-in tools.
+
         Args:
             tool_name: Name of the tool being called.
             match_text: Optional string matched against the tool's allow
-                patterns. A pattern hit short-circuits to *allow*;
-                otherwise the tool's configured level applies (allow when
-                unlisted). For ``bash``, a pattern only matches a single
+                patterns. For ``bash``, a pattern only matches a single
                 *simple* command (see :func:`pattern_allows`): a compound
                 shell line never short-circuits to allow and falls back to
                 the configured level.
@@ -187,7 +280,13 @@ class PermissionPolicy:
             for pattern in self.allow_patterns.get(tool_name, []):
                 if pattern_allows(tool_name, pattern, match_text):
                     return LEVEL_ALLOW
-        return self.levels.get(tool_name, LEVEL_ALLOW)
+        explicit = self.levels.get(tool_name)
+        if explicit is not None:
+            return explicit
+        hints = self.hints.get(tool_name)
+        if hints is not None:
+            return hints.derived_level()
+        return LEVEL_ALLOW
 
 
 def _denied_message(tool_name: str, reason: str) -> str:
@@ -284,10 +383,13 @@ class PermissionMiddleware(AgentMiddleware):
 
 __all__ = [
     "AskCallback",
+    "MCP_ANNOTATIONS_KEY",
     "PermissionMiddleware",
     "PermissionPolicy",
     "ToolBlockedError",
+    "ToolHints",
     "VALID_LEVELS",
+    "collect_tool_hints",
     "is_simple_shell_command",
     "pattern_allows",
 ]

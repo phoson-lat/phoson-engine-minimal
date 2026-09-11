@@ -254,7 +254,7 @@ engine = AgentEngine(
 
 ## Bundled plugins
 
-- `phoson_plugin_mcp`: integrates Model Context Protocol servers.
+- `phoson_plugin_mcp`: integrates Model Context Protocol servers. Publishes each server's tool annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`) as tool metadata, which the permission gate consumes — read-only tools run freely, everything else asks (see `docs/cli/permissions.md`).
 - `phoson_plugin_checkpoint`: Postgres-backed `SessionStorage` with its own schema (`phoson_checkpoint_*`). See `phoson_plugin_checkpoint/README.md`.
 - `phoson_plugin_memory`: short-term (Redis, TTL) and long-term (Postgres) memory exposed as `memory_read`/`memory_write` tools (same `MemoryBackend` for both), plus a separate semantic tier (Qdrant) exposed as `memory_remember`/`memory_recall` — a different interface because it is similarity search, not exact lookup. See `phoson_plugin_memory/README.md`.
 - `phoson_plugin_monitor`: long-running monitors (`register_monitor`/`list_monitors`/`stop_monitor`) that outlive a run and re-activate the agent. Kinds: `interval`, `file` (path or glob, polled), `command`. Wakes go to a persistent queue (`data_dir`, default `~/.phoson/monitors/`) and optionally an `on_wake` callback; the CLI drains pending wakes into the next user turn. See `phoson_plugin_monitor/README.md` and `examples/monitor_wake_host.py`.
@@ -358,6 +358,29 @@ class Plugin(ABC):
     def get_commands(self) -> list[CliCommandSpec]: ...
     def get_tool_render_specs(self) -> list[ToolRenderSpec]: ...
     def get_theme_extension(self) -> ThemeExtension | None: ...
+```
+
+### AgentTool metadata
+
+`AgentTool` carries an optional, producer-owned `metadata: dict` that is
+**never sent to the model**. Hosts and policies use it to reason about a
+tool's nature without a central registry. The MCP plugin uses it to publish
+server annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`) under the `mcp_annotations` key; a host folds them into the
+permission policy with `phoson_agent.permissions.collect_tool_hints` (the CLI
+does this in `phoson_cli.permissions_store.apply_tool_hints`). Read-only MCP
+tools stay `allow`; destructive, open-world, or unannotated ones resolve to
+`ask` — a signal that can only tighten the gate. See
+`docs/cli/permissions.md#mcp-tools-annotations-as-risk-signal`.
+
+```python
+@dataclass
+class AgentTool:
+    name: str
+    description: str
+    parameters: JsonSchema
+    handler: ToolHandler
+    metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
 ### Community CLI and UI hooks

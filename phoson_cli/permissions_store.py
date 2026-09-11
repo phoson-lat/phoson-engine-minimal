@@ -29,7 +29,9 @@ with the CLI's configuration surface:
 import json
 import logging
 from pathlib import Path
+from collections.abc import Iterable
 
+from phoson_agent.models import AgentTool
 from phoson_agent.permissions import (
     LEVEL_ASK,
     LEVEL_DENY,
@@ -37,6 +39,7 @@ from phoson_agent.permissions import (
     VALID_LEVELS,
     PermissionPolicy,
     PermissionMiddleware,
+    collect_tool_hints,
 )
 
 _LOGGER = logging.getLogger("phoson_cli.permissions")
@@ -201,6 +204,26 @@ def build_permission_middleware(
     )
 
 
+def apply_tool_hints(
+    policy: PermissionPolicy,
+    tools: Iterable[AgentTool],
+) -> None:
+    """Refresh ``policy.hints`` from the loaded tool set (#144 phase 2).
+
+    Called by hosts *after* the engine has loaded its plugins (MCP tool
+    discovery runs during plugin initialization), so the annotations a tool
+    published in its ``metadata`` reach the permission decision. The mapping
+    is **replaced**, not merged, so hints from a previous engine build cannot
+    linger after the tool set changes.
+
+    Only tools that actually publish hints are entered; built-in tools are
+    left untouched and keep the allow-by-default behaviour.
+    """
+    policy.hints = collect_tool_hints(
+        tool for tool in tools if isinstance(tool, AgentTool)
+    )
+
+
 __all__ = [
     "DEFAULT_PERMISSIONS_FILE",
     "LEVEL_ASK",
@@ -208,6 +231,7 @@ __all__ = [
     "LEVEL_DENY",
     "MATCH_ARGS",
     "add_pattern",
+    "apply_tool_hints",
     "build_permission_middleware",
     "glob_quote",
     "load_policy",

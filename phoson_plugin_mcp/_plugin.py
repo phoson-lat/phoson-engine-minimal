@@ -60,6 +60,31 @@ def _sanitize_tool_parameters(parameters: Any) -> dict[str, Any]:
     return cleaned
 
 
+def _extract_annotations(remote_tool: Any) -> dict[str, Any]:
+    """Normalize an MCP tool's ``ToolAnnotations`` for the permission gate.
+
+    MCP servers may publish a ``ToolAnnotations`` object describing the
+    tool's risk (``readOnlyHint`` / ``destructiveHint`` / ``idempotentHint``
+    / ``openWorldHint``). We copy those four booleans into a plain dict the
+    host can turn into permission signal (#144 phase 2). An unannotated tool
+    yields ``{"annotated": False}`` — the gate then applies its safe default.
+
+    Missing fields fall back to the *conservative* MCP defaults (destructive
+    and open-world are true unless the server says otherwise) so a partial
+    annotation never accidentally looks safe.
+    """
+    annotations = getattr(remote_tool, "annotations", None)
+    if annotations is None:
+        return {"annotated": False}
+    return {
+        "annotated": True,
+        "read_only": bool(getattr(annotations, "readOnlyHint", False)),
+        "destructive": bool(getattr(annotations, "destructiveHint", True)),
+        "idempotent": bool(getattr(annotations, "idempotentHint", False)),
+        "open_world": bool(getattr(annotations, "openWorldHint", True)),
+    }
+
+
 class MCPPlugin(Plugin):
     """
     Plugin for integrating Model Context Protocol (MCP) servers.
@@ -317,6 +342,10 @@ class MCPPlugin(Plugin):
                     "required": ["tool_name"],
                 },
                 handler=mcp_proxy_tool,
+                # A proxy can call any remote tool, so it carries no
+                # read-only annotation: the permission gate keeps it at the
+                # safe default (ask) rather than trusting the server name.
+                metadata={"mcp_annotations": {"annotated": False}},
             )
         ]
 
@@ -369,6 +398,7 @@ class MCPPlugin(Plugin):
                     description=description,
                     parameters=parameters,
                     handler=mcp_tool_handler,
+                    metadata={"mcp_annotations": _extract_annotations(remote_tool)},
                 )
             )
 

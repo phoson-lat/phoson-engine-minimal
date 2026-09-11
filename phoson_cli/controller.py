@@ -90,7 +90,7 @@ from .session_utils import (
     engine_visible_tools,
 )
 from .tools.compact import compact_context
-from .permissions_store import build_permission_middleware
+from .permissions_store import apply_tool_hints, build_permission_middleware
 
 # The monitor plugin ships in the same wheel; the fallback keeps
 # source-only dev checkouts (package not installed) importable.
@@ -481,6 +481,11 @@ class SessionController:
             effort_scheduler=effort_scheduler,
             tool_budget_tokens=self.config.tool_budget_tokens or None,
         )
+        # #144 phase 2: fold MCP tool annotations (read-only/destructive/
+        # open-world) into the permission policy now that plugins have
+        # loaded. Replaces the hint map each rebuild so a changed tool set
+        # cannot leave stale hints behind.
+        apply_tool_hints(self.permission_middleware.policy, self.engine.tools)
         self._command_catalog_version += 1
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
         try:

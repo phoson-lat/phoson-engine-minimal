@@ -384,7 +384,10 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
         build_middlewares,
         engine_prompt_tools,
     )
-    from phoson_cli.permissions_store import build_permission_middleware
+    from phoson_cli.permissions_store import (
+        apply_tool_hints,
+        build_permission_middleware,
+    )
 
     chat = build_chat(config)
     engine: AgentEngine | None = None
@@ -412,6 +415,10 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
             max_iterations=config.max_iterations,
             tool_budget_tokens=config.tool_budget_tokens or None,
         )
+        # #144 phase 2: fold MCP tool annotations into the permission policy.
+        # One-shot has no confirmation callback, so an annotated MCP tool that
+        # is not read-only resolves to ask → refused (fail closed).
+        apply_tool_hints(permission.policy, engine.tools)
         # Same sub-agent runtime context as the interactive REPL.
         engine.context.extra["safe_mode"] = config.safe_mode
         engine.context.extra["middlewares"] = middlewares
