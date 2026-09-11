@@ -12,6 +12,8 @@ through engine context injection (``bash_confirmation``):
   is refused with an actionable message instead of hanging or running.
 """
 
+import os
+import signal
 import asyncio
 from typing import Annotated
 
@@ -40,6 +42,38 @@ def _truncate(output: str) -> str:
         return output
     clipped = encoded[:MAX_BYTES].decode("utf-8", errors="replace")
     return f"{clipped}\n\n[...truncated]"
+
+
+async def _read_capped_stream(
+    stream: asyncio.StreamReader,
+    max_bytes: int = MAX_BYTES,
+) -> tuple[bytes, bool]:
+    """Read from ``stream`` up to ``max_bytes``, draining remainder to EOF.
+
+    Returns:
+        A tuple of (captured_bytes, was_truncated).
+    """
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+
+    while True:
+        chunk = await stream.read(8192)
+        if not chunk:
+            break
+        if total < max_bytes:
+            remaining = max_bytes - total
+            if len(chunk) <= remaining:
+                chunks.append(chunk)
+                total += len(chunk)
+            else:
+                chunks.append(chunk[:remaining])
+                total += remaining
+                truncated = True
+        else:
+            truncated = True
+
+    return b"".join(chunks), truncated
 
 
 async def _run_bash(
@@ -71,27 +105,55 @@ async def _run_bash(
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
     except OSError as exc:
         return f"Failed to spawn shell: {exc}"
 
+    if proc.stdout is None or proc.stderr is None:
+        return "Failed to capture subprocess streams"
+
+    async def _capture() -> tuple[tuple[bytes, bool], tuple[bytes, bool]]:
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        stdout_task = asyncio.create_task(_read_capped_stream(proc.stdout, MAX_BYTES))
+        stderr_task = asyncio.create_task(_read_capped_stream(proc.stderr, MAX_BYTES))
+        out_res, err_res = await asyncio.gather(stdout_task, stderr_task)
+        await proc.wait()
+        return out_res, err_res
+
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        (stdout_b, stdout_trunc), (stderr_b, stderr_trunc) = await asyncio.wait_for(
+            _capture(), timeout=timeout
+        )
     except TimeoutError:
         try:
-            proc.kill()
-        finally:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
             try:
-                await proc.communicate()
-            except Exception:  # noqa: BLE001
+                proc.kill()
+            except ProcessLookupError:
                 pass
+        try:
+            await proc.wait()
+        except Exception:  # noqa: BLE001
+            pass
         return f"Command timed out after {timeout:.0f}s"
 
     stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
     stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
-    return _truncate(stdout + stderr)
+    combined = stdout + stderr
+
+    if stdout_trunc or stderr_trunc:
+        # If capped during stream reading, ensure it has the truncated suffix
+        if len(combined.encode("utf-8", errors="replace")) > MAX_BYTES:
+            return _truncate(combined)
+        return f"{combined}\n\n[...truncated]"
+
+    return _truncate(combined)
 
 
 @tool(inject=["safe_mode", "bash_confirmation"])

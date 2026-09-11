@@ -189,8 +189,41 @@ async def test_bash_tool_schema_hides_injected_params() -> None:
 
 
 # ---------------------------------------------------------------------------
-# I-127: per-invocation timeout
+# Issue #216: Subprocess isolation, pipe capping, and process group timeout
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_stdin_is_devnull() -> None:
+    """An interactive command waiting on stdin fails fast or gets EOF."""
+    cmd = (
+        f"{sys.executable} -c "
+        "\"import sys; line = sys.stdin.read(); print('read:', repr(line))\""
+    )
+    out = await _run_bash(cmd)
+    assert "read: ''" in out
+
+
+@pytest.mark.asyncio
+async def test_bash_huge_output_does_not_hang_and_is_capped() -> None:
+    """Massive output (e.g. 5MB) is read with stream capping and truncated."""
+    cmd = (
+        f"{sys.executable} -c "
+        "\"import sys; [sys.stdout.write('X' * 65536) for _ in range(80)]\""
+    )
+    out = await _run_bash(cmd)
+    assert "[...truncated]" in out
+    max_len = MAX_BYTES + len("\n\n[...truncated]") + 16
+    assert len(out.encode("utf-8", errors="replace")) <= max_len
+
+
+@pytest.mark.asyncio
+async def test_bash_timeout_kills_process_group_with_orphaned_children() -> None:
+    """Timeout kills the process group even if children keep pipes open."""
+    # Background subprocess that would hold stdout open for 30s
+    cmd = "sh -c 'sleep 30 & sleep 30'"
+    out = await _run_bash(cmd, timeout=0.3)
+    assert "timed out" in out.lower()
 
 
 class _FakeRunBash:
