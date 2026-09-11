@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.33.0 (2026-09-11)
+
+### Feat
+
+- **mcp**: consume tool annotations in the permission gate (#144, phase 2) —
+  a server's `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`
+  now travel `ToolAnnotations → AgentTool.metadata → PermissionPolicy.hints`
+  and act as a *signal, not a contract*: a read-only tool derives `allow`,
+  while destructive, open-world, write-like or unannotated tools derive the
+  safe default `ask`. An explicit level in `permissions.json` always wins,
+  built-in tools keep the allow-by-default behaviour, and the deferred MCP
+  proxy tool (`mcp_<server>_call`) is never trusted. One-shot mode fails
+  closed without a confirmation callback.
+
+---
+
 ## v0.32.0 (2026-09-11)
 
 ### Feat
