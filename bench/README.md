@@ -119,8 +119,10 @@ Reproduce:
 uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
 ```
 
-Plots are generated from the results JSON (`bench/make_plots.py`,
-matplotlib is a dev dependency):
+Plots are generated from the results JSON with
+[`bench/make_plots.py`](make_plots.py) (Plotly, a dev dependency):
+PNGs for the README plus **interactive HTML exports** to embed on the
+Phoson website (`bench/assets/*.html`):
 
 ```bash
 uv run python bench/make_plots.py bench/results/bench-20260911-004146.json

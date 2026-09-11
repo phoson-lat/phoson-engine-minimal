@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Generate bench plots for the README (issue #139).
+"""Generate sales-grade bench plots for the README / site (issue #139).
 
-Reads a saved results JSON (``bench/results/bench-*.json``) and renders
-two PNGs into ``bench/assets/``:
+Reads a saved results JSON (``bench/results/bench-*.json``) and renders,
+per figure, a sharp PNG (for the README) and an interactive HTML
+(embed on the Phoson website):
 
-* ``per-task-time.png``    — mean task duration across runs (sorted),
-  with min–max whiskers; bar color encodes the pass rate of the task.
-* ``per-task-stability.png`` — every individual run per task, to show
-  run-to-run stability (noise) on the same task order.
+* ``per-task-time.png`` / ``.html``
+    Mean task duration across runs, gradient bars, pass-rate badges.
+* ``per-task-stability.png`` / ``.html``
+    Every individual run per task + the mean — run-to-run stability.
 
 Usage:
     uv run python bench/make_plots.py bench/results/bench-<timestamp>.json
@@ -19,17 +20,17 @@ import json
 from pathlib import Path
 from collections import defaultdict
 
-import matplotlib
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
-matplotlib.use("Agg", force=True)  # headless: save PNGs only, never open a window
 RESULTS_DIR = Path(__file__).parent / "results"
 ASSETS_DIR = Path(__file__).parent / "assets"
 
-PASS_COLOR = "#2f9e6e"
-PARTIAL_COLOR = "#e0a832"
-FAIL_COLOR = "#d0543c"
-RUN_COLORS = ["#4f7cff", "#9b6cff", "#e0639e", "#e0a832", "#2f9e6e"]
+FONT = "Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+GRID = "#e5e7eb"
+INK = "#111827"
+MUTED = "#6b7280"
+BAR_GRADIENT = ["#14b8a6", "#059669"]  # teal -> emerald
+RUN_COLORS = ["#6366f1", "#a855f7", "#ec4899"]  # indigo / violet / pink
 
 
 def load_results(path: Path) -> dict:
@@ -37,16 +38,14 @@ def load_results(path: Path) -> dict:
 
 
 def per_task_stats(results: list[dict]) -> dict[str, dict[str, list]]:
-    """task name -> {'durations': [...], 'passed': [...], 'runs': [i, ...]}"""
+    """task name -> {'durations': [...], 'passed': [...]}"""
     stats: dict[str, dict[str, list]] = defaultdict(
-        lambda: {"durations": [], "passed": [], "runs": []}
+        lambda: {"durations": [], "passed": []}
     )
     for r in results:
         name = r["name"].rsplit("#", 1)[0]
-        run = int(r["name"].rsplit("#", 1)[1]) if "#" in r["name"] else 1
         stats[name]["durations"].append(r["duration_s"])
         stats[name]["passed"].append(bool(r["passed"]))
-        stats[name]["runs"].append(run)
     return stats
 
 
@@ -54,59 +53,105 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs)
 
 
-def plot_per_task_time(stats: dict[str, dict[str, list]], out: Path) -> None:
-    order = sorted(stats, key=lambda k: -_mean(stats[k]["durations"]))
-    names = [k for k in order]
-    means = [_mean(stats[k]["durations"]) for k in order]
-    mins = [min(stats[k]["durations"]) for k in order]
-    maxs = [max(stats[k]["durations"]) for k in order]
-    # xerr wants deviations FROM the bar value (the mean), not absolute ends.
-    lo = [m - mn for m, mn in zip(means, mins)]  # how far min dips below the mean
-    hi = [mx - m for m, mx in zip(means, maxs)]  # how far max rises above it
-    rates = [sum(stats[k]["passed"]) / len(stats[k]["passed"]) for k in order]
-    colors = [
-        PASS_COLOR if rt == 1 else (FAIL_COLOR if rt == 0 else PARTIAL_COLOR)
-        for rt in rates
-    ]
-
-    fig, ax = plt.subplots(figsize=(8.5, 6.2), dpi=150)
-    y = range(len(order))
-    ax.barh(
-        list(y),
-        means,
-        xerr=[lo, hi],
-        color=colors,
-        alpha=0.9,
-        height=0.62,
-        error_kw={"lw": 1.4, "capsize": 3, "color": "#333"},
+def _base_layout(title: str, subtitle: str, height: int = 640) -> go.Layout:
+    return go.Layout(
+        width=1040,
+        height=height,
+        margin=dict(l=24, r=24, t=96, b=56),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=FONT, color=INK, size=13),
+        title=dict(
+            text=title,
+            x=0.012,
+            xanchor="left",
+            y=0.985,
+            font=dict(family=FONT, size=22, color=INK),
+            subtitle=dict(
+                text=subtitle,
+                font=dict(family=FONT, size=12.5, color=MUTED),
+            ),
+        ),
+        showlegend=False,
+        xaxis=dict(
+            gridcolor=GRID,
+            gridwidth=1,
+            zeroline=False,
+            linecolor="rgba(0,0,0,0)",
+            ticks="outside",
+            tickcolor="rgba(0,0,0,0)",
+            tickfont=dict(size=11.5, color=MUTED),
+            showgrid=True,
+        ),
     )
-    for yi, mx, rt in zip(y, maxs, rates):
-        ax.text(
-            mx + 0.3,
-            yi,
-            f"{mx:.1f}s  {int(rt * 100)}%",
-            va="center",
-            fontsize=8.5,
-            color="#222",
+
+
+def _save(fig: go.Figure, stem: str) -> None:
+    png = ASSETS_DIR / f"{stem}.png"
+    html = ASSETS_DIR / f"{stem}.html"
+    fig.write_image(str(png), scale=2)
+    fig.write_html(str(html), include_plotlyjs="cdn", full_html=True)
+    print(f"saved: {png}")
+    print(f"saved: {html}")
+
+
+def plot_per_task_time(stats: dict[str, dict[str, list]], meta: dict) -> None:
+    order = sorted(stats, key=lambda k: -_mean(stats[k]["durations"]))
+    names = order[::-1]  # slowest on top after inversion
+    means = [_mean(stats[k]["durations"]) for k in order][::-1]
+    maxs = [max(stats[k]["durations"]) for k in order][::-1]
+    rates = [sum(stats[k]["passed"]) / len(stats[k]["passed"]) for k in order][::-1]
+    overall = sum(rates) / len(rates)
+
+    fig = go.Figure(
+        go.Bar(
+            x=means,
+            y=names,
+            orientation="h",
+            marker=dict(
+                color=BAR_GRADIENT,
+                line=dict(width=0),
+                colorscale=None,
+            ),
+            width=0.62,
         )
-    ax.set_yticks(list(y))
-    ax.set_yticklabels(names, fontsize=9)
-    ax.invert_yaxis()
-    ax.set_xlabel("duration (s) across runs — bar: mean, whiskers: min–max")
-    ax.set_xlim(0, max(maxs) * 1.28)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="x", alpha=0.25)
-    ax.set_title("Bench task durations (mean of runs, min–max whiskers)", pad=12)
-    fig.tight_layout()
-    fig.savefig(out)
-    plt.close(fig)
+    )
+    for i, (mx, rt) in enumerate(zip(maxs, rates)):
+        color = "#059669" if rt == 1 else ("#dc2626" if rt == 0 else "#d97706")
+        badge = f"<span style='color:{color}'>{int(rt * 100)}%</span>"
+        fig.add_annotation(
+            x=mx + 0.25,
+            y=i,
+            text=f"<b>{mx:.1f}s</b>&ensp;{badge}",
+            showarrow=False,
+            font=dict(family=FONT, size=12),
+        )
+
+    layout = _base_layout(
+        "Agent benchmark — 15 deterministic tasks",
+        f"<b>{int(overall * 100)}% pass</b> · "
+        f"{meta.get('model', '?')} on {meta.get('provider', '?')} · "
+        f"3 runs · commit {meta.get('commit', '?')}",
+    )
+    layout.yaxis = dict(
+        title=None,
+        showgrid=False,
+        zeroline=False,
+        linecolor="rgba(0,0,0,0)",
+        tickfont=dict(size=12, color=INK),
+        automargin=True,
+    )
+    layout.xaxis.title = "mean duration (s) across runs"
+    layout.xaxis.range = [0, max(maxs) * 1.32]
+    fig.update_layout(layout)
+    _save(fig, "per-task-time")
 
 
-def plot_per_task_stability(stats: dict[str, dict[str, list]], out: Path) -> None:
+def plot_per_task_stability(stats: dict[str, dict[str, list]], meta: dict) -> None:
     order = sorted(stats, key=lambda k: -_mean(stats[k]["durations"]))
     n_runs = max(len(v["durations"]) for v in stats.values())
 
-    fig, ax = plt.subplots(figsize=(8.5, 6.2), dpi=150)
+    fig = go.Figure()
     for i in range(n_runs):
         xs = []
         ys = []
@@ -114,39 +159,67 @@ def plot_per_task_stability(stats: dict[str, dict[str, list]], out: Path) -> Non
             if i < len(stats[k]["durations"]):
                 xs.append(j)
                 ys.append(stats[k]["durations"][i])
-        ax.scatter(
-            xs,
-            ys,
-            s=26,
-            color=RUN_COLORS[i % len(RUN_COLORS)],
-            label=f"run {i + 1}",
-            zorder=3,
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers",
+                name=f"run {i + 1}",
+                line=dict(color=RUN_COLORS[i % len(RUN_COLORS)], width=1.2, dash="dot"),
+                marker=dict(size=8, color=RUN_COLORS[i % len(RUN_COLORS)]),
+                hovertemplate=f"run {i + 1}<extra></extra>",
+            )
         )
-        ax.plot(
-            xs, ys, color=RUN_COLORS[i % len(RUN_COLORS)], alpha=0.35, lw=1, zorder=2
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(len(order))),
+            y=[_mean(stats[k]["durations"]) for k in order],
+            mode="lines+markers",
+            name="mean",
+            line=dict(color=INK, width=3),
+            marker=dict(size=9, symbol="line-ns-open", line=dict(width=3.5, color=INK)),
+            hovertemplate="mean<extra></extra>",
         )
-
-    means = [_mean(stats[k]["durations"]) for k in order]
-    ax.scatter(
-        range(len(order)),
-        means,
-        marker="_",
-        s=900,
-        linewidths=1.6,
-        color="#222",
-        zorder=4,
-        label="mean",
     )
-    ax.set_xticks(range(len(order)))
-    ax.set_xticklabels([k for k in order], rotation=48, ha="right", fontsize=8)
-    ax.set_ylabel("duration (s)")
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(alpha=0.25)
-    ax.legend(fontsize=8.5, framealpha=0.9, loc="upper right")
-    ax.set_title("Per-task duration across repeated runs (stability)", pad=12)
-    fig.tight_layout()
-    fig.savefig(out)
-    plt.close(fig)
+
+    layout = _base_layout(
+        "Run-to-run stability — per-task duration",
+        f"{meta.get('model', '?')} on {meta.get('provider', '?')} · "
+        f"{n_runs} repeated runs",
+    )
+    layout.xaxis = dict(
+        gridcolor=GRID,
+        gridwidth=1,
+        zeroline=False,
+        linecolor="rgba(0,0,0,0)",
+        ticks="outside",
+        tickcolor="rgba(0,0,0,0)",
+        tickfont=dict(size=10.5, color=INK),
+        showgrid=True,
+        tickvals=list(range(len(order))),
+        ticktext=order,
+        tickangle=-42,
+    )
+    layout.yaxis = dict(
+        title="duration (s)",
+        showgrid=True,
+        gridcolor=GRID,
+        zeroline=False,
+        linecolor="rgba(0,0,0,0)",
+        tickfont=dict(size=11.5, color=MUTED),
+    )
+    layout.xaxis.title = None
+    layout.showlegend = True
+    layout.legend = dict(
+        x=1.0,
+        y=1.16,
+        xanchor="right",
+        bgcolor="rgba(0,0,0,0)",
+        font=dict(family=FONT, size=11.5),
+        orientation="h",
+    )
+    fig.update_layout(layout)
+    _save(fig, "per-task-stability")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,17 +236,18 @@ def main(argv: list[str] | None = None) -> int:
     stats = per_task_stats(doc["results"])
 
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    p1 = ASSETS_DIR / "per-task-time.png"
-    p2 = ASSETS_DIR / "per-task-stability.png"
-    plot_per_task_time(stats, p1)
-    plot_per_task_stability(stats, p2)
+    meta = {
+        "model": doc.get("model"),
+        "provider": doc.get("provider"),
+        "commit": doc.get("commit"),
+    }
     print(
         "model={} provider={} commit={}".format(
-            doc.get("model"), doc.get("provider"), doc.get("commit")
+            meta["model"], meta["provider"], meta["commit"]
         )
     )
-    print(f"saved: {p1}")
-    print(f"saved: {p2}")
+    plot_per_task_time(stats, meta)
+    plot_per_task_stability(stats, meta)
     return 0
 
 
