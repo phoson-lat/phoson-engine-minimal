@@ -13,7 +13,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 from pathlib import Path
 from collections.abc import Callable, Sequence, Coroutine
 
@@ -706,7 +706,9 @@ class PhosonApp:
 
     async def _run_bash_line(self, command: str) -> None:
         """T-12: run a ``!``-prefixed shell command via the command host."""
-        await self._commands.host.run_bash_line(command)
+        from .command_host import FullScreenCommandHost
+
+        await cast(FullScreenCommandHost, self._commands.host).run_bash_line(command)
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
     # Modal dialog bodies live in :class:`phoson_cli.fullscreen.floats.
