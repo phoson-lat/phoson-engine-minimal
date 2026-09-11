@@ -11,8 +11,6 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
-import os
-import time
 import asyncio
 import logging
 from typing import Any
@@ -72,12 +70,10 @@ from ..config import (
     enabled_providers_from_config,
 )
 from ..pickers import BasePicker
-from ..commands import Command, CommandHandler, parse_command
+from ..commands import Command, CommandHandler
 from .chat_pane import (
-    _PERF_LOGGER,
     ChatPane,
     ChatScrollbarMargin,
-    enable_perf_counter,
 )
 from .clipboard import (
     paste_image_from_clipboard,
@@ -108,6 +104,24 @@ from .state_cycles import (
     cycle_reasoning_effort as _cycle_reasoning_effort_impl,
 )
 from .session_cache import SessionListCache
+from .turn_controller import (
+    submit as _submit_impl,
+)
+from .turn_controller import (
+    dispatch as _dispatch_impl,
+)
+from .turn_controller import (
+    run_turn as _run_turn_impl,
+)
+from .turn_controller import (
+    run_command as _run_command_impl,
+)
+from .turn_controller import (
+    is_run_in_flight as _is_run_in_flight_impl,
+)
+from .turn_controller import (
+    tick_activity_indicators as _tick_activity_indicators_impl,
+)
 from .escape_controller import (
     handle_escape as _handle_escape_impl,
 )
@@ -116,6 +130,12 @@ from .escape_controller import (
 )
 from .rewind_controller import RewindController
 from .palette_controller import PaletteController
+from .lifecycle_controller import (
+    request_exit as _request_exit_impl,
+)
+from .lifecycle_controller import (
+    handle_ctrl_d as _handle_ctrl_d_impl,
+)
 
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
 # ``mouse_support=True`` so the scroll wheel can be handled by the app
@@ -639,36 +659,9 @@ class PhosonApp:
     def submit(self) -> None:
         """Handle Enter on the input line: dispatch a command or an agent turn.
 
-        While a turn is already in flight the input is *kept* (not cleared)
-        and the user is told why nothing happened — otherwise pressing Enter
-        looks like the app froze (IMPROVEMENTS.md A4). The header already
-        shows the live status ("Streaming" / "Running tool") so the user can
-        see the turn is still going.
+        Body in :mod:`phoson_cli.fullscreen.turn_controller` (#187).
         """
-        text = self._prompt_input.text
-        if not text.strip():
-            return
-        if self._is_run_in_flight():
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first. "
-                "Your text is kept.",
-            )
-            return
-        # Persist to the input history. The custom submit path bypasses the
-        # buffer's ``accept_handler`` (which normally does this), so it must
-        # be spelled out (IMPROVEMENTS.md A2).
-        self._prompt_input.buffer.append_to_history()
-        self._prompt_input.text = ""
-        self._auto_scroll = True
-        # T-12: a leading "!" (with the rest non-blank) is a shell command,
-        # not an agent turn or a slash command.
-        if text.startswith("!") and text[1:].strip():
-            self._run_task = self.app.create_background_task(
-                self._run_bash_line(text[1:].strip())
-            )
-            return
-        self._run_task = self.app.create_background_task(self._dispatch(text))
+        _submit_impl(self)
 
     def insert_newline(self) -> None:
         """Ctrl+J: insert a newline in the multiline input (IMPROVEMENTS.md A2).
@@ -683,77 +676,22 @@ class PhosonApp:
     def _is_run_in_flight(self) -> bool:
         """True from the moment Enter is pressed until the turn fully settles.
 
-        Guards against a second submission overlapping the first (which
-        would race two mutations of the same tree/session state) —
-        including the brief window after the visible answer is already
-        rendered but ``run_turn`` is still persisting it. For "should
-        Ctrl+C/Ctrl+Q interrupt something visible" use
-        ``sink.current_turn is not None`` instead (see ``request_exit``)
-        — that invisible trailing save is not cancel-worthy.
+        Body in :mod:`phoson_cli.fullscreen.turn_controller` (#187).
         """
-        return self._run_task is not None and not self._run_task.done()
+        return _is_run_in_flight_impl(self)
 
     async def _dispatch(self, text: str) -> None:
-        cmd = parse_command(text)
-        if cmd is not None:
-            await self._run_command(cmd)
-        else:
-            await self._run_turn(text)
+        await _dispatch_impl(self, text)
 
     async def _run_command(self, cmd: Command) -> None:
-        should_continue = await self._commands.handle(cmd)
-        self.app.invalidate()
-        if cmd.name in {"/model", "/subagent-model", "/provider"}:
-            # The available (or current-marked) model set may have just
-            # changed — refresh in the background so autocomplete stays
-            # accurate without blocking on another network round trip.
-            self.app.create_background_task(self.model_cache.refresh(self.repl.config))
-        if cmd.name in {"/sessions", "/new", "/delete"}:
-            # Session list may have changed (load/new/delete) — refresh the
-            # /sessions autocomplete cache in the background as well.
-            self.app.create_background_task(
-                self.session_cache.refresh(self.repl.storage, cwd=str(Path.cwd()))
-            )
-        if not should_continue:
-            self.app.exit()
+        await _run_command_impl(self, cmd)
 
     async def _run_turn(self, text: str) -> None:
-        # Start feedback before the controller/provider can emit its first
-        # AgentStartEvent. This removes the otherwise silent post-Enter gap.
-        self.sink.begin_activity()
-        ticker = self.app.create_background_task(self._tick_activity_indicators())
-        count_renders = (
-            enable_perf_counter(self.app) if os.environ.get("PHOSON_PERF") else None
-        )
-        turn_start = time.monotonic()
-        renders_before = count_renders() if count_renders else 0
-        try:
-            await self.repl._run_agent(text)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            ticker.cancel()
-            self.sink.end_pending_activity()
-            self.app.invalidate()
-            if count_renders is not None:
-                elapsed = time.monotonic() - turn_start
-                renders = count_renders() - renders_before
-                _PERF_LOGGER.info(
-                    "perf: turn=%.1fs renders=%d avg_fps=%.1f",
-                    elapsed,
-                    renders,
-                    renders / elapsed if elapsed > 0 else 0.0,
-                )
+        await _run_turn_impl(self, text)
 
     async def _tick_activity_indicators(self) -> None:
         """Animate the transient in-chat activity and subagent indicators."""
-        while True:
-            await asyncio.sleep(_SUBAGENT_TICK_SECONDS)
-            activity_active = self.sink.tick_activity_frame()
-            subagents_active = self.sink.tick_subagent_frame()
-            if activity_active or subagents_active:
-                self.sink.dirty = True
-                self.app.invalidate()
+        await _tick_activity_indicators_impl(self)
 
     # ── T-12: command palette + `!` bash ───────────────────────────────
 
@@ -876,39 +814,16 @@ class PhosonApp:
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
 
-        ``sink.current_turn`` is set exactly while there is something
-        the user can see happening (tokens, a running tool, a tool
-        awaiting confirmation) — and, because ``AgentDoneEvent``/
-        ``AgentErrorEvent`` are dispatched to the sink from inside the
-        same stream-consumption task ``is_running`` reflects, the two
-        become False together. There is no window where content is
-        still visibly streaming but ``is_running`` has already gone
-        False, so ``cancel_current()`` is always effective here.
-
-        Once the turn's content is fully rendered, only invisible
-        trailing bookkeeping remains (persisting reasoning, saving the
-        session) — not cancel-worthy, so this just quits; a pending
-        background task gets cancelled for free by the Application
-        shutting down.
+        Body in :mod:`phoson_cli.fullscreen.lifecycle_controller` (#187).
         """
-        if self.sink.current_turn is not None:
-            self.repl.cancel_current()
-            return
-        self.app.exit()
+        _request_exit_impl(self)
 
     def handle_ctrl_d(self) -> None:
         """Ctrl+D: delete-forward on a non-empty line, else quit.
 
-        Unlike ``PromptSession`` (where an empty-buffer Ctrl+D raises
-        ``EOFError`` for free), ``TextArea`` has no such behavior built
-        in, so this is spelled out explicitly. Routed through
-        ``request_exit`` rather than an unconditional quit so it stays
-        consistent with Ctrl+C/Ctrl+Q (interrupts a visible turn first).
+        Body in :mod:`phoson_cli.fullscreen.lifecycle_controller` (#187).
         """
-        if self._prompt_input.text:
-            self._prompt_input.buffer.delete()
-        else:
-            self.request_exit()
+        _handle_ctrl_d_impl(self)
 
     def paste_image(self) -> None:
         """Ctrl+V: paste an image from the clipboard, or fall back to text."""
