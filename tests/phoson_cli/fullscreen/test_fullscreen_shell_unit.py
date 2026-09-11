@@ -787,7 +787,7 @@ async def test_ctrl_v_attaches_an_image_from_the_clipboard(
 ) -> None:
     fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
     with patch(
-        "phoson_cli.fullscreen.app.read_clipboard_image",
+        "phoson_cli.fullscreen.clipboard.read_clipboard_image",
         new=AsyncMock(return_value=(fake_png, "image/png")),
     ):
         _trigger(app, "c-v")
@@ -802,7 +802,7 @@ async def test_ctrl_v_placeholder_inserts_at_cursor_and_numbers_multiple_pastes(
 ) -> None:
     fake_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
     with patch(
-        "phoson_cli.fullscreen.app.read_clipboard_image",
+        "phoson_cli.fullscreen.clipboard.read_clipboard_image",
         new=AsyncMock(return_value=(fake_png, "image/png")),
     ):
         app._prompt_input.text = "look at this and that"
@@ -822,11 +822,11 @@ async def test_ctrl_v_notifies_when_clipboard_has_no_image_or_text(
 ) -> None:
     with (
         patch(
-            "phoson_cli.fullscreen.app.read_clipboard_image",
+            "phoson_cli.fullscreen.clipboard.read_clipboard_image",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "phoson_cli.fullscreen.app.read_clipboard_text",
+            "phoson_cli.fullscreen.clipboard.read_clipboard_text",
             new=AsyncMock(return_value=None),
         ),
     ):
@@ -841,11 +841,11 @@ async def test_ctrl_v_falls_back_to_text_paste_when_no_image(app: PhosonApp) -> 
     """D3: Ctrl+V with text (not an image) on the clipboard pastes the text."""
     with (
         patch(
-            "phoson_cli.fullscreen.app.read_clipboard_image",
+            "phoson_cli.fullscreen.clipboard.read_clipboard_image",
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "phoson_cli.fullscreen.app.read_clipboard_text",
+            "phoson_cli.fullscreen.clipboard.read_clipboard_text",
             new=AsyncMock(return_value="pasted text"),
         ),
     ):
@@ -1147,11 +1147,13 @@ async def test_run_async_captures_warnings_for_the_session_only(
 
 def _no_real_config_save(monkeypatch) -> list[tuple[object, dict]]:
     """Keep the cycle's persistence out of the developer's real config.toml."""
-    from phoson_cli import fullscreen as fs
+    from phoson_cli.fullscreen import state_cycles
 
     saved: list[tuple[object, dict]] = []
     monkeypatch.setattr(
-        fs.app, "save_config", lambda config, **kwargs: saved.append((config, kwargs))
+        state_cycles,
+        "save_config",
+        lambda config, **kwargs: saved.append((config, kwargs)),
     )
     return saved
 

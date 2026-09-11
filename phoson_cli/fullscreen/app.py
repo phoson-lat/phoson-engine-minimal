@@ -11,15 +11,9 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
-import os
-import re
-import time
-import uuid
 import asyncio
 import logging
-import tempfile
-import mimetypes
-from typing import Any
+from typing import Any, cast
 from pathlib import Path
 from collections.abc import Callable, Sequence, Coroutine
 
@@ -68,27 +62,21 @@ from .floats import FloatsController
 # the historical name ``_bash_card_rows`` from this module (moved to
 # :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
 from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
-from .render import BlockAnsiCache, BlockFormattedTextCache
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
 from ..config import (
     PhosonConfig,
-    save_config,
     enabled_providers_from_config,
 )
 from ..pickers import BasePicker
-from ..commands import Command, CommandHandler, parse_command
+from ..commands import Command, CommandHandler
 from .chat_pane import (
-    _PERF_LOGGER,
     ChatPane,
     ChatScrollbarMargin,
-    enable_perf_counter,
 )
 from .clipboard import (
-    read_clipboard_text,
-    read_clipboard_image,
-    macos_image_tool_hint,
+    paste_image_from_clipboard,
 )
 from .completer import (
     PathCompleter,
@@ -99,13 +87,55 @@ from .completer import (
     SessionsArgCompleter,
 )
 from .model_cache import ModelCache
-from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 from .header_model import HeaderModel
 from .header_model import short_cwd as _short_cwd_impl
+from .state_cycles import (
+    clear_transcript as _clear_transcript_impl,
+)
+from .state_cycles import (
+    toggle_reasoning as _toggle_reasoning_impl,
+)
+from .state_cycles import (
+    cycle_permission_mode as _cycle_permission_mode_impl,
+)
+from .state_cycles import (
+    cycle_reasoning_effort as _cycle_reasoning_effort_impl,
+)
 from .session_cache import SessionListCache
+from .turn_controller import (
+    submit as _submit_impl,
+)
+from .turn_controller import (
+    dispatch as _dispatch_impl,
+)
+from .turn_controller import (
+    run_turn as _run_turn_impl,
+)
+from .turn_controller import (
+    run_command as _run_command_impl,
+)
+from .turn_controller import (
+    is_run_in_flight as _is_run_in_flight_impl,
+)
+from .turn_controller import (
+    tick_activity_indicators as _tick_activity_indicators_impl,
+)
+from .escape_controller import (
+    handle_escape as _handle_escape_impl,
+)
+from .escape_controller import (
+    is_prefixed_escape as _is_prefixed_escape_impl,
+)
 from .rewind_controller import RewindController
+from .palette_controller import PaletteController
+from .lifecycle_controller import (
+    request_exit as _request_exit_impl,
+)
+from .lifecycle_controller import (
+    handle_ctrl_d as _handle_ctrl_d_impl,
+)
 
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
 # ``mouse_support=True`` so the scroll wheel can be handled by the app
@@ -141,20 +171,7 @@ from .rewind_controller import RewindController
 # `tick_activity_frame()` — not the tick rate — is what cuts CPU.
 _SUBAGENT_TICK_SECONDS = 0.12
 
-# Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
-# (measured in monotonic seconds between *delivered* key presses) opens the
-# rewind picker. The window must be comfortably LARGER than prompt_toolkit's
-# ``ttimeoutlen`` (0.5 s): the VT100 input layer delays delivery of a lone
-# Esc by ``ttimeoutlen`` to disambiguate it from the start of an escape
-# sequence (arrow keys, ``\x1b[A``, ...). As a result the *delivered*
-# interval between two idle Esc presses is clamped to ~``ttimeoutlen`` from
-# below regardless of how quickly the user tapped — a 0.5 s window would
-# therefore miss real double-taps. 1.0 s sits well above that floor while
-# staying below the gap of two deliberately separate Esc presses, so a slow
-# single Esc never opens the picker. The *single* Esc cancel (#68) is
-# unaffected: that binding stays eager and fires immediately while a run is
-# in flight, and no double-tap state is recorded then.
-_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0
+# (Double-Esc rewind window moved to ``escape_controller.py`` in #187.)
 
 # (The AGENTS.md re-check interval moved to ``header_model.py`` in #187.)
 
@@ -315,6 +332,8 @@ class PhosonApp:
         # Rewind / undo-jump controller (#187); ``PhosonApp`` keeps thin
         # delegates so the ``keys.py`` name lookups and the test suite work.
         self._rewind = RewindController(self)
+        # Command palette controller (#187); see palette_controller.py.
+        self._palette = PaletteController(self)
 
         # T-1: the banner is no longer injected into the sink. The header
         # already carries provider/model/session; the art is available via
@@ -555,135 +574,36 @@ class PhosonApp:
     def _on_chat_mouse(self, mouse_event: MouseEvent) -> object:
         return self._chat_pane.on_chat_mouse(mouse_event)
 
-    # --- Pane state proxies (test suite + cache resets read these directly) ---
+    # --- Pane state forwarding (tests / external callers) ---
 
-    @property
-    def _chat_scroll_top(self) -> int:
-        return self._chat_pane._chat_scroll_top
+    def __getattr__(self, name: str) -> Any:
+        if "_chat_pane" in self.__dict__ and hasattr(self._chat_pane, name):
+            return getattr(self._chat_pane, name)
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
 
-    @_chat_scroll_top.setter
-    def _chat_scroll_top(self, value: int) -> None:
-        self._chat_pane._chat_scroll_top = value
-
-    @property
-    def _auto_scroll(self) -> bool:
-        return self._chat_pane._auto_scroll
-
-    @_auto_scroll.setter
-    def _auto_scroll(self, value: bool) -> None:
-        self._chat_pane._auto_scroll = value
-
-    @property
-    def _total_chat_lines(self) -> int:
-        return self._chat_pane._total_chat_lines
-
-    @_total_chat_lines.setter
-    def _total_chat_lines(self, value: int) -> None:
-        self._chat_pane._total_chat_lines = value
-
-    @property
-    def _cache_dirty(self) -> bool:
-        return self._chat_pane._cache_dirty
-
-    @_cache_dirty.setter
-    def _cache_dirty(self, value: bool) -> None:
-        self._chat_pane._cache_dirty = value
-
-    @property
-    def _last_width(self) -> int:
-        return self._chat_pane._last_width
-
-    @_last_width.setter
-    def _last_width(self, value: int) -> None:
-        self._chat_pane._last_width = value
-
-    @property
-    def _full_ansi_text(self) -> str:
-        return self._chat_pane._full_ansi_text
-
-    @_full_ansi_text.setter
-    def _full_ansi_text(self, value: str) -> None:
-        self._chat_pane._full_ansi_text = value
-
-    @property
-    def _full_ansi_bounds(self) -> list[int]:
-        return self._chat_pane._full_ansi_bounds
-
-    @_full_ansi_bounds.setter
-    def _full_ansi_bounds(self, value: list[int]) -> None:
-        self._chat_pane._full_ansi_bounds = value
-
-    @property
-    def _frozen_ansi_bounds(self) -> list[int]:
-        return self._chat_pane._frozen_ansi_bounds
-
-    @_frozen_ansi_bounds.setter
-    def _frozen_ansi_bounds(self, value: list[int]) -> None:
-        self._chat_pane._frozen_ansi_bounds = value
-
-    @property
-    def _frozen_ansi_ids(self) -> tuple[int, ...] | None:
-        return self._chat_pane._frozen_ansi_ids
-
-    @_frozen_ansi_ids.setter
-    def _frozen_ansi_ids(self, value: tuple[int, ...] | None) -> None:
-        self._chat_pane._frozen_ansi_ids = value
-
-    @property
-    def _chat_content_epoch(self) -> int:
-        return self._chat_pane._chat_content_epoch
-
-    @_chat_content_epoch.setter
-    def _chat_content_epoch(self, value: int) -> None:
-        self._chat_pane._chat_content_epoch = value
-
-    @property
-    def _window_top(self) -> int:
-        return self._chat_pane._window_top
-
-    @_window_top.setter
-    def _window_top(self, value: int) -> None:
-        self._chat_pane._window_top = value
-
-    @property
-    def _window_total(self) -> int:
-        return self._chat_pane._window_total
-
-    @_window_total.setter
-    def _window_total(self, value: int) -> None:
-        self._chat_pane._window_total = value
-
-    @property
-    def _window_height(self) -> int:
-        return self._chat_pane._window_height
-
-    @_window_height.setter
-    def _window_height(self, value: int) -> None:
-        self._chat_pane._window_height = value
-
-    @property
-    def _window_epoch(self) -> int:
-        return self._chat_pane._window_epoch
-
-    @_window_epoch.setter
-    def _window_epoch(self, value: int) -> None:
-        self._chat_pane._window_epoch = value
-
-    @property
-    def _windowed_ansi(self) -> ANSI:
-        return self._chat_pane._windowed_ansi
-
-    @_windowed_ansi.setter
-    def _windowed_ansi(self, value: ANSI) -> None:
-        self._chat_pane._windowed_ansi = value
-
-    @property
-    def _block_ansi_cache(self) -> BlockAnsiCache:
-        return self._chat_pane._block_ansi_cache
-
-    @property
-    def _block_ft_cache(self) -> BlockFormattedTextCache:
-        return self._chat_pane._block_ft_cache
+    def __setattr__(self, name: str, value: Any) -> None:
+        if (
+            name.startswith(
+                (
+                    "_chat_",
+                    "_full_ansi_",
+                    "_frozen_ansi_",
+                    "_window",
+                    "_total_chat_",
+                    "_auto_scroll",
+                    "_cache_dirty",
+                    "_last_width",
+                    "_block_ansi_cache",
+                    "_block_ft_cache",
+                )
+            )
+            and "_chat_pane" in self.__dict__
+        ):
+            setattr(self._chat_pane, name, value)
+            return
+        super().__setattr__(name, value)
 
     # ── Rendering ────────────────────────────────────────────────────────
 
@@ -739,36 +659,9 @@ class PhosonApp:
     def submit(self) -> None:
         """Handle Enter on the input line: dispatch a command or an agent turn.
 
-        While a turn is already in flight the input is *kept* (not cleared)
-        and the user is told why nothing happened — otherwise pressing Enter
-        looks like the app froze (IMPROVEMENTS.md A4). The header already
-        shows the live status ("Streaming" / "Running tool") so the user can
-        see the turn is still going.
+        Body in :mod:`phoson_cli.fullscreen.turn_controller` (#187).
         """
-        text = self._prompt_input.text
-        if not text.strip():
-            return
-        if self._is_run_in_flight():
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first. "
-                "Your text is kept.",
-            )
-            return
-        # Persist to the input history. The custom submit path bypasses the
-        # buffer's ``accept_handler`` (which normally does this), so it must
-        # be spelled out (IMPROVEMENTS.md A2).
-        self._prompt_input.buffer.append_to_history()
-        self._prompt_input.text = ""
-        self._auto_scroll = True
-        # T-12: a leading "!" (with the rest non-blank) is a shell command,
-        # not an agent turn or a slash command.
-        if text.startswith("!") and text[1:].strip():
-            self._run_task = self.app.create_background_task(
-                self._run_bash_line(text[1:].strip())
-            )
-            return
-        self._run_task = self.app.create_background_task(self._dispatch(text))
+        _submit_impl(self)
 
     def insert_newline(self) -> None:
         """Ctrl+J: insert a newline in the multiline input (IMPROVEMENTS.md A2).
@@ -783,203 +676,39 @@ class PhosonApp:
     def _is_run_in_flight(self) -> bool:
         """True from the moment Enter is pressed until the turn fully settles.
 
-        Guards against a second submission overlapping the first (which
-        would race two mutations of the same tree/session state) —
-        including the brief window after the visible answer is already
-        rendered but ``run_turn`` is still persisting it. For "should
-        Ctrl+C/Ctrl+Q interrupt something visible" use
-        ``sink.current_turn is not None`` instead (see ``request_exit``)
-        — that invisible trailing save is not cancel-worthy.
+        Body in :mod:`phoson_cli.fullscreen.turn_controller` (#187).
         """
-        return self._run_task is not None and not self._run_task.done()
+        return _is_run_in_flight_impl(self)
 
     async def _dispatch(self, text: str) -> None:
-        cmd = parse_command(text)
-        if cmd is not None:
-            await self._run_command(cmd)
-        else:
-            await self._run_turn(text)
+        await _dispatch_impl(self, text)
 
     async def _run_command(self, cmd: Command) -> None:
-        should_continue = await self._commands.handle(cmd)
-        self.app.invalidate()
-        if cmd.name in {"/model", "/subagent-model", "/provider"}:
-            # The available (or current-marked) model set may have just
-            # changed — refresh in the background so autocomplete stays
-            # accurate without blocking on another network round trip.
-            self.app.create_background_task(self.model_cache.refresh(self.repl.config))
-        if cmd.name in {"/sessions", "/new", "/delete"}:
-            # Session list may have changed (load/new/delete) — refresh the
-            # /sessions autocomplete cache in the background as well.
-            self.app.create_background_task(
-                self.session_cache.refresh(self.repl.storage, cwd=str(Path.cwd()))
-            )
-        if not should_continue:
-            self.app.exit()
+        await _run_command_impl(self, cmd)
 
     async def _run_turn(self, text: str) -> None:
-        # Start feedback before the controller/provider can emit its first
-        # AgentStartEvent. This removes the otherwise silent post-Enter gap.
-        self.sink.begin_activity()
-        ticker = self.app.create_background_task(self._tick_activity_indicators())
-        count_renders = (
-            enable_perf_counter(self.app) if os.environ.get("PHOSON_PERF") else None
-        )
-        turn_start = time.monotonic()
-        renders_before = count_renders() if count_renders else 0
-        try:
-            await self.repl._run_agent(text)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            ticker.cancel()
-            self.sink.end_pending_activity()
-            self.app.invalidate()
-            if count_renders is not None:
-                elapsed = time.monotonic() - turn_start
-                renders = count_renders() - renders_before
-                _PERF_LOGGER.info(
-                    "perf: turn=%.1fs renders=%d avg_fps=%.1f",
-                    elapsed,
-                    renders,
-                    renders / elapsed if elapsed > 0 else 0.0,
-                )
+        await _run_turn_impl(self, text)
 
     async def _tick_activity_indicators(self) -> None:
         """Animate the transient in-chat activity and subagent indicators."""
-        while True:
-            await asyncio.sleep(_SUBAGENT_TICK_SECONDS)
-            activity_active = self.sink.tick_activity_frame()
-            subagents_active = self.sink.tick_subagent_frame()
-            if activity_active or subagents_active:
-                self.sink.dirty = True
-                self.app.invalidate()
+        await _tick_activity_indicators_impl(self)
 
     # ── T-12: command palette + `!` bash ───────────────────────────────
 
     def open_command_palette(self) -> None:
         """Ctrl+P: open the command palette over every slash command (T-12).
 
-        The palette is a modal Float (like the model/theme pickers), so it
-        can be opened from a calm screen and its confirm dispatches the
-        chosen command through the normal ``/command`` path.
+        Hosted by :class:`~phoson_cli.fullscreen.palette_controller.
+        PaletteController` (#187); kept as a delegate for the ``keys.py``
+        name lookup and the test suite.
         """
-        if self._active_float is not None:
-            return  # a picker/confirmation is already open
-        if self._is_run_in_flight():
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
-            return
-        if self._palette_open:
-            return  # a palette is already scheduled/animating open
-        self._palette_open = True
-        self.app.create_background_task(self._run_command_palette())
-
-    async def _run_command_palette(self) -> None:
-        """Host the palette as a background task with a synchronous guard.
-
-        ``_active_float`` is only set when the task actually runs (the
-        float is opened inside the task), so a fast second Ctrl+P before
-        the first task ticks would schedule a second palette and clobber
-        ``_active_float`` / ``_float_kb``. ``self._palette_open`` closes
-        that window; it is released in ``finally`` so a failure path
-        (e.g. no entries, exception) can't wedge the guard.
-        """
-        try:
-            await self._run_command_palette_inner()
-        finally:
-            self._palette_open = False
-
-    async def _run_command_palette_inner(self) -> None:
-        from ..palette_picker import (
-            PaletteEntry,
-            PalettePickerResult,
-            build_command_palette,
-        )
-
-        catalog = self.repl._controller.command_catalog
-        entries: list[PaletteEntry] = []
-        for spec in catalog.specs:
-            display = " · ".join(spec.names) if len(spec.names) > 1 else spec.primary
-            entries.append(
-                PaletteEntry(
-                    name=spec.primary,
-                    display=display,
-                    help=spec.help,
-                )
-            )
-        if not entries:
-            self.sink.notify("info", "No commands available.")
-            return
-        picker = build_command_palette(entries, theme=self.theme)
-        result = await self.run_float_picker(picker)
-        if not isinstance(result, PalettePickerResult):
-            return
-        if result.cancelled or not result.command_name:
-            return
-        if self._is_run_in_flight():
-            # A run could have started while the float was open.
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
-            return
-        await self._run_command(Command(name=result.command_name, args=""))
+        self._palette.open()
 
     async def _run_bash_line(self, command: str) -> None:
-        """T-12: run a ``!``-prefixed shell command, respecting T-6 perms.
+        """T-12: run a ``!``-prefixed shell command via the command host."""
+        from .command_host import FullScreenCommandHost
 
-        The command is gated by the same bash permission policy the agent's
-        bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
-        refused). The result is rendered as a normal bash tool card, so the
-        transcript reads identically whether the agent or the user ran it.
-        """
-        from ..tools.bash import _run_bash
-        from ..permissions_store import (
-            LEVEL_ASK,
-            LEVEL_DENY,
-            load_policy,
-        )
-
-        policy = load_policy()
-        decision = policy.check("bash", command)
-        if decision == LEVEL_DENY:
-            self.sink.add_bash_card(command, "", error="denied by permissions policy")
-            self.app.invalidate()
-            return
-        if decision == LEVEL_ASK:
-            allowed = await self.run_float_bash_card(
-                command,
-                on_always=lambda cmd: self.repl._controller._remember_bash_pattern(cmd),
-            )
-            if not allowed:
-                self.sink.add_bash_card(command, "", error="denied by the user")
-                self.app.invalidate()
-                return
-
-        started = time.monotonic()
-        result = await _run_bash(command)
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        # Infra-level failures (spawn / timeout) are execution errors, not
-        # command output — render them as an ✗ card. A non-zero exit code
-        # still yields its stdout+stderr as the card body, matching how the
-        # agent's bash tool reports results. These are matched by the exact
-        # one-line shapes ``_run_bash`` returns (anchored fullmatch), so a
-        # real command whose output merely *starts* with that phrase is not
-        # misclassified as an error.
-        stripped = result.strip()
-        error = (
-            stripped
-            if (
-                re.fullmatch(r"Command timed out after \d+s", stripped, re.IGNORECASE)
-                or re.fullmatch(r"Failed to spawn shell: .+", stripped, re.DOTALL)
-            )
-            else None
-        )
-        self.sink.add_bash_card(command, result, duration_ms=elapsed_ms, error=error)
-        self.app.invalidate()
+        await cast(FullScreenCommandHost, self._commands.host).run_bash_line(command)
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
     # Modal dialog bodies live in :class:`phoson_cli.fullscreen.floats.
@@ -1024,116 +753,20 @@ class PhosonApp:
         self._floats.close_float(float_)
 
     def clear(self) -> None:
-        self.sink.blocks.clear()
-        self.sink.clear_reasoning_state()
-        # The banner is dropped with the transcript (unlike rewind, which
-        # re-seeds it): forget the reference so a later apply_theme doesn't
-        # look for an object that no longer exists in the pane.
-        self._banner_block = None
-        self.sink.drop_error_notice()
-        self.sink.dirty = True
-        self._auto_scroll = True
-        self._chat_scroll_top = 0
-        self.app.invalidate()
+        """Ctrl+L: drop the transcript and its ANSI cache."""
+        _clear_transcript_impl(self)
 
     def toggle_reasoning(self) -> None:
-        """Ctrl+T: toggle the live thinking block, or expand a past node's.
-
-        While streaming, toggles the in-progress reasoning panel. Once
-        idle, expands the reasoning of the newest node on the current
-        path that has any — a node's reasoning is shown at most once per
-        session (the transcript is append-only).
-        """
-        if self.sink.current_turn is not None:
-            new_state = self.sink.toggle_live_reasoning()
-            # Persist the default for future turns/sessions (#50).
-            if getattr(self.repl.config, "show_reasoning", True) != new_state:
-                self.repl.config.show_reasoning = new_state
-                save_config(self.repl.config, only_fields={"show_reasoning"})
-                self.sink.show_reasoning_default = new_state
-            return
-
-        cursor: str | None = self.repl.current_node_id
-        path_ids: list[str] = []
-        while cursor is not None:
-            path_ids.append(cursor)
-            node = self.repl.tree.nodes.get(cursor)
-            cursor = node.parent_id if node is not None else None
-        path_ids.reverse()
-
-        for node_id in path_ids:
-            node = self.repl.tree.nodes.get(node_id)
-            reasoning = node.metadata.get("reasoning") if node else None
-            if not reasoning:
-                continue
-            if node_id in self.repl._expanded_reasoning:
-                self.sink.notify(
-                    "info",
-                    "Reasoning already expanded (the transcript is append-only).",
-                )
-                return
-            self.repl._expanded_reasoning.add(node_id)
-            self.sink.expand_reasoning(str(reasoning))
-            return
+        """Ctrl+T: toggle the live thinking block, or expand a past node's."""
+        _toggle_reasoning_impl(self)
 
     def cycle_permission_mode(self) -> None:
-        """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
-
-        The mode is the durable per-tool policy (``permissions.json``);
-        cycling it sets *bash*'s level, which is the tool the SOTA
-        harnesses gate by default. The header chip refreshes immediately
-        and the user is told the new state + how to fine-tune
-        per-tool with /permissions.
-        """
-        from ..permissions_store import LEVEL_ASK, set_level, load_policy, save_policy
-
-        policy = load_policy()
-        current = policy.levels.get("bash")
-        if current == LEVEL_ASK:
-            set_level(policy, "bash", "allow")
-            new_mode = "auto"
-        else:
-            set_level(policy, "bash", LEVEL_ASK)
-            new_mode = "ask"
-        save_policy(policy)
-        self._perm_mode_cached = new_mode
-        self._perm_mode_checked_at = time.monotonic()
-        self._header_cache_key = None  # rebuild the chip on the next frame
-        self.sink.notify(
-            "info",
-            f"Permission mode → {new_mode}"
-            + (
-                " — bash commands now confirm with Yes / Always / No"
-                if new_mode == "ask"
-                else " — bash runs freely (per-tool rules: /permissions)"
-            ),
-        )
+        """Shift+Tab (T-6): cycle the visible permission mode ask → auto."""
+        _cycle_permission_mode_impl(self)
 
     def cycle_reasoning_effort(self) -> None:
-        """Ctrl+E: cycle the reasoning effort off → low → medium → high →
-        xhigh → max (wraps to off).
-
-        Mirrors the T-6 permission-mode cycle: the value lives on the
-        durable config (persisted like ``/reasoning-effort``), the run
-        picks it up at the *next* turn (the controller reads
-        ``config.reasoning_effort`` when building each run's ModelConfig),
-        the header chip refreshes immediately, and the user is told the
-        new state + how to set it explicitly. Ctrl+T stays the
-        show/hide toggle for the reasoning block — different axis.
-        """
-        current = self.repl.config.reasoning_effort
-        if current not in REASONING_EFFORTS:
-            current = None  # "off"
-        levels = (*REASONING_EFFORTS, None)
-        next_effort = levels[(levels.index(current) + 1) % len(levels)]
-        self.repl.config.reasoning_effort = next_effort
-        save_config(self.repl.config, only_fields={"reasoning_effort"})
-        self._header_cache_key = None  # rebuild the chip on the next frame
-        self.sink.notify(
-            "info",
-            f"Reasoning effort → {next_effort or 'off'}"
-            " · applies from the next turn (explicit: /reasoning-effort)",
-        )
+        """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""
+        _cycle_reasoning_effort_impl(self)
 
     def keys_listing(self) -> list[tuple[str, str]]:
         """The effective key map for ``/keys`` (IMPROVEMENTS.md E6).
@@ -1147,78 +780,16 @@ class PhosonApp:
     def _is_prefixed_escape(self) -> bool:
         """True when this Esc is the *prefix* of an Alt+<key> sequence.
 
-        Many terminals encode **Alt+<key>** as ``ESC`` + <key> (the
-        Meta/Alt convention). For Alt+Backspace the bytes are
-        ``0x1b 0x7f``; prompt_toolkit's VT100 parser emits them as two
-        KeyPresses — ``escape`` first, then ``c-h`` (Ctrl+H, data
-        ``'\\x7f'``). Because the escape binding is registered ``eager``,
-        ``handle_escape`` fires for the first KeyPress while the second
-        is still in ``key_processor.input_queue``.
-
-        The heuristic (issue #108): the second key's ``data`` is the
-        *original* terminal byte. For Meta-encoded keys this is a
-        printable ASCII character (0x20–0x7e) or DEL (0x7f). For
-        unrelated keys that merely happen to be in the queue (Ctrl+C
-        = ``\\x03``, Enter = ``\\r``, another Esc = ``\\x1b``), the
-        data is a control character below 0x20. We only suppress the
-        Esc when the next queued key looks like a Meta-encoded payload.
+        Body in :mod:`phoson_cli.fullscreen.escape_controller` (#187).
         """
-        processor = getattr(self.app, "key_processor", None)
-        if processor is None:
-            return False
-        queue = getattr(processor, "input_queue", None)
-        if queue is None:
-            return False
-        for kp in queue:
-            # The _Flush sentinel is an internal marker, not a real key.
-            if kp.data == "_Flush":
-                continue
-            # Meta/Alt encoding: the byte after ESC is in the range
-            # 0x20 (space) through 0x7f (DEL). This covers:
-            #   Alt+letter  → data = the letter (0x41-0x7a)
-            #   Alt+digit   → data = the digit  (0x30-0x39)
-            #   Alt+Backspace → data = '\\x7f' (DEL)
-            # It does NOT match control characters that arrive from
-            # separate key events (Ctrl+C '\\x03', Enter '\\r',
-            # another Esc '\\x1b'), which are all below 0x20.
-            if kp.data:
-                code = ord(kp.data[0])
-                if 0x20 <= code <= 0x7F:
-                    return True
-        return False
+        return _is_prefixed_escape_impl(self)
 
     def handle_escape(self) -> None:
         """Escape: cancel the in-flight run; double-tap opens the rewind.
 
-        Precedence (G1, coordinated with #68 and #108):
-        - **Prefix guard (#108):** if this Esc is the prefix of a longer
-          terminal sequence (Alt+<key>), it is silently ignored — neither
-          cancelling a run nor arming the double-tap window.
-        - While a run is in flight, a *clean* Esc keeps its *immediate*
-          cancel role (the binding is registered ``eager`` in ``keys.py``
-          so a double tap mid-run can never be swallowed as a chord) and
-          no double-tap state is recorded.
-        - While idle, a lone clean Esc still does nothing here (inside
-          Float pickers they bind Esc themselves and take precedence). A
-          second clean Esc within
-          ``_REWIND_DOUBLE_ESC_WINDOW_SECONDS`` opens the rewind picker
-          (``handle_rewind``).
+        Body in :mod:`phoson_cli.fullscreen.escape_controller` (#187).
         """
-        # Issue #108: Alt+Backspace (ESC 0x7f) arrives as escape + c-h
-        # in the same batch. The eager handler fires for the escape while
-        # c-h is still queued — that means this was NOT a deliberate Esc.
-        if self._is_prefixed_escape():
-            return
-        if self._is_run_in_flight():
-            self.repl.cancel_current()
-            self.sink.notify("info", "Cancelling current run (Esc)...")
-            return
-        now = time.monotonic()
-        if now - self._last_escape_at <= _REWIND_DOUBLE_ESC_WINDOW_SECONDS:
-            self._last_escape_at = 0.0
-            self.app.create_background_task(self.handle_rewind())
-            return
-        self._last_escape_at = now
+        _handle_escape_impl(self)
 
     # Rewind / undo-jump (G1) lives in :class:`phoson_cli.fullscreen.
     # rewind_controller.RewindController` (#187); the delegates below keep the
@@ -1245,110 +816,20 @@ class PhosonApp:
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
 
-        ``sink.current_turn`` is set exactly while there is something
-        the user can see happening (tokens, a running tool, a tool
-        awaiting confirmation) — and, because ``AgentDoneEvent``/
-        ``AgentErrorEvent`` are dispatched to the sink from inside the
-        same stream-consumption task ``is_running`` reflects, the two
-        become False together. There is no window where content is
-        still visibly streaming but ``is_running`` has already gone
-        False, so ``cancel_current()`` is always effective here.
-
-        Once the turn's content is fully rendered, only invisible
-        trailing bookkeeping remains (persisting reasoning, saving the
-        session) — not cancel-worthy, so this just quits; a pending
-        background task gets cancelled for free by the Application
-        shutting down.
+        Body in :mod:`phoson_cli.fullscreen.lifecycle_controller` (#187).
         """
-        if self.sink.current_turn is not None:
-            self.repl.cancel_current()
-            return
-        self.app.exit()
+        _request_exit_impl(self)
 
     def handle_ctrl_d(self) -> None:
         """Ctrl+D: delete-forward on a non-empty line, else quit.
 
-        Unlike ``PromptSession`` (where an empty-buffer Ctrl+D raises
-        ``EOFError`` for free), ``TextArea`` has no such behavior built
-        in, so this is spelled out explicitly. Routed through
-        ``request_exit`` rather than an unconditional quit so it stays
-        consistent with Ctrl+C/Ctrl+Q (interrupts a visible turn first).
+        Body in :mod:`phoson_cli.fullscreen.lifecycle_controller` (#187).
         """
-        if self._prompt_input.text:
-            self._prompt_input.buffer.delete()
-        else:
-            self.request_exit()
+        _handle_ctrl_d_impl(self)
 
     def paste_image(self) -> None:
-        """Ctrl+V: paste an image from the clipboard, or fall back to text.
-
-        Terminals only ever deliver *text* through their own paste
-        mechanism — an image copied to the OS clipboard (e.g. from a
-        screenshot tool or a browser) has to be read from the clipboard
-        directly (``clipboard.read_clipboard_image``, shelling out to
-        wl-paste/xclip/pngpaste) rather than anything a paste keystroke
-        could hand the ``TextArea``. Ctrl+V is rebound globally to this
-        handler, which would otherwise swallow the ``TextArea``'s native
-        text paste (IMPROVEMENTS.md D3): when the clipboard holds no
-        image, the clipboard's *text* is read the same way and inserted
-        at the cursor instead, so Ctrl+V still works for plain text.
-        """
-        self.app.create_background_task(self._paste_image_async())
-
-    async def _paste_image_async(self) -> None:
-        result = await read_clipboard_image()
-        if result is None:
-            await self._paste_text_fallback()
-            return
-
-        data, mime = result
-        suffix = mimetypes.guess_extension(mime) or ".png"
-        target_dir = Path(tempfile.gettempdir()) / "phoson-clipboard"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / f"clipboard-{uuid.uuid4().hex[:8]}{suffix}"
-        target.write_bytes(data)
-
-        try:
-            self.repl.attachments.attach(str(target))
-        except (FileNotFoundError, ValueError) as exc:
-            self.sink.notify("error", str(exc))
-            return
-
-        suffix = target.suffix.lower()
-        warning = provider_compat_warning(
-            suffix, getattr(self.repl.config, "provider", None)
-        )
-        if warning:
-            self.sink.notify("warn", warning)
-
-        # Terminal chat inputs can't show a real thumbnail chip — a text
-        # placeholder inserted at the cursor is the next best thing: it
-        # marks where the image was pasted, and (since it ends up as
-        # ordinary text in the message) doubles as an inline reference
-        # both the user and the model can read.
-        placeholder = f"[image #{len(self.repl.attachments)}] "
-        self._prompt_input.buffer.insert_text(placeholder)
-        self.app.invalidate()
-
-    async def _paste_text_fallback(self) -> None:
-        """No image on the clipboard: paste its text instead (D3), if any.
-
-        Reading via the same platform tool as the image path (rather
-        than relying on the terminal's own paste) is what lets this
-        double as the "clipboard has text, not an image" case instead
-        of silently doing nothing.
-        """
-        text = await read_clipboard_text()
-        if text:
-            self._prompt_input.buffer.insert_text(text)
-            self.app.invalidate()
-            return
-
-        message = "No image on the clipboard (or no clipboard tool available)."
-        hint = macos_image_tool_hint()
-        if hint:
-            message = f"{message} {hint}."
-        self.sink.notify("warn", message)
+        """Ctrl+V: paste an image from the clipboard, or fall back to text."""
+        self.app.create_background_task(paste_image_from_clipboard(self))
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
