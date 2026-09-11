@@ -85,7 +85,10 @@ one-shot currently prints only the final content and discards
   `PHOSON_MODEL` / `PHOSON_PROVIDER` env vars on the one-shot subprocess
   (the CLI resolves these env → config.toml → default). Any value inherited
   from your own shell is dropped first, so a dev `PHOSON_MODEL` can't quietly
-  re-target a baseline run (issue #138).
+  re-target a baseline run (issue #138). The resolved target is printed up
+  front (`Target: <model> @ <provider> (config.toml|--model/--provider)`)
+  and recorded in the results JSON, so every saved run states exactly what
+  it ran against — even when nothing was pinned (issue #139).
 - The agent's `bash` tool inherits the benchmark process cwd, so all
   tasks execute inside the temp workspace.
 - Each `bench/results/*.json` records the effective `model`, `provider` and
