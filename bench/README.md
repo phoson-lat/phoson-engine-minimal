@@ -78,6 +78,45 @@ require a `--json` output flag in one-shot mode (see ROADMAP suggestion):
 one-shot currently prints only the final content and discards
 `RunResult.steps` usage data.
 
+## Reference results
+
+Single run, 2026-09-10, commit `af874b2`, local vLLM serving
+**Qwen/Qwen3.8-27B-FP8** (15/15 tasks, 100%):
+
+| Metric | Value |
+|---|---|
+| Pass rate | 15/15 (100%) |
+| Total wall time | 146.0s |
+| Mean / median task time | 9.7s / 9.3s |
+| Fastest / slowest task | 6.9s (`create-nested-file`) / 16.0s (`rename-symbol`) |
+
+| Task | Result | Time |
+|---|---|---|
+| bump-version-files | ✅ | 10.9s |
+| count-defs-in-tree | ✅ | 8.1s |
+| create-json-config | ✅ | 7.1s |
+| create-nested-file | ✅ | 6.9s |
+| csv-stats | ✅ | 7.7s |
+| csv-to-json | ✅ | 8.1s |
+| find-call-sites | ✅ | 12.5s |
+| fix-deep-traceback | ✅ | 9.7s |
+| fix-failing-script | ✅ | 8.6s |
+| fix-import-error | ✅ | 10.3s |
+| locate-definition | ✅ | 9.3s |
+| log-error-count | ✅ | 7.3s |
+| merge-sorted-lists | ✅ | 9.6s |
+| parse-noisy-config | ✅ | 14.0s |
+| rename-symbol | ✅ | 16.0s |
+
+Reproduce:
+
+```bash
+uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm
+```
+
+Single-run reference: duration spread (6.9–16.0s) is task complexity, not
+noise — measure run-to-run noise with `--repeat 3` before quoting it.
+
 ## Notes
 
 - Tasks run with the provider/model configured in `~/.phoson/config.toml`,

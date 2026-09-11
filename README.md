@@ -110,6 +110,31 @@ Unlike other agent frameworks (LangChain, LangGraph, etc.), Phoson is built **fr
 
 ---
 
+## 📊 Evaluation
+
+Phoson is measured with a deterministic agent benchmark (`bench/`,
+issue #139): 15 tasks (edits, debugging, code analysis, data/config
+work), each run in an isolated workspace and verified by a
+model-free checker — plus a nightly no-regression gate on a fixed
+local model.
+
+Reference run (2026-09-10, `Qwen/Qwen3.8-27B-FP8` on local vLLM):
+
+| Metric | Value |
+|---|---|
+| Pass rate | **15/15 (100%)** |
+| Total wall time | 146s (~9.7s per task) |
+| Fastest / slowest task | 6.9s / 16.0s |
+
+```bash
+uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm
+```
+
+See [`bench/README.md`](bench/README.md) for the full per-task table,
+the gate mechanics and the baseline lifecycle.
+
+---
+
 ## 🏗️ High-level architecture
 
 ```mermaid
