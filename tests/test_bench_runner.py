@@ -326,3 +326,63 @@ def test_load_tasks_heldout_split(bench, monkeypatch, tmp_path) -> None:
     assert "rename-symbol" in all_names
     assert "rename-symbol" not in train
     assert len(train) == len(all_names) - 1
+
+
+# ── effective model/provider for the audit record (issue #139) ─────────────
+
+
+def test_effective_target_pinned_wins_over_config(bench, tmp_path) -> None:
+    """--model/--provider pin the audit record; config.toml is not read."""
+    (tmp_path / "config.toml").write_text(
+        '[defaults]\nmodel = "ollama/qwen3"\nprovider = "ollama"\n'
+    )
+    assert bench._effective_target(
+        "openai/gpt-4o", "openrouter", tmp_path / "config.toml"
+    ) == ("openai/gpt-4o", "openrouter")
+    # Partial pin: the unpinned side still resolves from config.toml.
+    assert bench._effective_target("openai/gpt-4o", None, tmp_path / "config.toml") == (
+        "openai/gpt-4o",
+        "ollama",
+    )
+
+
+def test_effective_target_resolves_config_when_unpinned(
+    bench, tmp_path, monkeypatch
+) -> None:
+    """No flags → the record carries what the child CLI actually resolves
+    (config.toml). A dev-shell PHOSON_MODEL/PHOSON_PROVIDER must NOT leak in:
+    the runner pops those from the child env, so the record must ignore them
+    too (issue #139: baselines auditable)."""
+    (tmp_path / "config.toml").write_text(
+        '[defaults]\nmodel = "omni/route"\nprovider = "OmniRoute"\n'
+    )
+    monkeypatch.setenv("PHOSON_MODEL", "leak-from-dev-shell")
+    monkeypatch.setenv("PHOSON_PROVIDER", "leak-from-dev-shell")
+    model, provider = bench._effective_target(None, None, tmp_path / "config.toml")
+    assert model == "omni/route"
+    assert provider == "omniroute"  # the CLI lowercases the provider
+
+
+def test_effective_target_missing_config_uses_built_in_defaults(
+    bench,
+    tmp_path,
+) -> None:
+    """No config.toml → the built-in PhosonConfig defaults, exactly what the
+    child CLI falls back to."""
+    from phoson_cli import config as pc
+
+    d = pc.PhosonConfig()
+    assert bench._effective_target(None, None, tmp_path / "config.toml") == (
+        d.model,
+        d.provider.lower(),
+    )
+
+
+def test_effective_target_malformed_config_degrades_to_unknown(bench, tmp_path) -> None:
+    """A malformed config.toml must not kill the bench; the record degrades
+    to 'unknown' (the child run itself would fail loudly anyway)."""
+    (tmp_path / "config.toml").write_text("[defaults\nmodel = oops")
+    assert bench._effective_target(None, None, tmp_path / "config.toml") == (
+        "unknown",
+        "unknown",
+    )

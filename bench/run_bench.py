@@ -216,6 +216,13 @@ def main(argv: list[str] | None = None) -> int:
         print("No tasks found.")
         return 1
 
+    # What this run actually uses (pinned flag, else config.toml → default).
+    # Recorded in the results JSON and the gate so baselines stay auditable
+    # (issue #139).
+    target_model, target_provider = _effective_target(args.model, args.provider)
+    source = "--model/--provider" if (args.model or args.provider) else "config.toml"
+    print(f"Target: {target_model} @ {target_provider} ({source})")
+
     results: list[TaskResult] = []
     for i in range(args.repeat):
         for task in tasks:
@@ -239,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_file = RESULTS_DIR / (f"bench-{time.strftime('%Y%m%d-%H%M%S')}.json")
     out_file.write_text(
-        json.dumps(_results_payload(args.model, args.provider, results), indent=2)
+        json.dumps(_results_payload(target_model, target_provider, results), indent=2)
     )
     print(f"Saved: {out_file}")
 
@@ -250,8 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     return run_gate(
         results,
         baseline_path=Path(args.baseline),
-        model=args.model,
-        provider=args.provider,
+        model=target_model,
+        provider=target_provider,
         min_margin=args.min_margin,
         bootstrap=args.bootstrap,
         heldout=_heldout_names(),
@@ -354,13 +361,53 @@ def run_gate(
     return 0
 
 
+def _config_defaults(config_path: Path | None = None) -> tuple[str, str]:
+    """(model, provider) the child CLI resolves when the runner pins neither.
+
+    The runner pops ``PHOSON_MODEL``/``PHOSON_PROVIDER`` from the subprocess
+    env, so the child falls back to ``[defaults]`` in
+    ``~/.phoson/config.toml`` and then to the built-in defaults — exactly
+    the resolution mirrored here. The *parent* env is deliberately ignored:
+    a dev shell that exports ``PHOSON_MODEL`` does not change what the child
+    runs, so it must not change what the record says either. Degrades to
+    ``("unknown", "unknown")`` when the config stack can't be imported
+    (source tarball outside the venv, malformed TOML).
+    """
+    try:
+        from phoson_cli import config as _pc
+
+        fd = _pc._load_file_defaults(
+            config_path or Path("~/.phoson/config.toml").expanduser()
+        )
+        d = _pc.PhosonConfig()
+        model = str(fd.get("model") or d.model)
+        # The CLI lowercases the provider (phoson_cli/config.py), mirror it.
+        provider = str(fd.get("provider") or d.provider).lower()
+        return model, provider
+    except Exception:  # noqa: BLE001 — the audit record degrades; the bench must not die
+        return "unknown", "unknown"
+
+
+def _effective_target(
+    model: str | None, provider: str | None, config_path: Path | None = None
+) -> tuple[str, str]:
+    """Effective (model, provider) of a run, for the audit record (issue #139).
+
+    Pinned values (``--model``/``--provider``) win; each unpinned side
+    resolves from the user's config.toml, so a saved result records what
+    actually ran — not ``null`` and not a leaked dev-shell value.
+    """
+    cfg_model, cfg_provider = _config_defaults(config_path)
+    return model or cfg_model, provider or cfg_provider
+
+
 def _effective_model() -> str:
-    """Best-effort effective model when the runner didn't pin one."""
-    return os.environ.get("PHOSON_MODEL") or "config-default"
+    """Effective model when the runner didn't pin one (issue #139)."""
+    return _effective_target(None, None)[0]
 
 
 def _effective_provider() -> str:
-    return os.environ.get("PHOSON_PROVIDER") or "config-default"
+    return _effective_target(None, None)[1]
 
 
 def _results_payload(

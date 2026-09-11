@@ -78,6 +78,56 @@ require a `--json` output flag in one-shot mode (see ROADMAP suggestion):
 one-shot currently prints only the final content and discards
 `RunResult.steps` usage data.
 
+## Reference results
+
+Committed baseline (`bench/baseline.json`): **Qwen/Qwen3.8-27B-FP8** on
+local vLLM, 3 runs × 15 tasks = 45 results, **pass rate 1.000, noise
+0.000**, commit `99e076a`, 2026-09-11:
+
+| Metric | Value |
+|---|---|
+| Pass rate | 45/45 (100%) across 3 runs |
+| Noise (std of per-run pass rates) | 0.000 |
+| Mean full-run wall time | 167.6s (~11.2s per task) |
+| Fastest / slowest task (mean) | 7.0s (`locate-definition`) / 17.5s (`count-defs-in-tree`) |
+
+![Bench task durations — mean of runs, min–max whiskers](assets/per-task-time.png)
+
+![Per-task duration across repeated runs (stability)](assets/per-task-stability.png)
+
+| Task | Pass (3 runs) | Mean time | Range |
+|---|---|---|---|
+| bump-version-files | 3/3 | 12.5s | 11.6–13.9s |
+| count-defs-in-tree | 3/3 | 17.5s | 13.2–25.9s |
+| create-json-config | 3/3 | 7.9s | 6.8–8.6s |
+| create-nested-file | 3/3 | 8.7s | 7.9–9.7s |
+| csv-stats | 3/3 | 9.4s | 8.2–10.4s |
+| csv-to-json | 3/3 | 9.7s | 9.3–10.1s |
+| find-call-sites | 3/3 | 13.4s | 12.3–14.8s |
+| fix-deep-traceback | 3/3 | 9.7s | 7.9–12.0s |
+| fix-failing-script | 3/3 | 9.4s | 9.1–9.9s |
+| fix-import-error | 3/3 | 13.2s | 9.5–15.2s |
+| locate-definition | 3/3 | 7.0s | 6.2–7.4s |
+| log-error-count | 3/3 | 9.9s | 8.2–12.8s |
+| merge-sorted-lists | 3/3 | 10.3s | 7.0–12.1s |
+| parse-noisy-config | 3/3 | 14.9s | 13.0–17.0s |
+| rename-symbol | 3/3 | 14.4s | 13.1–16.1s |
+
+Reproduce:
+
+```bash
+uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
+```
+
+Plots are generated from the results JSON with
+[`bench/make_plots.py`](make_plots.py) (Plotly, a dev dependency):
+PNGs for the README plus **interactive HTML exports** to embed on the
+Phoson website (`bench/assets/*.html`):
+
+```bash
+uv run python bench/make_plots.py bench/results/bench-20260911-004146.json
+```
+
 ## Notes
 
 - Tasks run with the provider/model configured in `~/.phoson/config.toml`,
@@ -85,7 +135,10 @@ one-shot currently prints only the final content and discards
   `PHOSON_MODEL` / `PHOSON_PROVIDER` env vars on the one-shot subprocess
   (the CLI resolves these env → config.toml → default). Any value inherited
   from your own shell is dropped first, so a dev `PHOSON_MODEL` can't quietly
-  re-target a baseline run (issue #138).
+  re-target a baseline run (issue #138). The resolved target is printed up
+  front (`Target: <model> @ <provider> (config.toml|--model/--provider)`)
+  and recorded in the results JSON, so every saved run states exactly what
+  it ran against — even when nothing was pinned (issue #139).
 - The agent's `bash` tool inherits the benchmark process cwd, so all
   tasks execute inside the temp workspace.
 - Each `bench/results/*.json` records the effective `model`, `provider` and

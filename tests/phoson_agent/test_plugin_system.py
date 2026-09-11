@@ -502,6 +502,26 @@ class TestAgentEngineBadPluginGracefulDegradation:
         assert engine._loaded_plugins == []
         assert engine.tools == []
 
+    def test_failed_plugin_instance_uses_plugin_name_not_defaults_hint(self, caplog):
+        """Direct Plugin instances are not [defaults].plugins entries."""
+
+        class BoomPlugin(DummyPlugin):
+            @property
+            def name(self) -> str:
+                return "phoson-plugin-mcp"
+
+            def initialize(self) -> None:
+                raise ImportError("MCP package not installed")
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            engine = AgentEngine(chat=Mock(), plugins=[BoomPlugin()])
+
+        assert engine._loaded_plugins == []
+        assert "phoson-plugin-mcp" in caplog.text
+        assert "[defaults].plugins" not in caplog.text
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -35,3 +35,7 @@ docs/superpowers
 # Vendored third-party C++ (abseil) extracted into the repo root — not part of
 # this Python project; kept out of the ruff/compileall push gate.
 /abseil-cpp/
+
+# Bench run artifacts (the nightly uploads them as a CI artifact; the
+# auditable baseline is bench/baseline.json, not individual runs).
+/bench/results/

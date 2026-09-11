@@ -171,18 +171,24 @@ class AgentEngine:
             try:
                 plugin = load_plugin(plugin_spec)
             except Exception as exc:  # noqa: BLE001 - optional plugin, must not brick the CLI
-                if isinstance(plugin_spec, str):
+                if isinstance(plugin_spec, Plugin):
+                    label = plugin_spec.name
+                    hint = ""
+                elif isinstance(plugin_spec, str):
                     label = plugin_spec
+                    hint = " Remove it from [defaults].plugins to silence this."
                 elif isinstance(plugin_spec, dict):
                     label = str(plugin_spec.get("name", "?"))
+                    hint = " Remove it from [defaults].plugins to silence this."
                 else:
                     label = "plugin"
+                    hint = " Remove it from [defaults].plugins to silence this."
                 logger.warning(
-                    "Skipping plugin %r: failed to load (%s: %s). "
-                    "Remove it from [defaults].plugins to silence this.",
+                    "Skipping plugin %r: failed to load (%s: %s).%s",
                     label,
                     type(exc).__name__,
                     exc,
+                    hint,
                 )
                 continue
             self._loaded_plugins.append(plugin)

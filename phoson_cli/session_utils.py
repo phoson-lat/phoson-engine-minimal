@@ -402,6 +402,20 @@ def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
 
     try:
         from phoson_plugin_mcp import MCPPlugin
+        from phoson_plugin_mcp._plugin import MCP_AVAILABLE
+
+        # The in-tree plugin imports without the SDK; ``initialize()`` is
+        # what raises. Don't hand the instance to the engine — that surfaces
+        # as ``Skipping plugin 'plugin'`` and a bogus "remove it from
+        # [defaults].plugins" hint. Skip here with an actionable warning.
+        if not MCP_AVAILABLE:
+            _LOGGER.warning(
+                "MCP is enabled but the `mcp` package is not installed. "
+                "Install with: uv sync --dev  (or: uv sync --extra mcp / "
+                "pip install 'phoson-engine-minimal[mcp]'). "
+                "Set enable_mcp = false in [defaults] to silence this."
+            )
+            return []
 
         plugin = MCPPlugin()
         plugin.configure(mcp_config)
