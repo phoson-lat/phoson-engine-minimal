@@ -4,6 +4,7 @@ Extracted from ``app.py``:
 - ``toggle_reasoning`` (Ctrl+T): live reasoning toggle or transcript expansion
 - ``cycle_permission_mode`` (Shift+Tab): ask ↔ auto policy toggle for bash
 - ``cycle_reasoning_effort`` (Ctrl+E): cycle reasoning effort levels
+- ``clear_transcript`` (Ctrl+L): drop the transcript and its ANSI cache
 """
 
 import time
@@ -12,6 +13,21 @@ from typing import Any
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from ..config import save_config
+
+
+def clear_transcript(app: Any) -> None:
+    """Ctrl+L: drop the transcript and its ANSI cache."""
+    app.sink.blocks.clear()
+    app.sink.clear_reasoning_state()
+    # The banner is dropped with the transcript (unlike rewind, which
+    # re-seeds it): forget the reference so a later apply_theme doesn't
+    # look for an object that no longer exists in the pane.
+    app._banner_block = None
+    app.sink.drop_error_notice()
+    app.sink.dirty = True
+    app._auto_scroll = True
+    app._chat_scroll_top = 0
+    app.app.invalidate()
 
 
 def toggle_reasoning(app: Any) -> None:
@@ -108,6 +124,7 @@ def cycle_reasoning_effort(app: Any) -> None:
 
 
 __all__ = [
+    "clear_transcript",
     "toggle_reasoning",
     "cycle_permission_mode",
     "cycle_reasoning_effort",

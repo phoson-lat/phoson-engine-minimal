@@ -96,6 +96,9 @@ from .confirmation import FullScreenConfirmationService
 from .header_model import HeaderModel
 from .header_model import short_cwd as _short_cwd_impl
 from .state_cycles import (
+    clear_transcript as _clear_transcript_impl,
+)
+from .state_cycles import (
     toggle_reasoning as _toggle_reasoning_impl,
 )
 from .state_cycles import (
@@ -105,7 +108,14 @@ from .state_cycles import (
     cycle_reasoning_effort as _cycle_reasoning_effort_impl,
 )
 from .session_cache import SessionListCache
+from .escape_controller import (
+    handle_escape as _handle_escape_impl,
+)
+from .escape_controller import (
+    is_prefixed_escape as _is_prefixed_escape_impl,
+)
 from .rewind_controller import RewindController
+from .palette_controller import PaletteController
 
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
 # ``mouse_support=True`` so the scroll wheel can be handled by the app
@@ -141,20 +151,7 @@ from .rewind_controller import RewindController
 # `tick_activity_frame()` — not the tick rate — is what cuts CPU.
 _SUBAGENT_TICK_SECONDS = 0.12
 
-# Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
-# (measured in monotonic seconds between *delivered* key presses) opens the
-# rewind picker. The window must be comfortably LARGER than prompt_toolkit's
-# ``ttimeoutlen`` (0.5 s): the VT100 input layer delays delivery of a lone
-# Esc by ``ttimeoutlen`` to disambiguate it from the start of an escape
-# sequence (arrow keys, ``\x1b[A``, ...). As a result the *delivered*
-# interval between two idle Esc presses is clamped to ~``ttimeoutlen`` from
-# below regardless of how quickly the user tapped — a 0.5 s window would
-# therefore miss real double-taps. 1.0 s sits well above that floor while
-# staying below the gap of two deliberately separate Esc presses, so a slow
-# single Esc never opens the picker. The *single* Esc cancel (#68) is
-# unaffected: that binding stays eager and fires immediately while a run is
-# in flight, and no double-tap state is recorded then.
-_REWIND_DOUBLE_ESC_WINDOW_SECONDS = 1.0
+# (Double-Esc rewind window moved to ``escape_controller.py`` in #187.)
 
 # (The AGENTS.md re-check interval moved to ``header_model.py`` in #187.)
 
@@ -315,6 +312,8 @@ class PhosonApp:
         # Rewind / undo-jump controller (#187); ``PhosonApp`` keeps thin
         # delegates so the ``keys.py`` name lookups and the test suite work.
         self._rewind = RewindController(self)
+        # Command palette controller (#187); see palette_controller.py.
+        self._palette = PaletteController(self)
 
         # T-1: the banner is no longer injected into the sink. The header
         # already carries provider/model/session; the art is available via
@@ -761,73 +760,11 @@ class PhosonApp:
     def open_command_palette(self) -> None:
         """Ctrl+P: open the command palette over every slash command (T-12).
 
-        The palette is a modal Float (like the model/theme pickers), so it
-        can be opened from a calm screen and its confirm dispatches the
-        chosen command through the normal ``/command`` path.
+        Hosted by :class:`~phoson_cli.fullscreen.palette_controller.
+        PaletteController` (#187); kept as a delegate for the ``keys.py``
+        name lookup and the test suite.
         """
-        if self._active_float is not None:
-            return  # a picker/confirmation is already open
-        if self._is_run_in_flight():
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
-            return
-        if self._palette_open:
-            return  # a palette is already scheduled/animating open
-        self._palette_open = True
-        self.app.create_background_task(self._run_command_palette())
-
-    async def _run_command_palette(self) -> None:
-        """Host the palette as a background task with a synchronous guard.
-
-        ``_active_float`` is only set when the task actually runs (the
-        float is opened inside the task), so a fast second Ctrl+P before
-        the first task ticks would schedule a second palette and clobber
-        ``_active_float`` / ``_float_kb``. ``self._palette_open`` closes
-        that window; it is released in ``finally`` so a failure path
-        (e.g. no entries, exception) can't wedge the guard.
-        """
-        try:
-            await self._run_command_palette_inner()
-        finally:
-            self._palette_open = False
-
-    async def _run_command_palette_inner(self) -> None:
-        from ..palette_picker import (
-            PaletteEntry,
-            PalettePickerResult,
-            build_command_palette,
-        )
-
-        catalog = self.repl._controller.command_catalog
-        entries: list[PaletteEntry] = []
-        for spec in catalog.specs:
-            display = " · ".join(spec.names) if len(spec.names) > 1 else spec.primary
-            entries.append(
-                PaletteEntry(
-                    name=spec.primary,
-                    display=display,
-                    help=spec.help,
-                )
-            )
-        if not entries:
-            self.sink.notify("info", "No commands available.")
-            return
-        picker = build_command_palette(entries, theme=self.theme)
-        result = await self.run_float_picker(picker)
-        if not isinstance(result, PalettePickerResult):
-            return
-        if result.cancelled or not result.command_name:
-            return
-        if self._is_run_in_flight():
-            # A run could have started while the float was open.
-            self.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
-            return
-        await self._run_command(Command(name=result.command_name, args=""))
+        self._palette.open()
 
     async def _run_bash_line(self, command: str) -> None:
         """T-12: run a ``!``-prefixed shell command via the command host."""
@@ -876,17 +813,8 @@ class PhosonApp:
         self._floats.close_float(float_)
 
     def clear(self) -> None:
-        self.sink.blocks.clear()
-        self.sink.clear_reasoning_state()
-        # The banner is dropped with the transcript (unlike rewind, which
-        # re-seeds it): forget the reference so a later apply_theme doesn't
-        # look for an object that no longer exists in the pane.
-        self._banner_block = None
-        self.sink.drop_error_notice()
-        self.sink.dirty = True
-        self._auto_scroll = True
-        self._chat_scroll_top = 0
-        self.app.invalidate()
+        """Ctrl+L: drop the transcript and its ANSI cache."""
+        _clear_transcript_impl(self)
 
     def toggle_reasoning(self) -> None:
         """Ctrl+T: toggle the live thinking block, or expand a past node's."""
@@ -912,78 +840,16 @@ class PhosonApp:
     def _is_prefixed_escape(self) -> bool:
         """True when this Esc is the *prefix* of an Alt+<key> sequence.
 
-        Many terminals encode **Alt+<key>** as ``ESC`` + <key> (the
-        Meta/Alt convention). For Alt+Backspace the bytes are
-        ``0x1b 0x7f``; prompt_toolkit's VT100 parser emits them as two
-        KeyPresses — ``escape`` first, then ``c-h`` (Ctrl+H, data
-        ``'\\x7f'``). Because the escape binding is registered ``eager``,
-        ``handle_escape`` fires for the first KeyPress while the second
-        is still in ``key_processor.input_queue``.
-
-        The heuristic (issue #108): the second key's ``data`` is the
-        *original* terminal byte. For Meta-encoded keys this is a
-        printable ASCII character (0x20–0x7e) or DEL (0x7f). For
-        unrelated keys that merely happen to be in the queue (Ctrl+C
-        = ``\\x03``, Enter = ``\\r``, another Esc = ``\\x1b``), the
-        data is a control character below 0x20. We only suppress the
-        Esc when the next queued key looks like a Meta-encoded payload.
+        Body in :mod:`phoson_cli.fullscreen.escape_controller` (#187).
         """
-        processor = getattr(self.app, "key_processor", None)
-        if processor is None:
-            return False
-        queue = getattr(processor, "input_queue", None)
-        if queue is None:
-            return False
-        for kp in queue:
-            # The _Flush sentinel is an internal marker, not a real key.
-            if kp.data == "_Flush":
-                continue
-            # Meta/Alt encoding: the byte after ESC is in the range
-            # 0x20 (space) through 0x7f (DEL). This covers:
-            #   Alt+letter  → data = the letter (0x41-0x7a)
-            #   Alt+digit   → data = the digit  (0x30-0x39)
-            #   Alt+Backspace → data = '\\x7f' (DEL)
-            # It does NOT match control characters that arrive from
-            # separate key events (Ctrl+C '\\x03', Enter '\\r',
-            # another Esc '\\x1b'), which are all below 0x20.
-            if kp.data:
-                code = ord(kp.data[0])
-                if 0x20 <= code <= 0x7F:
-                    return True
-        return False
+        return _is_prefixed_escape_impl(self)
 
     def handle_escape(self) -> None:
         """Escape: cancel the in-flight run; double-tap opens the rewind.
 
-        Precedence (G1, coordinated with #68 and #108):
-        - **Prefix guard (#108):** if this Esc is the prefix of a longer
-          terminal sequence (Alt+<key>), it is silently ignored — neither
-          cancelling a run nor arming the double-tap window.
-        - While a run is in flight, a *clean* Esc keeps its *immediate*
-          cancel role (the binding is registered ``eager`` in ``keys.py``
-          so a double tap mid-run can never be swallowed as a chord) and
-          no double-tap state is recorded.
-        - While idle, a lone clean Esc still does nothing here (inside
-          Float pickers they bind Esc themselves and take precedence). A
-          second clean Esc within
-          ``_REWIND_DOUBLE_ESC_WINDOW_SECONDS`` opens the rewind picker
-          (``handle_rewind``).
+        Body in :mod:`phoson_cli.fullscreen.escape_controller` (#187).
         """
-        # Issue #108: Alt+Backspace (ESC 0x7f) arrives as escape + c-h
-        # in the same batch. The eager handler fires for the escape while
-        # c-h is still queued — that means this was NOT a deliberate Esc.
-        if self._is_prefixed_escape():
-            return
-        if self._is_run_in_flight():
-            self.repl.cancel_current()
-            self.sink.notify("info", "Cancelling current run (Esc)...")
-            return
-        now = time.monotonic()
-        if now - self._last_escape_at <= _REWIND_DOUBLE_ESC_WINDOW_SECONDS:
-            self._last_escape_at = 0.0
-            self.app.create_background_task(self.handle_rewind())
-            return
-        self._last_escape_at = now
+        _handle_escape_impl(self)
 
     # Rewind / undo-jump (G1) lives in :class:`phoson_cli.fullscreen.
     # rewind_controller.RewindController` (#187); the delegates below keep the
