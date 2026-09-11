@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.32.0 (2026-09-11)
+
+### Feat
+
+- **bench**: agent eval suite (#139) — the runner resolves and records the
+  *effective* model/provider (flags → config.toml → defaults, dev-shell env
+  ignored), prints a `Target:` line, and re-seeded the committed baseline
+  with `Qwen/Qwen3.8-27B-FP8` on local vLLM (45/45, noise 0.000, 3 runs)
+- **bench**: `bench/make_plots.py` (Plotly + kaleido) renders the reference
+  results as sharp PNGs for the README and **interactive HTML** for the
+  website; Plotly replaces matplotlib in the dev group
+- **bench**: `bench/harbor/phoson_agent.py` — Harbor *installed agent* that
+  runs phoson-cli's headless one-shot mode on Terminal-Bench tasks, for
+  numbers comparable to the public leaderboard (verified on harbor 0.22.0)
+- **cli**: reference results and plots published in `README.md` (📊
+  Evaluation) and `bench/README.md` (per-task tables + stability)
+
+### Fix
+
+- **cli**: missing optional MCP SDK is handled gracefully — `mcp` joins the
+  dev group (production keeps the `[mcp]` extra), `build_mcp_plugins`
+  warns actionably instead of surfacing a bogus "remove it from
+  [defaults].plugins" hint, and the engine warning only suggests
+  `[defaults].plugins` for string/dict specs
+
+### Chores
+
+- `bench/results/` gitignored (run artifacts; the auditable baseline stays
+  `bench/baseline.json`)
+
+---
+
 ## v0.31.0 (2026-09-09)
 
 ### Feat
