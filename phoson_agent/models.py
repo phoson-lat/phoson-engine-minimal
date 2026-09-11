@@ -30,12 +30,19 @@ ToolHandler = Callable[[JsonObject, "AgentContext"], ToolReturn | Awaitable[Tool
 
 @dataclass
 class AgentTool:
-    """Definition of an agent tool."""
+    """Definition of an agent tool.
+
+    ``metadata`` carries optional, producer-owned facts about the tool (e.g.
+    the MCP annotations an MCP server publishes for it). It is never sent to
+    the model — it exists so hosts and policies can reason about a tool's
+    nature without a central registry; see ``phoson_agent.permissions``.
+    """
 
     name: str
     description: str
     parameters: JsonSchema
     handler: ToolHandler
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

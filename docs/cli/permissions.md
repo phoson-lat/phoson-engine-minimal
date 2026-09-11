@@ -53,6 +53,31 @@ Non-interactive contexts (one-shot mode, scripts, sub-agents with no
 confirmation service) **fail closed**: an `ask`-level tool is refused
 instead of hanging or running without approval.
 
+## MCP tools: annotations as risk signal
+
+MCP servers may publish `ToolAnnotations` for each tool
+(`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
+The MCP plugin copies them into the tool's metadata and the CLI folds them
+into the policy after plugins load. They are a **signal, not a contract**:
+they can only make the gate *stricter*, never bypass a rule you wrote.
+
+| Annotation | Derived level |
+|---|---|
+| `readOnlyHint: true` (and not destructive) | `allow` |
+| destructive / open-world / write-like | `ask` |
+| **no annotations at all** | `ask` (safe default) |
+
+Precedence is: allow-pattern hit → your explicit level in `levels` →
+derived hint → `allow` for unlisted non-MCP tools. So an explicit
+`/permissions mcp_fs_write allow` relaxes an annotated tool, and
+`/permissions mcp_fs_read deny` hardens a read-only one.
+
+**Scope.** The safe default applies only to tools that actually publish
+hints (MCP tools); built-in tools are unaffected. A deferred MCP *proxy*
+tool (`mcp_<server>_call`) is never trusted and stays at `ask` because it
+can invoke any remote tool. In one-shot mode this means an `ask`-level MCP
+tool fails closed (refused) unless you set its level explicitly.
+
 ## Web tools: SSRF filter and `ask`
 
 `web_fetch` (F-06) only fetches **public** addresses. Before connecting —
