@@ -112,6 +112,8 @@ dev = [
     # venv. `uv sync --dev` would otherwise omit the optional `[mcp]` extra
     # and warn on every CLI start. Production installs still use `[mcp]`.
     "mcp>=1.0.0,<2.0.0",
+    # Plot generation for the bench README (bench/make_plots.py).
+    "matplotlib>=3.9.0",
 ]
 
 [project.optional-dependencies]

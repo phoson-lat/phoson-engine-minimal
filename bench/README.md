@@ -91,6 +91,10 @@ local vLLM, 3 runs × 15 tasks = 45 results, **pass rate 1.000, noise
 | Mean full-run wall time | 167.6s (~11.2s per task) |
 | Fastest / slowest task (mean) | 7.0s (`locate-definition`) / 17.5s (`count-defs-in-tree`) |
 
+![Bench task durations — mean of runs, min–max whiskers](assets/per-task-time.png)
+
+![Per-task duration across repeated runs (stability)](assets/per-task-stability.png)
+
 | Task | Pass (3 runs) | Mean time | Range |
 |---|---|---|---|
 | bump-version-files | 3/3 | 12.5s | 11.6–13.9s |
@@ -113,6 +117,13 @@ Reproduce:
 
 ```bash
 uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
+```
+
+Plots are generated from the results JSON (`bench/make_plots.py`,
+matplotlib is a dev dependency):
+
+```bash
+uv run python bench/make_plots.py bench/results/bench-20260911-004146.json
 ```
 
 ## Notes
