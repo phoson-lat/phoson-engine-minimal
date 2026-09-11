@@ -118,16 +118,17 @@ work), each run in an isolated workspace and verified by a
 model-free checker — plus a nightly no-regression gate on a fixed
 local model.
 
-Reference run (2026-09-10, `Qwen/Qwen3.8-27B-FP8` on local vLLM):
+Reference results (2026-09-11, `Qwen/Qwen3.8-27B-FP8` on local vLLM,
+3 runs — the committed baseline):
 
 | Metric | Value |
 |---|---|
-| Pass rate | **15/15 (100%)** |
-| Total wall time | 146s (~9.7s per task) |
-| Fastest / slowest task | 6.9s / 16.0s |
+| Pass rate | **45/45 (100%)**, noise 0.000 |
+| Mean full-run wall time | 167.6s (~11.2s per task) |
+| Committed baseline | `bench/baseline.json` @ commit `99e076a` |
 
 ```bash
-uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm
+uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
 ```
 
 See [`bench/README.md`](bench/README.md) for the full per-task table,

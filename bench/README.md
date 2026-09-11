@@ -80,42 +80,40 @@ one-shot currently prints only the final content and discards
 
 ## Reference results
 
-Single run, 2026-09-10, commit `af874b2`, local vLLM serving
-**Qwen/Qwen3.8-27B-FP8** (15/15 tasks, 100%):
+Committed baseline (`bench/baseline.json`): **Qwen/Qwen3.8-27B-FP8** on
+local vLLM, 3 runs × 15 tasks = 45 results, **pass rate 1.000, noise
+0.000**, commit `99e076a`, 2026-09-11:
 
 | Metric | Value |
 |---|---|
-| Pass rate | 15/15 (100%) |
-| Total wall time | 146.0s |
-| Mean / median task time | 9.7s / 9.3s |
-| Fastest / slowest task | 6.9s (`create-nested-file`) / 16.0s (`rename-symbol`) |
+| Pass rate | 45/45 (100%) across 3 runs |
+| Noise (std of per-run pass rates) | 0.000 |
+| Mean full-run wall time | 167.6s (~11.2s per task) |
+| Fastest / slowest task (mean) | 7.0s (`locate-definition`) / 17.5s (`count-defs-in-tree`) |
 
-| Task | Result | Time |
-|---|---|---|
-| bump-version-files | ✅ | 10.9s |
-| count-defs-in-tree | ✅ | 8.1s |
-| create-json-config | ✅ | 7.1s |
-| create-nested-file | ✅ | 6.9s |
-| csv-stats | ✅ | 7.7s |
-| csv-to-json | ✅ | 8.1s |
-| find-call-sites | ✅ | 12.5s |
-| fix-deep-traceback | ✅ | 9.7s |
-| fix-failing-script | ✅ | 8.6s |
-| fix-import-error | ✅ | 10.3s |
-| locate-definition | ✅ | 9.3s |
-| log-error-count | ✅ | 7.3s |
-| merge-sorted-lists | ✅ | 9.6s |
-| parse-noisy-config | ✅ | 14.0s |
-| rename-symbol | ✅ | 16.0s |
+| Task | Pass (3 runs) | Mean time | Range |
+|---|---|---|---|
+| bump-version-files | 3/3 | 12.5s | 11.6–13.9s |
+| count-defs-in-tree | 3/3 | 17.5s | 13.2–25.9s |
+| create-json-config | 3/3 | 7.9s | 6.8–8.6s |
+| create-nested-file | 3/3 | 8.7s | 7.9–9.7s |
+| csv-stats | 3/3 | 9.4s | 8.2–10.4s |
+| csv-to-json | 3/3 | 9.7s | 9.3–10.1s |
+| find-call-sites | 3/3 | 13.4s | 12.3–14.8s |
+| fix-deep-traceback | 3/3 | 9.7s | 7.9–12.0s |
+| fix-failing-script | 3/3 | 9.4s | 9.1–9.9s |
+| fix-import-error | 3/3 | 13.2s | 9.5–15.2s |
+| locate-definition | 3/3 | 7.0s | 6.2–7.4s |
+| log-error-count | 3/3 | 9.9s | 8.2–12.8s |
+| merge-sorted-lists | 3/3 | 10.3s | 7.0–12.1s |
+| parse-noisy-config | 3/3 | 14.9s | 13.0–17.0s |
+| rename-symbol | 3/3 | 14.4s | 13.1–16.1s |
 
 Reproduce:
 
 ```bash
-uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm
+uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
 ```
-
-Single-run reference: duration spread (6.9–16.0s) is task complexity, not
-noise — measure run-to-run noise with `--repeat 3` before quoting it.
 
 ## Notes
 
