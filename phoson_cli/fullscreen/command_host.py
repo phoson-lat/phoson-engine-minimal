@@ -17,6 +17,8 @@ that take an explicit argument (``/model gpt-4o``, ``/provider openai
 list``, ...) are unaffected since they never call into these methods.
 """
 
+import re
+import time
 from typing import TYPE_CHECKING, cast
 
 from phoson_agent.sessions.models import SessionMeta
@@ -183,6 +185,58 @@ class FullScreenCommandHost:
             "The setup wizard isn't available inside this UI yet — "
             "exit and run `phoson-cli --setup` instead."
         )
+
+    async def run_bash_line(self, command: str) -> None:
+        """T-12: run a ``!``-prefixed shell command, respecting T-6 perms.
+
+        The command is gated by the same bash permission policy the agent's
+        bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
+        refused). The result is rendered as a normal bash tool card, so the
+        transcript reads identically whether the agent or the user ran it.
+        """
+        from ..tools.bash import _run_bash
+        from ..permissions_store import (
+            LEVEL_ASK,
+            LEVEL_DENY,
+            load_policy,
+        )
+
+        policy = load_policy()
+        decision = policy.check("bash", command)
+        if decision == LEVEL_DENY:
+            self.app.sink.add_bash_card(
+                command, "", error="denied by permissions policy"
+            )
+            self.app.app.invalidate()
+            return
+        if decision == LEVEL_ASK:
+            allowed = await self.app.run_float_bash_card(
+                command,
+                on_always=lambda cmd: self.app.repl._controller._remember_bash_pattern(
+                    cmd
+                ),
+            )
+            if not allowed:
+                self.app.sink.add_bash_card(command, "", error="denied by the user")
+                self.app.app.invalidate()
+                return
+
+        started = time.monotonic()
+        result = await _run_bash(command)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        stripped = result.strip()
+        error = (
+            stripped
+            if (
+                re.fullmatch(r"Command timed out after \d+s", stripped, re.IGNORECASE)
+                or re.fullmatch(r"Failed to spawn shell: .+", stripped, re.DOTALL)
+            )
+            else None
+        )
+        self.app.sink.add_bash_card(
+            command, result, duration_ms=elapsed_ms, error=error
+        )
+        self.app.app.invalidate()
 
 
 __all__ = ["FullScreenCommandHost"]

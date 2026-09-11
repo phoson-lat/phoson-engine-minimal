@@ -20,8 +20,15 @@ than silently doing nothing (``PhosonApp.paste_image`` tries
 
 import os
 import sys
+import uuid
 import shutil
 import asyncio
+import tempfile
+import mimetypes
+from typing import Any
+from pathlib import Path
+
+from ..attachments import provider_compat_warning
 
 _IMAGE_MIME_CANDIDATES = ("image/png", "image/jpeg")
 
@@ -127,8 +134,58 @@ async def read_clipboard_text() -> str | None:
         return None
 
 
+async def paste_image_from_clipboard(
+    app: Any,
+) -> None:
+    """Read an image (or fallback text) from the clipboard and attach/insert it."""
+    result = await read_clipboard_image()
+    if result is None:
+        await _paste_text_fallback(app)
+        return
+
+    data, mime = result
+    suffix = mimetypes.guess_extension(mime) or ".png"
+    target_dir = Path(tempfile.gettempdir()) / "phoson-clipboard"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"clipboard-{uuid.uuid4().hex[:8]}{suffix}"
+    target.write_bytes(data)
+
+    try:
+        app.repl.attachments.attach(str(target))
+    except (FileNotFoundError, ValueError) as exc:
+        app.sink.notify("error", str(exc))
+        return
+
+    suffix = target.suffix.lower()
+    warning = provider_compat_warning(
+        suffix, getattr(app.repl.config, "provider", None)
+    )
+    if warning:
+        app.sink.notify("warn", warning)
+
+    placeholder = f"[image #{len(app.repl.attachments)}] "
+    app._prompt_input.buffer.insert_text(placeholder)
+    app.app.invalidate()
+
+
+async def _paste_text_fallback(app: Any) -> None:
+    """No image on the clipboard: paste its text instead (D3), if any."""
+    text = await read_clipboard_text()
+    if text:
+        app._prompt_input.buffer.insert_text(text)
+        app.app.invalidate()
+        return
+
+    message = "No image on the clipboard (or no clipboard tool available)."
+    hint = macos_image_tool_hint()
+    if hint:
+        message = f"{message} {hint}."
+    app.sink.notify("warn", message)
+
+
 __all__ = [
     "read_clipboard_image",
     "read_clipboard_text",
     "macos_image_tool_hint",
+    "paste_image_from_clipboard",
 ]

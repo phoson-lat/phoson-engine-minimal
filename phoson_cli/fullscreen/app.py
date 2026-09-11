@@ -12,13 +12,9 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 """
 
 import os
-import re
 import time
-import uuid
 import asyncio
 import logging
-import tempfile
-import mimetypes
 from typing import Any
 from pathlib import Path
 from collections.abc import Callable, Sequence, Coroutine
@@ -68,13 +64,11 @@ from .floats import FloatsController
 # the historical name ``_bash_card_rows`` from this module (moved to
 # :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
 from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
-from .render import BlockAnsiCache, BlockFormattedTextCache
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
 from ..config import (
     PhosonConfig,
-    save_config,
     enabled_providers_from_config,
 )
 from ..pickers import BasePicker
@@ -86,9 +80,7 @@ from .chat_pane import (
     enable_perf_counter,
 )
 from .clipboard import (
-    read_clipboard_text,
-    read_clipboard_image,
-    macos_image_tool_hint,
+    paste_image_from_clipboard,
 )
 from .completer import (
     PathCompleter,
@@ -99,11 +91,19 @@ from .completer import (
     SessionsArgCompleter,
 )
 from .model_cache import ModelCache
-from ..attachments import provider_compat_warning
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 from .header_model import HeaderModel
 from .header_model import short_cwd as _short_cwd_impl
+from .state_cycles import (
+    toggle_reasoning as _toggle_reasoning_impl,
+)
+from .state_cycles import (
+    cycle_permission_mode as _cycle_permission_mode_impl,
+)
+from .state_cycles import (
+    cycle_reasoning_effort as _cycle_reasoning_effort_impl,
+)
 from .session_cache import SessionListCache
 from .rewind_controller import RewindController
 
@@ -555,135 +555,36 @@ class PhosonApp:
     def _on_chat_mouse(self, mouse_event: MouseEvent) -> object:
         return self._chat_pane.on_chat_mouse(mouse_event)
 
-    # --- Pane state proxies (test suite + cache resets read these directly) ---
+    # --- Pane state forwarding (tests / external callers) ---
 
-    @property
-    def _chat_scroll_top(self) -> int:
-        return self._chat_pane._chat_scroll_top
+    def __getattr__(self, name: str) -> Any:
+        if "_chat_pane" in self.__dict__ and hasattr(self._chat_pane, name):
+            return getattr(self._chat_pane, name)
+        raise AttributeError(
+            f"'{type(self).__name__}' object has no attribute '{name}'"
+        )
 
-    @_chat_scroll_top.setter
-    def _chat_scroll_top(self, value: int) -> None:
-        self._chat_pane._chat_scroll_top = value
-
-    @property
-    def _auto_scroll(self) -> bool:
-        return self._chat_pane._auto_scroll
-
-    @_auto_scroll.setter
-    def _auto_scroll(self, value: bool) -> None:
-        self._chat_pane._auto_scroll = value
-
-    @property
-    def _total_chat_lines(self) -> int:
-        return self._chat_pane._total_chat_lines
-
-    @_total_chat_lines.setter
-    def _total_chat_lines(self, value: int) -> None:
-        self._chat_pane._total_chat_lines = value
-
-    @property
-    def _cache_dirty(self) -> bool:
-        return self._chat_pane._cache_dirty
-
-    @_cache_dirty.setter
-    def _cache_dirty(self, value: bool) -> None:
-        self._chat_pane._cache_dirty = value
-
-    @property
-    def _last_width(self) -> int:
-        return self._chat_pane._last_width
-
-    @_last_width.setter
-    def _last_width(self, value: int) -> None:
-        self._chat_pane._last_width = value
-
-    @property
-    def _full_ansi_text(self) -> str:
-        return self._chat_pane._full_ansi_text
-
-    @_full_ansi_text.setter
-    def _full_ansi_text(self, value: str) -> None:
-        self._chat_pane._full_ansi_text = value
-
-    @property
-    def _full_ansi_bounds(self) -> list[int]:
-        return self._chat_pane._full_ansi_bounds
-
-    @_full_ansi_bounds.setter
-    def _full_ansi_bounds(self, value: list[int]) -> None:
-        self._chat_pane._full_ansi_bounds = value
-
-    @property
-    def _frozen_ansi_bounds(self) -> list[int]:
-        return self._chat_pane._frozen_ansi_bounds
-
-    @_frozen_ansi_bounds.setter
-    def _frozen_ansi_bounds(self, value: list[int]) -> None:
-        self._chat_pane._frozen_ansi_bounds = value
-
-    @property
-    def _frozen_ansi_ids(self) -> tuple[int, ...] | None:
-        return self._chat_pane._frozen_ansi_ids
-
-    @_frozen_ansi_ids.setter
-    def _frozen_ansi_ids(self, value: tuple[int, ...] | None) -> None:
-        self._chat_pane._frozen_ansi_ids = value
-
-    @property
-    def _chat_content_epoch(self) -> int:
-        return self._chat_pane._chat_content_epoch
-
-    @_chat_content_epoch.setter
-    def _chat_content_epoch(self, value: int) -> None:
-        self._chat_pane._chat_content_epoch = value
-
-    @property
-    def _window_top(self) -> int:
-        return self._chat_pane._window_top
-
-    @_window_top.setter
-    def _window_top(self, value: int) -> None:
-        self._chat_pane._window_top = value
-
-    @property
-    def _window_total(self) -> int:
-        return self._chat_pane._window_total
-
-    @_window_total.setter
-    def _window_total(self, value: int) -> None:
-        self._chat_pane._window_total = value
-
-    @property
-    def _window_height(self) -> int:
-        return self._chat_pane._window_height
-
-    @_window_height.setter
-    def _window_height(self, value: int) -> None:
-        self._chat_pane._window_height = value
-
-    @property
-    def _window_epoch(self) -> int:
-        return self._chat_pane._window_epoch
-
-    @_window_epoch.setter
-    def _window_epoch(self, value: int) -> None:
-        self._chat_pane._window_epoch = value
-
-    @property
-    def _windowed_ansi(self) -> ANSI:
-        return self._chat_pane._windowed_ansi
-
-    @_windowed_ansi.setter
-    def _windowed_ansi(self, value: ANSI) -> None:
-        self._chat_pane._windowed_ansi = value
-
-    @property
-    def _block_ansi_cache(self) -> BlockAnsiCache:
-        return self._chat_pane._block_ansi_cache
-
-    @property
-    def _block_ft_cache(self) -> BlockFormattedTextCache:
-        return self._chat_pane._block_ft_cache
+    def __setattr__(self, name: str, value: Any) -> None:
+        if (
+            name.startswith(
+                (
+                    "_chat_",
+                    "_full_ansi_",
+                    "_frozen_ansi_",
+                    "_window",
+                    "_total_chat_",
+                    "_auto_scroll",
+                    "_cache_dirty",
+                    "_last_width",
+                    "_block_ansi_cache",
+                    "_block_ft_cache",
+                )
+            )
+            and "_chat_pane" in self.__dict__
+        ):
+            setattr(self._chat_pane, name, value)
+            return
+        super().__setattr__(name, value)
 
     # ── Rendering ────────────────────────────────────────────────────────
 
@@ -929,57 +830,8 @@ class PhosonApp:
         await self._run_command(Command(name=result.command_name, args=""))
 
     async def _run_bash_line(self, command: str) -> None:
-        """T-12: run a ``!``-prefixed shell command, respecting T-6 perms.
-
-        The command is gated by the same bash permission policy the agent's
-        bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
-        refused). The result is rendered as a normal bash tool card, so the
-        transcript reads identically whether the agent or the user ran it.
-        """
-        from ..tools.bash import _run_bash
-        from ..permissions_store import (
-            LEVEL_ASK,
-            LEVEL_DENY,
-            load_policy,
-        )
-
-        policy = load_policy()
-        decision = policy.check("bash", command)
-        if decision == LEVEL_DENY:
-            self.sink.add_bash_card(command, "", error="denied by permissions policy")
-            self.app.invalidate()
-            return
-        if decision == LEVEL_ASK:
-            allowed = await self.run_float_bash_card(
-                command,
-                on_always=lambda cmd: self.repl._controller._remember_bash_pattern(cmd),
-            )
-            if not allowed:
-                self.sink.add_bash_card(command, "", error="denied by the user")
-                self.app.invalidate()
-                return
-
-        started = time.monotonic()
-        result = await _run_bash(command)
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        # Infra-level failures (spawn / timeout) are execution errors, not
-        # command output — render them as an ✗ card. A non-zero exit code
-        # still yields its stdout+stderr as the card body, matching how the
-        # agent's bash tool reports results. These are matched by the exact
-        # one-line shapes ``_run_bash`` returns (anchored fullmatch), so a
-        # real command whose output merely *starts* with that phrase is not
-        # misclassified as an error.
-        stripped = result.strip()
-        error = (
-            stripped
-            if (
-                re.fullmatch(r"Command timed out after \d+s", stripped, re.IGNORECASE)
-                or re.fullmatch(r"Failed to spawn shell: .+", stripped, re.DOTALL)
-            )
-            else None
-        )
-        self.sink.add_bash_card(command, result, duration_ms=elapsed_ms, error=error)
-        self.app.invalidate()
+        """T-12: run a ``!``-prefixed shell command via the command host."""
+        await self._commands.host.run_bash_line(command)
 
     # ── Float overlays (pickers, confirmations) ─────────────────────────
     # Modal dialog bodies live in :class:`phoson_cli.fullscreen.floats.
@@ -1037,103 +889,16 @@ class PhosonApp:
         self.app.invalidate()
 
     def toggle_reasoning(self) -> None:
-        """Ctrl+T: toggle the live thinking block, or expand a past node's.
-
-        While streaming, toggles the in-progress reasoning panel. Once
-        idle, expands the reasoning of the newest node on the current
-        path that has any — a node's reasoning is shown at most once per
-        session (the transcript is append-only).
-        """
-        if self.sink.current_turn is not None:
-            new_state = self.sink.toggle_live_reasoning()
-            # Persist the default for future turns/sessions (#50).
-            if getattr(self.repl.config, "show_reasoning", True) != new_state:
-                self.repl.config.show_reasoning = new_state
-                save_config(self.repl.config, only_fields={"show_reasoning"})
-                self.sink.show_reasoning_default = new_state
-            return
-
-        cursor: str | None = self.repl.current_node_id
-        path_ids: list[str] = []
-        while cursor is not None:
-            path_ids.append(cursor)
-            node = self.repl.tree.nodes.get(cursor)
-            cursor = node.parent_id if node is not None else None
-        path_ids.reverse()
-
-        for node_id in path_ids:
-            node = self.repl.tree.nodes.get(node_id)
-            reasoning = node.metadata.get("reasoning") if node else None
-            if not reasoning:
-                continue
-            if node_id in self.repl._expanded_reasoning:
-                self.sink.notify(
-                    "info",
-                    "Reasoning already expanded (the transcript is append-only).",
-                )
-                return
-            self.repl._expanded_reasoning.add(node_id)
-            self.sink.expand_reasoning(str(reasoning))
-            return
+        """Ctrl+T: toggle the live thinking block, or expand a past node's."""
+        _toggle_reasoning_impl(self)
 
     def cycle_permission_mode(self) -> None:
-        """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
-
-        The mode is the durable per-tool policy (``permissions.json``);
-        cycling it sets *bash*'s level, which is the tool the SOTA
-        harnesses gate by default. The header chip refreshes immediately
-        and the user is told the new state + how to fine-tune
-        per-tool with /permissions.
-        """
-        from ..permissions_store import LEVEL_ASK, set_level, load_policy, save_policy
-
-        policy = load_policy()
-        current = policy.levels.get("bash")
-        if current == LEVEL_ASK:
-            set_level(policy, "bash", "allow")
-            new_mode = "auto"
-        else:
-            set_level(policy, "bash", LEVEL_ASK)
-            new_mode = "ask"
-        save_policy(policy)
-        self._perm_mode_cached = new_mode
-        self._perm_mode_checked_at = time.monotonic()
-        self._header_cache_key = None  # rebuild the chip on the next frame
-        self.sink.notify(
-            "info",
-            f"Permission mode → {new_mode}"
-            + (
-                " — bash commands now confirm with Yes / Always / No"
-                if new_mode == "ask"
-                else " — bash runs freely (per-tool rules: /permissions)"
-            ),
-        )
+        """Shift+Tab (T-6): cycle the visible permission mode ask → auto."""
+        _cycle_permission_mode_impl(self)
 
     def cycle_reasoning_effort(self) -> None:
-        """Ctrl+E: cycle the reasoning effort off → low → medium → high →
-        xhigh → max (wraps to off).
-
-        Mirrors the T-6 permission-mode cycle: the value lives on the
-        durable config (persisted like ``/reasoning-effort``), the run
-        picks it up at the *next* turn (the controller reads
-        ``config.reasoning_effort`` when building each run's ModelConfig),
-        the header chip refreshes immediately, and the user is told the
-        new state + how to set it explicitly. Ctrl+T stays the
-        show/hide toggle for the reasoning block — different axis.
-        """
-        current = self.repl.config.reasoning_effort
-        if current not in REASONING_EFFORTS:
-            current = None  # "off"
-        levels = (*REASONING_EFFORTS, None)
-        next_effort = levels[(levels.index(current) + 1) % len(levels)]
-        self.repl.config.reasoning_effort = next_effort
-        save_config(self.repl.config, only_fields={"reasoning_effort"})
-        self._header_cache_key = None  # rebuild the chip on the next frame
-        self.sink.notify(
-            "info",
-            f"Reasoning effort → {next_effort or 'off'}"
-            " · applies from the next turn (explicit: /reasoning-effort)",
-        )
+        """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""
+        _cycle_reasoning_effort_impl(self)
 
     def keys_listing(self) -> list[tuple[str, str]]:
         """The effective key map for ``/keys`` (IMPROVEMENTS.md E6).
@@ -1280,75 +1045,8 @@ class PhosonApp:
             self.request_exit()
 
     def paste_image(self) -> None:
-        """Ctrl+V: paste an image from the clipboard, or fall back to text.
-
-        Terminals only ever deliver *text* through their own paste
-        mechanism — an image copied to the OS clipboard (e.g. from a
-        screenshot tool or a browser) has to be read from the clipboard
-        directly (``clipboard.read_clipboard_image``, shelling out to
-        wl-paste/xclip/pngpaste) rather than anything a paste keystroke
-        could hand the ``TextArea``. Ctrl+V is rebound globally to this
-        handler, which would otherwise swallow the ``TextArea``'s native
-        text paste (IMPROVEMENTS.md D3): when the clipboard holds no
-        image, the clipboard's *text* is read the same way and inserted
-        at the cursor instead, so Ctrl+V still works for plain text.
-        """
-        self.app.create_background_task(self._paste_image_async())
-
-    async def _paste_image_async(self) -> None:
-        result = await read_clipboard_image()
-        if result is None:
-            await self._paste_text_fallback()
-            return
-
-        data, mime = result
-        suffix = mimetypes.guess_extension(mime) or ".png"
-        target_dir = Path(tempfile.gettempdir()) / "phoson-clipboard"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / f"clipboard-{uuid.uuid4().hex[:8]}{suffix}"
-        target.write_bytes(data)
-
-        try:
-            self.repl.attachments.attach(str(target))
-        except (FileNotFoundError, ValueError) as exc:
-            self.sink.notify("error", str(exc))
-            return
-
-        suffix = target.suffix.lower()
-        warning = provider_compat_warning(
-            suffix, getattr(self.repl.config, "provider", None)
-        )
-        if warning:
-            self.sink.notify("warn", warning)
-
-        # Terminal chat inputs can't show a real thumbnail chip — a text
-        # placeholder inserted at the cursor is the next best thing: it
-        # marks where the image was pasted, and (since it ends up as
-        # ordinary text in the message) doubles as an inline reference
-        # both the user and the model can read.
-        placeholder = f"[image #{len(self.repl.attachments)}] "
-        self._prompt_input.buffer.insert_text(placeholder)
-        self.app.invalidate()
-
-    async def _paste_text_fallback(self) -> None:
-        """No image on the clipboard: paste its text instead (D3), if any.
-
-        Reading via the same platform tool as the image path (rather
-        than relying on the terminal's own paste) is what lets this
-        double as the "clipboard has text, not an image" case instead
-        of silently doing nothing.
-        """
-        text = await read_clipboard_text()
-        if text:
-            self._prompt_input.buffer.insert_text(text)
-            self.app.invalidate()
-            return
-
-        message = "No image on the clipboard (or no clipboard tool available)."
-        hint = macos_image_tool_hint()
-        if hint:
-            message = f"{message} {hint}."
-        self.sink.notify("warn", message)
+        """Ctrl+V: paste an image from the clipboard, or fall back to text."""
+        self.app.create_background_task(paste_image_from_clipboard(self))
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
