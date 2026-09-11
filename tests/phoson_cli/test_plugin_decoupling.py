@@ -127,3 +127,17 @@ class TestMcpFallback:
         )
         with pytest.warns(UserWarning, match="MCP disabled"):
             assert build_mcp_plugins(self._config(tmp_path)) == []
+
+    def test_missing_mcp_sdk_skips_plugin_without_engine_load(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """In-tree MCPPlugin imports fine without the SDK; don't load it."""
+        import logging
+
+        from phoson_cli.session_utils import build_mcp_plugins
+
+        monkeypatch.setattr("phoson_plugin_mcp._plugin.MCP_AVAILABLE", False)
+        with caplog.at_level(logging.WARNING):
+            assert build_mcp_plugins(self._config(tmp_path)) == []
+        assert "mcp` package is not installed" in caplog.text
+        assert "[defaults].plugins" not in caplog.text

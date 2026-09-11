@@ -1216,6 +1216,7 @@ mistral = [
 dev = [
     { name = "commitizen" },
     { name = "git-filter-repo" },
+    { name = "mcp" },
     { name = "opentelemetry-proto" },
     { name = "pip-audit" },
     { name = "pre-commit" },
@@ -1248,6 +1249,7 @@ provides-extras = ["gemini", "mistral", "aws", "checkpoint", "memory", "mcp"]
 dev = [
     { name = "commitizen", specifier = ">=3.29.0" },
     { name = "git-filter-repo", specifier = ">=2.47.0" },
+    { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "opentelemetry-proto", specifier = ">=1.25.0" },
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pre-commit", specifier = ">=3.8.0" },

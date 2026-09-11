@@ -311,6 +311,7 @@ chmod +x phoson-cli
 
 ```bash
 uv sync --dev --locked
+# MCP SDK is in the dev group (and the optional [mcp] extra).
 ```
 
 ### Install git hooks

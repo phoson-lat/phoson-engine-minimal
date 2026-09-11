@@ -108,6 +108,10 @@ dev = [
     # JSON payload into the real otel-proto schema (the collector's own
     # unmarshaler). Test-only — the plugin runtime itself stays stdlib-only.
     "opentelemetry-proto>=1.25.0",
+    # MCP SDK: local `enable_mcp = true` configs need this in the project
+    # venv. `uv sync --dev` would otherwise omit the optional `[mcp]` extra
+    # and warn on every CLI start. Production installs still use `[mcp]`.
+    "mcp>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]

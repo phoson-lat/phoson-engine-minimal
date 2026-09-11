@@ -5,10 +5,12 @@ Plugin to integrate Model Context Protocol (MCP) servers with Phoson Agent.
 ## Installation
 
 ```bash
-# Install the MCP package
-pip install mcp
+# In this repo (dev venv):
+uv sync --dev
 
-# The plugin ships with phoson-engine
+# Production / extra-only install:
+uv sync --extra mcp
+# or: pip install 'phoson-engine-minimal[mcp]'
 ```
 
 ## Configuration
@@ -358,9 +360,11 @@ For a clean shutdown of pooled connections, prefer `await plugin.aclose()` over 
 
 ### Error: "MCP package not installed"
 
-Install the MCP package:
+Install the MCP package (the plugin ships with phoson-engine; the SDK is optional):
 ```bash
-pip install mcp
+uv sync --dev
+# or: uv sync --extra mcp
+# or: pip install 'phoson-engine-minimal[mcp]'
 ```
 
 ### Error: "Failed to load MCP config"
