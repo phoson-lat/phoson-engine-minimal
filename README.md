@@ -127,6 +127,10 @@ Reference results (2026-09-11, `Qwen/Qwen3.8-27B-FP8` on local vLLM,
 | Mean full-run wall time | 167.6s (~11.2s per task) |
 | Committed baseline | `bench/baseline.json` @ commit `99e076a` |
 
+![Bench task durations — mean of 3 runs](bench/assets/per-task-time.png)
+
+![Run-to-run stability — per-task duration](bench/assets/per-task-stability.png)
+
 ```bash
 uv run python bench/run_bench.py --model "Qwen/Qwen3.8-27B-FP8" --provider vllm --repeat 3
 ```
