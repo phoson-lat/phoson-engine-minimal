@@ -90,6 +90,7 @@ from .session_utils import (
     engine_visible_tools,
 )
 from .tools.compact import compact_context
+from .guard_classifier import build_permission_classifier
 from .permissions_store import apply_tool_hints, build_permission_middleware
 
 # The monitor plugin ships in the same wheel; the fallback keeps
@@ -237,6 +238,10 @@ class SessionController:
         # one exists; without it the middleware fails closed.
         self.permission_middleware = build_permission_middleware(
             on_ask=self._ask_permission,
+            on_decision=self._on_permission_decision,
+            classifier=build_permission_classifier(self.config, lambda: self.chat),
+            classifier_auto_allow=self.config.permission_classifier_auto_allow,
+            classifier_timeout_s=self.config.permission_classifier_timeout_s,
         )
         # Assembled in _rebuild_engine; retained so sub-agents inherit the
         # gate via context.extra["middlewares"] (#174/F-01).
@@ -332,6 +337,21 @@ class SessionController:
         policy = load_policy()
         add_pattern(policy, "bash", glob_quote(command))
         save_policy(policy)
+
+    def _on_permission_decision(self, decision) -> None:
+        """Permission audit sink: forward each decision to exporters (#227).
+
+        The OTel plugin (when loaded) turns a decision into a
+        ``phoson.permission`` span, so every allow/ask/deny is auditable in
+        the trace — not just the denials that become a tool step. Plugins are
+        looked up lazily on the live engine, so this survives engine rebuilds.
+        """
+        from .session_utils import record_permission_decision
+
+        engine = getattr(self, "engine", None)
+        if engine is None:
+            return
+        record_permission_decision(getattr(engine, "_loaded_plugins", []), decision)
 
     @staticmethod
     def _summarize_args_for_confirm(tool_name: str, args: dict) -> str:

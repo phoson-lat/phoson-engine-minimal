@@ -10,6 +10,33 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Feat
 
+- **agent**: intent taxonomy in the permission gate (#227, phase 1 of #144) —
+  a policy can now be written against *what a call does* (`filesystem_read`,
+  `filesystem_write`, `filesystem_delete`, `network_outbound`,
+  `process_spawn`, `lang_exec`) instead of per-command names. The intent is
+  derived from the tool and its parsed args (for `bash`, a quote-aware parse
+  of the command line, wrappers unwrapped, unknown programs conservatively
+  `process_spawn`), and combined with the tool-name level using
+  **strictest-wins**, so neither rule can loosen the other. `intent_levels` is
+  optional in `permissions.json`: a pre-#227 file behaves exactly as before
+  and MCP/plugin tools keep their level + annotation hints.
+- **agent**: structured permission audit log (#227, phase 3 part) — every
+  decision (allow / ask / deny, granted or refused) emits a
+  `PermissionDecision` to an `on_decision` sink (tool, level, deciding rule,
+  derived intents, non-reversible arg digest). When `phoson_plugin_otel` is
+  enabled each decision becomes a `phoson.permission` child span of the run
+  (`phoson.permission.{tool,level,source,allowed,intents,arg_digest}`), and a
+  denial also rides in the `permission_denied` step payload. The gate never
+  fails because an exporter did.
+- **cli**: LLM permission guardian (#227, phase 3) — an opt-in classifier
+  (`permission_classifier`, off by default) reviews `ask`-level tool calls
+  before a human is bothered. It sees only *genuine user turns* and the
+  proposed action — never the assistant's own messages, tool results or env
+  blocks — so the guarded agent cannot rationalise in front of its guardian.
+  It can deny-and-continue; auto-allow is a separate opt-in; and any
+  error/timeout/ambiguous reply fails closed to UNSURE (never ALLOW).
+  Verdicts are recorded with `source = "classifier"` and exported like every
+  other decision.
 - **cli**: `--trace` for one-shot runs (#139) — emit a structured,
   one-line-per-event JSON trace (`start` / `tool_start` / `tool_done` /
   `step_done` / `done` / `error`) to stderr, so a headless run (`phoson-cli
