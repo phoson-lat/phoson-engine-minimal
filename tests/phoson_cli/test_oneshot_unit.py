@@ -206,7 +206,7 @@ def test_main_oneshot_exits_with_agent_code(monkeypatch, tmp_path) -> None:
     )
     runs: list[str] = []
 
-    async def fake_oneshot(config, task):
+    async def fake_oneshot(config, task, **kwargs):
         runs.append(task)
         return 0
 

@@ -8,6 +8,15 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Feat
+
+- **cli**: `--trace` for one-shot runs (#139) — emit a structured,
+  one-line-per-event JSON trace (`start` / `tool_start` / `tool_done` /
+  `step_done` / `done` / `error`) to stderr, so a headless run (`phoson-cli
+  -p`, scripts, CI, the Harbor / Terminal-Bench adapter) becomes observable
+  without touching the final answer on stdout. Also enabled with
+  `PHOSON_TRACE=1` for callers that cannot pass flags.
+
 ### Fix
 
 - **bench**: keep the nightly aligned with the baseline (#139) — the runner

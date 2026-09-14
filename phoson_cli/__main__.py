@@ -47,6 +47,8 @@ Options:
   --provider <id>      Override the provider for this run
   --theme <tier>       Override the theme: system, dark, light, ansi, no-color
   --max-turns <n>      Override max_iterations for this run
+  --trace              One-shot only: emit a JSON line per agent event
+                       (tool calls, steps, final/error) to stderr
   --classic            Use the classic line-by-line REPL
   --no-fullscreen      Alias for --classic
   --setup              Run the setup wizard
@@ -75,6 +77,7 @@ class CliOptions:
     provider: str | None = None
     theme: str | None = None
     max_turns: int | None = None
+    trace: bool = False
     task: str | None = None
     plugin_args: list[str] | None = None
     bg_args: list[str] | None = None
@@ -150,6 +153,8 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.classic = True
         elif arg in {"-p", "--print"}:
             options.print_mode = True
+        elif arg == "--trace":
+            options.trace = True
         elif arg in {"--model", "--provider", "--theme", "--max-turns"}:
             value = _take_value(argv, i, arg)
             i += 1
@@ -356,12 +361,17 @@ def _read_stdin_task() -> str:
         return ""
 
 
-async def _run_oneshot(config: PhosonConfig, task: str) -> int:
+async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> int:
     """Run a single agent task and print the final content to stdout.
 
     No REPL, no session persistence — intended for scripts and CI.
     Returns 0 on success, 1 on error, 124 when the run hits its
     wall-clock budget (``PHOSON_RUN_BUDGET_SECONDS``; #141).
+
+    When ``trace`` is set (``--trace`` / ``PHOSON_TRACE=1``) a structured
+    JSON trace of the run's agent events (tool calls, steps, final/error)
+    is written to stderr, so the answer on stdout stays byte-clean for
+    callers while the run itself becomes observable (#139).
 
     The one-shot engine carries the **same middleware chain** as the
     interactive REPL (#174/F-02): Offload → Summarizer → Permission.
@@ -407,6 +417,12 @@ async def _run_oneshot(config: PhosonConfig, task: str) -> int:
             summarizer=summarizer,
             permission=permission,
         )
+        # #139: optional structured run trace for headless one-shot. Appended
+        # last (it only implements on_agent_event, so chain order is inert).
+        from phoson_cli.trace import TraceMiddleware, trace_enabled
+
+        if trace or trace_enabled():
+            middlewares.append(TraceMiddleware())
         engine = AgentEngine(
             chat=chat,
             tools=tools,
@@ -575,7 +591,7 @@ def _run_cli() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        sys.exit(asyncio.run(_run_oneshot(config, options.task)))
+        sys.exit(asyncio.run(_run_oneshot(config, options.task, trace=options.trace)))
 
     config_path = Path.home() / ".phoson" / "config.toml"
 
