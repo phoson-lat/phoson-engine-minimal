@@ -39,3 +39,7 @@ docs/superpowers
 # Bench run artifacts (the nightly uploads them as a CI artifact; the
 # auditable baseline is bench/baseline.json, not individual runs).
 /bench/results/
+
+# Local background-job run artifacts (plugin state lives under
+# ~/.phoson/bgjobs/, not in the repo).
+/jobs/
