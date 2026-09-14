@@ -80,9 +80,11 @@ one-shot currently prints only the final content and discards
 
 ## Reference results
 
-Committed baseline (`bench/baseline.json`): **Qwen/Qwen3.8-27B-FP8** on
-local vLLM, 3 runs × 15 tasks = 45 results, **pass rate 1.000, noise
-0.000**, commit `99e076a`, 2026-09-11:
+Previously published reference: **Qwen/Qwen3.8-27B-FP8** on local vLLM, 3
+runs × 15 tasks = 45 results, **pass rate 1.000, noise 0.000**, commit
+`99e076a`, 2026-09-11. (The nightly's committed `bench/baseline.json` now
+targets the free OpenRouter model `nvidia/nemotron-3-ultra-550b-a55b:free`
+and self-seeds its pass rate on the first gated run.)
 
 | Metric | Value |
 |---|---|
@@ -158,13 +160,15 @@ uv run python bench/make_plots.py bench/results/bench-20260911-004146.json
 `.github/workflows/nightly-agent-eval.yml` runs on a schedule (and on
 manual dispatch) and:
 
-1. resolves the target — a dispatch input, else the `BENCH_MODEL` /
-   `BENCH_PROVIDER` repo vars, else **the committed `bench/baseline.json`**
-   (single source of truth, issue #139). A local `ollama` target installs
-   Ollama and pulls the model; a `vllm` target expects an
+1. resolves the target — a dispatch input, else **the committed
+   `bench/baseline.json`** (single source of truth, issue #139), else the
+   `BENCH_MODEL` / `BENCH_PROVIDER` repo vars. The committed baseline
+   targets the free OpenRouter model
+   `nvidia/nemotron-3-ultra-550b-a55b:free` (key via the
+   `OPENROUTER_API_KEY` repo secret); a local `ollama` target installs
+   Ollama and pulls the model, and a `vllm` target expects an
    OpenAI-compatible server (set `BENCH_VLLM_BASE_URL` and, for a
-   self-hosted GPU, the `RUNNER_LABEL` repo variable — the default
-   committed baseline runs `Qwen/Qwen3.8-27B-FP8` on vLLM),
+   self-hosted GPU, the `RUNNER_LABEL` repo variable),
 2. runs the bench `--repeat 3 --gate` (the runner re-enforces the baseline
    alignment above),
 3. publishes the results as an artifact,

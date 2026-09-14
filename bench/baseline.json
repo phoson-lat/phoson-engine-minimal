@@ -1,28 +1,12 @@
 {
-  "model": "Qwen/Qwen3.8-27B-FP8",
-  "provider": "vllm",
-  "commit": "99e076a",
-  "date": "2026-09-11T06:41:46Z",
-  "runs": 3,
-  "pass_rate": 1.0,
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "provider": "openrouter",
+  "commit": "unknown",
+  "date": null,
+  "runs": 0,
+  "pass_rate": null,
   "noise": 0.0,
-  "task_count": 15,
-  "per_task": {
-    "bump-version-files": 1.0,
-    "count-defs-in-tree": 1.0,
-    "create-json-config": 1.0,
-    "create-nested-file": 1.0,
-    "csv-stats": 1.0,
-    "csv-to-json": 1.0,
-    "find-call-sites": 1.0,
-    "fix-deep-traceback": 1.0,
-    "fix-failing-script": 1.0,
-    "fix-import-error": 1.0,
-    "locate-definition": 1.0,
-    "log-error-count": 1.0,
-    "merge-sorted-lists": 1.0,
-    "parse-noisy-config": 1.0,
-    "rename-symbol": 1.0
-  },
-  "status": "recorded"
+  "task_count": 0,
+  "per_task": {},
+  "status": "pending"
 }

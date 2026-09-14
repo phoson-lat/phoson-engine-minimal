@@ -62,6 +62,10 @@ jobs:
     env:
       OLLAMA_BASE_URL: http://localhost:11434
       VLLM_BASE_URL: ${{ vars.BENCH_VLLM_BASE_URL || 'http://localhost:8000/v1' }}
+      # (B) OpenRouter target: the key comes from a repo secret. The model
+      # comes from bench/baseline.json (or BENCH_MODEL), so the nightly runs
+      # exactly the target the baseline was measured with.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       BENCH_MODEL_VAR: ${{ vars.BENCH_MODEL }}
       BENCH_PROVIDER_VAR: ${{ vars.BENCH_PROVIDER }}
 
