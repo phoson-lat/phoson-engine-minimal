@@ -193,3 +193,21 @@ def test_run_per_task_rates_averages_across_repeats() -> None:
 def test_empty_results() -> None:
     assert B.run_pass_rates([]) == []
     assert B.run_per_task_rates([]) == {}
+
+
+# ── baseline target (nightly/baseline alignment, issue #139) ──────────────────
+
+
+def test_baseline_target_reads_model_and_provider() -> None:
+    assert B.baseline_target({"model": "m", "provider": "p"}) == ("m", "p")
+
+
+def test_baseline_target_missing_doc_is_none() -> None:
+    assert B.baseline_target(None) == (None, None)
+    assert B.baseline_target({}) == (None, None)
+
+
+def test_baseline_target_blank_values_degrade_to_none() -> None:
+    # A bootstrap sentinel has no model/provider recorded.
+    doc = {"pass_rate": None, "model": "", "provider": None, "status": "pending"}
+    assert B.baseline_target(doc) == (None, None)

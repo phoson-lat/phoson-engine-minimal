@@ -136,9 +136,18 @@ uv run python bench/make_plots.py bench/results/bench-20260911-004146.json
   (the CLI resolves these env → config.toml → default). Any value inherited
   from your own shell is dropped first, so a dev `PHOSON_MODEL` can't quietly
   re-target a baseline run (issue #138). The resolved target is printed up
-  front (`Target: <model> @ <provider> (config.toml|--model/--provider)`)
+  front (`Target: <model> @ <provider> (config.toml|--model/--provider|baseline.json)`)
   and recorded in the results JSON, so every saved run states exactly what
   it ran against — even when nothing was pinned (issue #139).
+- **Baseline alignment (`--gate`).** A pass rate is only "no regression"
+  relative to the exact model+provider the baseline was measured with, so a
+  gated run with an unpinned side **adopts that side from
+  `bench/baseline.json`** — the baseline file is the single source of truth
+  and the nightly can never drift to a different model than the one it is
+  compared against (issue #139). An explicit `--model`/`--provider` still
+  wins, but a pin that contradicts the baseline prints a loud warning,
+  because that comparison is not meaningful; use `--gate --bootstrap` to
+  deliberately re-target and re-seed.
 - The agent's `bash` tool inherits the benchmark process cwd, so all
   tasks execute inside the temp workspace.
 - Each `bench/results/*.json` records the effective `model`, `provider` and
@@ -149,15 +158,20 @@ uv run python bench/make_plots.py bench/results/bench-20260911-004146.json
 `.github/workflows/nightly-agent-eval.yml` runs on a schedule (and on
 manual dispatch) and:
 
-1. installs Ollama + pulls a **fixed local model** (default
-   `qwen2.5:1.5b`; override via the `BENCH_MODEL` / `BENCH_PROVIDER`
-   repo vars or the dispatch inputs — pass the bare model tag, the
-   workflow strips any leading `ollama/` prefix),
-2. runs the bench `--repeat 3 --gate`,
+1. resolves the target — a dispatch input, else the `BENCH_MODEL` /
+   `BENCH_PROVIDER` repo vars, else **the committed `bench/baseline.json`**
+   (single source of truth, issue #139). A local `ollama` target installs
+   Ollama and pulls the model; a `vllm` target expects an
+   OpenAI-compatible server (set `BENCH_VLLM_BASE_URL` and, for a
+   self-hosted GPU, the `RUNNER_LABEL` repo variable — the default
+   committed baseline runs `Qwen/Qwen3.8-27B-FP8` on vLLM),
+2. runs the bench `--repeat 3 --gate` (the runner re-enforces the baseline
+   alignment above),
 3. publishes the results as an artifact,
-4. commits the self-seeded baseline back to `main` (only on the first real
-   run, when the sentinel is replaced with data), and
+4. commits the self-seeded baseline back to `main` (only when a
+   `pass_rate: null` sentinel is replaced with data), and
 5. fails the run if the gate reports a regression.
 
-The baseline is tied to a specific local model + commit; re-seed it
-(`--gate --bootstrap`) whenever you change the model or the eval set.
+The baseline is tied to a specific model + provider + commit; re-seed it
+(`--gate --bootstrap`) whenever you change the model or the eval set, and
+the nightly will follow the new target automatically.

@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fix
+
+- **bench**: keep the nightly aligned with the baseline (#139) — the runner
+  now makes `bench/baseline.json` the single source of truth for a gated
+  run's target: an unpinned `--model`/`--provider` adopts the baseline's
+  recorded model/provider (a pass rate is only "no regression" relative to
+  the exact target the baseline was measured with), and a pin that
+  contradicts the baseline warns loudly instead of silently comparing
+  across models. The nightly workflow resolves its default target from the
+  baseline (instead of a hardcoded `qwen2.5:1.5b`) and wires
+  `BENCH_VLLM_BASE_URL`, so the drift that kept the gate red can no longer
+  happen.
+
+---
+
 ## v0.33.0 (2026-09-11)
 
 ### Feat

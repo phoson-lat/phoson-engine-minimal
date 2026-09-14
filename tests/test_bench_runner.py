@@ -386,3 +386,75 @@ def test_effective_target_malformed_config_degrades_to_unknown(bench, tmp_path) 
         "unknown",
         "unknown",
     )
+
+
+# ── gated run adopts the baseline target (issue #139) ──────────────────────
+
+
+def _baseline_file(tmp_path, model="Qwen/Qwen3.8-27B-FP8", provider="vllm"):
+    p = tmp_path / "baseline.json"
+    p.write_text(
+        json.dumps(
+            {
+                "pass_rate": 1.0,
+                "noise": 0.0,
+                "model": model,
+                "provider": provider,
+                "per_task": {},
+            }
+        )
+    )
+    return p
+
+
+def test_gated_run_adopts_baseline_target_when_unpinned(bench, tmp_path) -> None:
+    """No pin + --gate → the run uses the baseline's model/provider, so the
+    nightly can never drift from the baseline it is compared against (#139)."""
+    p = _baseline_file(tmp_path)
+    model, provider, source = bench._resolve_run_target(
+        None, None, p, gate=True, bootstrap=False
+    )
+    assert (model, provider) == ("Qwen/Qwen3.8-27B-FP8", "vllm")
+    assert source == "baseline.json"
+
+
+def test_gated_run_partial_pin_adopts_from_baseline(bench, tmp_path) -> None:
+    p = _baseline_file(tmp_path)
+    model, provider, source = bench._resolve_run_target(
+        "openai/gpt-4o", None, p, gate=True, bootstrap=False
+    )
+    assert model == "openai/gpt-4o"  # pin wins
+    assert provider == "vllm"  # unpinned side adopts the baseline
+    assert source == "--model/--provider"
+
+
+def test_pin_contradicting_baseline_warns(bench, tmp_path, capsys) -> None:
+    p = _baseline_file(tmp_path)
+    model, provider, _ = bench._resolve_run_target(
+        "other/model", "ollama", p, gate=True, bootstrap=False
+    )
+    assert (model, provider) == ("other/model", "ollama")  # explicit pin wins
+    out = capsys.readouterr().out
+    assert "differs from baseline" in out
+
+
+def test_ungated_run_does_not_adopt_baseline(bench, tmp_path) -> None:
+    """Without --gate there is no comparison to align with; the target stays
+    whatever the caller pinned (else config.toml)."""
+    p = _baseline_file(tmp_path)
+    model, provider, source = bench._resolve_run_target(
+        None, None, p, gate=False, bootstrap=False
+    )
+    assert (model, provider) == (None, None)
+    assert source == "config.toml"
+
+
+def test_bootstrap_does_not_adopt_baseline(bench, tmp_path) -> None:
+    """--bootstrap deliberately (re)seeds the baseline, so it must run the
+    caller's target, not the old baseline's."""
+    p = _baseline_file(tmp_path)
+    model, provider, source = bench._resolve_run_target(
+        None, None, p, gate=True, bootstrap=True
+    )
+    assert (model, provider) == (None, None)
+    assert source == "config.toml"

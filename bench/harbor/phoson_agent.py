@@ -10,16 +10,24 @@ Usage (from this repo):
 
     uv tool install harbor
     harbor run -d "terminal-bench/terminal-bench@<version>" \\
-        --agent bench/harbor/phoson_agent.py:PhosonAgent \\
-        --model <provider/model> \\
-        --env docker
+        --agent bench.harbor.phoson_agent:PhosonAgent \\
+        --env docker \\
+        --ae PHOSON_PROVIDER=vllm \\
+        --ae PHOSON_MODEL=<model> \\
+        --ae VLLM_BASE_URL=<openai-compatible base url>
 
 Model/provider/credentials are resolved by phoson-cli's normal chain
-(env -> config.toml -> defaults) INSIDE the container, so forward the
-API key as an env var on the harbor run (e.g. OPENROUTER_API_KEY=...
-harbor run ...) or pre-seed a config.toml in the container image.
+(env -> config.toml -> defaults) INSIDE the container. Harbor does **not**
+forward the host environment, so they must be passed with
+``--ae/--agent-env KEY=VALUE`` (host ``export``s never cross into the
+container). Export ``PYTHONPATH`` to the repo root so this module is
+importable when ``--agent`` is given as a module path.
 
-Note: pin the dataset version in `-d` — Terminal-Bench is a continuous
+Install uses ``uv tool install`` (an isolated venv, so it works on the
+PEP 668 "externally managed" task images where a bare ``pip install``
+fails), with a ``pip --break-system-packages`` fallback.
+
+Note: pin the dataset version in ``-d`` — Terminal-Bench is a continuous
 benchmark, and results are only comparable across the same dataset tag.
 """
 
@@ -33,8 +41,33 @@ from harbor.agents.installed.base import (
 )
 
 #: phoson-engine-minimal is published to PyPI; core tools are stdlib-only,
-#: so no extras are needed for terminal tasks.
-_INSTALL_CMD = "pip install --quiet --disable-pip-version-check phoson-engine-minimal"
+#: so no extras are needed for terminal tasks. ``uv tool install`` puts an
+#: isolated venv + a ``phoson-cli`` shim in ``~/.local/bin`` and sidesteps
+#: PEP 668 (images that mark the system Python "externally managed" reject a
+#: plain ``pip install`` — e.g. terminal-bench/data-anonymization). Fall back
+#: to ``pip --break-system-packages`` when ``uv`` cannot be bootstrapped.
+_INSTALL_CMD = (
+    "set -uo pipefail; "
+    "command -v uv >/dev/null 2>&1 || "
+    "  curl -LsSf https://astral.sh/uv/install.sh | sh || true; "
+    '[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"; '
+    'export PATH="$HOME/.local/bin:$PATH"; '
+    "if command -v uv >/dev/null 2>&1; then "
+    "  uv tool install phoson-engine-minimal; "
+    "else "
+    "  pip install --quiet --disable-pip-version-check "
+    "    --break-system-packages phoson-engine-minimal; "
+    "fi; "
+    "command -v phoson-cli"
+)
+
+#: ``phoson-cli`` lives in ``~/.local/bin`` after a ``uv tool install``; make
+#: sure every agent exec sees it on PATH (``docker exec`` starts a fresh
+#: shell that does not source the uv env).
+_PATH_PRELUDE = (
+    '[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"; '
+    'export PATH="$HOME/.local/bin:$PATH"; '
+)
 
 
 class PhosonAgent(BaseInstalledAgent):
@@ -50,6 +83,7 @@ class PhosonAgent(BaseInstalledAgent):
         return "0.31.2"
 
     async def install(self, environment: BaseEnvironment) -> None:
+        await self.ensure_system_dependencies(environment, ("curl",))
         await self.exec_as_agent(environment, command=_INSTALL_CMD)
 
     @with_prompt_template
@@ -62,13 +96,31 @@ class PhosonAgent(BaseInstalledAgent):
         # One-shot mode: no TTY, no session — the CLI resolves
         # PHOSON_MODEL/PHOSON_PROVIDER (env -> config.toml -> default) and
         # runs the task until it finishes or the budget is hit.
+        #
+        # No ``cwd`` is passed on purpose: Harbor defaults to the task's
+        # workdir, or the image's WORKDIR when unset — which for
+        # terminal-bench is ``/app``. Hardcoding ``/app`` would break tasks
+        # whose image uses a different WORKDIR.
+        #
+        # ``tee`` the full transcript into the environment's agent logs dir
+        # (/logs/agent, mounted back to the trial's ``agent/`` dir). The
+        # one-shot mode prints only the final content to stdout, so without
+        # this the run is invisible. ``_exec`` prepends ``set -o pipefail``,
+        # so a non-zero phoson-cli exit still fails the command through the
+        # pipe.
+        transcript = self.environment_logs_dir / "phoson.txt"
         await self.exec_as_agent(
             environment,
-            command=f"phoson-cli {shlex.quote(instruction)}",
+            command=(
+                f"{_PATH_PRELUDE}"
+                f"phoson-cli {shlex.quote(instruction)} "
+                f"2>&1 | tee {shlex.quote(str(transcript))}"
+            ),
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:
-        # phoson-cli prints the final content to stdout, which Harbor
-        # captures from the exec stream; no separate trajectory file to
-        # parse yet (sessions live in ~/.phoson/sessions if enabled).
+        # ``run`` persists the full transcript to /logs/agent/phoson.txt via
+        # ``tee`` (one-shot prints only the final content to stdout), so
+        # there is no structured trajectory yet to parse into token/cost
+        # metrics here.
         return None

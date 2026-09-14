@@ -2,15 +2,25 @@ name: nightly-agent-eval
 
 # No-regression gate for the agent eval set (issue #139 / H-1).
 #
-# Runs the deterministic bench at least 3 times against a FIXED LOCAL model
-# (Ollama) so the harness's quality is measured on the regime where it pays
-# off (no API key, free, reproducible). Fails if the pass rate drops below
-# the committed baseline minus the measured run-to-run noise; ties are
-# rejected.
+# Runs the deterministic bench at least 3 times against a FIXED model and
+# fails if the pass rate drops below the committed baseline minus the
+# measured run-to-run noise.
 #
-# Bootstrap: the committed bench/baseline.json is a `pass_rate: null`
-# sentinel, so the first real run self-seeds it — the workflow then commits
-# the measured baseline back to main, and every later night gates against it.
+# Single source of truth: when no model/provider override is given, the
+# target is read from the committed bench/baseline.json. A pass rate is
+# only "no regression" relative to the exact model+provider the baseline
+# was measured with, so deriving both from the baseline makes the drift
+# that kept this nightly red (issue #139) impossible. The bench runner
+# enforces the same rule when `--gate` is passed.
+#
+# Override precedence: workflow_dispatch input → BENCH_MODEL/BENCH_PROVIDER
+# repo variable → bench/baseline.json.
+#
+# Bootstrap: a committed `baseline.json` with `pass_rate: null` is a
+# sentinel, so the first real gated run self-seeds it — the workflow then
+# commits the measured baseline back to main, and every later night gates
+# against it. A maintainer can also re-seed deliberately with the
+# `bootstrap` dispatch input.
 
 on:
   schedule:
@@ -18,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model (provider/model, e.g. ollama/qwen2.5:1.5b)"
+        description: "Model (provider/model, e.g. Qwen/Qwen3.8-27B-FP8)"
         required: false
         default: ""
       provider:
@@ -43,13 +53,17 @@ concurrency:
 
 jobs:
   agent-eval:
-    # Default to a normal hosted runner (installs Ollama itself). Override
-    # with a repo variable RUNNER_LABEL (e.g. a self-hosted GPU runner) if
-    # you prefer to keep the model pre-loaded.
+    # Default to a normal hosted runner (installs Ollama itself for local
+    # ollama targets). For a self-hosted GPU that serves the baseline model
+    # through vLLM, set the RUNNER_LABEL repo variable (e.g. a GPU runner)
+    # and BENCH_VLLM_BASE_URL to the server's OpenAI-compatible endpoint.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 180
     env:
       OLLAMA_BASE_URL: http://localhost:11434
+      VLLM_BASE_URL: ${{ vars.BENCH_VLLM_BASE_URL || 'http://localhost:8000/v1' }}
+      BENCH_MODEL_VAR: ${{ vars.BENCH_MODEL }}
+      BENCH_PROVIDER_VAR: ${{ vars.BENCH_PROVIDER }}
 
     steps:
       - name: Checkout
@@ -62,8 +76,17 @@ jobs:
         run: |
           model="${{ inputs.model }}"
           provider="${{ inputs.provider }}"
-          [ -z "$model" ] && model="${{ vars.BENCH_MODEL || 'qwen2.5:1.5b' }}"
-          [ -z "$provider" ] && provider="${{ vars.BENCH_PROVIDER || 'ollama' }}"
+          # Single source of truth (issue #139): no override → read the
+          # target the committed baseline was measured with, so nightly and
+          # baseline can never drift apart. A null/absent sentinel yields an
+          # empty target, which the runner resolves from config.toml and the
+          # first real run re-seeds.
+          base_model="$(python3 -c 'import json;print(json.load(open("bench/baseline.json")).get("model") or "")' 2>/dev/null || true)"
+          base_provider="$(python3 -c 'import json;print(json.load(open("bench/baseline.json")).get("provider") or "")' 2>/dev/null || true)"
+          [ -z "$model" ] && model="$base_model"
+          [ -z "$model" ] && model="$BENCH_MODEL_VAR"
+          [ -z "$provider" ] && provider="$base_provider"
+          [ -z "$provider" ] && provider="$BENCH_PROVIDER_VAR"
           # Local providers (ollama/vllm/lmstudio) expect the BARE model tag,
           # not an `ollama/...` slug — the adapter sends config.model verbatim
           # to the provider API. Strip a leading provider/ prefix defensively
@@ -74,6 +97,7 @@ jobs:
           model="${model#lmstudio/}"
           echo "model=$model" >> "$GITHUB_OUTPUT"
           echo "provider=$provider" >> "$GITHUB_OUTPUT"
+
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v6

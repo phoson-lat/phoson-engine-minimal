@@ -261,6 +261,26 @@ def baseline_per_task(doc: dict[str, Any] | None) -> dict[str, float]:
     return {k: float(v) for k, v in per.items()}
 
 
+def baseline_target(doc: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    """The ``(model, provider)`` a baseline was measured with (issue #139).
+
+    A gated run must use the *same* target as the baseline it compares
+    against: a pass rate only means "no regression" relative to the exact
+    model+provider that produced the baseline. Exposing the recorded
+    target lets the runner adopt it when the caller pins nothing, so the
+    nightly can never silently drift to a different model than the
+    committed baseline. Missing/blank values degrade to ``None``.
+    """
+    if not doc:
+        return None, None
+    model = doc.get("model")
+    provider = doc.get("provider")
+    return (
+        str(model) if model else None,
+        str(provider) if provider else None,
+    )
+
+
 def run_pass_rates(results: list[Any]) -> list[float]:
     """Turn a flat list of per-(repeat × task) results into per-run rates.
 

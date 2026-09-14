@@ -172,6 +172,62 @@ def run_task(task: dict, model: str | None, provider: str | None) -> TaskResult:
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def _resolve_run_target(
+    pinned_model: str | None,
+    pinned_provider: str | None,
+    baseline_path: str | Path,
+    *,
+    gate: bool,
+    bootstrap: bool,
+) -> tuple[str | None, str | None, str]:
+    """Resolve the target a run will use, enforcing baseline alignment.
+
+    Returns ``(model, provider, source)`` where ``source`` is the audit
+    label (``"--model/--provider"``, ``"baseline.json"`` or
+    ``"config.toml"``).
+
+    On a gated run the comparison is only meaningful against the exact
+    target the baseline was measured with, so an unpinned side adopts the
+    baseline's recorded model/provider (issue #139). An explicit pin still
+    wins — a maintainer may deliberately re-target — but a pin that
+    contradicts the baseline prints a loud warning because the gate would
+    then compare across models/providers. ``--bootstrap`` deliberately
+    (re)seeds, so no adoption happens: the pin (or config.toml) defines the
+    new baseline.
+    """
+    run_model, run_provider = pinned_model, pinned_provider
+    adopted = False
+    if gate and not bootstrap:
+        doc = B.load_baseline(baseline_path)
+        base_model, base_provider = B.baseline_target(doc)
+        if run_model is None and base_model:
+            run_model = base_model
+            adopted = True
+        if run_provider is None and base_provider:
+            run_provider = base_provider
+            adopted = True
+        if pinned_model and base_model and pinned_model != base_model:
+            print(
+                f"⚠️  pinned model {pinned_model!r} differs from baseline "
+                f"{base_model!r} — the gate compares across models, which is "
+                "not meaningful (re-seed with --bootstrap to re-target)."
+            )
+        if pinned_provider and base_provider and pinned_provider != base_provider:
+            print(
+                f"⚠️  pinned provider {pinned_provider!r} differs from baseline "
+                f"{base_provider!r} — the gate compares across providers, "
+                "which is not meaningful (re-seed with --bootstrap)."
+            )
+
+    if pinned_model or pinned_provider:
+        source = "--model/--provider"
+    elif adopted:
+        source = "baseline.json"
+    else:
+        source = "config.toml"
+    return run_model, run_provider, source
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", help="run only tasks whose name contains it")
@@ -216,11 +272,18 @@ def main(argv: list[str] | None = None) -> int:
         print("No tasks found.")
         return 1
 
-    # What this run actually uses (pinned flag, else config.toml → default).
-    # Recorded in the results JSON and the gate so baselines stay auditable
-    # (issue #139).
-    target_model, target_provider = _effective_target(args.model, args.provider)
-    source = "--model/--provider" if (args.model or args.provider) else "config.toml"
+    # A gated run must use the *same* target as the baseline it compares
+    # against (issue #139): a pass rate is only "no regression" relative to
+    # the exact model+provider the baseline was measured with. Resolve the
+    # run's target before executing anything.
+    run_model, run_provider, source = _resolve_run_target(
+        args.model,
+        args.provider,
+        args.baseline,
+        gate=args.gate,
+        bootstrap=args.bootstrap,
+    )
+    target_model, target_provider = _effective_target(run_model, run_provider)
     print(f"Target: {target_model} @ {target_provider} ({source})")
 
     results: list[TaskResult] = []
@@ -228,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         for task in tasks:
             label = task["name"] if args.repeat == 1 else f"{task['name']}#{i + 1}"
             print(f"▶ running {label} ...", flush=True)
-            r = run_task(task, args.model, args.provider)
+            r = run_task(task, run_model, run_provider)
             r.name = label
             results.append(r)
             mark = "✅" if r.passed else "❌"
