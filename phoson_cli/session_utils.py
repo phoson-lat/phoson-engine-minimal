@@ -13,6 +13,7 @@ import warnings
 from typing import Any
 from pathlib import Path
 from datetime import UTC, datetime
+from collections.abc import Iterable
 
 from phoson_agent import Plugin
 from phoson_agent.middleware import (
@@ -568,6 +569,28 @@ def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
         if hasattr(plugin, "drain_pending_wakes"):
             return plugin
     return None
+
+
+def record_permission_decision(plugins: Iterable[Plugin], decision: Any) -> None:
+    """Fan a permission decision out to every plugin that can export it (#227).
+
+    Duck-typed on ``record_permission`` so the OTel plugin (which turns the
+    decision into a ``phoson.permission`` span) is picked up without importing
+    it here. Best-effort: a misbehaving exporter must never break the gate, so
+    each call is guarded and failures are logged.
+    """
+    for plugin in plugins:
+        recorder = getattr(plugin, "record_permission", None)
+        if not callable(recorder):
+            continue
+        try:
+            recorder(decision)
+        except Exception:  # noqa: BLE001 — observability must never block a run
+            _LOGGER.warning(
+                "Plugin %r failed to record a permission decision",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
 
 
 async def drain_monitor_wakes(

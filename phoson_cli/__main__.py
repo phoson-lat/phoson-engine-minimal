@@ -394,6 +394,7 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         build_middlewares,
         engine_prompt_tools,
     )
+    from phoson_cli.guard_classifier import build_permission_classifier
     from phoson_cli.permissions_store import (
         apply_tool_hints,
         build_permission_middleware,
@@ -410,7 +411,12 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         # Internal summary call must not carry the run's tool schemas
         # (F-11 / #176): route it through the tool-free chat client.
         summarizer.chat = chat
-        permission = build_permission_middleware(on_ask=None)
+        permission = build_permission_middleware(
+            on_ask=None,
+            classifier=build_permission_classifier(config, lambda: chat),
+            classifier_auto_allow=config.permission_classifier_auto_allow,
+            classifier_timeout_s=config.permission_classifier_timeout_s,
+        )
         middlewares = build_middlewares(
             config=config,
             offload=offload,
@@ -435,6 +441,13 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         # One-shot has no confirmation callback, so an annotated MCP tool that
         # is not read-only resolves to ask → refused (fail closed).
         apply_tool_hints(permission.policy, engine.tools)
+        # #227 phase 3: forward every permission decision to exporters (the
+        # OTel plugin, when enabled) now that the plugins are loaded.
+        from phoson_cli.session_utils import record_permission_decision
+
+        permission.on_decision = lambda decision: record_permission_decision(
+            getattr(engine, "_loaded_plugins", []), decision
+        )
         # Same sub-agent runtime context as the interactive REPL.
         engine.context.extra["safe_mode"] = config.safe_mode
         engine.context.extra["middlewares"] = middlewares

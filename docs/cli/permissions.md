@@ -40,6 +40,95 @@ A pattern matches *one program's invocation* — a **single simple command**
 - Interactive "always allow" grants (the `[a]` on the bash confirmation
   card) are subject to the same simple-command rule.
 
+## Intent taxonomy (issue #227, phase 1)
+
+Instead of listing every command by name you can write the policy against
+**what a call does** — its *intent*. The gate derives the intent from the
+tool and its parsed arguments (for `bash`, by parsing the command line) and
+resolves the call to the **strictest** applicable rule:
+
+| Intent | Derivation examples |
+|---|---|
+| `filesystem_read` | `read_file`, `list_dir`, `grep`, `glob`; `ls`, `cat`, `grep`, `find` (without `-exec`/`-delete`) |
+| `filesystem_write` | `write_file`, `patch_file`; `cp`, `mv`, `mkdir`, `chmod`, `sed -i`, `>` redirection |
+| `filesystem_delete` | `rm`, `rmdir`, `unlink`, `shred`; `find … -delete` |
+| `network_outbound` | `web_fetch`, `web_search`; `curl`, `wget`, `ssh`, `scp`, `rsync`, roaming package managers |
+| `process_spawn` | any program not otherwise classified (the catch-all) |
+| `lang_exec` | interpreters/evaluators: `python`, `node`, `bash`, `make`, `gcc`, … |
+
+Write the policy in `intent_levels`:
+
+```json
+{
+  "intent_levels": {
+    "filesystem_read": "allow",
+    "filesystem_write": "ask",
+    "filesystem_delete": "deny",
+    "network_outbound": "deny",
+    "process_spawn": "ask",
+    "lang_exec": "ask"
+  }
+}
+```
+
+With that policy `bash("ls")` is allowed and `bash("rm -rf /")` is denied —
+**without naming either command**. A compound line runs several programs, so
+its intents are the union and the strictest wins (`ls; rm -rf /` → deny).
+
+**Precedence and migration.** An allow-pattern hit still short-circuits to
+`allow`. Otherwise the tool-name level (`levels`) and the intent level are
+combined with *strictest-wins* — neither can loosen the other — so a
+`bash: deny` stays a kill-switch and an intent rule can only tighten it.
+`intent_levels` is optional: a `permissions.json` written before #227 has no
+such key and behaves **exactly** as before, and tools whose intent cannot be
+derived (MCP/plugin tools) keep their tool-name level and annotation hints.
+
+**Audit log.** Every decision produces a structured `PermissionDecision`
+(tool, level, deciding rule, derived intents, and a non-reversible argument
+digest) delivered to the `on_decision` sink. When `phoson_plugin_otel` is
+enabled, the CLI forwards each one to it and it becomes a
+`phoson.permission` child span of the run
+(`phoson.permission.{tool,level,source,allowed,intents,arg_digest}`), so the
+whole allow/ask/deny trail is auditable in the trace — a denial additionally
+rides in the `permission_denied` step payload. The gate is best-effort about
+observability: a failing sink or exporter is logged and skipped, never
+allowed to block (or approve) a call.
+
+## LLM guardian (classifier, issue #227, phase 3)
+
+An **opt-in** classifier can review the calls the deterministic gate would
+`ask` before a human is bothered. It is off by default:
+
+```toml
+# ~/.phoson/config.toml
+permission_classifier = true
+permission_classifier_model = "openai/gpt-5-mini"   # empty → the main model
+permission_classifier_auto_allow = false            # true → ALLOW skips the prompt
+permission_classifier_timeout_s = 8.0
+```
+
+Or via the env vars `PHOSON_PERMISSION_CLASSIFIER`,
+`PHOSON_PERMISSION_CLASSIFIER_MODEL`,
+`PHOSON_PERMISSION_CLASSIFIER_AUTO_ALLOW`, `PHOSON_PERMISSION_CLASSIFIER_TIMEOUT`.
+
+**What the guardian sees.** Only *genuine user turns* and the proposed action.
+Assistant messages (text and reasoning), tool results and `[env: …]` blocks
+are **never** included — the guardian judges the action against the user's
+intent, so the guarded agent cannot rationalise in front of its own guard.
+
+**Contract (tightening-only, fail-closed):**
+
+- consulted **only** when the deterministic policy resolves the call to `ask`
+  (an `allow` short-circuits, a `deny` never consults it);
+- `DENY` refuses the call and the run continues;
+- `ALLOW` still asks a human unless `permission_classifier_auto_allow = true`;
+- `UNSURE`, an unparseable reply, a timeout or any classifier error degrades
+  to the deterministic behaviour (human, or fail-closed without one) — it can
+  never turn into an `ALLOW`.
+
+The verdict is recorded with `source = "classifier"`, so it is visible in the
+audit log and the OTel trace like every other decision.
+
 **Scope.** The policy applies to *every* engine the CLI builds, not just
 the interactive REPL:
 

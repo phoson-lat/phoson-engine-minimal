@@ -114,7 +114,21 @@ def load_policy(path: Path | None = None) -> PermissionPolicy:
                 if cleaned:
                     allow_patterns[str(tool)] = cleaned
 
-    return PermissionPolicy(levels=levels, allow_patterns=allow_patterns)
+    # #227 phase 1: optional intent taxonomy. Absent in pre-#227 files, so
+    # an existing permissions.json keeps working unchanged.
+    intent_raw = raw.get("intent_levels", {})
+    intent_levels: dict[str, str] = {}
+    if isinstance(intent_raw, dict):
+        for intent, value in intent_raw.items():
+            level = _normalize_level(value)
+            if level is not None:
+                intent_levels[str(intent)] = level
+
+    return PermissionPolicy(
+        levels=levels,
+        allow_patterns=allow_patterns,
+        intent_levels=intent_levels,
+    )
 
 
 def save_policy(
@@ -131,6 +145,10 @@ def save_policy(
             for tool, patterns in sorted(policy.allow_patterns.items())
         },
     }
+    # Only emit intent_levels when the user actually wrote some: keeps the
+    # file a pre-#227 shape for everyone who has not opted in.
+    if policy.intent_levels:
+        payload["intent_levels"] = dict(sorted(policy.intent_levels.items()))
     policy_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     try:
         policy_path.chmod(0o600)
@@ -158,6 +176,26 @@ def add_pattern(policy: PermissionPolicy, tool: str, pattern: str) -> None:
     patterns = policy.allow_patterns.setdefault(tool, [])
     if pattern not in patterns:
         patterns.append(pattern)
+
+
+def set_intent_level(policy: PermissionPolicy, intent: str, level: str) -> bool:
+    """Set an intent category's level in-place (#227 phase 1).
+
+    Returns False for an unknown intent or an invalid level. ``allow`` drops
+    the entry (it is the fallback), mirroring :func:`set_level`.
+    """
+    from phoson_agent.intents import VALID_INTENTS
+
+    if intent not in VALID_INTENTS:
+        return False
+    normalized = _normalize_level(level)
+    if normalized is None:
+        return False
+    if normalized == LEVEL_ALLOW:
+        policy.intent_levels.pop(intent, None)
+    else:
+        policy.intent_levels[intent] = normalized
+    return True
 
 
 def glob_quote(text: str) -> str:
@@ -189,18 +227,28 @@ def build_permission_middleware(
     *,
     policy_path: Path | None = None,
     on_ask=None,
+    on_decision=None,
+    classifier=None,
+    classifier_auto_allow: bool = False,
+    classifier_timeout_s: float = 8.0,
 ) -> PermissionMiddleware:
     """Build the middleware wired to the durable store.
 
     ``on_ask`` is the interactive callback ``(tool_name, args) -> bool``
     provided by the front end; omitted in non-interactive contexts, where
-    ``ask`` fails closed.
+    ``ask`` fails closed. ``on_decision`` is the optional audit sink called
+    once per decision (#227 phase 3). ``classifier`` is the optional LLM
+    guardian consulted at ``ask`` (#227 phase 3).
     """
     policy = load_policy(path=policy_path)
     return PermissionMiddleware(
         policy=policy,
         on_ask=on_ask,
         match_args=dict(MATCH_ARGS),
+        on_decision=on_decision,
+        classifier=classifier,
+        classifier_auto_allow=classifier_auto_allow,
+        classifier_timeout_s=classifier_timeout_s,
     )
 
 
@@ -237,5 +285,6 @@ __all__ = [
     "load_policy",
     "remove_pattern",
     "save_policy",
+    "set_intent_level",
     "set_level",
 ]

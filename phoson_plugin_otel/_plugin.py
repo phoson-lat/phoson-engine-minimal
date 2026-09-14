@@ -392,6 +392,16 @@ class PhosonOtelPlugin(Plugin):
         assert self._middleware is not None
         return [self._middleware]
 
+    def record_permission(self, decision) -> None:
+        """Record a permission decision on the active run's trace (#227).
+
+        Called by the host's permission audit sink (duck-typed, like
+        ``find_monitor_plugin``). A no-op when no run is active.
+        """
+        middleware = self._middleware
+        if middleware is not None:
+            middleware.record_permission(decision)
+
     def _export(self, state: _RunState) -> None:
         """Ship a finished run's trace to the configured sink (best-effort)."""
         sink = self._sink

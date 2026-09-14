@@ -162,6 +162,17 @@ class PhosonConfig:
     otel_service_name: str = "phoson"
     otel_file_path: Path = Path(".phoson/trace.json")
     otel_endpoint: str = ""
+    # LLM permission guardian (#227 phase 3): an opt-in classifier that
+    # reviews ``ask``-level tool calls before a human is bothered. Off by
+    # default — it costs one extra model call per ambiguous action. The
+    # guardian is shown only the user's request and the proposed action,
+    # never the assistant's own messages (so it cannot be rationalised).
+    # ``..._auto_allow`` lets an ALLOW verdict skip the human prompt for an
+    # ``ask`` call; it is off by default so the guardian can only *deny*.
+    permission_classifier: bool = False
+    permission_classifier_model: str = ""
+    permission_classifier_auto_allow: bool = False
+    permission_classifier_timeout_s: float = 8.0
     # Third-party engine/CLI plugin specifications. They use the same
     # string/dict forms accepted by AgentEngine and are loaded in addition to
     # the optional MCP plugin. Config-file entries are data only; direct Plugin
@@ -829,6 +840,30 @@ def load_config() -> PhosonConfig:
         ).expanduser(),
         otel_endpoint=_resolve_str(
             "PHOSON_OTEL_ENDPOINT", "otel_endpoint", fd, d.otel_endpoint
+        ),
+        permission_classifier=_resolve_bool(
+            "PHOSON_PERMISSION_CLASSIFIER",
+            "permission_classifier",
+            fd,
+            d.permission_classifier,
+        ),
+        permission_classifier_model=_resolve_str(
+            "PHOSON_PERMISSION_CLASSIFIER_MODEL",
+            "permission_classifier_model",
+            fd,
+            d.permission_classifier_model,
+        ),
+        permission_classifier_auto_allow=_resolve_bool(
+            "PHOSON_PERMISSION_CLASSIFIER_AUTO_ALLOW",
+            "permission_classifier_auto_allow",
+            fd,
+            d.permission_classifier_auto_allow,
+        ),
+        permission_classifier_timeout_s=_resolve_float(
+            "PHOSON_PERMISSION_CLASSIFIER_TIMEOUT",
+            "permission_classifier_timeout_s",
+            fd,
+            d.permission_classifier_timeout_s,
         ),
         plugins=_resolve_plugins(fd),
         disabled_plugins=_validate_plugin_specs(

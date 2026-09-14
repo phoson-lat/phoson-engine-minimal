@@ -29,16 +29,30 @@ message to the model as the tool result, so the refusal is visible to
 both the user and the agent.
 """
 
+import json
+import asyncio
 import fnmatch
+import hashlib
+import logging
+import contextvars
 from typing import Any
 from dataclasses import field, dataclass
 from collections.abc import Callable, Iterable, Awaitable
 
-from phoson_llm.schemas import ToolCallEvent
+from phoson_llm.schemas import Message, ModelConfig, ToolCallEvent
 
 from .models import AgentTool
+from .intents import VALID_INTENTS, infer_intents
 from .exceptions import PhosonAgentError
 from .middleware import AgentMiddleware
+from .intent_guard import (
+    GuardClassifier,
+    build_guard_context,
+    parse_guard_verdict,
+    build_guard_messages,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ToolBlockedError(PhosonAgentError):
@@ -47,7 +61,15 @@ class ToolBlockedError(PhosonAgentError):
     ``message`` becomes the tool result returned to the model — it should
     be actionable ("ask the user to adjust /permissions") rather than a
     bare refusal.
+
+    ``decision`` (optional) carries the structured :class:`PermissionDecision`
+    so a host can log/export the refusal (the tool runner folds it into the
+    ``permission_denied`` step payload, which the OTel plugin exports).
     """
+
+    def __init__(self, message: str, *, decision: "PermissionDecision | None" = None):
+        super().__init__(message)
+        self.decision = decision
 
 
 #: How a tool may be invoked. ``ask`` requires a confirmation callback.
@@ -56,8 +78,82 @@ LEVEL_ASK = "ask"
 LEVEL_DENY = "deny"
 VALID_LEVELS = frozenset({LEVEL_ALLOW, LEVEL_ASK, LEVEL_DENY})
 
+#: Strictness lattice: given two levels, the *stricter* one wins. Used to
+#: combine the tool-name level and the intent level of one call (#227).
+_LEVEL_STRICTNESS: dict[str, int] = {LEVEL_ALLOW: 0, LEVEL_ASK: 1, LEVEL_DENY: 2}
+
+
+def strictest_level(*levels: str | None) -> str | None:
+    """Return the strictest of ``levels`` (ignoring ``None`` / unknown).
+
+    ``None`` when every argument is ``None`` or an unrecognised level, so a
+    caller can distinguish "no rule applies" from a real ``allow``.
+    """
+    known = [level for level in levels if level in _LEVEL_STRICTNESS]
+    if not known:
+        return None
+    return max(known, key=lambda level: _LEVEL_STRICTNESS[level])
+
+
+#: Which rule produced a decision (recorded in the audit log, #227 phase 3).
+SOURCE_ALLOW_PATTERN = "allow_pattern"
+SOURCE_SESSION_PATTERN = "session_pattern"
+SOURCE_TOOL_LEVEL = "tool_level"
+SOURCE_INTENT = "intent"
+SOURCE_TOOL_AND_INTENT = "tool_level+intent"
+SOURCE_HINT = "hint"
+SOURCE_DEFAULT = "default"
+SOURCE_CLASSIFIER = "classifier"
+
 #: Callback signature: return True to let the call through.
 AskCallback = Callable[[str, dict[str, Any]], Awaitable[bool]]
+
+
+@dataclass(frozen=True)
+class PermissionDecision:
+    """Structured record of one permission decision (#227 phase 3).
+
+    Every call that reaches the gate produces one of these, whether it is
+    allowed, asked or denied — the audit trail the issue asks for ("who asked
+    for what, with which intent, which policy applied, what was decided"),
+    exportable through an ``on_decision`` sink (e.g. the OTel plugin).
+
+    ``match_text`` is intentionally **not** stored verbatim: a command line
+    may carry a secret (a token passed as an argument). ``arg_digest`` is a
+    short, stable hash for correlating repeated calls without leaking them.
+    """
+
+    tool_name: str
+    level: str
+    source: str
+    allowed: bool
+    reason: str
+    intents: tuple[str, ...] = ()
+    arg_digest: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-friendly form for exporters (OTel attributes, a JSONL sink)."""
+        return {
+            "tool_name": self.tool_name,
+            "level": self.level,
+            "source": self.source,
+            "allowed": self.allowed,
+            "reason": self.reason,
+            "intents": list(self.intents),
+            "arg_digest": self.arg_digest,
+        }
+
+
+#: Callback signature for the audit sink: called once per decision.
+DecisionCallback = Callable[[PermissionDecision], None]
+
+
+def _arg_digest(args: dict[str, Any] | None) -> str:
+    """Short stable hash of a call's args, for the audit record only."""
+    if not isinstance(args, dict):
+        return ""
+    payload = json.dumps(args, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 # ── Tool risk hints (issue #144, phase 2) ────────────────────────────────────
@@ -245,48 +341,102 @@ class PermissionPolicy:
             tool's own metadata (MCP annotations, #144 phase 2). Consulted
             *after* an explicit level and *before* the allow-by-default
             fallback, so it can only tighten — never loosen — the gate.
+        intent_levels: Mapping of intent category (see
+            :mod:`phoson_agent.intents`) → level (#227 phase 1). Consulted
+            *together with* the tool's explicit level, resolving to the
+            **strictest** of the two, so an intent rule and a tool rule can
+            only ever harden each other. A call whose intents are not listed
+            (or a tool that yields no intents) is unaffected, which keeps a
+            policy written only with ``levels``/``allow_patterns`` working
+            unchanged during the migration.
     """
 
     levels: dict[str, str] = field(default_factory=dict)
     allow_patterns: dict[str, list[str]] = field(default_factory=dict)
     hints: dict[str, ToolHints] = field(default_factory=dict)
+    intent_levels: dict[str, str] = field(default_factory=dict)
 
     def normalized_levels(self) -> dict[str, str]:
         """Levels with invalid entries dropped."""
         return {k: v for k, v in self.levels.items() if v in VALID_LEVELS}
 
-    def check(self, tool_name: str, match_text: str | None = None) -> str:
-        """Resolve the effective decision for one call.
+    def normalized_intent_levels(self) -> dict[str, str]:
+        """Intent levels with invalid keys/values dropped."""
+        return {
+            k: v
+            for k, v in self.intent_levels.items()
+            if k in VALID_INTENTS and v in VALID_LEVELS
+        }
+
+    def intent_level(self, intents: tuple[str, ...]) -> str | None:
+        """Strictest configured level across ``intents`` (None when unset)."""
+        configured = [
+            self.intent_levels[intent]
+            for intent in intents
+            if self.intent_levels.get(intent) in VALID_LEVELS
+        ]
+        return strictest_level(*configured)
+
+    def evaluate(
+        self,
+        tool_name: str,
+        match_text: str | None = None,
+        args: dict[str, Any] | None = None,
+    ) -> tuple[str, str, tuple[str, ...]]:
+        """Resolve a call to ``(level, source, intents)``.
 
         Precedence, highest first:
 
-        1. an allow-pattern hit short-circuits to *allow*;
-        2. the tool's explicit level in ``levels`` (always wins over hints,
-           so ``/permissions <tool> allow`` can relax an annotated tool);
+        1. an allow-pattern hit short-circuits to *allow*
+           (``source="allow_pattern"``);
+        2. the tool's explicit level and the intent-derived level are
+           combined with :func:`strictest_level` — neither can loosen the
+           other (``source="tool_level"`` / ``"intent"`` / ``"tool_level+intent"``);
         3. the level derived from :attr:`hints` (MCP annotations): read-only
-           → allow, otherwise the safe default (ask);
+           → allow, otherwise the safe default (ask) (``source="hint"``);
         4. unlisted tools with no hints default to *allow*, preserving the
-           pre-#144 behaviour for built-in tools.
+           pre-#144 behaviour for built-in tools (``source="default"``).
 
-        Args:
-            tool_name: Name of the tool being called.
-            match_text: Optional string matched against the tool's allow
-                patterns. For ``bash``, a pattern only matches a single
-                *simple* command (see :func:`pattern_allows`): a compound
-                shell line never short-circuits to allow and falls back to
-                the configured level.
+        The third returned element is the derived intent tuple, for the audit
+        record.
         """
+        intents = infer_intents(tool_name, args)
+
         if match_text:
             for pattern in self.allow_patterns.get(tool_name, []):
                 if pattern_allows(tool_name, pattern, match_text):
-                    return LEVEL_ALLOW
+                    return LEVEL_ALLOW, SOURCE_ALLOW_PATTERN, intents
+
         explicit = self.levels.get(tool_name)
-        if explicit is not None:
-            return explicit
+        intent_lvl = self.intent_level(intents)
+        combined = strictest_level(explicit, intent_lvl)
+        if combined is not None:
+            if explicit is not None and intent_lvl is not None:
+                source = SOURCE_TOOL_AND_INTENT
+            elif intent_lvl is not None:
+                source = SOURCE_INTENT
+            else:
+                source = SOURCE_TOOL_LEVEL
+            return combined, source, intents
+
         hints = self.hints.get(tool_name)
         if hints is not None:
-            return hints.derived_level()
-        return LEVEL_ALLOW
+            return hints.derived_level(), SOURCE_HINT, intents
+        return LEVEL_ALLOW, SOURCE_DEFAULT, intents
+
+    def check(
+        self,
+        tool_name: str,
+        match_text: str | None = None,
+        args: dict[str, Any] | None = None,
+    ) -> str:
+        """Resolve the effective decision level for one call.
+
+        Thin wrapper over :meth:`evaluate` that returns only the level. The
+        ``args`` argument (#227) is what makes the intent taxonomy derivable;
+        callers that omit it get the pre-#227 behaviour (no intent rule).
+        """
+        return self.evaluate(tool_name, match_text, args)[0]
 
 
 def _denied_message(tool_name: str, reason: str) -> str:
@@ -320,19 +470,85 @@ class PermissionMiddleware(AgentMiddleware):
         policy: PermissionPolicy,
         on_ask: AskCallback | None = None,
         match_args: dict[str, str] | None = None,
+        on_decision: DecisionCallback | None = None,
+        classifier: GuardClassifier | None = None,
+        classifier_auto_allow: bool = False,
+        classifier_timeout_s: float = 8.0,
     ) -> None:
         self.policy = policy
         self.on_ask = on_ask
         self.match_args = match_args or {}
+        # Audit sink (#227 phase 3): called once per decision, best-effort.
+        self.on_decision = on_decision
+        # LLM guardian (#227 phase 3). ``classifier`` None → disabled.
+        self.classifier = classifier
+        self.classifier_auto_allow = classifier_auto_allow
+        self.classifier_timeout_s = classifier_timeout_s
+        # Guardian-safe view of the conversation, captured in on_before_llm.
+        # A ContextVar keeps parallel sub-agents from clobbering each other.
+        self._guard_context: contextvars.ContextVar[list[Message]] = (
+            contextvars.ContextVar("phoson_guard_context", default=[])
+        )
         # Runtime additions from "[a] always for this pattern" answers.
         # Session-scoped by design: config.toml holds the durable rules.
         self._session_allow: dict[str, list[str]] = {}
+
+    async def on_before_llm(
+        self,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> list[Message]:
+        """Snapshot the guardian-safe user turns before the model acts.
+
+        Captured here (not at tool time) so the current assistant turn — whose
+        only purpose would be to justify the very action being judged — can
+        never reach the classifier. Only genuine user turns survive (see
+        :func:`~phoson_agent.intent_guard.build_guard_context`).
+        """
+        if self.classifier is not None:
+            self._guard_context.set(build_guard_context(messages))
+        return messages
+
+    async def _consult_classifier(self, call: ToolCallEvent) -> Any:
+        """Ask the LLM guardian about one call; fail closed to UNSURE.
+
+        Returns a :class:`~phoson_agent.intent_guard.GuardDecision`. Any
+        classifier error or timeout degrades to ``UNSURE`` — never ``ALLOW``.
+        """
+        from .intent_guard import GUARD_UNSURE, GuardDecision
+
+        classifier = self.classifier
+        if classifier is None:
+            return GuardDecision(GUARD_UNSURE, "classifier disabled")
+        messages = build_guard_messages(self._guard_context.get(), call)
+        try:
+            reply = await asyncio.wait_for(
+                classifier(messages), timeout=self.classifier_timeout_s
+            )
+        except TimeoutError:
+            _LOGGER.warning("permission guardian timed out for %s", call.tool_name)
+            return GuardDecision(GUARD_UNSURE, "classifier timed out")
+        except Exception:  # noqa: BLE001 — a broken guardian must not allow a call
+            _LOGGER.warning(
+                "permission guardian failed for %s", call.tool_name, exc_info=True
+            )
+            return GuardDecision(GUARD_UNSURE, "classifier error")
+        return parse_guard_verdict(reply)
 
     def add_session_pattern(self, tool_name: str, pattern: str) -> None:
         """Register an interactive 'always allow <pattern>' grant."""
         patterns = self._session_allow.setdefault(tool_name, [])
         if pattern not in patterns:
             patterns.append(pattern)
+
+    def _emit(self, decision: PermissionDecision) -> None:
+        """Hand a decision to the audit sink, never letting it break a run."""
+        if self.on_decision is None:
+            return
+        try:
+            self.on_decision(decision)
+        except Exception:  # noqa: BLE001 — observability must never block a call
+            _LOGGER.warning("permission audit sink failed", exc_info=True)
 
     def _match_text(self, call: ToolCallEvent) -> str | None:
         """Extract the string that allow-patterns match against.
@@ -353,43 +569,146 @@ class PermissionMiddleware(AgentMiddleware):
     async def on_before_tool(self, call: ToolCallEvent) -> ToolCallEvent | None:
         """Gate the call; raises :class:`ToolBlockedError` on refusal."""
         tool_name = call.tool_name
+        args = call.args if isinstance(call.args, dict) else {}
         match_text = self._match_text(call)
 
         if match_text:
             for pattern in self._session_allow.get(tool_name, []):
                 if pattern_allows(tool_name, pattern, match_text):
+                    self._emit(
+                        PermissionDecision(
+                            tool_name=tool_name,
+                            level=LEVEL_ALLOW,
+                            source=SOURCE_SESSION_PATTERN,
+                            allowed=True,
+                            reason="always-allow grant for this session",
+                            arg_digest=_arg_digest(args),
+                        )
+                    )
                     return call
 
-        decision = self.policy.check(tool_name, match_text)
+        level, source, intents = self.policy.evaluate(tool_name, match_text, args)
 
-        if decision == LEVEL_ALLOW:
+        if level == LEVEL_ALLOW:
+            self._emit(
+                PermissionDecision(
+                    tool_name=tool_name,
+                    level=LEVEL_ALLOW,
+                    source=source,
+                    allowed=True,
+                    reason="allowed by policy",
+                    intents=intents,
+                    arg_digest=_arg_digest(args),
+                )
+            )
             return call
 
-        if decision == LEVEL_DENY:
-            raise ToolBlockedError(
-                _denied_message(tool_name, "denied by permissions policy")
+        if level == LEVEL_DENY:
+            decision = PermissionDecision(
+                tool_name=tool_name,
+                level=LEVEL_DENY,
+                source=source,
+                allowed=False,
+                reason="denied by permissions policy",
+                intents=intents,
+                arg_digest=_arg_digest(args),
             )
+            self._emit(decision)
+            raise ToolBlockedError(
+                _denied_message(tool_name, "denied by permissions policy"),
+                decision=decision,
+            )
+
+        # LLM guardian (#227 phase 3): consulted only here, where the
+        # deterministic policy is already unsure. It can deny (and the run
+        # continues) or — with auto-allow opted in — skip the human; anything
+        # else (UNSURE/error/timeout) falls through to the normal path.
+        if self.classifier is not None:
+            verdict = await self._consult_classifier(call)
+            if verdict.is_deny:
+                decision = PermissionDecision(
+                    tool_name=tool_name,
+                    level=LEVEL_ASK,
+                    source=SOURCE_CLASSIFIER,
+                    allowed=False,
+                    reason=f"guardian denied: {verdict.rationale}",
+                    intents=intents,
+                    arg_digest=_arg_digest(args),
+                )
+                self._emit(decision)
+                raise ToolBlockedError(
+                    _denied_message(tool_name, "denied by the safety guardian"),
+                    decision=decision,
+                )
+            if verdict.is_allow and self.classifier_auto_allow:
+                decision = PermissionDecision(
+                    tool_name=tool_name,
+                    level=LEVEL_ASK,
+                    source=SOURCE_CLASSIFIER,
+                    allowed=True,
+                    reason=f"guardian allowed: {verdict.rationale}",
+                    intents=intents,
+                    arg_digest=_arg_digest(args),
+                )
+                self._emit(decision)
+                return call
 
         # ask — human in the loop, or fail closed without a callback.
         if self.on_ask is None:
+            decision = PermissionDecision(
+                tool_name=tool_name,
+                level=LEVEL_ASK,
+                source=source,
+                allowed=False,
+                reason="confirmation required but unavailable here",
+                intents=intents,
+                arg_digest=_arg_digest(args),
+            )
+            self._emit(decision)
             raise ToolBlockedError(
-                _denied_message(tool_name, "confirmation required but unavailable here")
+                _denied_message(
+                    tool_name, "confirmation required but unavailable here"
+                ),
+                decision=decision,
             )
         granted = await self.on_ask(tool_name, call.args)
+        decision = PermissionDecision(
+            tool_name=tool_name,
+            level=LEVEL_ASK,
+            source=source,
+            allowed=granted,
+            reason="approved by the user" if granted else "denied by the user",
+            intents=intents,
+            arg_digest=_arg_digest(args),
+        )
+        self._emit(decision)
         if granted:
             return call
-        raise ToolBlockedError(_denied_message(tool_name, "denied by the user"))
+        raise ToolBlockedError(
+            _denied_message(tool_name, "denied by the user"), decision=decision
+        )
 
 
 __all__ = [
     "AskCallback",
+    "DecisionCallback",
     "MCP_ANNOTATIONS_KEY",
+    "PermissionDecision",
     "PermissionMiddleware",
     "PermissionPolicy",
+    "SOURCE_ALLOW_PATTERN",
+    "SOURCE_CLASSIFIER",
+    "SOURCE_DEFAULT",
+    "SOURCE_HINT",
+    "SOURCE_INTENT",
+    "SOURCE_SESSION_PATTERN",
+    "SOURCE_TOOL_AND_INTENT",
+    "SOURCE_TOOL_LEVEL",
     "ToolBlockedError",
     "ToolHints",
     "VALID_LEVELS",
     "collect_tool_hints",
     "is_simple_shell_command",
     "pattern_allows",
+    "strictest_level",
 ]

@@ -172,9 +172,15 @@ class ToolRunner:
             # Permission refusals (ToolBlockedError) surface as an
             # actionable tool result — the model sees *why* the call was
             # refused and how to proceed — instead of the generic
-            # "blocked by middleware" text.
+            # "blocked by middleware" text. The structured decision (when
+            # the middleware attached one) rides along in the step payload
+            # so the OTel plugin can export the intents (#227).
             async for event in self._handle_refused(
-                original_call, history, steps, str(exc)
+                original_call,
+                history,
+                steps,
+                str(exc),
+                decision=getattr(exc, "decision", None),
             ):
                 yield event, True
             return
@@ -383,12 +389,15 @@ class ToolRunner:
         history: list[Message],
         steps: list[RunStep],
         message: str,
+        decision: object | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Handle a call refused by the permission middleware.
 
         The refusal ``message`` becomes the tool result so the model can
         adapt (and the user sees an actionable explanation), while the
-        step records a stable ``permission_denied`` error code.
+        step records a stable ``permission_denied`` error code. When the
+        middleware attached a structured decision, it is stored in the step
+        payload under ``permission`` for observability (#227).
         """
         history.append(
             Message(
@@ -403,6 +412,14 @@ class ToolRunner:
             )
         )
 
+        payload: dict[str, object] = {
+            "args": original_call.args,
+            "result": message,
+        }
+        to_dict = getattr(decision, "to_dict", None)
+        if callable(to_dict):
+            payload["permission"] = to_dict()
+
         now = now_utc()
         refused_step = RunStep(
             kind="tool",
@@ -412,10 +429,7 @@ class ToolRunner:
             tool_name=original_call.tool_name,
             tool_call_id=original_call.tool_call_id,
             error="permission_denied",
-            payload={
-                "args": original_call.args,
-                "result": message,
-            },
+            payload=payload,
         )
         steps.append(refused_step)
 

@@ -117,6 +117,7 @@ class _RunState:
     run_span: OtelSpan
     spans: list[OtelSpan] = field(default_factory=list)
     step_count: int = 0
+    permission_count: int = 0
     exported: bool = False
 
     def add_step(self, step_span: OtelSpan, child: OtelSpan | None) -> None:
@@ -184,6 +185,60 @@ class OtelTracingMiddleware(AgentMiddleware):
             _LOGGER.warning(
                 "otel tracing: failed to process %s",
                 type(event).__name__,
+                exc_info=True,
+            )
+
+    # ── Permission audit (#227 phase 3) ─────────────────────────────────
+
+    def record_permission(self, decision) -> None:
+        """Attach a permission decision to the active run as a child span.
+
+        The permission gate is a *different* middleware and produces no agent
+        event, so its audit sink calls this directly. The decision is turned
+        into a ``phoson.permission`` span parented to the run span, which the
+        normal export path then ships — so *every* decision (allow, ask or
+        deny) is auditable, not only the ones that become a tool step.
+
+        Best-effort: outside a run (no active state in this context) or on
+        any error it is a no-op, never breaking the gate.
+        """
+        try:
+            state = self._current.get()
+            if state is None or state.exported:
+                return
+            data = (
+                decision.to_dict() if hasattr(decision, "to_dict") else dict(decision)
+            )
+            span = OtelSpan(
+                name="phoson.permission",
+                trace_id=state.trace_id,
+                kind=SPAN_KIND_INTERNAL,
+                parent_id=state.run_span.span_id,
+            )
+            attrs: dict[str, Any] = {
+                "phoson.permission.tool": str(data.get("tool_name", "")),
+                "phoson.permission.level": str(data.get("level", "")),
+                "phoson.permission.source": str(data.get("source", "")),
+                "phoson.permission.allowed": bool(data.get("allowed", False)),
+                "phoson.permission.reason": _clip(str(data.get("reason", ""))),
+            }
+            intents = data.get("intents")
+            if isinstance(intents, (list, tuple)) and intents:
+                attrs["phoson.permission.intents"] = ",".join(str(i) for i in intents)
+            digest = data.get("arg_digest")
+            if digest:
+                attrs["phoson.permission.arg_digest"] = str(digest)
+            span.set_attributes(attrs)
+            if data.get("allowed", False):
+                span.set_status(STATUS_OK)
+            else:
+                span.set_status(STATUS_ERROR, _clip(str(data.get("reason", ""))))
+            span.end()
+            state.spans.append(span)
+            state.permission_count += 1
+        except Exception:  # noqa: BLE001 — observability must never break a run
+            _LOGGER.warning(
+                "otel tracing: failed to record permission decision",
                 exc_info=True,
             )
 
@@ -309,6 +364,17 @@ class OtelTracingMiddleware(AgentMiddleware):
         result = step.payload.get("result")
         if isinstance(result, str):
             attrs["phoson.tool.result_chars"] = len(result)
+        # Permission decision (#227): export the intent taxonomy and the rule
+        # that decided, so a denied (or asked) call is auditable in the trace.
+        decision = step.payload.get("permission")
+        if isinstance(decision, dict):
+            intents = decision.get("intents")
+            if isinstance(intents, list) and intents:
+                attrs["phoson.permission.intents"] = ",".join(str(i) for i in intents)
+            if decision.get("level"):
+                attrs["phoson.permission.level"] = str(decision["level"])
+            if decision.get("source"):
+                attrs["phoson.permission.source"] = str(decision["source"])
         span.set_attributes(attrs)
         if outcome == "ok":
             span.set_status(STATUS_OK)
@@ -327,6 +393,7 @@ class OtelTracingMiddleware(AgentMiddleware):
         state.run_span.set_attributes(
             {
                 "phoson.step_count": state.step_count,
+                "phoson.permission_count": state.permission_count,
                 "phoson.total_cost_usd": result.total_cost_usd,
                 "phoson.total_credits": result.total_credits,
                 "phoson.truncated": result.truncated,
