@@ -10,7 +10,7 @@ import sys
 import types
 import logging
 import warnings
-from typing import Any
+from typing import Any, cast
 from pathlib import Path
 from datetime import UTC, datetime
 from collections.abc import Iterable
@@ -382,6 +382,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *config.plugins,
         *build_mcp_plugins(config),
         *build_monitor_plugins(config),
+        *build_bgjobs_plugins(config),
         *build_otel_plugins(config),
     ]
 
@@ -472,6 +473,42 @@ def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | P
         return []
 
 
+def build_bgjobs_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official background-jobs plugin specs (#217).
+
+    Returns an empty list when background jobs are disabled. Mirrors
+    :func:`build_monitor_plugins`: tries the in-tree ``phoson_plugin_bgjobs``
+    first and returns a *pre-configured, fresh* instance (the direct-``Plugin``
+    form, so the config is honored); falls back to the path-based loader used
+    during local development, and to an empty list (with a warning) when the
+    package is not importable and the in-tree file is missing.
+    """
+    if not config.enable_bgjobs:
+        return []
+
+    bgjobs_config = {
+        "data_dir": str(config.bgjobs_data_dir),
+    }
+
+    try:
+        from phoson_plugin_bgjobs import BgJobsPlugin
+
+        instance = BgJobsPlugin()
+        instance.configure(bgjobs_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_bgjobs", bgjobs_config, "background jobs disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise background-jobs plugin: {exc}",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
+
+
 def _in_tree_plugin_path(package: str) -> Path:
     """Absolute path of an in-tree plugin's ``_plugin.py`` (fallback target).
 
@@ -558,17 +595,51 @@ def _in_tree_fallback_spec(
     return [{"name": f"path:{candidate}", "config": config}]
 
 
-def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
-    """Return the loaded monitor plugin instance, if any.
+def find_wake_plugins(plugins: list[Plugin]) -> list[Plugin]:
+    """Return every loaded plugin that can drain wakes, in load order.
 
-    Duck-typed on ``drain_pending_wakes`` so this works for both the
-    in-tree plugin and path-loaded development builds without importing
-    the package here.
+    Duck-typed on ``drain_pending_wakes`` so this works for the in-tree
+    plugins and path-loaded development builds without importing the
+    packages here. Option B of #217: the CLI composes *all* wake providers
+    (monitors, background jobs, future ones) instead of only the first.
     """
-    for plugin in plugins:
-        if hasattr(plugin, "drain_pending_wakes"):
-            return plugin
-    return None
+    return [
+        plugin
+        for plugin in plugins
+        if callable(getattr(plugin, "drain_pending_wakes", None))
+    ]
+
+
+def find_monitor_plugin(plugins: list[Plugin]) -> Plugin | None:
+    """Return the first loaded wake provider, if any (back-compat helper).
+
+    Kept for callers that only need "is any wake plugin present?". New code
+    should prefer :func:`find_wake_plugins` to support multiple providers.
+    """
+    wake_plugins = find_wake_plugins(plugins)
+    return wake_plugins[0] if wake_plugins else None
+
+
+def has_pending_wakes(plugins: list[Plugin], session_id: str | None) -> bool:
+    """True when any wake provider has an unconsumed event for the session.
+
+    Non-destructive peek (duck-typed on ``pending_wakes``); a provider
+    without the hook is skipped, and a broken one never raises.
+    """
+    for plugin in find_wake_plugins(plugins):
+        peek = getattr(plugin, "pending_wakes", None)
+        if not callable(peek):
+            continue
+        try:
+            if peek(session_id):
+                return True
+        except Exception:  # noqa: BLE001 — a broken probe must not block a turn
+            _LOGGER.warning(
+                "Could not peek wakes for plugin %r",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
+    return False
 
 
 def record_permission_decision(plugins: Iterable[Plugin], decision: Any) -> None:
@@ -614,6 +685,35 @@ async def drain_monitor_wakes(
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Could not drain monitor wakes", exc_info=True)
         return []
+
+
+async def drain_all_wakes(
+    plugins: list[Plugin], session_id: str | None
+) -> list[tuple[Plugin, list[Any]]]:
+    """Consume pending wakes from **every** wake provider (option B, #217).
+
+    Returns a list of ``(plugin, events)`` batches, one per provider that
+    actually had events, in load order. Rendering is left to the host so
+    each provider keeps its own message shape. Failures are logged and
+    swallowed per provider: a broken wake queue never blocks a user turn.
+    """
+    batches: list[tuple[Plugin, list[Any]]] = []
+    for plugin in find_wake_plugins(plugins):
+        drain = getattr(plugin, "drain_pending_wakes", None)
+        if not callable(drain):
+            continue
+        try:
+            drained = drain(session_id) or []
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Could not drain wakes for plugin %r",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
+            continue
+        if drained:
+            batches.append((plugin, list(cast("list[Any]", drained))))
+    return batches
 
 
 async def close_plugins(plugins: list[Plugin]) -> None:

@@ -30,6 +30,7 @@ packages = [
     "phoson_plugin_memory",
     "phoson_plugin_monitor",
     "phoson_plugin_otel",
+    "phoson_plugin_bgjobs",
 ]
 
 [project.scripts]
@@ -87,6 +88,7 @@ include = [
     "phoson_plugin_memory",
     "phoson_plugin_monitor",
     "phoson_plugin_otel",
+    "phoson_plugin_bgjobs",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true

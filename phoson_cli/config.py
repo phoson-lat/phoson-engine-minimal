@@ -153,6 +153,11 @@ class PhosonConfig:
     # in monitors_data_dir.
     enable_monitors: bool = False
     monitors_data_dir: Path = Path("~/.phoson/monitors/").expanduser()
+    # Official background-jobs plugin (#217): one-shot detached commands that
+    # wake the agent on completion. Off by default; state lives in
+    # bgjobs_data_dir.
+    enable_bgjobs: bool = False
+    bgjobs_data_dir: Path = Path("~/.phoson/bgjobs/").expanduser()
     # Official OTel tracing plugin (issue #140): per-run span tree
     # (run → step → llm_call/tool_call) exported to a local JSON trace
     # file by default. Off by default — tracing must be opt-in because
@@ -824,6 +829,17 @@ def load_config() -> PhosonConfig:
                 str(d.monitors_data_dir),
             )
         ).expanduser(),
+        enable_bgjobs=_resolve_bool(
+            "PHOSON_ENABLE_BGJOBS", "enable_bgjobs", fd, d.enable_bgjobs
+        ),
+        bgjobs_data_dir=Path(
+            _resolve_str(
+                "PHOSON_BGJOBS_DIR",
+                "bgjobs_data_dir",
+                fd,
+                str(d.bgjobs_data_dir),
+            )
+        ).expanduser(),
         enable_otel=_resolve_bool(
             "PHOSON_ENABLE_OTEL", "enable_otel", fd, d.enable_otel
         ),
@@ -1112,6 +1128,8 @@ def save_config(
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
         ("enable_monitors", getattr(config, "enable_monitors", None)),
         ("monitors_data_dir", str(getattr(config, "monitors_data_dir", ""))),
+        ("enable_bgjobs", getattr(config, "enable_bgjobs", None)),
+        ("bgjobs_data_dir", str(getattr(config, "bgjobs_data_dir", ""))),
         ("plugins", getattr(config, "plugins", None)),
         ("disabled_plugins", getattr(config, "disabled_plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),

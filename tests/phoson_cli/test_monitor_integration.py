@@ -346,7 +346,7 @@ class TestControllerWiring:
         assert "dist/app.bin" in content_text
 
         # The sink told the user what happened.
-        assert any("1 monitor wake" in msg for _, msg in sink.notifications)
+        assert any("1 wake" in msg for _, msg in sink.notifications)
 
         # The queue is consumed: a second turn delivers nothing.
         plugin._queue.append(WakeEvent.create("x", "interval", "other-session", {}))
