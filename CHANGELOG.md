@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.35.0 (2026-09-14)
+
+### Feat
+
+- **plugins**: background jobs plugin (#217) — a new `phoson_plugin_bgjobs`
+  runs shell commands as **one-shot detached jobs** (`run_bg_job` /
+  `list_bg_jobs` / `stop_bg_job` / `wait_bg_jobs`) that do **not** block the
+  run and re-activate the agent on completion with the exit code, an output
+  tail and the duration. Disk is the source of truth (`jobs.json` +
+  `wakes.jsonl` under `~/.phoson/bgjobs/`, atomic writes) and
+  `ensure_started()` reconciles jobs left running by a dead process. Enable
+  with `enable_bgjobs = true` (`PHOSON_ENABLE_BGJOBS`).
+- **cli**: the wake channel now composes **every** provider instead of only
+  the first — monitors and background jobs (and future providers) coexist in
+  one session. `drain_all_wakes` / `has_pending_wakes` fan out over all
+  plugins exposing the wake hooks, each provider renders its own wake header
+  into the same turn, and the autonomous wake loop, `monitor_status()` and
+  the rebuild `ensure_started()` are aggregated.
+
 ## v0.34.0 (2026-09-14)
 
 ### Feat
