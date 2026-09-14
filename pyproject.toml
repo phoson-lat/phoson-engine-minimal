@@ -31,6 +31,7 @@ packages = [
     "phoson_plugin_monitor",
     "phoson_plugin_otel",
     "phoson_plugin_bgjobs",
+    "phoson_plugin_ssh",
 ]
 
 [project.scripts]
@@ -89,6 +90,7 @@ include = [
     "phoson_plugin_monitor",
     "phoson_plugin_otel",
     "phoson_plugin_bgjobs",
+    "phoson_plugin_ssh",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true
@@ -118,6 +120,9 @@ dev = [
     # (bench/make_plots.py) — static PNGs plus interactive HTML exports.
     "plotly>=6.0.0",
     "kaleido>=1.0.0",
+    # SSH plugin (issue #169): optional transport so the bundled plugin can be
+    # exercised in CI. Production installs still use the `[ssh]` extra.
+    "asyncssh>=2.14.0",
 ]
 
 [project.optional-dependencies]
@@ -131,3 +136,4 @@ memory = [
     "qdrant-client>=1.9.0",
 ]
 mcp = ["mcp>=1.0.0,<2.0.0"]
+ssh = ["asyncssh>=2.14.0"]

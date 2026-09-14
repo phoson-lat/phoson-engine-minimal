@@ -158,6 +158,14 @@ class PhosonConfig:
     # bgjobs_data_dir.
     enable_bgjobs: bool = False
     bgjobs_data_dir: Path = Path("~/.phoson/bgjobs/").expanduser()
+    # Official SSH plugin (#169): run commands and move files on remote hosts
+    # over SSH. Off by default — it can mutate remote infrastructure and the
+    # `asyncssh` transport ships as the optional `[ssh]` extra. Host aliases
+    # come from ~/.ssh/config plus any explicit plugin `hosts` config.
+    # Verification is always strict against ssh_known_hosts.
+    enable_ssh: bool = False
+    ssh_known_hosts: Path = Path("~/.ssh/known_hosts").expanduser()
+    ssh_command_timeout: float = 60.0
     # Official OTel tracing plugin (issue #140): per-run span tree
     # (run → step → llm_call/tool_call) exported to a local JSON trace
     # file by default. Off by default — tracing must be opt-in because
@@ -840,6 +848,21 @@ def load_config() -> PhosonConfig:
                 str(d.bgjobs_data_dir),
             )
         ).expanduser(),
+        enable_ssh=_resolve_bool("PHOSON_ENABLE_SSH", "enable_ssh", fd, d.enable_ssh),
+        ssh_known_hosts=Path(
+            _resolve_str(
+                "PHOSON_SSH_KNOWN_HOSTS",
+                "ssh_known_hosts",
+                fd,
+                str(d.ssh_known_hosts),
+            )
+        ).expanduser(),
+        ssh_command_timeout=_resolve_float(
+            "PHOSON_SSH_COMMAND_TIMEOUT",
+            "ssh_command_timeout",
+            fd,
+            d.ssh_command_timeout,
+        ),
         enable_otel=_resolve_bool(
             "PHOSON_ENABLE_OTEL", "enable_otel", fd, d.enable_otel
         ),

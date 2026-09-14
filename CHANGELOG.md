@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **plugins**: SSH plugin (#169) — a new bundled `phoson_plugin_ssh` runs
+  commands and moves files on **remote hosts over SSH** (`ssh_exec` /
+  `ssh_copy_local_to_remote` / `ssh_copy_remote_to_local` / `ssh_hosts`).
+  Transport is `asyncssh` (optional `[ssh]` extra); hosts are aliases resolved
+  from plugin config over `~/.ssh/config`; verification is strict against
+  `~/.ssh/known_hosts` (never auto-add), auth is key/agent only, and no PTY is
+  allocated. Mutating tools publish destructive/open-world risk hints, so they
+  resolve to `ask` and fail closed in one-shot mode.
+- **cli**: `enable_ssh` (`PHOSON_ENABLE_SSH`) opts the bundled SSH plugin in,
+  with `ssh_known_hosts` / `ssh_command_timeout` (and
+  `PHOSON_SSH_KNOWN_HOSTS` / `PHOSON_SSH_COMMAND_TIMEOUT`). Off by default.
+
 ## v0.35.0 (2026-09-14)
 
 ### Feat
