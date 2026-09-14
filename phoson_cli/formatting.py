@@ -409,8 +409,12 @@ def render_user_turn(
 # are unchanged.
 
 _MONITOR_WAKE_HEADER: Final = "[MONITOR EVENTS]"
-# ``[monitor-name] kind=command fired_at=...`` — the per-event header line.
-_MONITOR_EVENT_HEADER_RE = re.compile(r"^(\[[A-Za-z0-9._-]+\])\s+(kind=.*)$")
+# Background-jobs wakes carry their own banner (#217) but share the styling.
+_BGJOB_WAKE_HEADER: Final = "[BACKGROUND JOB EVENTS]"
+_WAKE_HEADERS: Final = (_MONITOR_WAKE_HEADER, _BGJOB_WAKE_HEADER)
+# ``[name] kind=command fired_at=...`` / ``[name] state=completed ...`` — the
+# per-event header line (monitor and background-job wakes both match).
+_MONITOR_EVENT_HEADER_RE = re.compile(r"^(\[[A-Za-z0-9._-]+\])\s+(\w+=.*)$")
 # ``  key: value`` — a payload field (exactly two leading spaces).
 _MONITOR_FIELD_RE = re.compile(r"^(\s{2})([A-Za-z_][A-Za-z0-9_]*):(\s+)(.*)$")
 
@@ -448,7 +452,7 @@ def _style_wake_line(line: str, theme: Theme) -> Text:
     """Return one tinted ``Text`` segment for a single wake-header line."""
     if not line.strip():
         return Text("")
-    if line.lstrip().startswith(_MONITOR_WAKE_HEADER):
+    if line.lstrip().startswith(_WAKE_HEADERS):
         return Text(line, style=f"bold {theme.accent}".strip())
     event = _MONITOR_EVENT_HEADER_RE.match(line)
     if event:

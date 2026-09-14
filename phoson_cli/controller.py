@@ -80,13 +80,14 @@ from .session_utils import (
     build_offload,
     close_plugins,
     vllm_base_url,
+    drain_all_wakes,
     build_summarizer,
     build_middlewares,
+    find_wake_plugins,
+    has_pending_wakes,
     build_plugin_specs,
     build_system_prompt,
-    drain_monitor_wakes,
     engine_prompt_tools,
-    find_monitor_plugin,
     engine_visible_tools,
 )
 from .tools.compact import compact_context
@@ -99,6 +100,38 @@ try:
     from phoson_plugin_monitor import render_wake_message
 except ImportError:  # pragma: no cover
     render_wake_message = None
+
+
+def _render_wake_batches(batches: list) -> str:
+    """Render ``(plugin, events)`` wake batches into one user-message header.
+
+    Each provider keeps its own message shape: a plugin that exposes a
+    duck-typed ``render_wake_message`` method is asked to render its own
+    events; otherwise the monitor composer is used as a fallback (its event
+    shape). Option B of #217: multiple providers compose into one header.
+    """
+    parts: list[str] = []
+    for plugin, events in batches:
+        if not events:
+            continue
+        rendered = ""
+        renderer = getattr(plugin, "render_wake_message", None)
+        try:
+            if callable(renderer):
+                rendered = renderer(events) or ""
+            elif render_wake_message is not None:
+                rendered = render_wake_message(events) or ""
+        except Exception:  # noqa: BLE001 — a broken renderer must not block a turn
+            _LOGGER.warning(
+                "Could not render wakes for plugin %r",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
+            rendered = ""
+        if rendered:
+            parts.append(str(rendered))
+    return "\n\n".join(parts)
+
 
 #: Upper bound on messages replayed into the chat pane when resuming a
 #: session (#56). The full history is shown for any reasonable session;
@@ -593,25 +626,27 @@ class SessionController:
             self._session.tree.session_id
         )
 
-        # (Re)start any running monitors from disk: engine rebuilds
+        # (Re)start any running providers from disk: engine rebuilds
         # (/model, /provider, /mcp) kill the previous instance's tasks,
         # and a crash leaves them running on disk. Duck-typed so this
-        # stays a no-op when the plugin is not enabled.
-        monitor_plugin = find_monitor_plugin(
+        # stays a no-op when no wake plugin is enabled. Option B (#217):
+        # every provider (monitors, background jobs, ...) is resumed.
+        wake_plugins = find_wake_plugins(
             list(getattr(self.engine, "_loaded_plugins", []))
         )
-        if monitor_plugin is not None:
-            ensure = getattr(monitor_plugin, "ensure_started", None)
-            if ensure is not None:
-                try:
-                    asyncio.get_running_loop().create_task(
-                        ensure(),
-                        name="monitors:ensure_started",
-                    )
-                except RuntimeError:
-                    # No running loop (sync test/one-shot bootstrap): the
-                    # tools start tasks lazily on first use.
-                    pass
+        for plugin in wake_plugins:
+            ensure = getattr(plugin, "ensure_started", None)
+            if ensure is None:
+                continue
+            try:
+                asyncio.get_running_loop().create_task(
+                    ensure(),
+                    name=f"wakes:{getattr(plugin, 'name', 'plugin')}:ensure_started",
+                )
+            except RuntimeError:
+                # No running loop (sync test/one-shot bootstrap): the
+                # tools start tasks lazily on first use.
+                pass
 
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
@@ -955,44 +990,53 @@ class SessionController:
         ``_turn_lock`` (the engine is single-flight).
         """
         async with self._turn_lock:
-            # Monitor plugin (I-126): fold any wakes that fired while the
-            # user was composing into THIS message (the autonomous wake loop
-            # only fires turns while idle, so at this point any pending wake
-            # belongs to the user's current turn).
-            monitor_plugin = find_monitor_plugin(
-                list(getattr(self.engine, "_loaded_plugins", []))
+            # Wake providers (I-126 monitors, #217 bgjobs): fold any wakes
+            # that fired while the user was composing into THIS message (the
+            # autonomous wake loop only fires turns while idle, so at this
+            # point any pending wake belongs to the user's current turn).
+            wake_batches = await drain_all_wakes(
+                list(getattr(self.engine, "_loaded_plugins", [])),
+                self._session.tree.session_id,
             )
-            wake_events = await drain_monitor_wakes(
-                monitor_plugin, self._session.tree.session_id
-            )
+            wake_events = [
+                event for _plugin, events in wake_batches for event in events
+            ]
+            wake_header = _render_wake_batches(wake_batches)
             if wake_events:
                 self.sink.notify(
                     "info",
-                    f"{len(wake_events)} monitor wake(s) delivered with your message.",
+                    f"{len(wake_events)} wake(s) delivered with your message.",
                 )
-            return await self._execute_turn(user_input, wake_events, "user")
+            return await self._execute_turn(
+                user_input, wake_events, "user", wake_header=wake_header
+            )
 
     async def _execute_turn(
         self,
         user_input: str,
         wake_events: list[Any] | None = None,
         source: str = "user",
+        wake_header: str | None = None,
     ) -> RunOutcome:
         """Run one turn built from ``user_input`` (+ optional wake header).
 
         ``source`` only names the trigger (``user`` or ``monitor``); the
         sink sees both through the same ``on_user_message`` channel so the
         front ends render autonomous wake turns exactly like typed ones.
+        ``wake_header`` is a pre-rendered multi-provider header; when omitted
+        the monitor composer is used for ``wake_events`` (back-compat).
         """
         effective_input = user_input
         if wake_events:
-            if render_wake_message is not None:
+            if wake_header is not None:
+                header = wake_header
+            elif render_wake_message is not None:
                 header = render_wake_message(wake_events)
             else:  # pragma: no cover — package always ships in the wheel
                 header = "[MONITOR EVENTS] " + "; ".join(
                     f"{e.monitor} ({e.kind})" for e in wake_events
                 )
-            effective_input = header + "\n\n" + user_input
+            effective_input = header + "\n\n" + user_input if header else user_input
 
         user_message = self._build_user_message(effective_input)
         _node_id, path = self._append_user_turn(user_message)
@@ -1113,7 +1157,7 @@ class SessionController:
         ``__init__`` runs before the loop in the classic REPL, where
         tasks cannot be created yet).
         """
-        if not self.config.enable_monitors:
+        if not (self.config.enable_monitors or self.config.enable_bgjobs):
             return
         if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
             return
@@ -1158,46 +1202,56 @@ class SessionController:
 
     async def _wake_loop_tick(self) -> None:
         """One poll of the autonomous wake loop (see the loop's docstring)."""
-        plugin = find_monitor_plugin(list(getattr(self.engine, "_loaded_plugins", [])))
-        if plugin is None or self.is_running:
+        plugins = list(getattr(self.engine, "_loaded_plugins", []))
+        if self.is_running:
             return
-        if not self._peek_pending_wakes(plugin):
+        if not has_pending_wakes(plugins, self._session.tree.session_id):
             return
         self.sink.notify(
             "info",
-            "Monitor wake(s) received — waking the agent.",
+            "Background wake(s) received — waking the agent.",
         )
         async with self._turn_lock:
-            wake_events = await drain_monitor_wakes(
-                plugin, self._session.tree.session_id
-            )
+            wake_batches = await drain_all_wakes(plugins, self._session.tree.session_id)
+            wake_events = [
+                event for _plugin, events in wake_batches for event in events
+            ]
             if not wake_events:
                 return  # a user turn consumed them in the meantime
+            wake_header = _render_wake_batches(wake_batches)
             try:
-                await self._execute_turn("", wake_events, source="monitor")
+                await self._execute_turn(
+                    "", wake_events, source="monitor", wake_header=wake_header
+                )
             except Exception:  # noqa: BLE001 — a broken wake turn
-                _LOGGER.warning("Autonomous monitor wake turn failed", exc_info=True)
+                _LOGGER.warning("Autonomous wake turn failed", exc_info=True)
 
     def monitor_status(self) -> str | None:
-        """Short status string for active monitors, or ``None`` when none.
+        """Short status string for active background providers, or ``None``.
 
-        Thin host-side accessor: duck-typed on the monitor plugin's
-        optional ``monitor_status()`` hook so the front ends can surface
-        "monitors are running" in a header/prompt without importing the
-        package. In-memory only; safe to call on every paint.
+        Aggregates every wake provider's optional ``monitor_status()`` hook
+        (monitors, background jobs, ...) so the front ends can surface
+        "something is running" in a header/prompt without importing the
+        packages. In-memory only; safe to call on every paint.
         """
-        plugin = find_monitor_plugin(list(getattr(self.engine, "_loaded_plugins", [])))
-        if plugin is None:
+        parts: list[str] = []
+        for plugin in find_wake_plugins(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        ):
+            status_fn = getattr(plugin, "monitor_status", None)
+            if status_fn is None:
+                continue
+            try:
+                status = status_fn()
+            except Exception:  # noqa: BLE001 — a status probe must never
+                # break a paint; degrade to "no indicator".
+                _LOGGER.warning("monitor_status() failed", exc_info=True)
+                continue
+            if status:
+                parts.append(status)
+        if not parts:
             return None
-        status_fn = getattr(plugin, "monitor_status", None)
-        if status_fn is None:
-            return None
-        try:
-            return status_fn()
-        except Exception:  # noqa: BLE001 — a status probe must never
-            # break a paint; degrade to "no indicator".
-            _LOGGER.warning("monitor_status() failed", exc_info=True)
-            return None
+        return " · ".join(parts)
 
     # ── Session / model management ────────────────────────────────────────
 
