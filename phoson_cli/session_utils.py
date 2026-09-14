@@ -383,6 +383,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *build_mcp_plugins(config),
         *build_monitor_plugins(config),
         *build_bgjobs_plugins(config),
+        *build_ssh_plugins(config),
         *build_otel_plugins(config),
     ]
 
@@ -505,6 +506,46 @@ def build_bgjobs_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Pl
             f"Failed to initialise background-jobs plugin: {exc}",
             UserWarning,
             stacklevel=2,
+        )
+        return []
+
+
+def build_ssh_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official SSH plugin specs (#169).
+
+    Returns an empty list when SSH is disabled or the optional ``asyncssh``
+    transport is not installed. Mirrors :func:`build_bgjobs_plugins`: returns a
+    *pre-configured, fresh* instance (direct-``Plugin`` form, so the config is
+    honored) and falls back to the path-based loader during local development.
+    """
+    if not config.enable_ssh:
+        return []
+
+    ssh_config = {
+        "known_hosts": str(config.ssh_known_hosts),
+        "command_timeout": config.ssh_command_timeout,
+    }
+
+    try:
+        from phoson_plugin_ssh import SSH_AVAILABLE, SshPlugin
+
+        if not SSH_AVAILABLE:
+            _LOGGER.warning(
+                "SSH is enabled but the `asyncssh` package is not installed. "
+                "Install with: uv sync --extra ssh  (or: "
+                "pip install 'phoson-engine-minimal[ssh]'). "
+                "Set enable_ssh = false in [defaults] to silence this."
+            )
+            return []
+
+        instance = SshPlugin()
+        instance.configure(ssh_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec("phoson_plugin_ssh", ssh_config, "SSH disabled")
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise SSH plugin: {exc}", UserWarning, stacklevel=2
         )
         return []
 
