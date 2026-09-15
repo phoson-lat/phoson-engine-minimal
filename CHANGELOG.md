@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.39.0 (2026-09-15)
+
+### Feat
+
+- **permissions**: auto mode (Shift+Tab) is now a global `"*": "allow"`
+  default consulted *before* the annotation hints, so annotated plugin tools
+  — including the bundled SSH plugin's `ssh_exec` / `ssh_copy_*` — run freely
+  in auto instead of always resolving to `ask`. A per-tool level or an intent
+  rule still wins, and the no-`permissions.json` default is unchanged (the
+  SSH plugin still asks). This is the option-B fix for "ask for permission
+  for the SSH plugin when on auto mode".
+
+### Fix
+
+- **permissions**: reload the durable policy into the live gate after
+  `/permissions …`, the full-screen auto-mode cycle and an "always allow"
+  grant. They previously only wrote `permissions.json`, so a change did not
+  take effect until a restart.
+
 ## v0.38.0 (2026-09-15)
 
 ### Feat
