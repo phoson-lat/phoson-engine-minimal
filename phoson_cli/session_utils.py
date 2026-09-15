@@ -386,6 +386,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *build_ssh_plugins(config),
         *build_computeruse_plugins(config),
         *build_otel_plugins(config),
+        *build_swarm_plugins(config),
     ]
 
 
@@ -584,6 +585,41 @@ def build_computeruse_plugins(
             f"Failed to initialise Computer Use plugin: {exc}",
             UserWarning,
             stacklevel=2,
+        )
+        return []
+
+
+def build_swarm_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official Swarm plugin specs (issue #232).
+
+    Returns an empty list when the swarm is disabled (the default). Mirrors
+    :func:`build_bgjobs_plugins`: returns a *pre-configured, fresh* instance
+    (direct-``Plugin`` form) and falls back to the path-based loader during
+    local development.
+    """
+    if not config.enable_swarm:
+        return []
+
+    swarm_config = {
+        "max_agents": config.swarm_max_agents,
+        "default_topology": config.swarm_default_topology,
+        "max_tokens_per_agent": config.swarm_max_tokens_per_agent,
+        "max_tokens_total": config.swarm_max_tokens_total,
+    }
+
+    try:
+        from phoson_plugin_swarm import SwarmPlugin
+
+        instance = SwarmPlugin()
+        instance.configure(swarm_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_swarm", swarm_config, "swarm disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise swarm plugin: {exc}", UserWarning, stacklevel=2
         )
         return []
 

@@ -185,6 +185,15 @@ class PhosonConfig:
     otel_service_name: str = "phoson"
     otel_file_path: Path = Path(".phoson/trace.json")
     otel_endpoint: str = ""
+    # Official Swarm plugin (#232): orchestrate a group of specialized,
+    # concurrently-running sub-agents with roles, a shared blackboard and
+    # star/mesh/pipeline topologies. Off by default — it spawns multiple LLM
+    # runs, so cost control (swarm_max_agents / token caps) is built in.
+    enable_swarm: bool = False
+    swarm_max_agents: int = 5
+    swarm_max_tokens_per_agent: int = 4096
+    swarm_max_tokens_total: int = 32768
+    swarm_default_topology: str = "star"
     # LLM permission guardian (#227 phase 3): an opt-in classifier that
     # reviews ``ask``-level tool calls before a human is bothered. Off by
     # default — it costs one extra model call per ambiguous action. The
@@ -897,6 +906,30 @@ def load_config() -> PhosonConfig:
         otel_service_name=_resolve_str(
             "PHOSON_SERVICE_NAME", "otel_service_name", fd, d.otel_service_name
         ),
+        enable_swarm=_resolve_bool(
+            "PHOSON_ENABLE_SWARM", "enable_swarm", fd, d.enable_swarm
+        ),
+        swarm_max_agents=_resolve_int(
+            "PHOSON_SWARM_MAX_AGENTS", "swarm_max_agents", fd, d.swarm_max_agents
+        ),
+        swarm_max_tokens_per_agent=_resolve_int(
+            "PHOSON_SWARM_MAX_TOKENS_PER_AGENT",
+            "swarm_max_tokens_per_agent",
+            fd,
+            d.swarm_max_tokens_per_agent,
+        ),
+        swarm_max_tokens_total=_resolve_int(
+            "PHOSON_SWARM_MAX_TOKENS_TOTAL",
+            "swarm_max_tokens_total",
+            fd,
+            d.swarm_max_tokens_total,
+        ),
+        swarm_default_topology=_resolve_str(
+            "PHOSON_SWARM_TOPOLOGY",
+            "swarm_default_topology",
+            fd,
+            d.swarm_default_topology,
+        ),
         otel_file_path=Path(
             _resolve_str(
                 "PHOSON_OTEL_TRACE_FILE",
@@ -1186,6 +1219,17 @@ def save_config(
         (
             "computeruse_require_confirmation",
             getattr(config, "computeruse_require_confirmation", None),
+        ),
+        ("enable_swarm", getattr(config, "enable_swarm", None)),
+        ("swarm_max_agents", getattr(config, "swarm_max_agents", None)),
+        (
+            "swarm_max_tokens_per_agent",
+            getattr(config, "swarm_max_tokens_per_agent", None),
+        ),
+        ("swarm_max_tokens_total", getattr(config, "swarm_max_tokens_total", None)),
+        (
+            "swarm_default_topology",
+            getattr(config, "swarm_default_topology", None),
         ),
         ("plugins", getattr(config, "plugins", None)),
         ("disabled_plugins", getattr(config, "disabled_plugins", None)),

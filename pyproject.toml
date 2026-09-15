@@ -33,6 +33,7 @@ packages = [
     "phoson_plugin_bgjobs",
     "phoson_plugin_ssh",
     "phoson_plugin_computeruse",
+    "phoson_plugin_swarm",
 ]
 
 [project.scripts]
@@ -93,6 +94,7 @@ include = [
     "phoson_plugin_bgjobs",
     "phoson_plugin_ssh",
     "phoson_plugin_computeruse",
+    "phoson_plugin_swarm",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true
