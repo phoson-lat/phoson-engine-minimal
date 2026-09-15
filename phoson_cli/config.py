@@ -166,6 +166,16 @@ class PhosonConfig:
     enable_ssh: bool = False
     ssh_known_hosts: Path = Path("~/.ssh/known_hosts").expanduser()
     ssh_command_timeout: float = 60.0
+    # Official Computer Use plugin (#223): screenshot + mouse/keyboard control
+    # of the local desktop. Off by default — it operates the *real* desktop and
+    # needs optional capture/input dependencies (the `[computeruse]` extra).
+    # `computeruse_backend` is one of "auto", "x11", "macos", "fake".
+    enable_computeruse: bool = False
+    computeruse_backend: str = "auto"
+    # When true, computer-use input tools publish destructive risk hints so the
+    # permission gate resolves them to `ask` (fails closed in one-shot mode).
+    # Default false: computer use never prompts.
+    computeruse_require_confirmation: bool = False
     # Official OTel tracing plugin (issue #140): per-run span tree
     # (run → step → llm_call/tool_call) exported to a local JSON trace
     # file by default. Off by default — tracing must be opt-in because
@@ -863,6 +873,24 @@ def load_config() -> PhosonConfig:
             fd,
             d.ssh_command_timeout,
         ),
+        enable_computeruse=_resolve_bool(
+            "PHOSON_ENABLE_COMPUTERUSE",
+            "enable_computeruse",
+            fd,
+            d.enable_computeruse,
+        ),
+        computeruse_backend=_resolve_str(
+            "PHOSON_COMPUTERUSE_BACKEND",
+            "computeruse_backend",
+            fd,
+            d.computeruse_backend,
+        ),
+        computeruse_require_confirmation=_resolve_bool(
+            "PHOSON_COMPUTERUSE_REQUIRE_CONFIRMATION",
+            "computeruse_require_confirmation",
+            fd,
+            d.computeruse_require_confirmation,
+        ),
         enable_otel=_resolve_bool(
             "PHOSON_ENABLE_OTEL", "enable_otel", fd, d.enable_otel
         ),
@@ -1153,6 +1181,12 @@ def save_config(
         ("monitors_data_dir", str(getattr(config, "monitors_data_dir", ""))),
         ("enable_bgjobs", getattr(config, "enable_bgjobs", None)),
         ("bgjobs_data_dir", str(getattr(config, "bgjobs_data_dir", ""))),
+        ("enable_computeruse", getattr(config, "enable_computeruse", None)),
+        ("computeruse_backend", getattr(config, "computeruse_backend", None)),
+        (
+            "computeruse_require_confirmation",
+            getattr(config, "computeruse_require_confirmation", None),
+        ),
         ("plugins", getattr(config, "plugins", None)),
         ("disabled_plugins", getattr(config, "disabled_plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),

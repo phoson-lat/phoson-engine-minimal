@@ -32,6 +32,7 @@ packages = [
     "phoson_plugin_otel",
     "phoson_plugin_bgjobs",
     "phoson_plugin_ssh",
+    "phoson_plugin_computeruse",
 ]
 
 [project.scripts]
@@ -91,6 +92,7 @@ include = [
     "phoson_plugin_otel",
     "phoson_plugin_bgjobs",
     "phoson_plugin_ssh",
+    "phoson_plugin_computeruse",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true
@@ -137,3 +139,13 @@ memory = [
 ]
 mcp = ["mcp>=1.0.0,<2.0.0"]
 ssh = ["asyncssh>=2.14.0"]
+computeruse = [
+    "mss>=10.0.0",
+    "Pillow>=10.0.0",
+    "python-xlib>=0.33",
+]
+computeruse-macos = ["pyobjc-framework-Quartz>=10.0"]
+# GNOME Wayland: a persistent session-bus connection is required (the
+# compositor destroys a session when its creating client disconnects, so the
+# one-shot `gdbus` transport cannot hold one).
+computeruse-wayland = ["jeepney>=0.9"]

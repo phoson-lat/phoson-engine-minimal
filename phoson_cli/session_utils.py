@@ -384,6 +384,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *build_monitor_plugins(config),
         *build_bgjobs_plugins(config),
         *build_ssh_plugins(config),
+        *build_computeruse_plugins(config),
         *build_otel_plugins(config),
     ]
 
@@ -546,6 +547,43 @@ def build_ssh_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugi
     except Exception as exc:
         warnings.warn(
             f"Failed to initialise SSH plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+def build_computeruse_plugins(
+    config: PhosonConfig,
+) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official Computer Use plugin specs (#223).
+
+    Returns an empty list when Computer Use is disabled (the default: it
+    operates the real desktop). Mirrors :func:`build_ssh_plugins`: returns a
+    *pre-configured, fresh* instance and falls back to the path-based loader
+    during local development.
+    """
+    if not config.enable_computeruse:
+        return []
+
+    cu_config = {
+        "backend": config.computeruse_backend,
+        "require_confirmation": config.computeruse_require_confirmation,
+    }
+
+    try:
+        from phoson_plugin_computeruse import ComputerUsePlugin
+
+        instance = ComputerUsePlugin()
+        instance.configure(cu_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_computeruse", cu_config, "Computer Use disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise Computer Use plugin: {exc}",
+            UserWarning,
+            stacklevel=2,
         )
         return []
 
