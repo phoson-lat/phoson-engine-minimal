@@ -103,7 +103,16 @@ SOURCE_INTENT = "intent"
 SOURCE_TOOL_AND_INTENT = "tool_level+intent"
 SOURCE_HINT = "hint"
 SOURCE_DEFAULT = "default"
+SOURCE_MODE = "mode"
 SOURCE_CLASSIFIER = "classifier"
+
+#: Pseudo tool name for a *global default* level (``"*"``). Unlike a regular
+#: tool, ``allow`` on the wildcard is meaningful rather than a no-op: it is an
+#: explicit opt-in that overrides the annotation hints for every tool that has
+#: no rule of its own. This is what the CLI's visible **auto** mode writes, so
+#: annotated plugin tools (SSH, MCP, ...) run freely in auto mode while a
+#: per-tool level or intent rule still wins.
+WILDCARD_TOOL = "*"
 
 #: Callback signature: return True to let the call through.
 AskCallback = Callable[[str, dict[str, Any]], Awaitable[bool]]
@@ -329,7 +338,10 @@ class PermissionPolicy:
         levels: Mapping of tool name → default level for that tool.
             Tools not listed are allowed: the engine's tool registry is
             already the curated capability surface, so a policy only needs
-            to restrict.
+            to restrict. The special key ``"*"`` (:data:`WILDCARD_TOOL`) is a
+            *global default* consulted for tools that have no level of their
+            own, **before** annotation hints — so ``"*": "allow"`` is the
+            explicit "auto" mode that also lets annotated plugin tools run.
         allow_patterns: Mapping of tool name → glob patterns matched
             against the tool's match text (for bash, the command line).
             A match short-circuits to *allow* even under ``ask``/``deny``
@@ -392,9 +404,13 @@ class PermissionPolicy:
         2. the tool's explicit level and the intent-derived level are
            combined with :func:`strictest_level` — neither can loosen the
            other (``source="tool_level"`` / ``"intent"`` / ``"tool_level+intent"``);
-        3. the level derived from :attr:`hints` (MCP annotations): read-only
+        3. the global default level (``levels["*"]``, when set) applies to any
+           remaining tool (*before* hints), so an explicit ``"*": "allow"``
+           lets annotated plugin tools run — the CLI's auto mode
+           (``source="mode"``);
+        4. the level derived from :attr:`hints` (MCP annotations): read-only
            → allow, otherwise the safe default (ask) (``source="hint"``);
-        4. unlisted tools with no hints default to *allow*, preserving the
+        5. unlisted tools with no hints default to *allow*, preserving the
            pre-#144 behaviour for built-in tools (``source="default"``).
 
         The third returned element is the derived intent tuple, for the audit
@@ -418,6 +434,15 @@ class PermissionPolicy:
             else:
                 source = SOURCE_TOOL_LEVEL
             return combined, source, intents
+
+        # Global default level (the CLI's auto mode). Consulted *before* the
+        # annotation hints so that an explicit `"*": "allow"` covers annotated
+        # plugin tools (SSH, MCP, ...) too, not just built-ins. A per-tool
+        # level or an intent rule above always wins, so auto can never loosen
+        # a rule the user wrote for a specific tool.
+        wildcard = self.levels.get(WILDCARD_TOOL)
+        if wildcard in VALID_LEVELS:
+            return wildcard, SOURCE_MODE, intents
 
         hints = self.hints.get(tool_name)
         if hints is not None:
@@ -701,12 +726,14 @@ __all__ = [
     "SOURCE_DEFAULT",
     "SOURCE_HINT",
     "SOURCE_INTENT",
+    "SOURCE_MODE",
     "SOURCE_SESSION_PATTERN",
     "SOURCE_TOOL_AND_INTENT",
     "SOURCE_TOOL_LEVEL",
     "ToolBlockedError",
     "ToolHints",
     "VALID_LEVELS",
+    "WILDCARD_TOOL",
     "collect_tool_hints",
     "is_simple_shell_command",
     "pattern_allows",

@@ -370,6 +370,20 @@ class SessionController:
         policy = load_policy()
         add_pattern(policy, "bash", glob_quote(command))
         save_policy(policy)
+        self.refresh_permission_policy()
+
+    def refresh_permission_policy(self) -> None:
+        """Re-read ``permissions.json`` into the *live* gate.
+
+        ``/permissions …``, the full-screen auto-mode cycle and an "always
+        allow" grant all write the durable file directly; without this the
+        middleware would keep enforcing the policy it loaded at startup, so
+        the change would only apply after a restart. Tool hints are re-applied
+        too, because a freshly loaded policy carries none.
+        """
+        from .permissions_store import refresh_policy
+
+        refresh_policy(self.permission_middleware, self.engine.tools)
 
     def _on_permission_decision(self, decision) -> None:
         """Permission audit sink: forward each decision to exporters (#227).

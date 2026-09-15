@@ -73,23 +73,36 @@ def toggle_reasoning(app: Any) -> None:
 def cycle_permission_mode(app: Any) -> None:
     """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
 
-    The mode is the durable per-tool policy (``permissions.json``);
-    cycling it sets *bash*'s level, which is the tool the SOTA
-    harnesses gate by default. The header chip refreshes immediately
-    and the user is told the new state + how to fine-tune
-    per-tool with /permissions.
+    The mode is the durable per-tool policy (``permissions.json``). ``ask``
+    gates ``bash`` explicitly and leaves annotated plugin tools (SSH, MCP, …)
+    at their hint-derived ``ask``; ``auto`` writes the global ``"*": "allow"``
+    default, so those annotated tools run freely too. A per-tool level still
+    wins over auto. The header chip refreshes immediately and the change is
+    pushed into the live gate (no restart needed).
     """
-    from ..permissions_store import LEVEL_ASK, set_level, load_policy, save_policy
+    from ..permissions_store import (
+        LEVEL_ASK,
+        set_level,
+        load_policy,
+        save_policy,
+        set_auto_mode,
+    )
 
     policy = load_policy()
-    current = policy.levels.get("bash")
-    if current == LEVEL_ASK:
+    # Direction follows the visible chip (ask ↔ auto), exactly as before:
+    # `ask` is bash explicitly at ask, anything else is the auto side.
+    if policy.levels.get("bash") == LEVEL_ASK:
+        set_auto_mode(policy, True)
         set_level(policy, "bash", "allow")
         new_mode = "auto"
     else:
+        set_auto_mode(policy, False)
         set_level(policy, "bash", LEVEL_ASK)
         new_mode = "ask"
     save_policy(policy)
+    controller = getattr(app.repl, "_controller", None)
+    if controller is not None:
+        controller.refresh_permission_policy()
     app._perm_mode_cached = new_mode
     app._perm_mode_checked_at = time.monotonic()
     app._header_cache_key = None  # rebuild the chip on the next frame
@@ -97,9 +110,10 @@ def cycle_permission_mode(app: Any) -> None:
         "info",
         f"Permission mode → {new_mode}"
         + (
-            " — bash commands now confirm with Yes / Always / No"
+            " — gated tools (bash, SSH, …) now confirm with Yes / Always / No"
             if new_mode == "ask"
-            else " — bash runs freely (per-tool rules: /permissions)"
+            else " — gated tools (bash, SSH, …) run freely"
+            " (per-tool rules: /permissions)"
         ),
     )
 

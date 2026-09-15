@@ -146,6 +146,28 @@ def test_read_only_hosts_tool_resolves_to_allow():
     assert policy.check("ssh_hosts") == LEVEL_ALLOW
 
 
+def test_auto_mode_wildcard_lets_mutating_tools_run():
+    """Auto mode (`"*": allow`) covers annotated plugin tools, not just bash."""
+    from phoson_agent.permissions import (
+        LEVEL_DENY,
+        SOURCE_MODE,
+        WILDCARD_TOOL,
+    )
+
+    tools = SshPlugin().get_tools()
+    policy = PermissionPolicy(
+        levels={WILDCARD_TOOL: LEVEL_ALLOW},
+        hints=collect_tool_hints(tools),
+    )
+    level, source, _ = policy.evaluate("ssh_exec")
+    assert level == LEVEL_ALLOW
+    assert source == SOURCE_MODE
+    assert policy.check("ssh_copy_local_to_remote") == LEVEL_ALLOW
+    # A per-tool rule the user wrote still wins over auto.
+    policy.levels["ssh_exec"] = LEVEL_DENY
+    assert policy.check("ssh_exec") == LEVEL_DENY
+
+
 def test_mcp_annotations_key_is_used_for_hints():
     tools = {t.name: t for t in SshPlugin().get_tools()}
     raw = tools["ssh_exec"].metadata["mcp_annotations"]
