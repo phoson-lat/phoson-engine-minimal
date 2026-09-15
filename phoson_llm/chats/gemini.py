@@ -36,8 +36,15 @@ if TYPE_CHECKING:
     from google.genai import types
 
 
-def _convert_messages(messages: list[Message]) -> "list[types.Content]":
-    """Converts Phoson messages to Gemini Content objects."""
+def _convert_messages(messages: list[Message]) -> "list[types.ContentUnion]":
+    """Converts Phoson messages to Gemini Content objects.
+
+    The return type is the SDK's ``ContentUnion`` rather than ``Content``:
+    ``generate_content_stream(contents=...)`` accepts ``ContentListUnion``,
+    which includes ``list[ContentUnion]``, and ``list`` is invariant — a
+    ``list[Content]`` is a nominal mismatch even though ``Content`` is a
+    ``ContentUnion``.
+    """
     from google.genai import types
 
     # Gemini's ``function_response`` part requires the *function name*, but a
@@ -53,7 +60,7 @@ def _convert_messages(messages: list[Message]) -> "list[types.Content]":
             if isinstance(block, ToolUseBlock):
                 tool_name_by_id[block.tool_call_id] = block.tool_name
 
-    gemini_messages = []
+    gemini_messages: list[types.ContentUnion] = []
     for msg in messages:
         if msg.role == "system":
             continue
