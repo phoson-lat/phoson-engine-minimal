@@ -296,17 +296,17 @@ class ComputerUsePlugin(Plugin):
         width: int | None,
         height: int | None,
     ) -> str | ImageToolResult:
-        given = [value is not None for value in (x, y, width, height)]
-        if any(given) and not all(given):
+        if x is not None and y is not None and width is not None and height is not None:
+            region: Region | None = Region(
+                x=int(x), y=int(y), width=int(width), height=int(height)
+            )
+        elif x is None and y is None and width is None and height is None:
+            region = None
+        else:
             return (
                 "To capture a region pass all of x, y, width and height; "
                 "to capture the whole screen pass none of them."
             )
-        region = (
-            Region(x=int(x), y=int(y), width=int(width), height=int(height))
-            if all(given)
-            else None
-        )
         backend = self._backend_impl()
         try:
             raster = backend.capture(region)
