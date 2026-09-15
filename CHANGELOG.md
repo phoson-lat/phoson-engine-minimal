@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.38.0 (2026-09-15)
+
+### Feat
+
+- **plugins**: Agents Swarm plugin (#232) — a new bundled `phoson_plugin_swarm`
+  orchestrates a group of **specialized, concurrently-running sub-agents** with
+  roles, a shared blackboard + message routing, and `star` / `mesh` /
+  `pipeline` topologies (`swarm_create` / `swarm_assign` / `swarm_message` /
+  `swarm_status` / `swarm_collect` / `swarm_dissolve`) — the AutoGen/CrewAI
+  multi-agent pattern integrated into Phoson. Unlike the one-way `agent` /
+  `agents` sub-agents, each swarm member is configured with its own
+  `tools_allowlist` (a member can never call a tool outside its allowlist, and
+  the delegation / `swarm_*` tools are always stripped so a member can't
+  recurse), shares state via a per-swarm blackboard, and is cost-bounded by
+  `swarm_max_agents` (fan-out, enforced in `swarm_create`) plus per-agent and
+  swarm-wide token caps that stop a member **gracefully** on overflow. Each
+  member is its own `AgentEngine`, built with the host's injected
+  chat/tools/model and the same permission middleware.
+- **cli**: `enable_swarm` (`PHOSON_ENABLE_SWARM`) opts the bundled swarm plugin
+  in, with `swarm_max_agents`, `swarm_max_tokens_per_agent`,
+  `swarm_max_tokens_total` and `swarm_default_topology`. Off by default.
+
+### Docs
+
+- **plugins**: `phoson_plugin_swarm/README.md`, a new `docs/plugins.md`
+  "Bundled plugins" bullet, and a runnable, no-cost `examples/swarm_example.py`
+  end-to-end demo (mock LLM).
+
+### Test
+
+- **plugins**: 10 mock-LLM unit tests for the swarm (create, message routing,
+  collect, allowlist enforcement, pipeline chaining, graceful budget stop,
+  dissolve, and the `max_agents` cap).
+
 ## v0.37.0 (2026-09-14)
 
 ### Feat
