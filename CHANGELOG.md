@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.37.0 (2026-09-14)
+
+### Feat
+
+- **plugins**: computer use plugin (#223) — a new bundled
+  `phoson_plugin_computeruse` gives the agent a **screenshot → decide → input**
+  loop over the local desktop: `computer_screenshot` / `computer_move` /
+  `computer_click` / `computer_drag` / `computer_scroll` / `computer_type` /
+  `computer_key` / `computer_wait`. Captures come back as `ImageBlock`s, so a
+  vision model is required. The plugin owns coordinate mapping: screenshots are
+  downscaled to the model's image limits and input coordinates are mapped back
+  to native pixels, so DPI/Retina/fractional scaling never reach the model.
+  Backends: **X11** (`mss` + `python-xlib` XTEST), **GNOME Wayland** (xdg
+  Screenshot portal for capture; `org.gnome.Mutter.RemoteDesktop` for input over
+  a persistent `jeepney` connection), **macOS** Quartz (`screencapture` +
+  `CGEvent`, beta, needs Screen Recording + Accessibility grants) and a
+  dependency-free `fake` backend used by the tests. Optional extras
+  `[computeruse]`, `[computeruse-wayland]`, `[computeruse-macos]`.
+- **cli**: `enable_computeruse` (`PHOSON_ENABLE_COMPUTERUSE`) opts the bundled
+  computer use plugin in, with `computeruse_backend` and
+  `computeruse_require_confirmation` (`PHOSON_COMPUTERUSE_BACKEND` /
+  `PHOSON_COMPUTERUSE_REQUIRE_CONFIRMATION`). Off by default — it operates the
+  real desktop. Computer-use tools **do not prompt** by default; setting
+  `computeruse_require_confirmation = true` restores destructive risk hints, so
+  input resolves to `ask` and fails closed in one-shot mode.
+
+### Fix
+
+- **llm**: the Gemini adapter's `_convert_messages` now returns
+  `list[types.ContentUnion]` instead of `list[types.Content]`, matching the
+  SDK's `ContentListUnion` parameter. `list` is invariant, so the narrower
+  annotation was a nominal mismatch that failed type checking against
+  `google-genai` 2.x. No runtime change.
+
+### Note
+
+- Wayland support is GNOME-only (other compositors still need the portal +
+  libei path), and pointer motion there is **relative-only**:
+  `NotifyPointerMotionAbsolute` requires a ScreenCast stream that the portal
+  links internally, which Mutter 49 cannot express, so absolute coordinates are
+  reconstructed from relative deltas off a corner-homed origin.
+
 ## v0.36.0 (2026-09-14)
 
 ### Feat
