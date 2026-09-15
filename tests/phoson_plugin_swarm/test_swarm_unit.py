@@ -285,3 +285,34 @@ async def test_swarm_dissolve() -> None:
     assert dissolved["dissolved"] is True
     with pytest.raises(SwarmError):
         await _tool(plugin, "swarm_assign").handler({"task": "x"}, ctx)
+
+
+async def test_max_agents_enforced() -> None:
+    plugin = SwarmPlugin()
+    plugin.configure({"max_agents": 2})
+    plugin.initialize()
+    chat = SwarmMockChat()
+    ctx = _ctx(chat, _make_tools())
+    with pytest.raises(SwarmError):
+        await _tool(plugin, "swarm_create").handler(
+            {
+                "agents": [
+                    {"name": "a", "system_prompt": "s"},
+                    {"name": "b", "system_prompt": "s"},
+                    {"name": "c", "system_prompt": "s"},
+                ],
+                "topology": "star",
+            },
+            ctx,
+        )
+    # exactly at the cap is allowed
+    await _tool(plugin, "swarm_create").handler(
+        {
+            "agents": [
+                {"name": "a", "system_prompt": "s"},
+                {"name": "b", "system_prompt": "s"},
+            ],
+            "topology": "star",
+        },
+        ctx,
+    )

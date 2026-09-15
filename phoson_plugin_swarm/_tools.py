@@ -94,6 +94,7 @@ def build_swarm_tools(plugin: Any) -> list[AgentTool]:
             topology=topology,
             max_tokens_per_agent=plugin.max_tokens_per_agent,
             max_tokens_total=plugin.max_tokens_total,
+            max_agents=plugin.max_agents,
         )
         runtime.bind_runtime(
             chat=chat,

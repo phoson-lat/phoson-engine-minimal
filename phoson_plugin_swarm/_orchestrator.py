@@ -168,8 +168,19 @@ class SwarmRuntime:
         topology: str = "star",
         max_tokens_per_agent: int | None,
         max_tokens_total: int | None,
+        max_agents: int | None = None,
     ) -> None:
-        """(Re)build the swarm from ``roles`` under ``topology``."""
+        """(Re)build the swarm from ``roles`` under ``topology``.
+
+        Raises:
+            SwarmError: if ``roles`` exceeds ``max_agents`` (the fan-out cap),
+                the topology is unknown, or a role name is duplicated.
+        """
+        if max_agents is not None and len(roles) > max_agents:
+            raise SwarmError(
+                f"swarm can have at most {max_agents} agents, "
+                f"got {len(roles)} (raise swarm_max_agents to allow more)"
+            )
         if topology not in _TOPOLOGIES:
             raise SwarmError(
                 f"unknown topology {topology!r}; expected one of {_TOPOLOGIES}"
@@ -574,6 +585,7 @@ def build_runtime_from_roles(
     topology: str,
     max_tokens_per_agent: int | None,
     max_tokens_total: int | None,
+    max_agents: int | None = None,
 ) -> SwarmRuntime:
     """Validate ``raw_roles`` and build a fresh :class:`SwarmRuntime`."""
     if not isinstance(raw_roles, (list, tuple)) or not raw_roles:
@@ -585,5 +597,6 @@ def build_runtime_from_roles(
         topology=topology,
         max_tokens_per_agent=max_tokens_per_agent,
         max_tokens_total=max_tokens_total,
+        max_agents=max_agents,
     )
     return runtime
