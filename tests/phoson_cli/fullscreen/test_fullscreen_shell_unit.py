@@ -972,18 +972,52 @@ def test_shift_tab_cycles_permission_mode(
         PermissionPolicy,
         load_policy,
         save_policy,
+        is_auto_mode,
     )
 
     target = _point_permissions_at(tmp_path, monkeypatch)
     save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), target)
 
     _trigger(app, "s-tab")  # ask → auto
-    assert load_policy().levels.get("bash") != LEVEL_ASK
+    policy = load_policy()
+    assert policy.levels.get("bash") != LEVEL_ASK
+    # Auto is the global wildcard, so annotated plugin tools (SSH, ...) are
+    # covered too — not just bash.
+    assert is_auto_mode(policy)
     assert "ask" not in app._get_header_text().value
+    # The live gate was refreshed, not just the file.
+    live = app.repl._controller.permission_middleware.policy
+    assert is_auto_mode(live)
 
     _trigger(app, "s-tab")  # auto → ask
-    assert load_policy().levels.get("bash") == LEVEL_ASK
+    policy = load_policy()
+    assert policy.levels.get("bash") == LEVEL_ASK
+    assert not is_auto_mode(policy)
     assert "ask" in app._get_header_text().value
+    live = app.repl._controller.permission_middleware.policy
+    assert live.levels.get("bash") == LEVEL_ASK
+    assert not is_auto_mode(live)
+
+
+def test_shift_tab_from_fresh_state_goes_ask_then_auto(
+    app: PhosonApp, tmp_path, monkeypatch
+) -> None:
+    """Toggle direction is unchanged: the default (auto chip) first goes ask."""
+    from phoson_cli.permissions_store import (
+        LEVEL_ASK,
+        load_policy,
+        is_auto_mode,
+    )
+
+    _point_permissions_at(tmp_path, monkeypatch)
+
+    _trigger(app, "s-tab")  # default → ask
+    policy = load_policy()
+    assert policy.levels.get("bash") == LEVEL_ASK
+    assert not is_auto_mode(policy)
+
+    _trigger(app, "s-tab")  # ask → auto (wildcard on)
+    assert is_auto_mode(load_policy())
 
 
 def test_bash_card_rows_show_command_and_always_action() -> None:

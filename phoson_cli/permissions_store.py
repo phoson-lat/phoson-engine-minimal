@@ -37,6 +37,7 @@ from phoson_agent.permissions import (
     LEVEL_DENY,
     LEVEL_ALLOW,
     VALID_LEVELS,
+    WILDCARD_TOOL,
     PermissionPolicy,
     PermissionMiddleware,
     collect_tool_hints,
@@ -162,13 +163,34 @@ def set_level(policy: PermissionPolicy, tool: str, level: str) -> bool:
     normalized = _normalize_level(level)
     if normalized is None:
         return False
-    if normalized == LEVEL_ALLOW:
+    if normalized == LEVEL_ALLOW and tool != WILDCARD_TOOL:
         # Allow is the default for unlisted tools; dropping the entry keeps
-        # the file minimal and makes /permissions output unambiguous.
+        # the file minimal and makes /permissions output unambiguous. The
+        # wildcard is the exception: `"*": "allow"` is the explicit auto
+        # mode, so it must be written to the file to have any effect.
         policy.levels.pop(tool, None)
     else:
         policy.levels[tool] = normalized
     return True
+
+
+def set_auto_mode(policy: PermissionPolicy, enabled: bool) -> None:
+    """Turn the global auto mode on/off by writing/removing the wildcard.
+
+    Auto mode (``"*": "allow"``) lets every tool with no rule of its own run
+    freely — including annotated plugin tools such as SSH, which otherwise
+    resolve to ``ask`` from their risk hints. A per-tool level or intent rule
+    still wins, so this never loosens a rule the user wrote for a tool.
+    """
+    if enabled:
+        policy.levels[WILDCARD_TOOL] = LEVEL_ALLOW
+    else:
+        policy.levels.pop(WILDCARD_TOOL, None)
+
+
+def is_auto_mode(policy: PermissionPolicy) -> bool:
+    """Whether the policy has the global auto-mode wildcard set."""
+    return policy.levels.get(WILDCARD_TOOL) == LEVEL_ALLOW
 
 
 def add_pattern(policy: PermissionPolicy, tool: str, pattern: str) -> None:
@@ -272,6 +294,26 @@ def apply_tool_hints(
     )
 
 
+def refresh_policy(
+    middleware: PermissionMiddleware,
+    tools: Iterable[AgentTool],
+    *,
+    policy_path: Path | None = None,
+) -> PermissionPolicy:
+    """Reload the durable policy into a *live* middleware and re-apply hints.
+
+    ``/permissions …`` and the full-screen auto-mode cycle write the file
+    directly; without this the middleware keeps enforcing the policy it loaded
+    at startup, so the change would not take effect until a restart. The tool
+    hints are refreshed too (annotated plugin tools), since ``load_policy``
+    returns a policy with an empty hint map.
+    """
+    policy = load_policy(path=policy_path)
+    apply_tool_hints(policy, tools)
+    middleware.policy = policy
+    return policy
+
+
 __all__ = [
     "DEFAULT_PERMISSIONS_FILE",
     "LEVEL_ASK",
@@ -282,9 +324,12 @@ __all__ = [
     "apply_tool_hints",
     "build_permission_middleware",
     "glob_quote",
+    "is_auto_mode",
     "load_policy",
+    "refresh_policy",
     "remove_pattern",
     "save_policy",
+    "set_auto_mode",
     "set_intent_level",
     "set_level",
 ]

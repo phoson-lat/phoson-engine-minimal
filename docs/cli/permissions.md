@@ -14,6 +14,33 @@ matching allow-pattern runs without asking even under `ask`/`deny` —
 handy for safe subcommands. Inspect or change levels at runtime with
 `/permissions bash ask` (persisted immediately).
 
+Changes apply to the live session at once — no restart needed.
+
+## Ask vs auto mode
+
+The full-screen header shows a mode chip you cycle with **Shift+Tab**:
+
+- **ask** — `bash` is set to `ask` and the annotated plugin tools (SSH,
+  MCP, computer-use, …) stay at the `ask` their risk hints imply.
+- **auto** — a global default `"*": "allow"` is written to the policy, so
+  every tool without a rule of its own runs freely, **including** annotated
+  plugin tools such as the SSH plugin. This is the mode to pick for
+  unattended work.
+
+Auto is only an opt-in default: precedence is unchanged, so a per-tool
+level (`/permissions ssh_exec deny`) or an intent rule still wins over it
+and can never be loosened by auto. With no `permissions.json` at all, tools
+keep their pre-auto behaviour — built-ins run freely, but annotated plugin
+tools such as SSH still confirm.
+
+```json
+{
+  "levels": { "*": "allow", "ssh_exec": "ask" }
+}
+```
+
+The wildcard above is auto mode with SSH still gated.
+
 ## Allow-pattern semantics
 
 A pattern matches *one program's invocation* — a **single simple command**
@@ -156,8 +183,9 @@ they can only make the gate *stricter*, never bypass a rule you wrote.
 | destructive / open-world / write-like | `ask` |
 | **no annotations at all** | `ask` (safe default) |
 
-Precedence is: allow-pattern hit → your explicit level in `levels` →
-derived hint → `allow` for unlisted non-MCP tools. So an explicit
+Precedence is: allow-pattern hit → your explicit level in `levels` → the
+global auto-mode default (`"*"`, when set) → derived hint → `allow` for
+unlisted non-MCP tools. So an explicit
 `/permissions mcp_fs_write allow` relaxes an annotated tool, and
 `/permissions mcp_fs_read deny` hardens a read-only one.
 

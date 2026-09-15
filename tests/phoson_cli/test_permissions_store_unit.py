@@ -90,6 +90,46 @@ def test_set_level_validates_and_normalizes_allow(policy_file) -> None:
     assert "bash" not in policy.levels
 
 
+def test_set_level_persists_wildcard_allow(policy_file) -> None:
+    """The wildcard is the one tool whose *allow* is not a no-op."""
+    from phoson_agent.permissions import WILDCARD_TOOL
+
+    policy = PermissionPolicy()
+    assert set_level(policy, WILDCARD_TOOL, "allow") is True
+    # Unlike a normal tool, it is written rather than dropped.
+    assert policy.levels[WILDCARD_TOOL] == "allow"
+
+    save_policy(policy, policy_file)
+    loaded = load_policy(policy_file)
+    assert loaded.levels[WILDCARD_TOOL] == "allow"
+
+
+def test_set_auto_mode_toggles_wildcard(policy_file) -> None:
+    from phoson_cli.permissions_store import is_auto_mode, set_auto_mode
+
+    policy = PermissionPolicy()
+    assert is_auto_mode(policy) is False
+    set_auto_mode(policy, True)
+    assert is_auto_mode(policy) is True
+    assert policy.levels["*"] == "allow"
+    set_auto_mode(policy, False)
+    assert is_auto_mode(policy) is False
+    assert "*" not in policy.levels
+
+
+def test_refresh_policy_updates_live_middleware(policy_file) -> None:
+    """A policy change made on disk reaches the already-built gate."""
+    from phoson_agent.permissions import LEVEL_ALLOW, PermissionMiddleware
+    from phoson_cli.permissions_store import refresh_policy
+
+    middleware = PermissionMiddleware(PermissionPolicy())
+    assert middleware.policy.check("bash") == LEVEL_ALLOW
+
+    save_policy(PermissionPolicy(levels={"bash": LEVEL_ASK}), policy_file)
+    refresh_policy(middleware, [], policy_path=policy_file)
+    assert middleware.policy.check("bash") == LEVEL_ASK
+
+
 def test_add_and_remove_pattern(policy_file) -> None:
     policy = PermissionPolicy()
     add_pattern(policy, "bash", "git status")

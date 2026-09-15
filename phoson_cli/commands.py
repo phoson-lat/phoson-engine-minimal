@@ -1316,6 +1316,8 @@ class CommandHandler:
         allow-patterns live in ~/.phoson/permissions.json too (edited via
         "[a] always" answers or by hand).
         """
+        from phoson_agent.permissions import WILDCARD_TOOL
+
         from .permissions_store import (
             LEVEL_ALLOW,
             VALID_LEVELS,
@@ -1330,7 +1332,8 @@ class CommandHandler:
         if not cmd.args:
             if not policy.levels and not policy.allow_patterns:
                 r.print_info(
-                    "No permission rules configured — all tools run freely."
+                    "No permission rules configured — built-in tools run "
+                    "freely; annotated plugin tools (e.g. SSH) still confirm."
                     "\nUsage: /permissions <tool> <allow|ask|deny>"
                     "\nExample: /permissions bash ask"
                 )
@@ -1339,7 +1342,10 @@ class CommandHandler:
             for tool, level in sorted(policy.levels.items()):
                 patterns = policy.allow_patterns.get(tool, [])
                 suffix = f"  (always allows: {', '.join(patterns)})" if patterns else ""
-                r.print_info(f"  {tool}: {level}{suffix}")
+                if tool == WILDCARD_TOOL:
+                    r.print_info(f"  *: {level}  (auto mode — default for every tool)")
+                else:
+                    r.print_info(f"  {tool}: {level}{suffix}")
             for tool, patterns in sorted(policy.allow_patterns.items()):
                 if tool not in policy.levels:
                     r.print_info(f"  {tool}: allow  (patterns: {', '.join(patterns)})")
@@ -1355,6 +1361,11 @@ class CommandHandler:
             r.print_error(f"Invalid level: {level!r} — use allow, ask or deny")
             return True
         save_policy(policy)
+        # Apply the change to the live gate immediately (it otherwise keeps
+        # the policy loaded at startup until a restart).
+        controller = getattr(self.repl, "_controller", None)
+        if controller is not None:
+            controller.refresh_permission_policy()
         note = ""
         if level == LEVEL_ALLOW:
             note = " (allow is the default — the entry is dropped from the file)"

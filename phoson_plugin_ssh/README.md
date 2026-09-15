@@ -70,7 +70,9 @@ Plugin config wins over `~/.ssh/config`.
   `ssh_copy_remote_to_local` publish destructive/open-world risk hints, so
   they resolve to **`ask`** by default and **fail closed** in one-shot mode.
   `ssh_hosts` is read-only (`allow`). Explicitly set a looser level in
-  `~/.phoson/permissions.json` if you want unattended runs.
+  `~/.phoson/permissions.json` if you want unattended runs — or switch the
+  CLI to **auto** mode (Shift+Tab), which writes a global `"*": "allow"`
+  default that covers these tools too.
 - **Bounded.** Per-command timeout and capped output protect the context.
 
 ### Not yet: per-host allow-patterns
