@@ -1330,7 +1330,7 @@ computeruse = [
     { name = "python-xlib" },
 ]
 computeruse-macos = [
-    { name = "pyobjc-framework-quartz" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin'" },
 ]
 computeruse-wayland = [
     { name = "jeepney" },
@@ -1386,7 +1386,7 @@ requires-dist = [
     { name = "openai", specifier = ">=2.32.0" },
     { name = "pillow", marker = "extra == 'computeruse'", specifier = ">=10.0.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.51" },
-    { name = "pyobjc-framework-quartz", marker = "extra == 'computeruse-macos'", specifier = ">=10.0" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' and extra == 'computeruse-macos'", specifier = ">=10.0" },
     { name = "python-xlib", marker = "extra == 'computeruse'", specifier = ">=0.33" },
     { name = "qdrant-client", marker = "extra == 'memory'", specifier = ">=1.9.0" },
     { name = "redis", marker = "extra == 'memory'", specifier = ">=5.0.0" },

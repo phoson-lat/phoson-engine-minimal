@@ -105,6 +105,7 @@ def test_capture_uses_the_portal_by_default():
 
 
 def test_region_capture_crops_the_portal_shot():
+    pytest.importorskip("PIL")  # cropping needs Pillow
     backend, transport = _backend()
     image = backend.capture(Region(10, 20, 30, 40))
     assert (image.width, image.height) == (30, 40)
