@@ -1,0 +1,60 @@
+name: windows-installer
+
+on:
+  pull_request:
+    paths:
+      - scripts/phoson-installer.ps1
+      - tests/scripts/test_windows_installer.ps1
+      - .github/workflows/windows-installer.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/phoson-installer.ps1
+      - tests/scripts/test_windows_installer.ps1
+      - .github/workflows/windows-installer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer contract tests
+        run: ./tests/scripts/test_windows_installer.ps1
+      - name: Bootstrap uv and install published CLI
+        run: |
+          # Runner-local tool locations containing spaces exercise quoting.
+          $env:UV_TOOL_DIR = Join-Path $env:RUNNER_TEMP 'phoson tools'
+          $env:UV_TOOL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'phoson bin'
+          ./scripts/phoson-installer.ps1 -Version 0.40.0 -CI -Setup
+          if ($LASTEXITCODE -ne 0) { throw 'Installer failed' }
+          $cli = Join-Path $env:UV_TOOL_BIN_DIR 'phoson-cli.exe'
+          $version = & $cli --version
+          if ($LASTEXITCODE -ne 0 -or $version -ne 'phoson-cli 0.40.0') {
+              throw "Unexpected installed version: $version"
+          }
+          & $cli --help
+          if ($LASTEXITCODE -ne 0) { throw 'CLI help failed' }
+          # Persist values explicitly: each Actions step uses a new process.
+          "UV_TOOL_DIR=$env:UV_TOOL_DIR" >> $env:GITHUB_ENV
+          "UV_TOOL_BIN_DIR=$env:UV_TOOL_BIN_DIR" >> $env:GITHUB_ENV
+      - name: Repeat install and check persistent PATH
+        run: |
+          $before = [Environment]::GetEnvironmentVariable('Path', 'User')
+          ./scripts/phoson-installer.ps1 -Version 0.40.0 -SkipSetup -Setup
+          if ($LASTEXITCODE -ne 0) { throw 'Repeat install failed' }
+          $after = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($before -cne $after) { throw 'Repeat install changed user PATH' }
+          $entries = @($after -split ';' | Where-Object { $_ -ieq $env:UV_TOOL_BIN_DIR })
+          if ($entries.Count -ne 1) { throw 'Expected exactly one tool directory in user PATH' }
