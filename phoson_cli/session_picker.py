@@ -20,9 +20,11 @@ class _SessionState(TypedDict):
 class SessionPickerResult:
     session_id: str | None = None
     cancelled: bool = False
+    unavailable: bool = False
     delete: bool = False
     #: Session ids to delete (multi-delete mode); empty unless delete_many.
     delete_ids: list[str] | None = None
+    deleted_count: int = 0
 
 
 _HEADER = (
@@ -60,7 +62,7 @@ def _render_sessions(
         cost = f"${s.total_cost:.4f}" if has_cost else "—"
         title = getattr(s, "title", None)
 
-        is_current = str(s.id).startswith(current_id[:4])
+        is_current = str(s.id) == str(current_id)
         is_selected = i == selected
 
         if is_selected:
@@ -126,7 +128,20 @@ def build_session_picker(
     of it spinning up its own full-screen ``Application`` via ``run()``
     (``pick_session`` above does that for the classic REPL).
     """
-    state: _SessionState = {"selected": 0, "page": 0, "marked": set()}
+    selected = next(
+        (i for i, session in enumerate(sessions) if str(session.id) == str(current_id)),
+        0,
+    )
+    state: _SessionState = {
+        "selected": selected,
+        "page": selected // page_size,
+        "marked": set(),
+    }
+
+    def _selected_id() -> str | None:
+        if not sessions:
+            return None
+        return str(sessions[state["selected"]].id)
 
     picker: BasePicker[SessionPickerResult] = BasePicker(
         render=lambda: _render_sessions(
@@ -150,7 +165,9 @@ def build_session_picker(
         set_page=lambda p: state.update(page=p),
         page_size=page_size,
         on_enter=lambda: picker.done(
-            SessionPickerResult(session_id=sessions[state["selected"]].id)
+            SessionPickerResult(
+                session_id=_selected_id(), cancelled=_selected_id() is None
+            )
         ),
         on_cancel=lambda: picker.done(SessionPickerResult(cancelled=True)),
     )
@@ -158,13 +175,19 @@ def build_session_picker(
     picker.bind(
         "d",
         lambda: picker.done(
-            SessionPickerResult(session_id=sessions[state["selected"]].id, delete=True)
+            SessionPickerResult(
+                session_id=_selected_id(),
+                delete=_selected_id() is not None,
+                cancelled=_selected_id() is None,
+            )
         ),
     )
 
     def _toggle_mark() -> None:
         """Space: (un)mark the selected session for multi-delete."""
-        sid = str(sessions[state["selected"]].id)
+        sid = _selected_id()
+        if sid is None:
+            return
         if sid in state["marked"]:
             state["marked"].discard(sid)
         else:

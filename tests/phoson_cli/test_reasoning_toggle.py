@@ -182,6 +182,34 @@ async def test_ctrl_t_expands_reasoning_exactly_once(tmp_path) -> None:
     assert "already expanded" in second
 
 
+def test_ctrl_t_expands_newest_reasoning_then_older(tmp_path) -> None:
+    repl = _make_repl(tmp_path)
+    parent = None
+    for prompt, reasoning in (("old", "old reasoning"), ("new", "new reasoning")):
+        user = repl.tree.append(
+            parent_id=parent, message=Message(role="user", content=prompt)
+        )
+        assistant = repl.tree.append(
+            parent_id=user.id,
+            message=Message(role="assistant", content="answer"),
+            metadata={"reasoning": reasoning},
+        )
+        parent = assistant.id
+    repl.current_node_id = parent
+    buf = _capture_console(repl)
+
+    repl._on_reasoning_toggle()
+    first = buf.getvalue()
+    assert "new reasoning" in first
+    assert "old reasoning" not in first
+
+    buf.truncate(0)
+    buf.seek(0)
+    repl._on_reasoning_toggle()
+    second = buf.getvalue()
+    assert "old reasoning" in second
+
+
 @pytest.mark.asyncio
 async def test_ctrl_t_without_reasoning_shows_info(tmp_path) -> None:
     repl = _make_repl(tmp_path)

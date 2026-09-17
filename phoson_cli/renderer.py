@@ -8,7 +8,7 @@ isolated in :class:`WaitingSpinner` and :class:`SubagentSpinner` so that
 
 import datetime
 import threading
-from time import sleep
+from time import sleep, monotonic
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -37,6 +37,7 @@ from phoson_agent import (
     AgentToolComposingEvent,
 )
 from phoson_cli.theme import Theme, load_theme
+from phoson_cli.terminal import animation_capable
 from phoson_cli.animations import SPINNER_FRAMES
 from phoson_cli.formatting import (
     ToolRenderRegistry,
@@ -68,7 +69,6 @@ from phoson_cli.formatting import (
 )
 from phoson_cli.command_host import HelpEntry, HelpEntries, is_grouped_help
 from phoson_cli.tools.subagent_panel import (
-    render_subagent_panel,
     parse_subagent_metrics,
     render_subagent_summary,
     render_subagent_panel_frame,
@@ -80,6 +80,13 @@ from phoson_cli.tools.subagent_panel import (
 # ── Animation helpers ──────────────────────────────────────────────────────────
 
 
+def _animations_enabled(console: Console, theme: Theme | None = None) -> bool:
+    """Whether cursor-driven animation is safe on this output stream."""
+    return animation_capable(
+        console.file, theme_name=theme.name if theme is not None else None
+    )
+
+
 class WaitingSpinner:
     """Braille-spinner animation that writes directly to the console file.
 
@@ -87,18 +94,24 @@ class WaitingSpinner:
     animation thread always sees a consistent string.
     """
 
-    def __init__(self, console: Console) -> None:
+    def __init__(self, console: Console, *, enabled: bool | None = None) -> None:
         self._console = console
+        self._enabled = self._detect_enabled() if enabled is None else enabled
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
         self._label: str = ""
         self._visible: bool = False
 
+    def _detect_enabled(self) -> bool:
+        return _animations_enabled(self._console)
+
     def start(self, label: str) -> None:
         """Start the spinner, or update the label if already running."""
         with self._lock:
             self._label = label
+        if not self._enabled:
+            return
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop = threading.Event()
@@ -112,17 +125,24 @@ class WaitingSpinner:
 
     def stop(self) -> None:
         """Stop animation and clear the spinner line."""
-        if self._stop is None:
-            return
-        self._stop.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=0.2)
-        self._clear()
-        self._thread = None
-        self._stop = None
         with self._lock:
+            stop = self._stop
+            thread = self._thread
+            if stop is None:
+                return
+            stop.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.2)
+        if thread is not None and thread.is_alive():
+            return
+        with self._lock:
+            if self._stop is not stop or self._thread is not thread:
+                return
+            self._clear()
+            self._thread = None
+            self._stop = None
             self._label = ""
-        self._visible = False
+            self._visible = False
 
     def _run(self) -> None:
         stop = self._stop
@@ -134,8 +154,14 @@ class WaitingSpinner:
             with self._lock:
                 label = self._label
             self._console.file.write(f"\r\x1b[2K  {frame}  {label}")
+            if stop.is_set():
+                return
             self._console.file.flush()
-            self._visible = True
+            if stop.is_set():
+                return
+            with self._lock:
+                if self._stop is stop and not stop.is_set():
+                    self._visible = True
             idx += 1
             sleep(0.08)
 
@@ -149,74 +175,88 @@ class WaitingSpinner:
 class SubagentSpinner:
     """Rich Live panel animation for parallel subagent execution."""
 
-    def __init__(self, console: Console, theme: Theme | None = None) -> None:
+    def __init__(
+        self,
+        console: Console,
+        theme: Theme | None = None,
+        *,
+        enabled: bool | None = None,
+    ) -> None:
         self._console = console
         self._theme = theme or load_theme()
-        self._lock = threading.Lock()
+        self._enabled = self._detect_enabled() if enabled is None else enabled
+        self._lock = threading.RLock()
         self._live: Live | None = None
+        # Kept as a compatibility/debugging attribute. Rich Live owns the sole
+        # refresh worker; SubagentSpinner never starts a second thread.
         self._thread: threading.Thread | None = None
-        self._stop: threading.Event | None = None
         self._tasks: list[str] = []
         # Live per-task metrics (E2); None → the table shows "waiting".
         self._progress: object | None = None
 
+    def _detect_enabled(self) -> bool:
+        return _animations_enabled(self._console, self._theme)
+
     def start(self, tasks: list[str]) -> None:
         """Start the subagent panel animation."""
-        self.stop()
         with self._lock:
+            self._stop_locked()
             self._tasks = tasks
-        self._stop = threading.Event()
-        self._live = Live(
-            render_subagent_panel(tasks, theme=self._theme, progress=self._progress),
-            console=self._console,
-            refresh_per_second=12,
-            transient=True,
-        )
-        self._live.start()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+            if not self._enabled:
+                return
+            live = Live(
+                get_renderable=self._get_renderable,
+                console=self._console,
+                refresh_per_second=12,
+                transient=True,
+            )
+            self._live = live
+            try:
+                live.start()
+            except Exception:
+                try:
+                    live.stop()
+                except Exception:  # noqa: BLE001 - preserve the start failure
+                    self._live = live
+                else:
+                    self._live = None
+                raise
 
     def stop(self) -> None:
         """Stop animation and close the Live context."""
-        if self._stop is not None:
-            self._stop.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=0.2)
-        if self._live is not None:
-            self._live.stop()
-        self._stop = None
+        with self._lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        live = self._live
+        if live is not None:
+            live.stop()
+            self._live = None
         self._thread = None
-        self._live = None
         self._progress = None
 
     def set_progress(self, progress: object | None) -> None:
         """Attach/detach the live-metrics source (E2).
 
-        The animation thread re-reads it on every frame, so values keep
-        updating while the panel is on screen; ``None`` falls back to
-        the static "waiting" cells.
+        Rich Live re-reads the source on every refresh, including mutations
+        made without callbacks; ``None`` restores the "waiting" cells.
         """
         with self._lock:
             self._progress = progress
+            if self._live is not None:
+                self._live.refresh()
 
-    def _run(self) -> None:
-        stop = self._stop
-        live = self._live
-        if stop is None or live is None:
-            return
-        frame = 0
-        while not stop.is_set():
-            with self._lock:
-                tasks = self._tasks
-                progress = self._progress
-            live.update(
-                render_subagent_panel_frame(
-                    tasks, frame, theme=self._theme, progress=progress
-                ),
-                refresh=True,
-            )
-            frame += 1
-            sleep(0.08)
+    def _get_renderable(self) -> Table:
+        # Rich calls this under its own lock. Never acquire the lifecycle
+        # lock here: start/stop/set_progress enter Rich while holding it.
+        # The tracker provides best-effort snapshots; read its current
+        # reference on each frame rather than caching a rendered table.
+        return render_subagent_panel_frame(
+            self._tasks,
+            int(monotonic() * 12),
+            theme=self._theme,
+            progress=self._progress,
+        )
 
 
 # ── Renderer ───────────────────────────────────────────────────────────────────
@@ -275,7 +315,9 @@ class Renderer:
         self._run_cost_usd: float = 0.0
 
         # ── Animations ────────────────────────────────────────────────
-        self._spinner = WaitingSpinner(self.console)
+        self._spinner = WaitingSpinner(
+            self.console, enabled=False if self.theme.name == "no-color" else None
+        )
         self._subagent_spinner = SubagentSpinner(self.console, theme=self.theme)
 
     def set_session(self, session_id: str) -> None:
@@ -659,7 +701,7 @@ class Renderer:
             padding=(0, 1),
         )
         table.add_column("#", style=self.theme.muted, width=3, justify="right")
-        table.add_column("Session ID", style="white", no_wrap=True)
+        table.add_column("Session ID", style=self.theme.text, no_wrap=True)
         table.add_column("Messages", style=self.theme.muted, justify="right")
         table.add_column("Updated", style=self.theme.muted)
         table.add_column("State", style=self.theme.accent_soft)

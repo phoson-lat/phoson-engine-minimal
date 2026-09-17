@@ -5,6 +5,8 @@ import pytest
 from phoson_cli.theme import NO_COLOR
 from phoson_cli.commands import Command, CommandHandler
 
+pytestmark = pytest.mark.usefixtures("isolated_cli_home")
+
 
 class DummyRenderer:
     def __init__(self) -> None:

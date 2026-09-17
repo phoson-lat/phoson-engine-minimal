@@ -222,10 +222,10 @@ async def test_run_oneshot_warning_is_notice_not_stderr(capsys, tmp_path: Path) 
     out, err = capsys.readouterr()
     assert rc == 0
     assert "ONE-SHOT RESULT" in out
-    # Mid-run warning surfaces once as a notice, never as raw stderr.
-    assert err == ""
-    assert "vLLM /v1/models response did not include" in out
-    assert ".py:" not in out
+    # Mid-run warning is diagnostic stderr, never answer stdout.
+    assert "vLLM /v1/models response did not include" not in out
+    assert err.count("vLLM /v1/models response did not include") == 1
+    assert ".py:" not in err
 
 
 # ── main() wiring: the hook is active during the run, restored on exit ──────

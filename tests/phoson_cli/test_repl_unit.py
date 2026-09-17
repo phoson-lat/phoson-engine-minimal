@@ -61,6 +61,15 @@ def test_repl_history_path_falls_back_for_legacy_config(tmp_path) -> None:
     assert repl._history_path() == Path("~/.phoson/history.txt").expanduser()
 
 
+def test_repl_new_session_is_synchronous_and_immediate(repl: PhosonRepl) -> None:
+    old_id = repl.tree.session_id
+
+    result = repl.new_session()
+
+    assert result is None
+    assert repl.tree.session_id != old_id
+
+
 def test_session_metrics_load_from_meta() -> None:
     """load_from_meta populates all fields from the dict."""
     metrics = SessionMetrics()

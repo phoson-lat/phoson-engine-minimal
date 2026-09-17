@@ -1,8 +1,11 @@
-"""Unit tests for EnvironmentalContextMiddleware (#143) and its wiring."""
+"""Disabled env injection, legacy cleanup and compatible lifecycle/wiring."""
+
+from copy import deepcopy
+from unittest.mock import Mock
 
 import pytest
 
-from phoson_llm.schemas import Message, ModelConfig
+from phoson_llm.schemas import Message, TextBlock, ModelConfig
 from phoson_agent.models import AgentStartEvent, AgentTokenEvent
 from phoson_agent.middleware import EnvironmentalContextMiddleware, is_env_context
 
@@ -15,13 +18,6 @@ def _config() -> ModelConfig:
 
 def _msgs(n: int = 5) -> list[Message]:
     return [Message(role="user", content=f"msg {i}") for i in range(n)]
-
-
-def _block_text(result: list[Message]) -> str:
-    """The text of the trailing env block (plain string content)."""
-    last = result[-1]
-    assert isinstance(last.content, str)
-    return last.content
 
 
 def _fake_clock(values):
@@ -38,116 +34,140 @@ def _fake_clock(values):
     return _clock
 
 
-# ── block shape & position ───────────────────────────────────────────────────
+# ── injection is disabled; legacy blocks are cleaned up ─────────────────────
 
 
-class TestBlockShape:
-    async def test_block_appended_at_end(self):
+class TestInjectionDisabled:
+    async def test_no_env_block_appended(self):
         mw = EnvironmentalContextMiddleware(max_iterations=20)
-        msgs = _msgs(5)
-        result = await mw.on_before_llm(msgs, _config())
-        assert len(result) == 6
-        assert result[-1].role == "user"
-        assert _block_text(result).startswith("[env: ")
-        assert _block_text(result).endswith("]")
+        result = await mw.on_before_llm(_msgs(5), _config())
+        assert len(result) == 5
+        assert result == _msgs(5)
+        assert all(not is_env_context(m) for m in result)
 
     async def test_original_list_not_mutated(self):
         mw = EnvironmentalContextMiddleware(max_iterations=20)
         msgs = _msgs(5)
         snapshot = list(msgs)
-        await mw.on_before_llm(msgs, _config())
+        result = await mw.on_before_llm(msgs, _config())
         assert msgs == snapshot
-        assert len(msgs) == 5  # the original is untouched
+        assert result is not msgs
 
-    async def test_block_is_single_line(self):
+    async def test_legacy_env_block_stripped(self):
+        """#212: env blocks are request artifacts, not genuine turns. Even
+        with injection off, any legacy block already in the history is
+        dropped instead of being sent to the provider or persisted."""
         mw = EnvironmentalContextMiddleware(max_iterations=20)
-        result = await mw.on_before_llm(_msgs(), _config())
-        assert "\n" not in _block_text(result)
+        legacy = Message(role="user", content="[env: step 1/20]")
+        result = await mw.on_before_llm([legacy] + _msgs(3), _config())
+        assert len(result) == 3
+        assert all(not is_env_context(m) for m in result)
 
-    async def test_injected_on_every_call_including_first(self):
+    async def test_multiple_legacy_blocks_stripped(self):
         mw = EnvironmentalContextMiddleware(max_iterations=20)
-        result = await mw.on_before_llm(_msgs(), _config())
-        assert "step 1/20" in _block_text(result)
-
-    async def test_prior_env_block_stripped_no_accumulation(self):
-        """#212: the env block is a request artifact. When the engine feeds
-        a history that already carries an env block back in, exactly one must
-        survive — otherwise it accumulates (one per LLM call) and, since the
-        engine folds ``on_before_llm`` output into the persistent history, it
-        leaks into the tree / rewind picker."""
-        mw = EnvironmentalContextMiddleware(max_iterations=20)
-        first = await mw.on_before_llm(_msgs(3), _config())
-        assert sum(1 for m in first if is_env_context(m)) == 1
-        # The engine appends the assistant reply, then calls again with that.
-        second = await mw.on_before_llm(
-            first + [Message(role="assistant", content="a")], _config()
+        legacy_a = Message(role="user", content="[env: step 1/20]")
+        legacy_b = Message(
+            role="user",
+            content="[env: step 2/20, time 45s elapsed, 555s remaining]",
         )
-        assert sum(1 for m in second if is_env_context(m)) == 1
-        assert _block_text(second).startswith("[env: ")
-        # And the original input list is still never mutated.
-        assert sum(1 for m in _msgs(3) if is_env_context(m)) == 0
+        kept = [
+            Message(role="system", content="System prompt"),
+            Message(role="user", content=[TextBlock(text="User text")]),
+            Message(role="assistant", content="Answer", reasoning="Reasoning"),
+        ]
+        msgs = [legacy_a, kept[0], legacy_b, *kept[1:], legacy_a]
+        snapshot = deepcopy(msgs)
+        result = await mw.on_before_llm(msgs, _config())
+        assert result == kept
+        assert all(actual is original for actual, original in zip(result, kept))
+        assert result is not msgs
+        assert msgs == snapshot
+        assert all(not is_env_context(m) for m in result)
+        assert await mw.on_before_llm(result, _config()) == kept
+
+    async def test_genuine_user_turn_with_env_like_text_kept(self):
+        """The prefix match requires an exact ``[env: `` start; real turns
+        mentioning env text elsewhere (or with different casing/spacing) are
+        preserved untouched."""
+        mw = EnvironmentalContextMiddleware(max_iterations=20)
+        kept = [
+            Message(role="user", content="Please explain the [env: prefix]"),
+            Message(role="user", content="[env] no space-colon"),
+            Message(role="user", content="[Env: step 1/20]"),
+            Message(role="user", content="[env:step 1/20]"),
+            Message(role="user", content=" [env: step 1/20]"),
+            Message(role="assistant", content="[env: step 1/20]"),
+            Message(role="system", content="[env: step 1/20]"),
+            Message(role="user", content=[TextBlock(text="[env: step 1/20]")]),
+        ]
+        result = await mw.on_before_llm(kept, _config())
+        assert result == kept
+
+    async def test_no_block_on_repeated_calls(self):
+        """Repeated calls (as the engine makes per LLM turn) never add an
+        env block, so nothing accumulates in history."""
+        mw = EnvironmentalContextMiddleware(max_iterations=20)
+        history = _msgs(3)
+        for _ in range(3):
+            history = await mw.on_before_llm(
+                history + [Message(role="assistant", content="a")], _config()
+            )
+        assert all(not is_env_context(m) for m in history)
+        assert len(history) == 6  # 3 initial + 3 assistant, nothing added
+
+    @pytest.mark.parametrize("budget", [None, 0, -1, 600])
+    @pytest.mark.parametrize("count", [0, 2])
+    async def test_disabled_with_any_budget_or_empty_history(self, budget, count):
+        mw = EnvironmentalContextMiddleware(max_iterations=7, run_budget_seconds=budget)
+        result = await mw.on_before_llm(_msgs(count), _config())
+        assert result == _msgs(count)
+        assert all(not is_env_context(m) for m in result)
+
+    async def test_only_legacy_blocks_produce_empty_history(self):
+        mw = EnvironmentalContextMiddleware()
+        msgs = [Message(role="user", content="[env: step 1/20]")]
+        snapshot = deepcopy(msgs)
+        assert await mw.on_before_llm(msgs, _config()) == []
+        assert msgs == snapshot
 
 
 # ── step counting ────────────────────────────────────────────────────────────
 
 
 class TestStepCounting:
-    async def test_step_increments_per_call(self):
+    async def test_step_increments_per_call_without_output(self):
+        """The per-run counter still advances (compat), but no step text is
+        computed or attached to any message."""
         mw = EnvironmentalContextMiddleware(max_iterations=20)
-        first = await mw.on_before_llm(_msgs(), _config())
-        assert "step 1/20" in _block_text(first)
-        third = None
-        for _ in range(2):
-            third = await mw.on_before_llm(_msgs(), _config())
-        assert "step 3/20" in _block_text(third)
+        result = await mw.on_before_llm(_msgs(2), _config())
+        assert mw._step == 1
+        await mw.on_before_llm(_msgs(2), _config())
+        assert mw._step == 2
+        assert result == _msgs(2)
 
-    async def test_max_iterations_in_block(self):
-        mw = EnvironmentalContextMiddleware(max_iterations=7)
-        result = await mw.on_before_llm(_msgs(), _config())
-        assert "step 1/7" in _block_text(result)
-
-    def test_invalid_max_iterations_raises(self):
-        with pytest.raises(ValueError):
-            EnvironmentalContextMiddleware(max_iterations=0)
+    @pytest.mark.parametrize("max_iterations", [0, -1])
+    def test_invalid_max_iterations_raises(self, max_iterations):
+        with pytest.raises(ValueError, match="max_iterations must be > 0"):
+            EnvironmentalContextMiddleware(max_iterations=max_iterations)
 
 
 # ── time / budget ────────────────────────────────────────────────────────────
 
 
 class TestTimeBudget:
-    async def test_with_budget_shows_elapsed_and_remaining(self):
-        mw = EnvironmentalContextMiddleware(max_iterations=20, run_budget_seconds=600)
-        result = await mw.on_before_llm(_msgs(), _config())
-        text = _block_text(result)
-        assert "elapsed" in text
-        assert "remaining" in text
-        # The budget was just started, so almost the full 600s remains.
-        assert "599s remaining" in text or "600s remaining" in text
-
-    async def test_without_budget_only_step(self):
-        mw = EnvironmentalContextMiddleware(max_iterations=20, run_budget_seconds=None)
-        result = await mw.on_before_llm(_msgs(), _config())
-        text = _block_text(result)
-        assert "step 1/20" in text
-        assert "elapsed" not in text
-        assert "remaining" not in text
-
-    async def test_zero_budget_means_no_time(self):
-        mw = EnvironmentalContextMiddleware(max_iterations=20, run_budget_seconds=0)
-        result = await mw.on_before_llm(_msgs(), _config())
-        assert "elapsed" not in _block_text(result)
-
-    async def test_time_uses_monotonic(self, monkeypatch):
+    async def test_clock_only_used_to_start_run_not_compute_budget(self, monkeypatch):
         import phoson_agent.middleware as mw_mod
 
-        # on_before_llm reads the clock twice: once to (re)start, once for
-        # elapsed. 3rd value is a clamp for post-test teardown.
-        monkeypatch.setattr(mw_mod.time, "monotonic", _fake_clock([1000.0, 1045.0]))
-        mw = EnvironmentalContextMiddleware(max_iterations=20, run_budget_seconds=600)
-        result = await mw.on_before_llm(_msgs(), _config())
-        text = _block_text(result)
-        assert "45s elapsed" in text
-        assert "555s remaining" in text
+        clock = Mock(return_value=1000.0)
+        # Replace the module reference, not the event loop's shared clock.
+        monkeypatch.setattr(mw_mod, "time", Mock(monotonic=clock))
+        mw = EnvironmentalContextMiddleware(run_budget_seconds=600)
+        msgs = _msgs(2)
+        assert await mw.on_before_llm(msgs, _config()) == msgs
+        clock.assert_called_once_with()
+        clock.return_value = 2000.0  # Even an exhausted budget adds nothing.
+        assert await mw.on_before_llm(msgs, _config()) == msgs
+        clock.assert_called_once_with()
 
 
 # ── reset / lifecycle ────────────────────────────────────────────────────────
@@ -162,7 +182,8 @@ class TestLifecycle:
         await mw.on_agent_event(AgentStartEvent())
         assert mw._step == 0
         result = await mw.on_before_llm(_msgs(), _config())
-        assert "step 1/20" in _block_text(result)
+        assert mw._step == 1
+        assert result == _msgs()
 
     async def test_non_start_event_does_not_reset(self):
         mw = EnvironmentalContextMiddleware(max_iterations=20)
@@ -179,6 +200,15 @@ class TestLifecycle:
         assert mw._step == 0
         assert mw._start_time == 1000.0
 
+    async def test_start_time_lazily_set_on_first_call(self, monkeypatch):
+        import phoson_agent.middleware as mw_mod
+
+        monkeypatch.setattr(mw_mod.time, "monotonic", _fake_clock([1000.0]))
+        mw = EnvironmentalContextMiddleware(max_iterations=20)
+        assert mw._start_time is None
+        await mw.on_before_llm(_msgs(), _config())
+        assert mw._start_time == 1000.0
+
 
 # ── build_middlewares wiring ─────────────────────────────────────────────────
 
@@ -189,31 +219,34 @@ class TestBuildMiddlewaresWiring:
 
         return PermissionMiddleware(PermissionPolicy())
 
-    def _chain(self, **overrides):
+    def _chain(self, *, summarizer=None, **overrides):
         from phoson_cli.config import PhosonConfig
         from phoson_cli.session_utils import build_middlewares
 
         config = PhosonConfig(**overrides)
         return build_middlewares(
-            config=config, offload=None, summarizer=None, permission=self._permission()
+            config=config,
+            offload=None,
+            summarizer=summarizer,
+            permission=self._permission(),
         )
 
     def test_env_middleware_present_and_after_summarizer(self):
         from phoson_agent.permissions import PermissionMiddleware
+        from phoson_agent.plugins.summarizer import SummarizationMiddleware
 
-        chain = self._chain()
+        summarizer = SummarizationMiddleware(provider="echo", model="echo")
+        chain = self._chain(summarizer=summarizer)
         env = next(m for m in chain if isinstance(m, EnvironmentalContextMiddleware))
         env_idx = chain.index(env)
         # The permission gate is always last in the chain.
         assert isinstance(chain[-1], PermissionMiddleware)
-        # The env block must be appended after any summarizer compaction.
-        from phoson_agent.plugins.summarizer import SummarizationMiddleware
-
+        # The env middleware must sit after any summarizer compaction.
         summarizers = [
             i for i, m in enumerate(chain) if isinstance(m, SummarizationMiddleware)
         ]
-        if summarizers:
-            assert env_idx > max(summarizers)
+        assert summarizers
+        assert env_idx > max(summarizers)
 
     def test_env_middleware_uses_config_values(self):
         chain = self._chain(max_iterations=42, run_budget_seconds=120.0)

@@ -33,7 +33,8 @@ class PaletteController:
         if app._palette_open:
             return  # a palette is already scheduled/animating open
         app._palette_open = True
-        app.app.create_background_task(self._run())
+        if app._start_operation(self._run(), "palette") is None:
+            app._palette_open = False
 
     async def _run(self) -> None:
         """Host the palette as a background task with a synchronous guard.
@@ -79,13 +80,6 @@ class PaletteController:
         if not isinstance(result, PalettePickerResult):
             return
         if result.cancelled or not result.command_name:
-            return
-        if app._is_run_in_flight():
-            # A run could have started while the float was open.
-            app.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
             return
         await app._run_command(Command(name=result.command_name, args=""))
 

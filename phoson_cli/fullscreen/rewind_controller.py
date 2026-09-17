@@ -178,6 +178,8 @@ class RewindController:
         """
         app = self.app
         app.sink.blocks.clear()
+        app.sink.clear_reasoning_state()
+        app.repl._expanded_reasoning.clear()
         app.sink.drop_error_notice()
         app._block_ansi_cache.clear(0)
         app._block_ft_cache.clear(0)

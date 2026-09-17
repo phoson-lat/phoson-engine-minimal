@@ -252,7 +252,7 @@ class TestBuildMonitorPlugins:
 
 
 class TestControllerWiring:
-    def test_injects_session_id_provider(self, tmp_path) -> None:
+    async def test_injects_session_id_provider(self, tmp_path) -> None:
         controller, _ = _make_controller(
             tmp_path,
             enable_monitors=True,
@@ -264,7 +264,7 @@ class TestControllerWiring:
         assert provider() == original
 
         # new_session swaps the tree; the provider follows (no rebuild).
-        controller.new_session()
+        await controller.new_session()
         assert provider() != original
         assert provider() == controller.tree.session_id
 

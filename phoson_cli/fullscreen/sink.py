@@ -95,6 +95,22 @@ class CurrentTurn:
     thinking_since: float | None = None
 
 
+@dataclass
+class _SessionViewSnapshot:
+    blocks: list[object]
+    plugin_blocks: dict[str, object]
+    current_turn: CurrentTurn | None
+    last_reasoning: str
+    reasoning_blocks: list[tuple[object, str, bool, Theme]]
+    expanded_reasoning_nodes: set[str]
+    pending_tool_calls: dict[str, tuple[dict, object, Theme]]
+    tool_calls: list[tuple[AgentToolDoneEvent, dict[str, Any], object, Theme]]
+    error_notice_idx: int | None
+    stream_event: bool
+    dirty: bool
+    app_state: object | None
+
+
 class FullScreenSink:
     """``AgentEventSink`` implementation for the full-screen ``PhosonApp``.
 
@@ -105,9 +121,20 @@ class FullScreenSink:
     """
 
     def __init__(
-        self, on_invalidate, theme: Theme, show_reasoning: bool = True
+        self,
+        on_invalidate,
+        theme: Theme,
+        show_reasoning: bool = True,
+        on_session_snapshot=None,
+        on_session_reset=None,
+        on_session_restore=None,
+        on_persistence_required=None,
     ) -> None:
         self._on_invalidate = on_invalidate
+        self._on_session_snapshot = on_session_snapshot
+        self._on_session_reset = on_session_reset
+        self._on_session_restore = on_session_restore
+        self._on_persistence_required = on_persistence_required
         self.theme = theme
         self.session_id: str | None = None
         self.dirty = True
@@ -123,12 +150,16 @@ class FullScreenSink:
         # the *newest* turn. ``expand_reasoning`` replaces the matching
         # collapsed line with the full text in place; once a turn is
         # expanded, later Ctrl+T presses expand the next one.
-        self._reasoning_blocks: list[tuple[object, str, bool]] = []
+        self._reasoning_blocks: list[tuple[object, str, bool, Theme]] = []
+        # Node identity is authoritative for one-shot expansion. Reasoning text
+        # is not unique: resumed and live nodes may legitimately contain the
+        # same content and must remain independently expandable.
+        self._expanded_reasoning_nodes: set[str] = set()
         # Args + transcript block of in-flight regular tool calls, keyed by
         # tool_call_id (C1). Done events don't carry args, and the done card
         # REPLACES the start line so each call renders as exactly one card
         # (appending would duplicate the header).
-        self._pending_tool_calls: dict[str, tuple[dict, object]] = {}
+        self._pending_tool_calls: dict[str, tuple[dict, object, Theme]] = {}
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
@@ -144,7 +175,9 @@ class FullScreenSink:
         # T-7: every finished regular tool call, remembered so
         # ``/details`` can re-expand a collapsed done card (event + its
         # start args + the exact block object currently in ``blocks``).
-        self._tool_calls: list[tuple[AgentToolDoneEvent, dict[str, Any], object]] = []
+        self._tool_calls: list[
+            tuple[AgentToolDoneEvent, dict[str, Any], object, Theme]
+        ] = []
         # /details toggle state: cards render expanded until the user
         # collapses them (T-7).
         self.tool_details_shown: bool = True
@@ -152,6 +185,16 @@ class FullScreenSink:
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Apply the active controller's isolated plugin visual specs."""
         self._tool_render_registry = registry
+
+    def set_theme(self, theme: Theme) -> None:
+        """Theme future blocks while preserving finalized append-only blocks.
+
+        Finalized Rich renderables intentionally retain their original palette;
+        rebuilding all historical block kinds would require storing a parallel
+        semantic event transcript. Mutable/live content and newly emitted blocks
+        use the new theme immediately.
+        """
+        self.theme = theme
 
     def set_tool_details(self) -> bool:
         """T-7: toggle collapsed tool cards, returning the new state.
@@ -164,12 +207,14 @@ class FullScreenSink:
         """
         self.tool_details_shown = not self.tool_details_shown
         show = self.tool_details_shown
-        for i, (event, start_args, block) in enumerate(self._tool_calls):
+        for i, (event, start_args, block, originating_theme) in enumerate(
+            self._tool_calls
+        ):
             if event.tool_name in {"agent", "agents"}:
                 continue  # subagent lines keep their own layout
             rebuilt = render_tool_done_line(
                 event,
-                self.theme,
+                originating_theme,
                 args=start_args,
                 registry=self._tool_render_registry,
                 collapsed=not show,
@@ -182,7 +227,7 @@ class FullScreenSink:
             # Keep the record pointing at the *current* block object: the
             # next toggle replaces by identity, so a stale reference would
             # make the card un-expandable.
-            self._tool_calls[i] = (event, start_args, rebuilt)
+            self._tool_calls[i] = (event, start_args, rebuilt, originating_theme)
         self._touch()
         return show
 
@@ -255,7 +300,7 @@ class FullScreenSink:
         self.blocks.append(block)
         # Remember it so /details can re-render this card like any other
         # finished tool call.
-        self._tool_calls.append((event, args, block))
+        self._tool_calls.append((event, args, block, self.theme))
         self._touch()
 
     def _touch(self) -> None:
@@ -293,13 +338,21 @@ class FullScreenSink:
                 self._touch()
                 return
             delay = REPAINT_INTERVAL_SECONDS - (now - self._last_stream_repaint)
-            self._stream_repaint_pending = loop.call_later(max(delay, 0.0), self._touch)
+
+            def repaint() -> None:
+                self._stream_repaint_pending = None
+                self._last_stream_repaint = time.monotonic()
+                self._touch()
+
+            self._stream_repaint_pending = loop.call_later(max(delay, 0.0), repaint)
 
     def cancel_stream_throttle(self) -> None:
         """Drop any pending throttled repaint timer (turn finished)."""
         if self._stream_repaint_pending is not None:
             self._stream_repaint_pending.cancel()
             self._stream_repaint_pending = None
+        self._last_stream_repaint = 0.0
+        self._stream_event = False
 
     def drop_error_notice(self) -> None:
         """Remove the pending single-line error notice from the transcript (I-83).
@@ -464,6 +517,7 @@ class FullScreenSink:
     def on_event(self, event: AgentEvent) -> None:
         match event:
             case AgentStartEvent():
+                self.cancel_stream_throttle()
                 # No meta line here (cli_abel-style: the response starts
                 # directly with the assistant label, no model/session line —
                 # the header bar already shows the active model).
@@ -526,7 +580,11 @@ class FullScreenSink:
                     )
                     self.blocks.append(start_block)
                     key = event.tool_call_id or f"index:{event.index}"
-                    self._pending_tool_calls[key] = (dict(event.args), start_block)
+                    self._pending_tool_calls[key] = (
+                        dict(event.args),
+                        start_block,
+                        self.theme,
+                    )
 
             case AgentToolDoneEvent():
                 turn = self.current_turn
@@ -546,12 +604,12 @@ class FullScreenSink:
                         turn.running_tool = False
                     key = event.tool_call_id or f"index:{event.index}"
                     pending = self._pending_tool_calls.pop(key, None)
-                    start_args, start_block = (
-                        pending if pending is not None else ({}, None)
+                    start_args, start_block, originating_theme = (
+                        pending if pending is not None else ({}, None, self.theme)
                     )
                     done_block = render_tool_done_line(
                         event,
-                        self.theme,
+                        originating_theme,
                         args=start_args,
                         registry=self._tool_render_registry,
                         collapsed=not self.tool_details_shown,
@@ -579,7 +637,9 @@ class FullScreenSink:
                     # T-7: remember the finished call (event + args + the
                     # exact block object) so /details can re-render it
                     # uncollapsed later in the session.
-                    self._tool_calls.append((event, start_args, done_block))
+                    self._tool_calls.append(
+                        (event, start_args, done_block, originating_theme)
+                    )
 
             case AgentStepDoneEvent():
                 if self.current_turn is not None:
@@ -593,6 +653,7 @@ class FullScreenSink:
                 self._stream_event = True
 
             case AgentDoneEvent():
+                self.protect_persistence()
                 self.cancel_stream_throttle()
                 turn = self.current_turn
                 if turn is not None:
@@ -608,6 +669,7 @@ class FullScreenSink:
                     self.blocks.append(line)
 
             case AgentErrorEvent():
+                self.protect_persistence()
                 self.cancel_stream_throttle()
                 turn = self.current_turn
                 if turn is not None:
@@ -679,7 +741,7 @@ class FullScreenSink:
         block = render_reasoning_collapsed(elapsed, self.theme)
         self.blocks.append(block)
         # Newest first: Ctrl+T expands the most recent un-expanded turn.
-        self._reasoning_blocks.insert(0, (block, turn.reasoning, False))
+        self._reasoning_blocks.insert(0, (block, turn.reasoning, False, self.theme))
 
     def flush_line(self) -> None:
         """Freeze the in-flight turn (cancel/error paths before a terminal event).
@@ -690,6 +752,7 @@ class FullScreenSink:
         ``current_turn``, and there would otherwise be nothing left for
         ``capture_partial_reasoning`` to read.
         """
+        self.cancel_stream_throttle()
         turn = self.current_turn
         if turn is None:
             return
@@ -715,18 +778,21 @@ class FullScreenSink:
         self._touch()
         return self.current_turn.show_reasoning
 
-    def expand_reasoning(self, reasoning: str) -> None:
+    def expand_reasoning(self, node_id: str, reasoning: str) -> bool:
         """Ctrl+T post-turn: expand a collapsed reasoning line in place (T-3).
 
         Finds the newest finished turn whose collapsed ``thought Ns`` line
         has not yet been expanded and swaps that line for the full
         reasoning text — in place, with **no** ``Panel``. A turn is
-        expanded at most once (the transcript is append-only, mirroring the
-        classic REPL's one-shot Ctrl+T). The *reasoning* argument is kept
-        for the classic-REPL call site; the full-screen path resolves the
-        text from its own :attr:`_reasoning_blocks` record.
+        expanded at most once by ``node_id`` (the transcript is append-only,
+        mirroring the classic REPL's one-shot Ctrl+T). Live turns resolve text
+        from :attr:`_reasoning_blocks`; resumed turns use ``reasoning``.
         """
-        for index, (block, text, expanded) in enumerate(self._reasoning_blocks):
+        if node_id in self._expanded_reasoning_nodes:
+            return False
+        for index, (block, text, expanded, originating_theme) in enumerate(
+            self._reasoning_blocks
+        ):
             if expanded:
                 continue
             if block not in self.blocks:
@@ -735,29 +801,97 @@ class FullScreenSink:
                 continue
             position = self.blocks.index(block)
             self.blocks[position] = render_reasoning_expanded(
-                text if text else reasoning, self.theme
+                text if text else reasoning, originating_theme
             )
             self._reasoning_blocks[index] = (
                 self.blocks[position],
                 text,
                 True,
+                originating_theme,
             )
             self._touch()
-            return
-        # No unexpanded collapsed line was found. If we've already expanded
-        # reasoning this session this is the one-shot "nothing left to do"
-        # case (a repeat Ctrl+T) — a no-op. Only when nothing has been
-        # expanded yet (e.g. the transcript was rebuilt after a resume and
-        # the collapsed line is gone) do we append the full text in place
-        # style — still no Panel — so Ctrl+T after a resume still surfaces
-        # the node's reasoning.
-        if reasoning and not any(entry[2] for entry in self._reasoning_blocks):
+            self._expanded_reasoning_nodes.add(node_id)
+            return True
+        # Resumed reasoning has no live collapsed-line record. Append it in
+        # the same unboxed style after all newer live records are expanded.
+        # Node-level one-shot tracking in state_cycles prevents duplicates.
+        if reasoning:
             self.blocks.append(render_reasoning_expanded(reasoning, self.theme))
             self._touch()
+            self._expanded_reasoning_nodes.add(node_id)
+            return True
+        return False
 
     def clear_reasoning_state(self) -> None:
-        """Drop the collapsed-line records (transcript cleared / rewound)."""
+        """Drop collapsed-line and node-identity records on transcript reset."""
         self._reasoning_blocks.clear()
+        self._expanded_reasoning_nodes.clear()
+
+    def protect_persistence(self) -> None:
+        """Mark the current app operation's remaining save as required."""
+        if self._on_persistence_required is not None:
+            self._on_persistence_required()
+
+    def snapshot_session_view(self) -> object:
+        """Capture transcript and app-owned state for transactional replacement."""
+        app_state = (
+            self._on_session_snapshot()
+            if self._on_session_snapshot is not None
+            else None
+        )
+        return _SessionViewSnapshot(
+            blocks=list(self.blocks),
+            plugin_blocks=dict(self._plugin_blocks),
+            current_turn=self.current_turn,
+            last_reasoning=self._last_reasoning,
+            reasoning_blocks=list(self._reasoning_blocks),
+            expanded_reasoning_nodes=set(self._expanded_reasoning_nodes),
+            pending_tool_calls=dict(self._pending_tool_calls),
+            tool_calls=list(self._tool_calls),
+            error_notice_idx=self._error_notice_idx,
+            stream_event=self._stream_event,
+            dirty=self.dirty,
+            app_state=app_state,
+        )
+
+    def reset_session_view(self) -> None:
+        """Clear all transcript state before displaying another session."""
+        self.cancel_stream_throttle()
+        self.blocks.clear()
+        self._plugin_blocks.clear()
+        self.current_turn = None
+        self._last_reasoning = ""
+        self._reasoning_blocks.clear()
+        self._expanded_reasoning_nodes.clear()
+        self._pending_tool_calls.clear()
+        self._tool_calls.clear()
+        self._error_notice_idx = None
+        self._stream_event = False
+        self.dirty = True
+        if self._on_session_reset is not None:
+            self._on_session_reset()
+        else:
+            self._on_invalidate()
+
+    def restore_session_view(self, snapshot: object) -> None:
+        """Restore transcript and app-owned state after a failed replacement."""
+        if not isinstance(snapshot, _SessionViewSnapshot):
+            raise TypeError("invalid fullscreen session view snapshot")
+        self.blocks = snapshot.blocks
+        self._plugin_blocks = snapshot.plugin_blocks
+        self.current_turn = snapshot.current_turn
+        self._last_reasoning = snapshot.last_reasoning
+        self._reasoning_blocks = snapshot.reasoning_blocks
+        self._expanded_reasoning_nodes = snapshot.expanded_reasoning_nodes
+        self._pending_tool_calls = snapshot.pending_tool_calls
+        self._tool_calls = snapshot.tool_calls
+        self._error_notice_idx = snapshot.error_notice_idx
+        self._stream_event = snapshot.stream_event
+        self.dirty = snapshot.dirty
+        if self._on_session_restore is not None:
+            self._on_session_restore(snapshot.app_state)
+        else:
+            self._on_invalidate()
 
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id

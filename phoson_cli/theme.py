@@ -23,10 +23,10 @@ Custom themes: drop a JSON file into ``~/.phoson/themes/`` — its tokens
 merge onto a built-in ``base`` (see :func:`_load_json_themes`). Python
 plugin themes (``ThemeExtension``) remain for the odd case.
 
-Selection: ``NO_COLOR``/``CLICOLOR=0`` always win, then the
-``PHOSON_THEME`` env var, then ``config.toml [theme]`` (via
-``load_theme(config_value=...)``), then ``system``. Invalid names warn
-and fall back to ``dark``.
+Selection: ``NO_COLOR``/``CLICOLOR=0`` always win, then an explicit CLI
+value, ``PHOSON_THEME``, ``config.toml [theme]`` (via
+``load_theme(config_value=...)``), then ``system``. Invalid names warn and
+fall back to ``dark``.
 """
 
 import os
@@ -35,6 +35,10 @@ import warnings
 from pathlib import Path
 from dataclasses import replace, dataclass
 from collections.abc import Mapping, Sequence
+
+from rich.style import Style as RichStyle
+from pygments.styles import get_style_by_name
+from prompt_toolkit.styles import Style as PromptToolkitStyle
 
 from phoson_agent import Plugin, ThemeExtension
 
@@ -354,25 +358,73 @@ def _load_json_theme_file(path: Path) -> Theme | None:
     """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        warnings.warn(f"Skipping invalid JSON theme {path}: {exc}", stacklevel=2)
         return None
     if not isinstance(raw, dict):
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: root must be an object", stacklevel=2
+        )
         return None
-    name = str(raw.get("name") or path.stem).strip().lower()
+    if "name" in raw and not isinstance(raw["name"], str):
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: name must be a string",
+            stacklevel=2,
+        )
+        return None
+    if "base" in raw and not isinstance(raw["base"], str):
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: base must be a string",
+            stacklevel=2,
+        )
+        return None
+    name = (raw.get("name") or path.stem).strip().lower()
     if not name:
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: name is empty", stacklevel=2
+        )
         return None
-    base_name = str(raw.get("base") or "dark").strip().lower()
+    if name in _BY_NAME:
+        warnings.warn(
+            f"Skipping JSON theme {path}: built-in theme {name!r} cannot be replaced",
+            stacklevel=2,
+        )
+        return None
+    base_name = (raw.get("base") or "dark").strip().lower()
     base = _BY_NAME.get(base_name)
     if base is None:
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: unknown base {base_name!r}",
+            stacklevel=2,
+        )
         return None
     known_tokens = set(Theme.__dataclass_fields__) - {"name", "base"}
+    invalid_tokens = set(raw) - known_tokens - {"name", "base"}
+    if invalid_tokens:
+        warnings.warn(
+            f"Skipping invalid JSON theme {path}: unknown tokens: "
+            f"{', '.join(sorted(invalid_tokens))}",
+            stacklevel=2,
+        )
+        return None
     tokens: dict[str, str] = {}
     for key, value in raw.items():
         if key in {"name", "base"}:
             continue
-        if key in known_tokens and isinstance(value, str):
-            tokens[key] = value
-    return replace(base, name=name, **tokens)
+        if not isinstance(value, str):
+            warnings.warn(
+                f"Skipping invalid JSON theme {path}: token {key!r} must be a string",
+                stacklevel=2,
+            )
+            return None
+        tokens[key] = value
+    theme = replace(base, name=name, **tokens)
+    try:
+        _validate_theme_styles(theme)
+    except ValueError as exc:
+        warnings.warn(f"Skipping JSON theme {path}: invalid style: {exc}", stacklevel=2)
+        return None
+    return theme
 
 
 def load_json_themes() -> dict[str, Theme]:
@@ -413,7 +465,8 @@ class ThemeRegistry:
 def default_theme_registry() -> ThemeRegistry:
     """Return the registry with the built-in tiers plus drop-in JSON themes."""
     themes = dict(_BY_NAME)
-    themes.update(load_json_themes())  # user files may add (not replace) names
+    json_themes = load_json_themes()
+    themes.update(json_themes)
     descriptions = {
         "system": "default, inherits your terminal's colors",
         "dark": "purple on dark",
@@ -421,7 +474,7 @@ def default_theme_registry() -> ThemeRegistry:
         "ansi": "16-color SSH-safe",
         "no-color": "plain text",
     }
-    for name, theme in load_json_themes().items():
+    for name in json_themes:
         descriptions.setdefault(name, "JSON theme (~/.phoson/themes/)")
     return ThemeRegistry(themes=themes, descriptions=descriptions)
 
@@ -443,8 +496,11 @@ def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
     known_tokens = set(Theme.__dataclass_fields__) - {"name"}
 
     for plugin in plugins:
+        get_extension = getattr(plugin, "get_theme_extension", None)
+        if not callable(get_extension):
+            continue
         try:
-            extension = plugin.get_theme_extension()
+            extension = get_extension()
         except Exception as exc:
             raise ValueError(
                 f"Plugin {plugin.name!r} failed while declaring its theme: {exc}"
@@ -473,7 +529,9 @@ def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
                 f"Plugin {plugin.name!r} theme {name!r} has invalid base "
                 f"{extension.base!r}"
             )
-        themes[name] = replace(base, name=name, **dict(extension.tokens))
+        theme = replace(base, name=name, **dict(extension.tokens))
+        _validate_theme_styles(theme)
+        themes[name] = theme
         descriptions[name] = extension.description.strip() or "plugin theme"
 
     return ThemeRegistry(themes=themes, descriptions=descriptions)
@@ -484,13 +542,21 @@ def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
 
 def _env_requests_no_color() -> bool:
     """True when ``NO_COLOR`` is set (non-empty) or ``CLICOLOR=0``."""
-    if os.environ.get("NO_COLOR", "").strip():
+    if os.environ.get("NO_COLOR", "") != "":
         return True
     return os.environ.get("CLICOLOR", "") == "0"
 
 
+def env_requests_no_color() -> bool:
+    """Public color-disable check shared by startup and ``/theme``."""
+    return _env_requests_no_color()
+
+
 def load_theme(
-    config_value: str | None = None, *, registry: ThemeRegistry | None = None
+    config_value: str | None = None,
+    *,
+    registry: ThemeRegistry | None = None,
+    cli_value: str | None = None,
 ) -> Theme:
     """Resolve the active theme.
 
@@ -498,9 +564,10 @@ def load_theme(
 
     1. ``NO_COLOR`` / ``CLICOLOR=0`` — always wins (CLI convention;
        scripts and CI get plain output).
-    2. ``PHOSON_THEME`` env var.
-    3. ``config_value`` (the ``theme`` key from ``config.toml``).
-    4. ``system`` (T-8) — the terminal's own colors, so a user's
+    2. ``cli_value`` (the explicit ``--theme`` value).
+    3. ``PHOSON_THEME`` env var.
+    4. ``config_value`` (the ``theme`` key from ``config.toml``).
+    5. ``system`` (T-8) — the terminal's own colors, so a user's
        Gruvbox/Catppuccin/... palette is never fought over.
 
     Unknown names warn and fall back to ``dark`` (or the no-color tier
@@ -512,10 +579,12 @@ def load_theme(
     Returns:
         The resolved :class:`Theme`.
     """
-    if _env_requests_no_color():
+    if env_requests_no_color():
         return NO_COLOR
 
-    requested = os.environ.get("PHOSON_THEME", "").strip().lower()
+    requested = str(cli_value or "").strip().lower()
+    if not requested:
+        requested = os.environ.get("PHOSON_THEME", "").strip().lower()
     if not requested and config_value:
         requested = str(config_value).strip().lower()
     if not requested:
@@ -543,6 +612,34 @@ def get_theme(name: str, *, registry: ThemeRegistry | None = None) -> Theme | No
     otherwise force plain output. Returns ``None`` for unknown names.
     """
     return (registry or default_theme_registry()).get(name)
+
+
+def resolve_runtime_theme(config: object, registry: ThemeRegistry) -> Theme:
+    """Resolve a configured theme without warning during deferred CLI validation."""
+    requested = getattr(config, "cli_theme", None)
+    configured = getattr(config, "theme", None)
+    if requested and configured and configured != requested:
+        # CLI selection seeds config.theme at startup. A later /theme or setup
+        # choice replaces it; rebuilding plugins must not resurrect the seed.
+        requested = configured
+        setattr(config, "cli_theme", requested)
+        setattr(config, "_cli_theme_deferred", False)
+    if (
+        requested
+        and getattr(config, "_cli_theme_deferred", False)
+        and registry.get(requested) is None
+    ):
+        return getattr(config, "_startup_theme")
+    theme = load_theme(
+        getattr(config, "theme", None),
+        registry=registry,
+        cli_value=requested,
+    )
+    if requested:
+        setattr(config, "_startup_theme_registry", registry)
+        setattr(config, "_startup_theme", theme)
+        setattr(config, "_cli_theme_deferred", False)
+    return theme
 
 
 def suggest_theme(
@@ -672,3 +769,35 @@ def build_prompt_style(theme: Theme) -> dict[str, str]:
         },
         theme,
     )
+
+
+def _validate_theme_styles(theme: Theme) -> None:
+    """Fail before registry inclusion if Rich or prompt_toolkit rejects a token."""
+    rich_fields = (
+        "text",
+        "muted",
+        "muted_deep",
+        "accent",
+        "accent_soft",
+        "art",
+        "ok",
+        "err",
+        "warn",
+        "reasoning",
+        "diff_add_bg",
+        "diff_del_bg",
+        "panel_bg",
+        "badge_user",
+        "badge_assistant",
+        "badge_history",
+    )
+    try:
+        for field_name in rich_fields:
+            RichStyle.parse(getattr(theme, field_name))
+        if theme.code_theme not in {"ansi_dark", "ansi_light", "none"}:
+            get_style_by_name(theme.code_theme)
+        PromptToolkitStyle.from_dict(build_prompt_style(theme))
+        PromptToolkitStyle.from_dict(build_picker_style_dict(theme))
+        PromptToolkitStyle.from_dict(build_wizard_prompt_style(theme))
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc

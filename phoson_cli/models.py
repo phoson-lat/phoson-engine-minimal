@@ -22,12 +22,17 @@ writes new entries to it.
 """
 
 import json
+import warnings
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
 
 #: File name inside the Phoson home directory.
 MODELS_FILE_NAME = "models.json"
+
+# Last malformed payload reported per path. A repeated read during one picker or
+# controller refresh should not duplicate the same actionable diagnostic.
+_reported_invalid_json: dict[Path, str] = {}
 
 
 @dataclass(frozen=True)
@@ -154,11 +159,16 @@ def load_models_file(path: str | Path | None = None) -> dict[str, Any]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        print(
-            f"⚠  {p.name} is not valid JSON — ignoring it. "
-            "Fix or delete the file to restore defaults."
-        )
+        if _reported_invalid_json.get(p) != raw:
+            _reported_invalid_json[p] = raw
+            warnings.warn(
+                f"{p.name} is not valid JSON; ignoring it. "
+                "Fix or delete the file to restore defaults.",
+                UserWarning,
+                stacklevel=2,
+            )
         return {}
+    _reported_invalid_json.pop(p, None)
     if not isinstance(data, dict):
         return {}
     return data

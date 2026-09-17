@@ -49,11 +49,11 @@ def test_load_missing_file_returns_empty(tmp_path) -> None:
     assert load_models_file(tmp_path / "nope.json") == {}
 
 
-def test_load_invalid_json_returns_empty_and_warns(tmp_path, capsys) -> None:
+def test_load_invalid_json_returns_empty_and_warns(tmp_path) -> None:
     p = tmp_path / "models.json"
     p.write_text("{not json")
-    assert load_models_file(p) == {}
-    assert "not valid JSON" in capsys.readouterr().out
+    with pytest.warns(UserWarning, match="not valid JSON"):
+        assert load_models_file(p) == {}
 
 
 def test_load_non_dict_returns_empty(tmp_path) -> None:

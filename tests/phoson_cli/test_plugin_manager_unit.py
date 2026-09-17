@@ -201,10 +201,77 @@ def test_enable_plugin_checks_entrypoint_and_deduplicates() -> None:
 
 
 def test_remove_plugin_is_a_safe_configuration_only_operation() -> None:
-    config = PhosonConfig(plugins=["entrypoint:demo"])
-    with patch("phoson_cli.plugin_manager.save_config"):
+    config = PhosonConfig(
+        plugins=["entrypoint:demo", "entrypoint:other"],
+        disabled_plugins=["entrypoint:demo", "path:/tmp/demo"],
+    )
+    with (
+        patch("phoson_cli.plugin_manager.save_config") as save,
+        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
+        patch("phoson_cli.plugin_manager._save_lockfile"),
+        patch("phoson_cli.plugin_manager.subprocess.run") as uninstall,
+    ):
         remove_plugin("demo", config)
-    assert config.plugins == []
+    assert config.plugins == ["entrypoint:other"]
+    assert config.disabled_plugins == ["path:/tmp/demo"]
+    save.assert_called_once_with(config, only_fields={"plugins", "disabled_plugins"})
+    uninstall.assert_not_called()
+
+
+def test_remove_validates_lockfile_before_mutating_config() -> None:
+    config = PhosonConfig(plugins=["entrypoint:demo"])
+    with (
+        patch(
+            "phoson_cli.plugin_manager._load_lockfile",
+            side_effect=PluginManagerError("malformed lockfile"),
+        ),
+        patch("phoson_cli.plugin_manager.save_config") as save,
+    ):
+        with pytest.raises(PluginManagerError, match="malformed lockfile"):
+            remove_plugin("demo", config)
+
+    assert config.plugins == ["entrypoint:demo"]
+    assert config.disabled_plugins == []
+    save.assert_not_called()
+
+
+def test_remove_unwritable_lockfile_leaves_config_unchanged() -> None:
+    config = PhosonConfig(plugins=["entrypoint:demo"], disabled_plugins=["path:/other"])
+    with (
+        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
+        patch(
+            "phoson_cli.plugin_manager._save_lockfile",
+            side_effect=OSError("read-only filesystem"),
+        ),
+        patch("phoson_cli.plugin_manager.save_config") as save,
+    ):
+        with pytest.raises(OSError, match="read-only"):
+            remove_plugin("demo", config)
+
+    assert config.plugins == ["entrypoint:demo"]
+    assert config.disabled_plugins == ["path:/other"]
+    save.assert_not_called()
+
+
+def test_remove_rolls_back_inventory_when_config_save_fails() -> None:
+    config = PhosonConfig(plugins=["entrypoint:demo"])
+    previous_lock = [{"id": "demo", "source": "package"}]
+    with (
+        patch("phoson_cli.plugin_manager._load_lockfile", return_value=previous_lock),
+        patch("phoson_cli.plugin_manager._save_lockfile") as save_lock,
+        patch(
+            "phoson_cli.plugin_manager.save_config",
+            side_effect=[OSError("config read-only"), None],
+        ) as save_config,
+    ):
+        with pytest.raises(OSError, match="config read-only"):
+            remove_plugin("demo", config)
+
+    assert config.plugins == ["entrypoint:demo"]
+    assert config.disabled_plugins == []
+    assert save_lock.call_args_list[0].args == ([],)
+    assert save_lock.call_args_list[1].args == (previous_lock,)
+    assert save_config.call_count == 2
 
 
 def test_lockfile_round_trips_a_reviewable_install_inventory(tmp_path) -> None:
@@ -222,6 +289,21 @@ def test_lockfile_round_trips_a_reviewable_install_inventory(tmp_path) -> None:
 
     assert _load_lockfile(lockfile) == entries
     assert lockfile.stat().st_mode & 0o777 == 0o600
+
+
+def test_lockfile_failed_atomic_replace_preserves_previous_inventory(
+    tmp_path,
+) -> None:
+    lockfile = tmp_path / "plugins.lock.toml"
+    previous = [{"id": "demo", "source": "old"}]
+    _save_lockfile(previous, lockfile)
+
+    with patch("pathlib.Path.replace", side_effect=OSError("replace failed")):
+        with pytest.raises(OSError, match="replace failed"):
+            _save_lockfile([{"id": "other", "source": "new"}], lockfile)
+
+    assert _load_lockfile(lockfile) == previous
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def test_update_plugin_uses_locked_requirement_and_preserves_config(tmp_path) -> None:

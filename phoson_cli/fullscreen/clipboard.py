@@ -31,6 +31,7 @@ from pathlib import Path
 from ..attachments import provider_compat_warning
 
 _IMAGE_MIME_CANDIDATES = ("image/png", "image/jpeg")
+_PROCESS_EXIT_TIMEOUT = 0.2
 
 
 def _is_macos() -> bool:
@@ -82,6 +83,51 @@ def macos_image_tool_hint() -> str | None:
     return None
 
 
+async def _drain_and_wait(proc: asyncio.subprocess.Process) -> None:
+    """Discard cancelled output without buffering it, then reap the child."""
+    # Cancelling communicate() also cancels its reader. A full stdout pipe
+    # can keep an existing wait() pending even after SIGKILL sets returncode.
+    # Drain even when the child has already exited so EOF closes the transport.
+    if proc.stdout is not None:
+        while await proc.stdout.read(64 * 1024):
+            pass
+    await proc.wait()
+
+
+async def _stop_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate, drain and reap a clipboard child, escalating past TERM."""
+    if proc.returncode is None:
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+    drained = asyncio.create_task(_drain_and_wait(proc))
+    try:
+        # The grace-period timeout must not cancel the replacement reader.
+        await asyncio.wait_for(asyncio.shield(drained), timeout=_PROCESS_EXIT_TIMEOUT)
+    except TimeoutError:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await drained
+
+
+async def _await_process_cleanup(proc: asyncio.subprocess.Process) -> None:
+    """Defer repeated cancellation until TERM/KILL, draining and reaping finish."""
+    cleanup = asyncio.create_task(_stop_process(proc))
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+    await cleanup
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 async def _run_command(command: list[str]) -> bytes | None:
     """Run *command*, returning its stdout bytes, or ``None`` on any failure."""
     try:
@@ -90,7 +136,11 @@ async def _run_command(command: list[str]) -> bytes | None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await proc.communicate()
+        try:
+            stdout, _ = await proc.communicate()
+        except asyncio.CancelledError:
+            await _await_process_cleanup(proc)
+            raise
     except OSError:
         return None
     if proc.returncode == 0 and stdout:
@@ -138,9 +188,12 @@ async def paste_image_from_clipboard(
     app: Any,
 ) -> None:
     """Read an image (or fallback text) from the clipboard and attach/insert it."""
+    session_id = app.repl.tree.session_id
     result = await read_clipboard_image()
+    if app.repl.tree.session_id != session_id:
+        return
     if result is None:
-        await _paste_text_fallback(app)
+        await _paste_text_fallback(app, session_id)
         return
 
     data, mime = result
@@ -168,9 +221,11 @@ async def paste_image_from_clipboard(
     app.app.invalidate()
 
 
-async def _paste_text_fallback(app: Any) -> None:
+async def _paste_text_fallback(app: Any, session_id: str) -> None:
     """No image on the clipboard: paste its text instead (D3), if any."""
     text = await read_clipboard_text()
+    if app.repl.tree.session_id != session_id:
+        return
     if text:
         app._prompt_input.buffer.insert_text(text)
         app.app.invalidate()

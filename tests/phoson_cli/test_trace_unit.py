@@ -75,13 +75,11 @@ def test_tool_done_records_result_and_duration() -> None:
     assert recs[0]["error"] is None
 
 
-def test_error_event_records_code() -> None:
+def test_terminal_events_are_owned_by_oneshot_not_middleware() -> None:
     recs = _records(
         [AgentErrorEvent(message="boom", code="max_iterations", retryable=False)]
     )
-    assert recs[0]["phoson_trace"] == "error"
-    assert recs[0]["message"] == "boom"
-    assert recs[0]["code"] == "max_iterations"
+    assert recs == []
 
 
 def test_long_result_is_clipped() -> None:

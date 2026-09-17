@@ -20,6 +20,7 @@ class _PickerState(TypedDict):
 class ModelPickerResult:
     model_id: str | None = None
     cancelled: bool = False
+    unavailable: bool = False
     #: Provider of the selected option (I-113 unified picker). Lets
     #: commands switch (model, provider) together via the I-89 path.
     provider: str | None = None

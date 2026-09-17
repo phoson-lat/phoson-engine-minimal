@@ -2,6 +2,8 @@ import pytest
 
 from phoson_cli.config import PhosonConfig, has_configured_provider
 
+pytestmark = pytest.mark.usefixtures("isolated_cli_home")
+
 
 def test_configured_provider_detects_all_credentials() -> None:
     assert has_configured_provider(
@@ -53,6 +55,9 @@ def test_main_does_not_run_setup_when_config_file_exists(monkeypatch, tmp_path) 
             app_ran = True
 
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli"])
     monkeypatch.setattr(main_module, "load_config", lambda: PhosonConfig())
     monkeypatch.setattr(main_module, "build_chat", lambda config: None)
@@ -98,6 +103,9 @@ def test_main_runs_setup_wizard_then_launches_the_full_screen_app(
             app_ran = True
 
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli"])
     monkeypatch.setattr(
         main_module, "load_config", lambda: PhosonConfig(provider="openrouter")
@@ -130,6 +138,7 @@ def test_main_friendly_error_when_active_provider_lacks_credential(
         raise ValueError("OPENROUTER_API_KEY is required for provider=openrouter")
 
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli"])
     monkeypatch.setattr(
         main_module, "load_config", lambda: PhosonConfig(provider="openrouter")

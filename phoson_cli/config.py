@@ -7,13 +7,18 @@ the LLM chat clients.
 
 import os
 import re
+import json
+import math
 import shutil
 import logging
 import tomllib
+import tempfile
 import warnings
+from types import MappingProxyType
 from typing import Any, Final
 from pathlib import Path
 from dataclasses import field, dataclass
+from collections.abc import Mapping
 
 from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
@@ -80,6 +85,10 @@ class PhosonConfig:
     # PHOSON_PRESERVE_THINKING env var.
     preserve_thinking: bool | None = None
     provider: str = "openrouter"
+    # ``None`` preserves legacy credentials-imply-enabled behavior. Once the
+    # setup wizard writes an explicit list, credentials can remain stored while
+    # their providers are disabled.
+    enabled_providers: list[str] | None = None
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -107,6 +116,8 @@ class PhosonConfig:
     max_iterations: int = 50
     safe_mode: bool = False
     theme: str = "system"
+    # One-run CLI provenance. Not loaded from or saved to config.toml.
+    cli_theme: str | None = field(default=None, repr=False)
     subagent_max_parallel: int = 4
     subagent_timeout_seconds: float = 300.0
     # ── Wall-clock budget for non-interactive runs (#141 / H-7) ──────────
@@ -250,6 +261,26 @@ class PhosonConfig:
     # permissions.json): save_config never writes it, so a stale value
     # can never override a hand-edited [keys] table.
     key_bindings: dict[str, list[str]] | None = None
+    # Immutable load-time provenance. ``replace(config)`` carries these maps
+    # into setup copies, while direct constructors have no env-derived values.
+    _secret_sources: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}), repr=False, compare=False
+    )
+    _provider_source: str = field(default="explicit", repr=False, compare=False)
+    _persisted_provider: str = field(default="openrouter", repr=False, compare=False)
+    _persisted_model: str = field(
+        default="qwen/qwen3.6-plus", repr=False, compare=False
+    )
+
+    @property
+    def secret_sources(self) -> Mapping[str, str]:
+        """Read-only load source (env/file/default) for every secret field."""
+        return self._secret_sources
+
+    def mark_provider_explicit(self) -> None:
+        """Mark the current provider as a deliberate persistent selection."""
+        self._provider_source = "explicit"
+        self._persisted_provider = self.provider
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -307,14 +338,18 @@ def _load_file_defaults(config_path: Path) -> dict[str, Any]:
     Raises:
         PhosonConfigError: If the file exists but contains invalid TOML.
     """
-    if not config_path.exists():
-        return {}
     try:
+        if not config_path.exists():
+            return {}
         with config_path.open("rb") as f:
             raw = tomllib.load(f)
     except tomllib.TOMLDecodeError as exc:
         raise PhosonConfigError(
             f"Malformed configuration file {config_path}: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not read configuration file {config_path}: {exc}"
         ) from exc
     defaults = raw.get("defaults", {})
     return defaults if isinstance(defaults, dict) else {}
@@ -420,24 +455,124 @@ def _resolve_effort_profile(
     kept; unknown keys are dropped rather than raising, so a partially filled
     profile degrades to "no effort for that phase" instead of breaking startup.
     """
-    import json as _json
-
     raw: Any = None
     if env_var in os.environ:
-        raw = _json.loads(os.environ[env_var])
+        try:
+            raw = json.loads(os.environ[env_var])
+        except json.JSONDecodeError as exc:
+            raise PhosonConfigError(
+                f"{env_var} must be a valid JSON object: {exc.msg}"
+            ) from exc
     elif file_key in fd:
         raw = fd[file_key]
 
-    if not isinstance(raw, dict):
+    if raw is None:
         return None
+    if not isinstance(raw, dict):
+        source = env_var if env_var in os.environ else f"[defaults].{file_key}"
+        raise PhosonConfigError(f"{source} must be an object of phase-to-effort values")
 
+    from phoson_llm.schemas import REASONING_EFFORTS  # noqa: PLC0415
     from phoson_agent.reasoning_effort import _PHASES  # noqa: PLC0415
 
-    return {
-        str(phase): str(effort)
-        for phase, effort in raw.items()
-        if phase in _PHASES and effort is not None
+    invalid_phases = set(raw) - set(_PHASES)
+    if invalid_phases:
+        source = env_var if env_var in os.environ else f"[defaults].{file_key}"
+        phase_names = ", ".join(sorted(map(str, invalid_phases)))
+        raise PhosonConfigError(f"{source} has unknown phases: {phase_names}")
+    for phase, effort in raw.items():
+        if not isinstance(effort, str) or effort not in REASONING_EFFORTS:
+            source = env_var if env_var in os.environ else f"[defaults].{file_key}"
+            raise PhosonConfigError(
+                f"{source}.{phase} must be one of {', '.join(REASONING_EFFORTS)}"
+            )
+
+    return {str(phase): effort for phase, effort in raw.items()}
+
+
+_PROVIDER_ALIASES: Final[dict[str, str]] = {
+    "aws": "bedrock",
+    "google": "gemini",
+    "grok": "xai",
+}
+_CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {
+        "anthropic",
+        "azure",
+        "bedrock",
+        "cohere",
+        "deepseek",
+        "fireworks",
+        "gemini",
+        "github",
+        "groq",
+        "lmstudio",
+        "mistral",
+        "nvidia",
+        "ollama",
+        "omniroute",
+        "openai",
+        "openrouter",
+        "perplexity",
+        "together",
+        "vllm",
+        "xai",
     }
+)
+
+
+def _canonical_provider(value: str, *, source: str) -> str:
+    name = value.strip().lower()
+    canonical = _PROVIDER_ALIASES.get(name, name)
+    if not name or canonical not in _CANONICAL_PROVIDERS:
+        raise PhosonConfigError(f"{source} contains unknown provider {value!r}")
+    return canonical
+
+
+def canonicalize_enabled_providers(
+    providers: list[str],
+    *,
+    active_provider: str,
+    allow_transient_active: bool = False,
+) -> list[str]:
+    """Validate explicit provider state and normalize aliases."""
+    canonical = list(
+        dict.fromkeys(
+            _canonical_provider(provider, source="enabled_providers")
+            for provider in providers
+        )
+    )
+    if not canonical:
+        raise PhosonConfigError("enabled_providers must contain at least one provider")
+    active = _canonical_provider(active_provider, source="active provider")
+    if not allow_transient_active and active not in canonical:
+        raise PhosonConfigError(
+            f"active provider {active_provider!r} is not enabled in enabled_providers"
+        )
+    return canonical
+
+
+def _resolve_enabled_providers(
+    fd: dict[str, Any], *, active_provider: str, provider_source: str
+) -> list[str] | None:
+    """Load and canonicalize persisted provider enablement."""
+    if "enabled_providers" not in fd:
+        return None
+    raw = fd["enabled_providers"]
+    if isinstance(raw, str):
+        values = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        values = [item.strip().lower() for item in raw if item.strip()]
+    else:
+        raise PhosonConfigError(
+            "[defaults].enabled_providers must be a comma-separated string "
+            "or an array of provider names"
+        )
+    return canonicalize_enabled_providers(
+        values,
+        active_provider=active_provider,
+        allow_transient_active=provider_source == "env",
+    )
 
 
 def _resolve_int(
@@ -449,12 +584,22 @@ def _resolve_int(
     if env_var in os.environ:
         return _parse_int(os.environ[env_var], default, env_var=env_var)
     value = fd.get(file_key, default)
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
+    if isinstance(value, bool):
         raise PhosonConfigError(
             f"[defaults].{file_key} must be an integer, got {value!r}"
-        ) from exc
+        )
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        raise PhosonConfigError(
+            f"[defaults].{file_key} must be an integer, got {value!r}"
+        )
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    raise PhosonConfigError(f"[defaults].{file_key} must be an integer, got {value!r}")
 
 
 def _validate_plugin_specs(value: Any, key: str) -> list[str | dict[str, Any]]:
@@ -523,10 +668,11 @@ def _resolve_float(
             )
             return default
     value = fd.get(file_key, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PhosonConfigError(
+            f"[defaults].{file_key} must be a number, got {value!r}"
+        )
+    return float(value)
 
 
 def has_persisted_theme(config_path: Path | None = None) -> bool:
@@ -652,13 +798,17 @@ def load_key_bindings(config_path: Path | None = None) -> dict[str, list[str]]:
     even called.)
     """
     path = config_path or Path("~/.phoson/config.toml").expanduser()
-    if not path.exists():
-        return {}
     try:
+        if not path.exists():
+            return {}
         with path.open("rb") as f:
             raw = tomllib.load(f)
     except tomllib.TOMLDecodeError as exc:
         raise PhosonConfigError(f"Malformed configuration file {path}: {exc}") from exc
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not read configuration file {path}: {exc}"
+        ) from exc
 
     keys_section = raw.get("keys")
     if keys_section is None:
@@ -688,6 +838,22 @@ def load_config() -> PhosonConfig:
     """
     d = PhosonConfig()
     fd = _load_file_defaults(Path("~/.phoson/config.toml").expanduser())
+    persisted_provider = str(fd.get("provider") or d.provider).lower()
+    provider = _resolve_str(
+        "PHOSON_PROVIDER", "provider", fd, persisted_provider
+    ).lower()
+    provider_source = (
+        "env"
+        if os.environ.get("PHOSON_PROVIDER")
+        else "file"
+        if fd.get("provider")
+        else "default"
+    )
+    enabled_providers = _resolve_enabled_providers(
+        fd,
+        active_provider=persisted_provider,
+        provider_source="file" if "provider" in fd else "default",
+    )
     # [keys] section (IMPROVEMENTS.md E6): user remaps for the full-screen
     # TUI. An empty table = built-in defaults; a malformed one raises
     # PhosonKeyBindingsError with a user-facing message (main() prints it).
@@ -713,7 +879,8 @@ def load_config() -> PhosonConfig:
         preserve_thinking=_resolve_optional_bool(
             "PHOSON_PRESERVE_THINKING", "preserve_thinking", fd
         ),
-        provider=_resolve_str("PHOSON_PROVIDER", "provider", fd, d.provider).lower(),
+        provider=provider,
+        enabled_providers=enabled_providers,
         openrouter_api_key=_resolve_optional_str(
             "OPENROUTER_API_KEY", "openrouter_api_key", fd, d.openrouter_api_key
         ),
@@ -1051,12 +1218,111 @@ def load_config() -> PhosonConfig:
     ):
         cfg.compact_min_keep_messages = preset_keep
 
-    cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+    validate_config(cfg)
+    cfg._secret_sources = MappingProxyType(
+        {
+            field_name: (
+                "env"
+                if os.environ.get(env_var)
+                else "file"
+                if fd.get(field_name)
+                else "default"
+            )
+            for field_name, env_var in _SECRET_ENV_BY_KEY.items()
+        }
+    )
+    cfg._provider_source = provider_source
+    cfg._persisted_provider = persisted_provider
+    cfg._persisted_model = str(fd.get("model", d.model))
+    try:
+        cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not create sessions directory {cfg.sessions_dir}: {exc}"
+        ) from exc
     return cfg
 
 
+def validate_config(config: PhosonConfig) -> None:
+    """Validate runtime bounds shared by environment, TOML, and setup paths."""
+    positive_ints = (
+        "max_iterations",
+        "subagent_max_parallel",
+        "llm_max_attempts",
+        "swarm_max_agents",
+        "swarm_max_tokens_per_agent",
+        "swarm_max_tokens_total",
+        "compact_min_keep_messages",
+        "offload_max_chars",
+    )
+    for field_name in positive_ints:
+        value = getattr(config, field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise PhosonConfigError(f"{field_name} must be an integer, got {value!r}")
+        if value <= 0:
+            raise PhosonConfigError(
+                f"{field_name} must be greater than 0, got {value!r}"
+            )
+
+    positive_floats = (
+        "subagent_timeout_seconds",
+        "ssh_command_timeout",
+        "permission_classifier_timeout_s",
+    )
+    for field_name in positive_floats:
+        value = getattr(config, field_name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise PhosonConfigError(f"{field_name} must be a number, got {value!r}")
+        if not math.isfinite(value) or value <= 0:
+            raise PhosonConfigError(
+                f"{field_name} must be greater than 0, got {value!r}"
+            )
+
+    if isinstance(config.compact_threshold, bool) or not isinstance(
+        config.compact_threshold, (int, float)
+    ):
+        raise PhosonConfigError(
+            f"compact_threshold must be a number, got {config.compact_threshold!r}"
+        )
+    if not math.isfinite(config.compact_threshold) or not (
+        0 < config.compact_threshold <= 1
+    ):
+        raise PhosonConfigError(
+            "compact_threshold must be greater than 0 and at most 1, "
+            f"got {config.compact_threshold!r}"
+        )
+    if isinstance(config.run_budget_seconds, bool) or not isinstance(
+        config.run_budget_seconds, (int, float)
+    ):
+        raise PhosonConfigError(
+            f"run_budget_seconds must be a number, got {config.run_budget_seconds!r}"
+        )
+    if not math.isfinite(config.run_budget_seconds) or config.run_budget_seconds < 0:
+        raise PhosonConfigError(
+            "run_budget_seconds must be 0 (disabled) or greater, "
+            f"got {config.run_budget_seconds!r}"
+        )
+    for field_name in (
+        "loop_detect_n",
+        "tool_budget_tokens",
+        "offload_head_chars",
+        "offload_tail_chars",
+        "offload_ttl_days",
+        "offload_max_mb",
+    ):
+        value = getattr(config, field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise PhosonConfigError(f"{field_name} must be an integer, got {value!r}")
+        if value < 0:
+            raise PhosonConfigError(f"{field_name} must be 0 or greater, got {value!r}")
+    if config.offload_head_chars + config.offload_tail_chars > config.offload_max_chars:
+        raise PhosonConfigError(
+            "offload_head_chars + offload_tail_chars must not exceed offload_max_chars"
+        )
+
+
 #: Secret-bearing keys and the env var each one is *sourced from*. ``save_config``
-#: refuses to persist a value that currently comes from one of these env vars, so
+#: refuses to persist a value loaded from one of these env vars, so
 #: a bare ``save_config(load_config())`` can't write an env-only key into the
 #: config file (F-36).
 _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
@@ -1073,21 +1339,26 @@ _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
     "azure_openai_api_key": "AZURE_OPENAI_API_KEY",
     "gemini_api_key": "GEMINI_API_KEY",
     "mistral_api_key": "MISTRAL_API_KEY",
+    "fireworks_api_key": "FIREWORKS_API_KEY",
+    "cohere_api_key": "COHERE_API_KEY",
     "omniroute_api_key": "OMNIROUTE_API_KEY",
     "vllm_api_key": "VLLM_API_KEY",
 }
 
 
 def save_config(
-    config: PhosonConfig, *, only_fields: frozenset[str] | set[str] | None = None
+    config: PhosonConfig,
+    *,
+    only_fields: frozenset[str] | set[str] | None = None,
+    explicit_secret_fields: frozenset[str] | set[str] = frozenset(),
 ) -> Path:
     """Persist configuration defaults to ~/.phoson/config.toml.
 
-    The existing file is updated **in place**: only the managed keys of the
+    The existing content is updated structurally: only the managed keys of the
     ``[defaults]`` section are touched (replaced at their original position,
-    appended when missing, removed when now ``None``). Every other line —
-    comments, user-added keys, extra sections — is preserved byte-for-byte,
-    so saving never clobbers content the CLI does not own.
+    appended when missing, removed when now ``None``). Every other line is
+    preserved byte-for-byte. The completed content is written to a restrictive
+    same-directory temporary file and atomically replaces ``config.toml``.
 
     Args:
         only_fields: When given, restrict this save to just these field
@@ -1099,25 +1370,24 @@ def save_config(
             than the file). Ignored — treated as a full save — when the
             file does not exist yet, so the very first save always writes
             a complete ``[defaults]`` section.
+        explicit_secret_fields: Secret fields whose current values were entered
+            explicitly by the user. Those values may be persisted even while
+            the corresponding environment variable is present. All other
+            environment-derived secret values remain excluded.
 
     Before writing, the previous file (if any) is copied to
     ``config.toml.bak`` so a previous configuration is never truly lost,
     even if an unexpected value slips into this save.
     """
+    if isinstance(config, PhosonConfig):
+        validate_config(config)
+
     config_dir = Path("~/.phoson").expanduser()
-    config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.toml"
 
+    explicit_model = only_fields is not None and "model" in only_fields
     if only_fields is not None and not config_path.exists():
         only_fields = None  # first save ever: always write a full section
-
-    if config_path.exists():
-        try:
-            backup_path = config_path.parent / f"{config_path.name}.bak"
-            shutil.copy2(config_path, backup_path)
-            os.chmod(backup_path, 0o600)
-        except OSError:  # pragma: no cover - best-effort safety net
-            pass
 
     def _toml_value(value: Any) -> str:
         """Render the restricted TOML values managed by this CLI.
@@ -1131,8 +1401,24 @@ def save_config(
         if isinstance(value, (int, float)):
             return str(value)
         if isinstance(value, str):
-            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-            return f'"{escaped}"'
+            escapes = {
+                "\b": "\\b",
+                "\t": "\\t",
+                "\n": "\\n",
+                "\f": "\\f",
+                "\r": "\\r",
+                '"': '\\"',
+                "\\": "\\\\",
+            }
+            encoded: list[str] = []
+            for char in value:
+                if char in escapes:
+                    encoded.append(escapes[char])
+                elif ord(char) < 0x20 or ord(char) == 0x7F:
+                    encoded.append(f"\\u{ord(char):04X}")
+                else:
+                    encoded.append(char)
+            return f'"{"".join(encoded)}"'
         if isinstance(value, list):
             return "[" + ", ".join(_toml_value(item) for item in value) + "]"
         if isinstance(value, dict):
@@ -1154,20 +1440,35 @@ def save_config(
     def _line(key: str, value: Any) -> str | None:
         return None if value is None else f"{key} = {_toml_value(value)}"
 
-    enabled_providers = enabled_providers_from_config(config)
+    provider_source = getattr(config, "_provider_source", "explicit")
+    provider_to_persist = (
+        config.provider
+        if provider_source == "explicit"
+        else getattr(config, "_persisted_provider", config.provider)
+    )
+    enabled_providers = enabled_providers_from_config(config, for_persistence=True)
 
-    # The on-disk defaults, so we can tell which secret values currently come
-    # from the file (persist) versus only from the environment (skip) — F-36.
-    try:
-        fd = _load_file_defaults(config_path)
-    except PhosonConfigError:
-        fd = {}
+    # Validate and read the existing file before constructing a replacement.
+    file_defaults = _load_file_defaults(config_path)
+    # Loaded configs carry runtime CLI/env overrides. An unrelated save must
+    # keep the durable provider/model pair, including on the first narrow save
+    # (which expands to a full section). Setup and /provider mark the pair
+    # explicit; /model explicitly requests the model field. A model-only save
+    # is safe only on the durable provider: callers selecting a transient route
+    # must first mark that route explicit and persist the provider with it.
+    model_to_persist = getattr(config, "model", None)
+    if provider_source != "explicit" and (
+        not explicit_model or config.provider != provider_to_persist
+    ):
+        model_to_persist = file_defaults.get(
+            "model", getattr(config, "_persisted_model", model_to_persist)
+        )
 
     managed: dict[str, str | None] = {}
     for key, value in [
-        ("provider", getattr(config, "provider", None)),
+        ("provider", provider_to_persist),
         ("enabled_providers", ",".join(enabled_providers)),
-        ("model", getattr(config, "model", None)),
+        ("model", model_to_persist),
         ("subagent_model", getattr(config, "subagent_model", None)),
         ("reasoning_effort", getattr(config, "reasoning_effort", None)),
         ("show_reasoning", getattr(config, "show_reasoning", True)),
@@ -1249,10 +1550,17 @@ def save_config(
     ]:
         if only_fields is not None and key not in only_fields:
             continue  # not part of this narrow save — leave the file's line alone
-        if env_var := _SECRET_ENV_BY_KEY.get(key):
-            # F-36: never persist a secret that only exists in the process
-            # environment — a bare full save would otherwise write it to disk.
-            if os.environ.get(env_var) and not fd.get(key):
+        if key in _SECRET_ENV_BY_KEY:
+            # Load-time provenance, not the mutable process environment, decides
+            # whether an ordinary save may persist this value. Legacy/direct
+            # config objects have no provenance, so retain their env safeguard.
+            source = getattr(config, "secret_sources", {}).get(key)
+            legacy_env_value = source is None and os.environ.get(
+                _SECRET_ENV_BY_KEY[key]
+            )
+            if (
+                source == "env" or legacy_env_value
+            ) and key not in explicit_secret_fields:
                 continue
         managed[key] = _line(key, value)
 
@@ -1266,11 +1574,16 @@ def save_config(
             and line.count('"') % 2 == 0
         )
 
-    lines = (
-        config_path.read_text(encoding="utf-8").splitlines()
-        if config_path.exists()
-        else []
-    )
+    try:
+        lines = (
+            config_path.read_text(encoding="utf-8").splitlines()
+            if config_path.exists()
+            else []
+        )
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not read configuration file {config_path}: {exc}"
+        ) from exc
 
     out: list[str] = []
     in_defaults = False
@@ -1314,15 +1627,130 @@ def save_config(
     if missing:
         out[defaults_end:defaults_end] = missing
 
-    config_path.write_text("\n".join(out) + "\n", encoding="utf-8")
-
-    # The file holds API keys — restrict it to the owner. The parent
-    # directory also stores session data, so keep it private as well.
+    content = "\n".join(out) + "\n"
     try:
-        os.chmod(config_path, 0o600)
-        os.chmod(config_dir, 0o700)
-    except OSError:  # pragma: no cover - non-POSIX filesystems
-        pass
+        content.encode("utf-8")
+        parsed = tomllib.loads(content)
+    except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+        raise PhosonConfigError(f"Invalid generated configuration: {exc}") from exc
+    if not isinstance(parsed.get("defaults"), dict):
+        raise PhosonConfigError(
+            "Invalid generated configuration: [defaults] must be a table"
+        )
+    generated_defaults = parsed["defaults"]
+    if only_fields is None and (
+        "provider" not in generated_defaults
+        or "enabled_providers" not in generated_defaults
+    ):
+        raise PhosonConfigError(
+            "Invalid generated configuration: provider and enabled_providers "
+            "must be persisted together"
+        )
+    if "provider" in generated_defaults and "enabled_providers" in generated_defaults:
+        try:
+            _resolve_enabled_providers(
+                generated_defaults,
+                active_provider=str(generated_defaults["provider"]),
+                provider_source="file",
+            )
+        except PhosonConfigError as exc:
+            raise PhosonConfigError(f"Invalid generated configuration: {exc}") from exc
+
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not create configuration directory {config_dir}: {exc}"
+        ) from exc
+    if os.name == "posix":
+        try:
+            os.chmod(config_dir, 0o700)
+        except OSError as exc:
+            raise PhosonConfigError(
+                f"Could not set secure permissions on {config_dir}: {exc}"
+            ) from exc
+
+    if config_path.exists():
+        backup_path = config_path.with_name(f"{config_path.name}.bak")
+        try:
+            shutil.copy2(config_path, backup_path)
+            os.chmod(backup_path, 0o600)
+        except OSError as exc:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise PhosonConfigError(
+                f"Could not create secure configuration backup {backup_path}: {exc}"
+            ) from exc
+
+    temp_fd = -1
+    temp_path: Path | None = None
+    try:
+        try:
+            temp_fd, temp_name = tempfile.mkstemp(
+                prefix=f".{config_path.name}.", dir=config_dir, text=True
+            )
+            temp_path = Path(temp_name)
+        except OSError as exc:
+            raise PhosonConfigError(
+                f"Could not create temporary configuration file in {config_dir}: {exc}"
+            ) from exc
+
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError as exc:
+            raise PhosonConfigError(
+                f"Could not set secure permissions on configuration file: {exc}"
+            ) from exc
+
+        try:
+            stream = os.fdopen(temp_fd, "w", encoding="utf-8", newline="\n")
+            temp_fd = -1
+            with stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except OSError as exc:
+            raise PhosonConfigError(
+                f"Could not write configuration file {config_path}: {exc}"
+            ) from exc
+
+        try:
+            os.replace(temp_path, config_path)
+            temp_path = None
+        except OSError as exc:
+            raise PhosonConfigError(
+                f"Could not replace configuration file {config_path}: {exc}"
+            ) from exc
+
+        # The restrictive temporary-file mode is retained by replacement.
+        # Durably commit the directory entry where supported, but never report
+        # a failure after os.replace has already committed the new config.
+        if os.name == "posix":
+            directory_fd = -1
+            try:
+                directory_fd = os.open(config_dir, os.O_RDONLY)
+                os.fsync(directory_fd)
+            except OSError:
+                pass
+            finally:
+                if directory_fd >= 0:
+                    try:
+                        os.close(directory_fd)
+                    except OSError:
+                        pass
+    finally:
+        if temp_fd >= 0:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     return config_path
 
@@ -1379,16 +1807,32 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
     return providers
 
 
-def enabled_providers_from_config(config: PhosonConfig) -> list[str]:
+def enabled_providers_from_config(
+    config: PhosonConfig, *, for_persistence: bool = False
+) -> list[str]:
     """Return the list of usable providers derived from ``config``.
 
     A provider is considered enabled when its credential (API key or base URL)
     is present. The active ``config.provider`` is always included so the REPL
     never ends up with an empty list.
     """
+    explicit = getattr(config, "enabled_providers", None)
+    provider_source = getattr(config, "_provider_source", "explicit")
+    active_provider = (
+        getattr(config, "_persisted_provider", config.provider)
+        if for_persistence and provider_source != "explicit"
+        else config.provider
+    )
+    if explicit is not None:
+        return canonicalize_enabled_providers(
+            list(explicit),
+            active_provider=active_provider,
+            allow_transient_active=not for_persistence
+            and provider_source in {"env", "cli"},
+        )
     providers = _credential_providers(config)
-    if getattr(config, "provider", None) not in providers:
-        providers.append(config.provider)
+    if active_provider not in providers:
+        providers.append(active_provider)
     return providers
 
 

@@ -45,6 +45,7 @@ from .config import (
     NO_CREDENTIAL_PROVIDERS,
     save_config,
     enabled_providers_from_config,
+    canonicalize_enabled_providers,
 )
 from .models import model_provider_for, normalize_provider
 from .updater import perform_self_update
@@ -690,6 +691,10 @@ class CommandHandler:
     def _available_providers(self) -> list[str]:
         return enabled_providers_from_config(self.repl.config)
 
+    def _picker_unavailable(self, usage: str) -> bool:
+        checker = getattr(self.host, "picker_unavailable", None)
+        return bool(checker(usage)) if callable(checker) else False
+
     async def _pick_and_set_model(
         self,
         *,
@@ -756,6 +761,13 @@ class CommandHandler:
         chosen: str | None = explicit
         option_provider: str | None = None
         if not chosen:
+            usage = (
+                "/model <id> or /model list"
+                if target == "main"
+                else "/subagent-model <id> or /subagent-model list"
+            )
+            if self._picker_unavailable(usage):
+                return
             # I-113: one unified view of every configured provider
             # (concurrent live fetch, active provider first). The host's
             # pick_model receives a flat multi-provider list; each option
@@ -773,15 +785,28 @@ class CommandHandler:
                 r.print_info("No models available.")
                 return
             result = await self.host.pick_model(
-                models, current, unavailable=unavailable
+                models,
+                current,
+                unavailable=unavailable,
             )
+            if getattr(result, "unavailable", False):
+                return
             if result.cancelled or not result.model_id:
                 r.print_info("Cancelled.")
                 return
             chosen = result.model_id
-            option_provider = getattr(result, "provider", None) or next(
-                (m.provider for m in models if m.id == chosen), None
-            )
+            option_provider = getattr(result, "provider", None)
+            if not option_provider:
+                matching_providers = list(
+                    dict.fromkeys(m.provider for m in models if m.id == chosen)
+                )
+                if len(matching_providers) > 1:
+                    r.print_error(
+                        f"Model {chosen} is served by multiple providers. "
+                        "Choose a provider-specific picker row."
+                    )
+                    return
+                option_provider = matching_providers[0] if matching_providers else None
         elif target == "main":
             # I-113 follow-up: an *explicit* ``/model <id>`` (typed, or
             # picked from inline autocomplete) skipped provider
@@ -806,9 +831,9 @@ class CommandHandler:
             # The only trustworthy signal is asking every configured
             # provider's *live* listing which of them actually serves
             # this exact id — same authority the picker branch already
-            # has. Prefer a listing that is *not* the active provider
-            # when several match (the user is switching); otherwise the
-            # first match (active provider is listed first).
+            # has. Keep the active provider when it serves the id. A
+            # unique non-active match can switch safely; multiple matches
+            # require the user to choose a provider explicitly.
             #
             # Falls back to the cheap prefix heuristic (below, via
             # model_provider_for) only when no configured provider's
@@ -823,10 +848,26 @@ class CommandHandler:
                 if option.id == chosen
             ]
             active = normalize_provider(self.repl.config.provider)
-            option_provider = next(
-                (p for p in matches if normalize_provider(p) != active),
-                matches[0] if matches else None,
+            active_match = next(
+                (
+                    provider
+                    for provider in matches
+                    if normalize_provider(provider) == active
+                ),
+                None,
             )
+            distinct_matches = list(dict.fromkeys(map(normalize_provider, matches)))
+            if active_match is not None:
+                option_provider = active_match
+            elif len(distinct_matches) == 1:
+                option_provider = matches[0]
+            elif len(distinct_matches) > 1:
+                r.print_error(
+                    f"Model {chosen} is served by multiple providers: "
+                    f"{', '.join(distinct_matches)}. Use /provider <id> first, "
+                    "then retry /model so the billing route is explicit."
+                )
+                return
 
         if target == "main":
             # I-89: a model that belongs to another provider must switch the
@@ -849,6 +890,17 @@ class CommandHandler:
                     )
                     return
                 await self.repl.set_model(chosen, provider=target_provider)
+                enabled = getattr(self.repl.config, "enabled_providers", None)
+                if enabled is not None:
+                    self.repl.config.enabled_providers = canonicalize_enabled_providers(
+                        [*enabled, self.repl.config.provider],
+                        active_provider=self.repl.config.provider,
+                    )
+                mark_provider_explicit = getattr(
+                    self.repl.config, "mark_provider_explicit", None
+                )
+                if callable(mark_provider_explicit):
+                    mark_provider_explicit()
                 save_config(
                     self.repl.config,
                     only_fields={"model", "provider", "enabled_providers"},
@@ -859,10 +911,24 @@ class CommandHandler:
                 )
             else:
                 await self.repl.set_model(chosen)
-                save_config(
-                    self.repl.config,
-                    only_fields={"model", "enabled_providers"},
-                )
+                fields = {"model", "enabled_providers"}
+                if getattr(self.repl.config, "_provider_source", "explicit") in {
+                    "env",
+                    "cli",
+                }:
+                    # /model is deliberate even when it keeps the transient
+                    # provider. Persist that route too, never its model under
+                    # the unrelated provider from the previous launch.
+                    self.repl.config.enabled_providers = canonicalize_enabled_providers(
+                        [
+                            *enabled_providers_from_config(self.repl.config),
+                            self.repl.config.provider,
+                        ],
+                        active_provider=self.repl.config.provider,
+                    )
+                    self.repl.config.mark_provider_explicit()
+                    fields.add("provider")
+                save_config(self.repl.config, only_fields=fields)
                 r.print_info(f"Model → {self.repl.current_model}  ·  saved")
         else:
             self.repl.subagent_model = chosen
@@ -930,6 +996,8 @@ class CommandHandler:
 
     async def _cmd_provider(self, cmd: Command) -> bool:
         r = self._r
+        if not cmd.args and self._picker_unavailable("/provider <id>"):
+            return True
         providers = self._available_providers()
         if not providers:
             r.print_info("No providers configured. Run /setup first.")
@@ -945,6 +1013,8 @@ class CommandHandler:
         target_provider = cmd.args or None
         if not target_provider:
             result = await self.host.pick_provider(providers, self.repl.config.provider)
+            if getattr(result, "unavailable", False):
+                return True
             if result.cancelled or not result.provider:
                 r.print_info("Cancelled.")
                 return True
@@ -959,6 +1029,12 @@ class CommandHandler:
         except ValueError as exc:
             r.print_error(str(exc))
             return True
+
+        mark_provider_explicit = getattr(
+            self.repl.config, "mark_provider_explicit", None
+        )
+        if callable(mark_provider_explicit):
+            mark_provider_explicit()
 
         save_config(
             self.repl.config,
@@ -1022,6 +1098,8 @@ class CommandHandler:
 
         arg = cmd.args.strip().lower()
         if not arg:
+            if self._picker_unavailable("/theme <system|dark|light|ansi|no-color>"):
+                return True
             # Zero-cost hint for the picker's "detected" marker: only the
             # COLORFGBG env (no tty IO — an OSC 11 probe here would race
             # the app's own input reader for keystrokes).
@@ -1034,6 +1112,8 @@ class CommandHandler:
                     "light" if detected else ("dark" if detected is False else None)
                 ),
             )
+            if getattr(result, "unavailable", False):
+                return True
             if result.cancelled or not result.theme_name:
                 r.print_info("Cancelled.")
                 return True
@@ -1050,6 +1130,15 @@ class CommandHandler:
             r.print_error(
                 f"Unknown theme: {arg!r}  ·  use "
                 f"{', '.join(theme_registry.valid_names())}"
+            )
+            return True
+
+        from .theme import NO_COLOR, env_requests_no_color
+
+        if env_requests_no_color() and theme is not NO_COLOR:
+            r.print_error(
+                "Cannot enable color while NO_COLOR is set or CLICOLOR=0; "
+                "unset that environment setting first."
             )
             return True
 
@@ -1556,8 +1645,36 @@ class CommandHandler:
     async def _pick_session_modal(self, r: Any, sessions: "list[SessionMeta]") -> bool:
         result = await self.host.pick_session(sessions, self.repl.tree.session_id)
 
+        if getattr(result, "unavailable", False):
+            return True
         if result.cancelled:
             r.print_info("Cancelled.")
+            return True
+
+        if result.deleted_count:
+            return True
+
+        if result.delete_ids:
+            ids = [
+                sid
+                for sid in result.delete_ids
+                if sid != str(self.repl.tree.session_id)
+            ]
+            if not ids:
+                r.print_error(
+                    "Cannot delete the current active session. Use /new first."
+                )
+                return True
+            if not await self.host.confirm(
+                f"Delete {len(ids)} session(s)? This cannot be undone."
+            ):
+                r.print_info("Delete cancelled.")
+                return True
+            for session_id in ids:
+                await self.repl.storage.delete(session_id)
+            r.print_info(
+                f"Deleted {len(ids)} session(s). Run /sessions again to refresh."
+            )
             return True
 
         if result.session_id is None:
@@ -1604,6 +1721,10 @@ class CommandHandler:
         try:
             await self.repl.storage.delete(session_id)
             r.print_info(f"Session {session_id[:8]} deleted.")
+        except ValueError:
+            r.print_error(
+                "Invalid session ID. Use /sessions to choose a saved session."
+            )
         except OSError as exc:
             r.print_error(f"Failed to delete session: {exc}")
         return True

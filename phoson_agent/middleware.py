@@ -281,23 +281,19 @@ class DoomLoopMiddleware(AgentMiddleware):
 
 # ── Environmental context (#143) ─────────────────────────────────────────
 
-#: Prefix of the environmental-context block. The block is a per-LLM-call
-#: request artifact (``role="user"`` with a plain ``[env: ...]`` string),
-#: appended by :class:`EnvironmentalContextMiddleware`. It is *not* a
-#: genuine user turn: the middleware strips it before each call (so exactly
-#: one survives instead of one per call) and the CLI persistence layer drops
-#: it before writing to the conversation tree, so it never leaks into
-#: sessions or the rewind picker (#212).
+#: Prefix of legacy environmental-context request artifacts (``role="user"``
+#: with a plain ``[env: ...]`` string), not genuine user turns. Injection is
+#: intentionally disabled. The middleware and CLI persistence layer still
+#: strip old blocks to keep them out of requests, sessions and rewind (#212).
 ENV_CONTEXT_PREFIX = "[env: "
 
 
 def is_env_context(message: Message) -> bool:
-    """True when *message* is an environmental-context block.
+    """True when *message* matches a legacy environmental-context block.
 
-    The env block is a per-LLM-call artifact (see
-    :class:`EnvironmentalContextMiddleware`), not a genuine user turn. Both
-    the middleware (to avoid accumulating a block per call) and the CLI
-    persistence layer (to keep it out of the stored tree) use this predicate.
+    Injection is disabled, but both the middleware and CLI persistence layer
+    use this predicate to remove old request artifacts from history. The
+    role, plain-string content and prefix matching remain compatible.
     """
     return (
         message.role == "user"
@@ -307,35 +303,17 @@ def is_env_context(message: Message) -> bool:
 
 
 class EnvironmentalContextMiddleware(AgentMiddleware):
-    """Appends a one-line environmental context block before each LLM call.
+    """Remove legacy env blocks without injecting new environmental context.
 
-    The block reports the iteration position (``step N/M``) and, when a
-    wall-clock run budget is configured, how much time has elapsed and
-    how much remains:
+    Injection is intentionally disabled on every LLM call, including the
+    first and calls with a configured run budget. Only old blocks matching
+    :func:`is_env_context` are removed. The returned list is new; the input
+    list and retained messages are not mutated or reordered.
 
-        ``[env: step 12/20, time 45s elapsed, 555s remaining]``
-
-    **Design constraint — always at the END.** The block is appended as
-    the *last* message of the context, never prepended: the stable
-    prefix (system prompt + history) must stay byte-identical across
-    turns so the provider's prompt cache is not invalidated. Only the
-    numeric content of the trailing line changes between turns.
-
-    The block is injected on **every** LLM call (including the first),
-    so the agent can always see its remaining budget.
-
-    **Role: ``user`` with a plain string.** A trailing ``role="system"``
-    message would be silently dropped by the adapters (Anthropic skips
-    every system message in ``_convert_messages``; the OpenAI-compatible
-    adapter empties a system message whose content is a block list), so
-    the context would never reach the model. A ``user`` message with a
-    plain string is handled by the fast path in every adapter, and
-    consecutive ``user`` messages already occur in this codebase (multi-
-    tool results), so it is accepted by the providers. The ``[env:``
-    prefix keeps it visually distinct from a real user turn.
-
-    State is per-run: :meth:`on_agent_event` resets the step counter and
-    restarts the clock on :class:`~phoson_agent.models.AgentStartEvent`.
+    Constructor arguments, validation, :meth:`reset` and per-run bookkeeping
+    are retained for compatibility. The step counter and monotonic start
+    time reset on :class:`~phoson_agent.models.AgentStartEvent`, but no step
+    or elapsed/remaining budget text is computed or added to messages.
     """
 
     def __init__(
@@ -369,17 +347,6 @@ class EnvironmentalContextMiddleware(AgentMiddleware):
             self._start_time = time.monotonic()
         self._step += 1
 
-        parts = [f"step {self._step}/{self._max_iterations}"]
-        if self._run_budget and self._run_budget > 0:
-            elapsed = time.monotonic() - self._start_time
-            remaining = max(0.0, self._run_budget - elapsed)
-            parts.append(f"time {int(elapsed)}s elapsed, {int(remaining)}s remaining")
-
-        env_text = f"{ENV_CONTEXT_PREFIX}{', '.join(parts)}]"
-        # Drop any prior env block so exactly one survives: the engine folds
-        # ``on_before_llm`` output into the persistent history, so without
-        # this the block would accumulate (one per LLM call) within a run
-        # (#212). The input list is not mutated (we build a new one).
-        updated = [m for m in messages if not is_env_context(m)]
-        updated.append(Message(role="user", content=env_text))
-        return updated
+        # The engine folds this output into history. Clean up legacy request
+        # artifacts without replacing them or mutating the caller's list.
+        return [m for m in messages if not is_env_context(m)]

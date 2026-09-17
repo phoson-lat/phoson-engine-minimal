@@ -11,6 +11,7 @@ Verify that:
 import sys
 import asyncio
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,16 @@ bash_module = importlib.import_module("phoson_cli.tools.bash")
 MAX_BYTES = bash_module.MAX_BYTES
 DEFAULT_TIMEOUT_SECONDS = bash_module.DEFAULT_TIMEOUT_SECONDS
 _run_bash = bash_module._run_bash
+
+
+def _process_is_running(pid: int) -> bool:
+    status_path = Path(f"/proc/{pid}/stat")
+    try:
+        if not status_path.exists():
+            return False
+        return status_path.read_text(encoding="utf-8").split()[2] != "Z"
+    except (FileNotFoundError, ProcessLookupError):
+        return False
 
 
 @pytest.mark.asyncio
@@ -224,6 +235,81 @@ async def test_bash_timeout_kills_process_group_with_orphaned_children() -> None
     cmd = "sh -c 'sleep 30 & sleep 30'"
     out = await _run_bash(cmd, timeout=0.3)
     assert "timed out" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_bash_cancellation_kills_and_reaps_process_group(tmp_path) -> None:
+    """Cancelling the tool must not leave its harmless child sleeper alive."""
+    child_pid_file = tmp_path / "child.pid"
+    command = (
+        f'{sys.executable} -c "import os, pathlib, subprocess; '
+        f"p = subprocess.Popen(['{sys.executable}', '-c', "
+        "'import time; time.sleep(30)']); "
+        f"pathlib.Path(r'{child_pid_file}').write_text("
+        "f'{os.getpid()} {p.pid}'); p.wait()\""
+    )
+    task = asyncio.create_task(_run_bash(command))
+    for _ in range(100):
+        if child_pid_file.exists():
+            break
+        await asyncio.sleep(0.01)
+    assert child_pid_file.exists(), "child process did not start"
+    parent_pid, child_pid = map(int, child_pid_file.read_text().split())
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for _ in range(100):
+        if not _process_is_running(parent_pid) and not _process_is_running(child_pid):
+            break
+        await asyncio.sleep(0.01)
+    assert not _process_is_running(parent_pid), "cancelled bash parent is still running"
+    assert not _process_is_running(child_pid), "cancelled bash child is still running"
+
+
+@pytest.mark.parametrize("method", ["exists", "read_text"])
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
+def test_process_liveness_handles_proc_disappearing(
+    method, error, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def disappear(*args, **kwargs):
+        raise error()
+
+    if method == "read_text":
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(Path, method, disappear)
+
+    assert _process_is_running(12345) is False
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_timeout_cleanup_preserves_timeout_and_reaps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    real_cleanup = bash_module._terminate_process_group
+
+    async def paused_cleanup(proc, stream_tasks) -> None:
+        cleanup_started.set()
+        await cleanup_release.wait()
+        await real_cleanup(proc, stream_tasks)
+        assert all(task.done() for task in stream_tasks)
+        cleanup_finished.set()
+
+    monkeypatch.setattr(bash_module, "_terminate_process_group", paused_cleanup)
+    command = f'{sys.executable} -c "import time; time.sleep(30)"'
+    task = asyncio.create_task(_run_bash(command, timeout=0.02))
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+
+    task.cancel()
+    cleanup_release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert "timed out" in result.lower()
+    assert cleanup_finished.is_set()
 
 
 class _FakeRunBash:

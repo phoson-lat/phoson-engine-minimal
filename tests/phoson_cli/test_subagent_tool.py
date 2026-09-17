@@ -163,6 +163,7 @@ def test_renderer_shows_subagent_spawn_states() -> None:
 
 def test_renderer_shows_subagent_panel_on_start() -> None:
     renderer = Renderer()
+    renderer._subagent_spinner._enabled = True
 
     with renderer.console.capture() as capture:
         renderer._on_tool_start(
