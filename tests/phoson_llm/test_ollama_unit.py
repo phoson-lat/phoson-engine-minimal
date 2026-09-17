@@ -274,6 +274,79 @@ async def test_stream_forwards_max_tokens_via_options(
         assert payload["options"]["num_predict"] == max_tokens
 
 
+_DONE_LINES = [
+    json.dumps(
+        {
+            "message": {"role": "assistant", "content": "ok"},
+            "done": True,
+            "eval_count": 1,
+            "prompt_eval_count": 1,
+        }
+    )
+]
+
+
+async def _sent_payload(monkeypatch: pytest.MonkeyPatch, config: ModelConfig) -> dict:
+    client = _FakeClient(_FakeOllamaResponse(_DONE_LINES))
+    _patch_httpx(monkeypatch, client)
+    chat = OllamaChat()
+    await _collect(chat.stream([Message(role="user", content="hi")], config))
+    assert client.last_payload is not None
+    return client.last_payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("think", [True, False])
+async def test_stream_forwards_think_from_config(
+    monkeypatch: pytest.MonkeyPatch, think: bool
+) -> None:
+    """``config.think`` maps to Ollama's top-level ``think`` field (#212)."""
+    monkeypatch.delenv("PHOSON_OLLAMA_THINK", raising=False)
+    payload = await _sent_payload(monkeypatch, ModelConfig(model="qwen3", think=think))
+    assert payload["think"] is think
+
+
+@pytest.mark.asyncio
+async def test_stream_omits_think_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``think=None`` (default) must leave the model's behaviour untouched."""
+    monkeypatch.delenv("PHOSON_OLLAMA_THINK", raising=False)
+    payload = await _sent_payload(monkeypatch, ModelConfig(model="qwen3"))
+    assert "think" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("nope", False),
+    ],
+)
+async def test_stream_reads_think_from_env(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: bool
+) -> None:
+    """``PHOSON_OLLAMA_THINK`` is the fallback when ``config.think`` is unset."""
+    monkeypatch.setenv("PHOSON_OLLAMA_THINK", raw)
+    payload = await _sent_payload(monkeypatch, ModelConfig(model="qwen3"))
+    assert payload["think"] is expected
+
+
+@pytest.mark.asyncio
+async def test_stream_config_think_beats_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``config.think`` wins over the env fallback."""
+    monkeypatch.setenv("PHOSON_OLLAMA_THINK", "1")
+    payload = await _sent_payload(monkeypatch, ModelConfig(model="qwen3", think=False))
+    assert payload["think"] is False
+
+
 @pytest.mark.asyncio
 async def test_stream_emits_tool_call_events(
     monkeypatch: pytest.MonkeyPatch,

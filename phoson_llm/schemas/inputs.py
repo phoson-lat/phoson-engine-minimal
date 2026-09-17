@@ -232,6 +232,12 @@ class ModelConfig:
             without a reasoning channel ignore it. ``True`` forces emission
             where the adapter supports it; ``False`` never emits it (the
             ``PHOSON_PRESERVE_THINKING`` env var maps to this).
+        think: Enable/disable the model's own extended-thinking mode for
+            hybrid reasoning models that expose a per-request toggle (Ollama's
+            ``think`` field, e.g. Qwen3). ``None`` (default) leaves the
+            model's default behaviour untouched; ``False`` disables thinking
+            (fast, direct responses — what agentic tool-use tasks want);
+            ``True`` forces it on. Ignored by adapters without such a toggle.
     """
 
     model: str
@@ -242,3 +248,4 @@ class ModelConfig:
     reasoning_effort: ReasoningEffort | None = None
     session_id: str | None = None
     preserve_thinking: bool | None = None
+    think: bool | None = None

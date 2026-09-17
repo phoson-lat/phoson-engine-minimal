@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -162,6 +163,19 @@ class OllamaChat(BaseLLMChat):
 
         if tools:
             payload["tools"] = _convert_tools(tools)
+
+        # Thinking control for hybrid reasoning models (Ollama's ``think``
+        # field, e.g. Qwen3). ``config.think`` wins; when unset, fall back to
+        # the ``PHOSON_OLLAMA_THINK`` env var (a local-tuning knob). ``None``
+        # leaves the model's default thinking behaviour untouched, so models
+        # without a think toggle are never affected.
+        think = config.think
+        if think is None:
+            env_think = os.environ.get("PHOSON_OLLAMA_THINK")
+            if env_think is not None:
+                think = env_think.strip().lower() in ("1", "true", "yes", "on")
+        if think is not None:
+            payload["think"] = think
 
         text_acc = ""
         tool_args_acc: dict[int, str] = {}
