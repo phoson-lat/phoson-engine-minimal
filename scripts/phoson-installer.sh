@@ -12,11 +12,11 @@ UPGRADE_CMD="uv tool upgrade $PACKAGE_NAME"
 PHOSON_CLI="phoson-cli"
 
 # Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-RESET='\033[0m'
+RED=$(printf '\033[0;31m')
+GREEN=$(printf '\033[0;32m')
+YELLOW=$(printf '\033[1;33m')
+BOLD=$(printf '\033[1m')
+RESET=$(printf '\033[0m')
 
 info() { printf "${GREEN}==>${RESET} %s\n" "$*"; }
 warn() { printf "${YELLOW}==>${RESET} %s\n" "$*"; }
@@ -200,18 +200,6 @@ run_setup_wizard() {
     fi
 }
 
-launch_setup() {
-    # Try to launch setup wizard
-    # If no terminal, it will fail gracefully
-    info "Launching setup wizard..."
-    if "$PHOSON_CLI" --setup 2>/dev/null; then
-        : # Setup completed
-    else
-        info "Setup skipped (no interactive terminal)"
-        info "Run 'phoson-cli --setup' later to configure"
-    fi
-}
-
 print_next_steps() {
     echo ""
     info "${BOLD}Installation complete!${RESET}"
@@ -280,9 +268,6 @@ main() {
     if [ -z "$SKIP_SETUP" ]; then
         run_setup_wizard
     fi
-
-    # Launch setup wizard if we have a terminal
-    launch_setup
 
     print_next_steps
 }
