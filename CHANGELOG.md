@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.41.0 (2026-09-17)
+
+### Feat
+
+- **llm**: forward a per-request `think` toggle to Ollama for hybrid reasoning
+  models (e.g. Qwen3). `ModelConfig.think` wins; when unset, the
+  `PHOSON_OLLAMA_THINK` env var is the fallback. Leaving both unset keeps the
+  model's default thinking behaviour untouched, so models without the toggle
+  are never affected.
+- **installer**: add a per-user Windows PowerShell installation.
+
 ## v0.40.0 (2026-09-17)
 
 ### Fix
