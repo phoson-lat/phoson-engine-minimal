@@ -36,6 +36,8 @@ from phoson_llm.schemas import (
 )
 from phoson_llm.chats.base import BaseLLMChat
 
+pytestmark = pytest.mark.usefixtures("isolated_cli_home")
+
 
 def _ollama_config(**overrides) -> PhosonConfig:
     """A config whose provider needs no credential, so build_chat works."""
@@ -138,6 +140,9 @@ def test_build_chat_default_is_three_attempts() -> None:
 def test_build_chat_honours_env_override(monkeypatch) -> None:
     from phoson_cli.config import load_config
 
+    # Build a real credential-free adapter without relying on an earlier
+    # keybinding test having persisted Ollama in the caller's config.
+    monkeypatch.setenv("PHOSON_PROVIDER", "ollama")
     monkeypatch.setenv("PHOSON_LLM_MAX_ATTEMPTS", "5")
     config = load_config()
     assert config.llm_max_attempts == 5

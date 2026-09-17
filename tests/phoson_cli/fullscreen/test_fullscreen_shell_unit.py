@@ -31,6 +31,8 @@ from phoson_cli.fullscreen.header_model import (
     _FOOTER_HINT_RUNNING,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_cli_home")
+
 
 def _trigger(app: PhosonApp, key: str) -> None:
     """Look up the handler registered for ``key`` on ``app.app`` and invoke it.
