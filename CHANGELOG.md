@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.40.0 (2026-09-17)
+
+### Fix
+
+- **sessions**: harden persistence and new/load/rewind lifecycle; cancelling
+  before the current stream starts no longer saves history from a previous
+  session (#237).
+- **cli**: serialize fullscreen operations and improve cancellation, modal
+  handling, terminal capability detection, degraded output and warning routing.
+- **clipboard**: drain subprocess output during cancellation to avoid hanging
+  the TUI when the pipe is full; reap children even on repeated cancellation.
+- **renderer**: restore live subagent progress updates with one Rich refresh
+  worker and a dynamic renderable.
+- **config**: validate and atomically persist settings, keep transient
+  provider/model overrides out of durable configuration, and accept CLI
+  provider overrides in setup. Explicit runtime theme changes survive engine
+  rebuilds; improve model/provider selection and plugin lifecycle handling.
+- **installer**: honor `--ci` and `--skip-setup`, remove duplicate setup wizard
+  execution, and render ANSI header colors correctly (#236).
+
+### Changed
+
+- **context**: environmental step/time message injection remains intentionally
+  disabled for now. The middleware still removes legacy environmental blocks;
+  its public constructor and lifecycle API remain compatible (#237).
+
+### Tests
+
+- Add regression coverage for session isolation, cancellation, terminal/process
+  contracts, provider/model persistence, themes and plugin lifecycle.
+- Isolate HOME/configuration in affected CLI tests and declare terminal
+  capabilities explicitly, preventing CI failures caused by shared settings.
+- Make X11 backend-selection tests independent of installed optional extras
+  and access to a live display.
+
 ## v0.39.0 (2026-09-15)
 
 ### Feat
