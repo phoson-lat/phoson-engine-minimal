@@ -41,6 +41,61 @@ def _make_sink() -> tuple[FullScreenSink, list[int]]:
     return sink, ticks
 
 
+def test_reset_session_view_clears_transcript_and_transient_state() -> None:
+    resets: list[int] = []
+    sink = FullScreenSink(
+        on_invalidate=lambda: None,
+        theme=DARK,
+        on_session_reset=lambda: resets.append(1),
+    )
+    block = object()
+    sink.blocks.append(block)
+    sink._plugin_blocks["plugin"] = block
+    sink.current_turn = object()  # type: ignore[assignment]
+    sink._last_reasoning = "stale"
+    sink._reasoning_blocks.append((block, "stale", False))
+    sink._expanded_reasoning_nodes.add("stale-node")
+    sink._pending_tool_calls["call"] = ({}, block)
+    sink._tool_calls.append((object(), {}, block))  # type: ignore[arg-type]
+
+    sink.reset_session_view()
+
+    assert sink.blocks == []
+    assert sink._plugin_blocks == {}
+    assert sink.current_turn is None
+    assert sink.take_reasoning() == ""
+    assert sink._reasoning_blocks == []
+    assert sink._expanded_reasoning_nodes == set()
+    assert sink._pending_tool_calls == {}
+    assert sink._tool_calls == []
+    assert resets == [1]
+
+
+def test_restore_session_view_recovers_snapshot_after_partial_replay() -> None:
+    restored_app_states: list[object] = []
+    sink = FullScreenSink(
+        on_invalidate=lambda: None,
+        theme=DARK,
+        on_session_snapshot=lambda: "old app state",
+        on_session_restore=restored_app_states.append,
+    )
+    old_block = object()
+    sink.blocks.append(old_block)
+    sink._last_reasoning = "old reasoning"
+    sink._expanded_reasoning_nodes.add("old-node")
+    snapshot = sink.snapshot_session_view()
+
+    sink.reset_session_view()
+    sink.blocks.append(object())
+    sink._last_reasoning = "new reasoning"
+    sink.restore_session_view(snapshot)
+
+    assert sink.blocks == [old_block]
+    assert sink.take_reasoning() == "old reasoning"
+    assert sink._expanded_reasoning_nodes == {"old-node"}
+    assert restored_app_states == ["old app state"]
+
+
 def _run_step(cost: float = 0.001) -> RunStep:
     now = datetime.datetime.now(UTC)
     return RunStep(
@@ -304,7 +359,7 @@ def test_t3_ctrl_t_expands_collapsed_reasoning_in_place_without_a_panel() -> Non
     assert "deep thoughts about the problem" not in collapsed
 
     before_blocks = len(sink.blocks)
-    sink.expand_reasoning("deep thoughts about the problem")
+    assert sink.expand_reasoning("node-1", "deep thoughts about the problem")
 
     expanded = _strip_ansi(render_chat(sink, width=80))
     # Full text now shows in place …
@@ -319,7 +374,7 @@ def test_t3_ctrl_t_expands_collapsed_reasoning_in_place_without_a_panel() -> Non
     assert not re.search(r"thought \d+s", expanded)
 
     # One-shot: a second Ctrl+T is a no-op (nothing left to expand).
-    sink.expand_reasoning("deep thoughts about the problem")
+    assert not sink.expand_reasoning("node-1", "deep thoughts about the problem")
     assert len(sink.blocks) == before_blocks
 
 
@@ -595,6 +650,52 @@ def test_streaming_trailing_repaint_never_lost() -> None:
     # The final turn must have frozen the streamed content into a block —
     # assert via the rendered ANSI (blocks are Rich renderables, not text).
     assert "last chunk" in render_chat(sink, width=80)
+
+
+def test_streaming_two_bursts_each_schedule_a_trailing_repaint() -> None:
+    """A fired timer must release the pending slot for the next burst."""
+    import asyncio
+
+    from phoson_cli.fullscreen.sink import REPAINT_INTERVAL_SECONDS
+
+    sink, ticks = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+
+    async def drive() -> None:
+        ticks.clear()
+        sink.on_event(AgentTokenEvent(content="burst one a"))
+        sink.on_event(AgentTokenEvent(content="burst one b"))
+        await asyncio.sleep(REPAINT_INTERVAL_SECONDS + 0.02)
+        first_burst_ticks = len(ticks)
+        sink.on_event(AgentTokenEvent(content="burst two a"))
+        sink.on_event(AgentTokenEvent(content="burst two b"))
+        await asyncio.sleep(REPAINT_INTERVAL_SECONDS + 0.02)
+        assert len(ticks) >= first_burst_ticks + 1
+
+    asyncio.run(drive())
+
+
+def test_stream_throttle_is_reset_when_a_turn_is_flushed() -> None:
+    import time
+    import asyncio
+
+    sink, _ = _make_sink()
+
+    async def drive() -> None:
+        sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+        sink._last_stream_repaint = time.monotonic()
+        sink.on_event(AgentTokenEvent(content="pending"))
+        pending = sink._stream_repaint_pending
+        assert pending is not None and not pending.cancelled()
+
+        sink.flush_line()
+
+        assert pending.cancelled()
+        assert sink._stream_repaint_pending is None
+        assert sink._last_stream_repaint == 0.0
+        assert sink._stream_event is False
+
+    asyncio.run(drive())
 
 
 def _done_result() -> "AgentRunResult":

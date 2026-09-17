@@ -17,6 +17,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from phoson_agent import (
+    FormField,
     AgentDoneEvent,
     AgentErrorEvent,
     AgentStartEvent,
@@ -62,8 +63,9 @@ async def test_pipe_input_typing_and_ctrl_j_inserts_multiline_text(tmp_path) -> 
                 # Ctrl+C to exit
                 pipe.send_text("\x03")
 
-            asyncio.create_task(drive_app())
+            driver = asyncio.create_task(drive_app())
             await app.app.run_async()
+            await driver
 
             assert app._prompt_input.text == "line one\nline two"
 
@@ -93,8 +95,9 @@ async def test_pipe_input_ctrl_l_clears_transcript(tmp_path) -> None:
                 await asyncio.sleep(0.02)
                 pipe.send_text("\x03")
 
-            asyncio.create_task(drive_app())
+            driver = asyncio.create_task(drive_app())
             await app.app.run_async()
+            await driver
 
             assert len(app.sink.blocks) == 0
 
@@ -113,24 +116,26 @@ async def test_pipe_input_ctrl_c_cancels_active_turn_without_exiting(tmp_path) -
             app.app.input = pipe
             app.app.output = DummyOutput()
 
-            # Simulate an active turn in progress
-            app.sink.on_event(AgentStartEvent(model="test-model", message_count=1))
-            app.sink.on_event(AgentTokenEvent(content="working..."))
-
             async def drive_app():
                 await asyncio.sleep(0.02)
-                # First Ctrl+C: cancels active turn and clears sink.current_turn
+                operation = app._start_operation(asyncio.sleep(30), "input")
+                assert operation is not None
+                app.sink.on_event(AgentStartEvent(model="test-model", message_count=1))
+                app.sink.on_event(AgentTokenEvent(content="working..."))
+                # First Ctrl+C cancels the authoritative outer operation.
                 with patch.object(app.repl, "cancel_current") as mock_cancel:
                     pipe.send_text("\x03")
                     await asyncio.sleep(0.05)
                     mock_cancel.assert_called_once()
+                    assert operation.done()
                     # Mark turn ended as controller would
                     app.sink.current_turn = None
                     # Second Ctrl+C: exits application
                     pipe.send_text("\x03")
 
-            asyncio.create_task(drive_app())
+            driver = asyncio.create_task(drive_app())
             await app.app.run_async()
+            await driver
 
             assert True
 
@@ -159,14 +164,93 @@ async def test_pipe_input_escape_cancels_inflight_run(tmp_path) -> None:
                     await asyncio.sleep(0.02)
                     # Escape (\x1b)
                     pipe.send_text("\x1b")
-                    await asyncio.sleep(0.02)
+                    # A lone Esc is delayed by prompt_toolkit's VT100 parser;
+                    # wait for the outer task cancellation to settle before
+                    # the next Ctrl+C takes the now-idle exit path.
+                    await asyncio.sleep(0.65)
                     pipe.send_text("\x03")
 
-                asyncio.create_task(drive_app())
+                driver = asyncio.create_task(drive_app())
                 await app.app.run_async()
+                await driver
 
                 mock_cancel.assert_called_once()
             fake_task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_pipe_input_form_tabs_validates_and_submits_two_fields(tmp_path) -> None:
+    """Tab changes fields; invalid Enter stays open with visible feedback."""
+    with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            history_file=tmp_path / "history.txt",
+        )
+        with create_pipe_input() as pipe:
+            app = PhosonApp(config)
+            app.app.input = pipe
+            app.app.output = DummyOutput()
+            form_task = asyncio.create_task(
+                app.run_float_form(
+                    "Details",
+                    [
+                        FormField(id="name", label="Name", required=True),
+                        FormField(id="count", label="Count", kind="integer"),
+                    ],
+                )
+            )
+
+            async def drive_app() -> None:
+                await asyncio.sleep(0.03)
+                pipe.send_text("\r")
+                await asyncio.sleep(0.03)
+                assert not form_task.done()
+                assert "Name is required" in app._floats._form_error
+                rendered_error = "".join(
+                    text for _style, text in app._floats._form_error_content()
+                )
+                assert "Name is required" in rendered_error
+                # Tab to Count, Shift-Tab (CSI Z) back to Name, then Tab to
+                # Count again. If either direction is broken, values land in
+                # the wrong fields and the expected validation cannot pass.
+                pipe.send_text("\t\x1b[ZAda\tseven\r")
+                await asyncio.sleep(0.03)
+                assert not form_task.done()
+                assert "Count must be an integer" in app._floats._form_error
+                pipe.send_text("\x15" + "7\r")
+                result = await form_task
+                assert result == {"name": "Ada", "count": "7"}
+                app.app.exit()
+
+            driver = asyncio.create_task(drive_app())
+            await app.app.run_async()
+            await driver
+
+
+@pytest.mark.asyncio
+async def test_empty_float_form_submits_safely(tmp_path) -> None:
+    with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
+        config = PhosonConfig(
+            provider="ollama",
+            sessions_dir=tmp_path,
+            history_file=tmp_path / "history.txt",
+        )
+        with create_pipe_input() as pipe:
+            app = PhosonApp(config)
+            app.app.input = pipe
+            app.app.output = DummyOutput()
+            form_task = asyncio.create_task(app.run_float_form("Empty", []))
+
+            async def drive_app() -> None:
+                await asyncio.sleep(0.03)
+                pipe.send_text("\r")
+                assert await form_task == {}
+                app.app.exit()
+
+            driver = asyncio.create_task(drive_app())
+            await app.app.run_async()
+            await driver
 
 
 @pytest.mark.asyncio
@@ -208,8 +292,9 @@ async def test_pipe_input_remapped_keys_dispatch(tmp_path) -> None:
                     await asyncio.sleep(0.02)
                     pipe.send_text("\x03")  # Ctrl+C to exit
 
-                asyncio.create_task(drive_app())
+                driver = asyncio.create_task(drive_app())
                 await app.app.run_async()
+                await driver
 
             assert submitted == ["remapped turn"]
             assert app._prompt_input.text == ""

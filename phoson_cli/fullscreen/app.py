@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import Any, cast
 from pathlib import Path
+from dataclasses import dataclass
 from collections.abc import Callable, Sequence, Coroutine
 
 from prompt_toolkit import Application
@@ -54,6 +55,7 @@ from ..theme import (
     Theme,
     load_theme,
     build_prompt_style,
+    resolve_runtime_theme,
     build_picker_style_dict,
 )
 from .floats import FloatsController
@@ -62,6 +64,7 @@ from .floats import FloatsController
 # the historical name ``_bash_card_rows`` from this module (moved to
 # :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
 from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
+from .render import BlockAnsiCache, BlockFormattedTextCache
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
@@ -180,6 +183,32 @@ _SUBAGENT_TICK_SECONDS = 0.12
 _INPUT_MAX_LINES = 5
 
 
+@dataclass
+class _AppSessionViewSnapshot:
+    rewind_stack: list[str]
+    expanded_reasoning: set[str]
+    auto_scroll: bool
+    scroll_top: int
+    ansi_cache: BlockAnsiCache
+    ft_cache: BlockFormattedTextCache
+
+
+@dataclass
+class _AppOperation:
+    task: asyncio.Task
+    kind: str
+    result: "_OperationResult"
+    persistence_required: bool = False
+    exit_when_done: bool = False
+
+
+@dataclass
+class _OperationResult:
+    value: Any = None
+    error: Exception | None = None
+    cancelled: bool = False
+
+
 class _ComposerPlaceholderProcessor(Processor):
     """Synchronous ``Processor`` that renders an empty-composer placeholder.
 
@@ -247,7 +276,7 @@ class PhosonApp:
     """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
 
     def __init__(self, config: PhosonConfig) -> None:
-        self.theme = load_theme()
+        self.theme = getattr(config, "_startup_theme", None) or load_theme()
         # Kept for _build_application (runs before self.repl exists): the
         # [keys] remap overrides (IMPROVEMENTS.md E6) come from the same
         # config object the shared REPL later wraps.
@@ -262,6 +291,7 @@ class PhosonApp:
         # anything renders.
         self._chat_pane = ChatPane(self)
         self._run_task: asyncio.Task | None = None
+        self._operation: _AppOperation | None = None
         # Double-Esc rewind (IMPROVEMENTS.md G1): monotonic timestamp of the
         # last idle Esc press, and the stack of pre-rewind cursors that
         # ``undo_jump`` (Ctrl+Z) pops to restore the previous point. The
@@ -318,12 +348,27 @@ class PhosonApp:
             on_invalidate=self.app.invalidate,
             theme=self.theme,
             show_reasoning=getattr(config, "show_reasoning", True),
+            on_session_snapshot=self._snapshot_session_view,
+            on_session_reset=self._reset_session_view,
+            on_session_restore=self._restore_session_view,
+            on_persistence_required=self._protect_operation_persistence,
         )
-        self.repl = PhosonRepl(
-            config, sink=self.sink, confirmation=FullScreenConfirmationService(self)
+        # Controller construction can read models.json. Route any malformed-file
+        # warning into the future transcript before the alternate screen starts.
+        warnings_hook.set_fullscreen_active(
+            True, lambda message: self.sink.notify("warn", message)
         )
+        try:
+            self.repl = PhosonRepl(
+                config,
+                sink=self.sink,
+                confirmation=FullScreenConfirmationService(self),
+            )
+        finally:
+            warnings_hook.set_fullscreen_active(False)
+        self.repl._controller.set_operation_starter(self._start_operation)
         self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
-        self.apply_theme(load_theme(config.theme, registry=self.repl.theme_registry))
+        self.apply_theme(resolve_runtime_theme(config, self.repl.theme_registry))
         # Header/footer model (#187). Created after ``self.repl`` exists (it
         # reads ``repl.session_metrics`` / ``repl.config``); the ptk controls
         # only invoke the header/footer delegates during rendering, i.e. after
@@ -527,7 +572,7 @@ class PhosonApp:
         """
         self.theme = theme
         self.repl.apply_theme(theme)
-        self.sink.theme = theme
+        self.sink.set_theme(theme)
         self._apply_style()
         self._block_ansi_cache.clear(0)
         self._block_ft_cache.clear(0)
@@ -680,6 +725,96 @@ class PhosonApp:
         """
         return _is_run_in_flight_impl(self)
 
+    def _start_operation(
+        self, coro: Coroutine[Any, Any, Any], kind: str
+    ) -> asyncio.Task | None:
+        """Register one application-managed operation as the authoritative task."""
+        if self._is_run_in_flight():
+            coro.close()
+            return None
+        result = _OperationResult()
+        wrapped = cast(Coroutine[Any, Any, None], self._execute_operation(coro, result))
+        task = self.app.create_background_task(wrapped)
+        self._run_task = task
+        self._operation = _AppOperation(task=task, kind=kind, result=result)
+        task.add_done_callback(self._finish_operation)
+        self.app.invalidate()
+        return task
+
+    async def _execute_operation(
+        self, coro: Coroutine[Any, Any, Any], result: _OperationResult
+    ) -> _OperationResult:
+        """Capture operation failures so prompt_toolkit never receives them."""
+        try:
+            result.value = await coro
+        except asyncio.CancelledError:
+            result.cancelled = True
+            raise
+        except Exception as exc:  # noqa: BLE001 - UI boundary captures all failures
+            result.error = exc
+        return result
+
+    def _finish_operation(self, task: asyncio.Task) -> None:
+        operation = self._operation
+        if operation is None or operation.task is not task:
+            return
+        exit_when_done = operation.exit_when_done
+        self._operation = None
+        self.app.invalidate()
+        result = operation.result
+        if result.error is not None:
+            message = (
+                f"Could not save session; the application remains open: {result.error}"
+                if operation.persistence_required
+                else f"Operation failed: {result.error}"
+            )
+            self.sink.notify("error", message)
+            return
+        if exit_when_done:
+            if task.cancelled() or result.cancelled:
+                self.sink.notify(
+                    "error",
+                    "Session save was cancelled; the application remains open.",
+                )
+            else:
+                self.app.exit()
+
+    def _protect_operation_persistence(self) -> None:
+        """Prevent repeated cancellation from interrupting required session saves."""
+        if self._operation is not None:
+            self._operation.persistence_required = True
+
+    def _operation_status(self) -> str:
+        """Short header status for app work without an active agent event."""
+        if not self._is_run_in_flight():
+            return ""
+        if self._operation is not None and self._operation.persistence_required:
+            return "Saving session"
+        if self._operation is not None:
+            return {
+                "bash": "Running bash",
+                "palette": "Running command",
+                "wake": "Background wake",
+            }.get(self._operation.kind, "Working")
+        return "Working"
+
+    def _cancel_operation(self, *, exit_when_done: bool = False) -> str:
+        """Cancel the outer app operation, or defer exit through persistence."""
+        task = self._run_task
+        if task is None or task.done():
+            return "idle"
+        operation = self._operation
+        if operation is not None and operation.task is task:
+            if operation.persistence_required:
+                operation.exit_when_done |= exit_when_done
+                return "protected"
+        # Also interrupt the stream consumer immediately when it exists. The
+        # outer task remains authoritative and is cancelled below, covering
+        # preparation/commands/bash before the controller creates that child.
+        self.repl.cancel_current()
+        task.cancel()
+        return "cancelled"
+
     async def _dispatch(self, text: str) -> None:
         await _dispatch_impl(self, text)
 
@@ -813,6 +948,38 @@ class PhosonApp:
         """Drop the transcript and its ANSI cache (see RewindController)."""
         self._rewind.reset_transcript()
 
+    def _reset_session_view(self) -> None:
+        """Reset fullscreen-only view state when the active session changes."""
+        self._block_ansi_cache = type(self._block_ansi_cache)()
+        self._block_ft_cache = type(self._block_ft_cache)()
+        self._reset_transcript()
+        self._rewind_stack.clear()
+        self._auto_scroll = True
+        self._chat_scroll_top = 0
+
+    def _snapshot_session_view(self) -> _AppSessionViewSnapshot:
+        """Capture app-owned session view state before transactional reset."""
+        return _AppSessionViewSnapshot(
+            rewind_stack=list(self._rewind_stack),
+            expanded_reasoning=set(self.repl._expanded_reasoning),
+            auto_scroll=self._auto_scroll,
+            scroll_top=self._chat_scroll_top,
+            ansi_cache=self._block_ansi_cache,
+            ft_cache=self._block_ft_cache,
+        )
+
+    def _restore_session_view(self, snapshot: object) -> None:
+        """Restore app-owned session view state after a failed load."""
+        if not isinstance(snapshot, _AppSessionViewSnapshot):
+            raise TypeError("invalid fullscreen app session view snapshot")
+        self._rewind_stack = snapshot.rewind_stack
+        self.repl._expanded_reasoning = snapshot.expanded_reasoning
+        self._auto_scroll = snapshot.auto_scroll
+        self._chat_scroll_top = snapshot.scroll_top
+        self._block_ansi_cache = snapshot.ansi_cache
+        self._block_ft_cache = snapshot.ft_cache
+        self.app.invalidate()
+
     def request_exit(self) -> None:
         """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
 
@@ -829,7 +996,7 @@ class PhosonApp:
 
     def paste_image(self) -> None:
         """Ctrl+V: paste an image from the clipboard, or fall back to text."""
-        self.app.create_background_task(paste_image_from_clipboard(self))
+        self._start_operation(paste_image_from_clipboard(self), "clipboard")
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -855,24 +1022,27 @@ class PhosonApp:
         # and print raw warnings over the rendered UI (seen with sub-agent
         # fallbacks). Silence that path for the duration of the session;
         # libraries still emit records for real handler setups.
-        logging.getLogger().handlers.append(logging.NullHandler())
-        logging.getLogger().propagate = False
-        # ``warnings.warn(...)`` (context-window/model-listing fallbacks —
-        # e.g. vLLM's /v1/models not listing the configured model id) would
-        # otherwise hit the I-112 hook installed by ``main()`` and print a
-        # notice to stdout, tearing the alt-screen render. Mute the hook for
-        # the session; the NullHandler above absorbs the routed records.
-        # ``logging.captureWarnings(True)`` additionally swaps ``showwarning``
-        # for the duration of the run and restores ours on exit, so the
-        # classic-mode hook stays active after the TUI closes.
-        warnings_hook.set_fullscreen_active(True)
-        logging.captureWarnings(True)
+        root_logger = logging.getLogger()
+        previous_propagate = root_logger.propagate
+        null_handler = logging.NullHandler()
+        root_logger.addHandler(null_handler)
+        root_logger.propagate = False
+        # Route warning/logging diagnostics into the transcript instead of
+        # writing around prompt_toolkit's alternate-screen renderer.
+        warnings_hook.set_fullscreen_active(
+            True, lambda message: self.sink.notify("warn", message)
+        )
+        restore_warning_capture = warnings_hook.capture_warnings()
         try:
             await self.app.run_async()
         finally:
-            logging.captureWarnings(False)
-            warnings_hook.set_fullscreen_active(False)
-            await self.repl.shutdown()
+            try:
+                await self.repl.shutdown()
+            finally:
+                restore_warning_capture()
+                warnings_hook.set_fullscreen_active(False)
+                root_logger.removeHandler(null_handler)
+                root_logger.propagate = previous_propagate
 
 
 __all__ = ["PhosonApp"]

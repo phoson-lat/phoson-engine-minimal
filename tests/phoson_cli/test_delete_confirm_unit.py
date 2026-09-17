@@ -123,6 +123,25 @@ async def test_delete_command_cancelled_deletes_nothing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_command_reports_invalid_session_id() -> None:
+    class ValidatingStorage(_FakeStorage):
+        async def delete(self, session_id: str) -> None:
+            raise ValueError("unsafe id")
+
+    repl = _DummyRepl()
+    repl.storage = ValidatingStorage()
+    host = _FakeHost(confirm_result=True)
+    handler = CommandHandler(repl, host)
+
+    kept = await handler.handle(Command(name="/delete", args="../victim"))
+
+    assert kept is True
+    assert host.errors == [
+        "Invalid session ID. Use /sessions to choose a saved session."
+    ]
+
+
+@pytest.mark.asyncio
 async def test_delete_current_session_never_confirms() -> None:
     """The active-session guard fires before any confirmation."""
     repl = _DummyRepl(current_id="abc123456789")
@@ -167,3 +186,31 @@ async def test_picker_single_delete_cancelled_deletes_nothing() -> None:
 
     assert repl.storage.deleted == []
     assert any("cancelled" in msg.lower() for msg in host.infos)
+
+
+@pytest.mark.asyncio
+async def test_picker_multi_delete_confirms_and_deletes_in_classic_handler() -> None:
+    repl = _DummyRepl()
+    host = _FakeHost(confirm_result=True)
+    host.pick_session_result = SessionPickerResult(
+        delete_ids=["abc123456789", "second-session"]
+    )
+    handler = CommandHandler(repl, host)
+
+    await handler.handle(Command(name="/sessions", args="pick"))
+
+    assert host.confirm_prompts == ["Delete 2 session(s)? This cannot be undone."]
+    assert repl.storage.deleted == ["abc123456789", "second-session"]
+
+
+@pytest.mark.asyncio
+async def test_completed_fullscreen_multi_delete_does_not_print_cancelled() -> None:
+    repl = _DummyRepl()
+    host = _FakeHost()
+    host.pick_session_result = SessionPickerResult(deleted_count=1)
+    handler = CommandHandler(repl, host)
+
+    await handler.handle(Command(name="/sessions", args="pick"))
+
+    assert host.infos == []
+    assert host.errors == []

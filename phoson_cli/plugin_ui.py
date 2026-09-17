@@ -1,10 +1,12 @@
 """Host adapters for the neutral community-plugin UI contracts (I-110)."""
 
+import sys
+from typing import TextIO
 from dataclasses import dataclass
 
 from rich.text import Text
 from rich.table import Table
-from rich.console import Group
+from rich.console import Group, Console
 
 from phoson_agent import (
     Choice,
@@ -19,6 +21,7 @@ from phoson_agent import (
 )
 
 from .theme import Theme
+from .trace import TraceWriter
 from .formatting import render_notice
 from .ui_protocols import AgentEventSink
 
@@ -66,9 +69,33 @@ class NonInteractivePluginUiService(PluginUiService):
     """Safe one-shot/CI adapter: output blocks, never request stdin."""
 
     theme: Theme
+    stream: TextIO | None = None
+    trace_writer: TraceWriter | None = None
 
     def publish(self, block: UiBlock) -> None:
-        print(render_plugin_block(block, self.theme))
+        output = self.stream if self.stream is not None else sys.stderr
+        console = Console(
+            file=output,
+            color_system=None,
+            force_terminal=False,
+            highlight=False,
+            width=100,
+        )
+        with console.capture() as capture:
+            console.print(render_plugin_block(block, self.theme))
+        rendered = capture.get()
+        if self.trace_writer is not None:
+            self.trace_writer.emit(
+                "diagnostic",
+                level="info",
+                source="plugin_ui",
+                block_type=type(block).__name__,
+                block_id=block.id,
+                message=rendered.rstrip("\n"),
+            )
+            return
+        output.write(rendered)
+        output.flush()
 
     def replace(self, block_id: str, block: UiBlock) -> None:
         self.publish(block)
@@ -105,6 +132,14 @@ class SinkPluginUiService(PluginUiService):
         self._sink = sink
         self._theme = theme
         self._confirmation = confirmation
+
+    @property
+    def theme(self) -> Theme:
+        return self._theme
+
+    def set_theme(self, theme: Theme) -> None:
+        """Use *theme* for blocks emitted after a runtime theme switch."""
+        self._theme = theme
 
     def _id(self, block_id: str) -> str:
         return block_id

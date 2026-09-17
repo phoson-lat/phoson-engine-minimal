@@ -231,6 +231,126 @@ async def test_session_file_naming(temp_dir, sample_tree):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_id",
+    [
+        "/tmp/victim",
+        "../victim",
+        "..\\victim",
+        ".",
+        "..",
+        "",
+        "foo:bar",
+        "foo<bar",
+        "foo>bar",
+        'foo"bar',
+        "foo|bar",
+        "foo?bar",
+        "foo*bar",
+        "foo\x00bar",
+        "foo\x1fbar",
+        "foo\x7fbar",
+    ],
+)
+async def test_storage_rejects_unsafe_session_ids_before_file_access(
+    temp_dir, session_id
+):
+    storage = JsonlStorage(base_path=temp_dir / "sessions")
+    victim = temp_dir / "victim.jsonl"
+    victim.write_text("do not touch", encoding="utf-8")
+
+    unsafe_tree = ConversationTree.new(session_id="temporary-safe-id")
+    unsafe_tree.session_id = session_id
+
+    with pytest.raises(ValueError, match="safe, non-empty filename stem"):
+        await storage.save(unsafe_tree)
+    with pytest.raises(ValueError, match="safe, non-empty filename stem"):
+        await storage.load(session_id)
+    with pytest.raises(ValueError, match="safe, non-empty filename stem"):
+        await storage.delete(session_id)
+    with pytest.raises(ValueError, match="safe, non-empty filename stem"):
+        await storage.save_meta(session_id, {})
+
+    assert victim.read_text(encoding="utf-8") == "do not touch"
+
+
+@pytest.mark.asyncio
+async def test_storage_accepts_generated_session_ids(temp_dir):
+    storage = JsonlStorage(base_path=temp_dir)
+    tree = ConversationTree.new()
+    tree.append(parent_id=None, message=Message(role="user", content="safe"))
+
+    await storage.save(tree)
+    loaded = await storage.load(tree.session_id)
+    await storage.save_meta(tree.session_id, {"step_count": 1})
+    await storage.delete(tree.session_id)
+
+    assert loaded.session_id == tree.session_id
+    assert not (temp_dir / f"{tree.session_id}.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_storage_accepts_consecutive_dots_inside_safe_session_id(temp_dir):
+    storage = JsonlStorage(base_path=temp_dir)
+    tree = ConversationTree.new(session_id="release..candidate")
+    tree.append(parent_id=None, message=Message(role="user", content="safe"))
+
+    await storage.save(tree)
+    assert (await storage.load(tree.session_id)).session_id == tree.session_id
+    assert tree.session_id in {meta.id for meta in await storage.list_sessions()}
+    await storage.delete(tree.session_id)
+
+    assert not (temp_dir / "release..candidate.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_skips_ids_rejected_by_crud(temp_dir, caplog):
+    storage = JsonlStorage(base_path=temp_dir)
+    tree = ConversationTree.new(session_id="safe-session")
+    tree.append(parent_id=None, message=Message(role="user", content="safe"))
+    await storage.save(tree)
+    (temp_dir / "safe-session.jsonl").rename(temp_dir / "unsafe:name.jsonl")
+
+    with caplog.at_level("WARNING"):
+        sessions = await storage.list_sessions()
+
+    assert sessions == []
+    assert "unsafe id" in caplog.text
+    with pytest.raises(ValueError):
+        await storage.load("unsafe:name")
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_skips_extension_only_filename(temp_dir, caplog):
+    storage = JsonlStorage(base_path=temp_dir)
+    tree = ConversationTree.new(session_id="source-session")
+    tree.append(parent_id=None, message=Message(role="user", content="safe"))
+    await storage.save(tree)
+    (temp_dir / "source-session.jsonl").rename(temp_dir / ".jsonl")
+
+    with caplog.at_level("WARNING"):
+        sessions = await storage.list_sessions()
+
+    assert sessions == []
+    assert ".jsonl" in caplog.text
+    assert not (temp_dir / ".jsonl.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_every_listed_session_id_is_loadable(temp_dir):
+    storage = JsonlStorage(base_path=temp_dir)
+    for session_id in ("safe-one", "safe-two"):
+        tree = ConversationTree.new(session_id=session_id)
+        tree.append(parent_id=None, message=Message(role="user", content=session_id))
+        await storage.save(tree)
+
+    sessions = await storage.list_sessions()
+
+    loaded = [await storage.load(str(meta.id)) for meta in sessions]
+    assert {tree.session_id for tree in loaded} == {"safe-one", "safe-two"}
+
+
+@pytest.mark.asyncio
 async def test_multiple_sessions(temp_dir):
     storage = JsonlStorage(base_path=temp_dir)
 

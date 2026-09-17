@@ -59,6 +59,7 @@ class ThemePickerResult:
 
     theme_name: str | None = None
     cancelled: bool = False
+    unavailable: bool = False
 
 
 def _banner_preview_renderable(theme: Theme):

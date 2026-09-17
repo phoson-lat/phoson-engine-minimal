@@ -13,7 +13,12 @@ from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 from phoson_cli.theme import load_theme, build_wizard_prompt_style
 from phoson_cli.labels import PROVIDER_LABELS
 
-from .config import PhosonConfig, save_config
+from .config import (
+    PhosonConfig,
+    save_config,
+    validate_config,
+    canonicalize_enabled_providers,
+)
 from ._frozen import asset_path
 from .model_selector import list_available_models
 
@@ -41,6 +46,7 @@ class SetupWizard:
         self.console = console or Console(highlight=False)
         self.config = config or PhosonConfig()
         self.enabled_providers = self._infer_enabled_providers(self.config)
+        self._explicit_secret_fields: set[str] = set()
         self.theme = load_theme(getattr(self.config, "theme", None))
         self.session = PromptSession(
             style=Style.from_dict(build_wizard_prompt_style(self.theme))
@@ -60,23 +66,27 @@ class SetupWizard:
         self._print_intro()
         await self._pick_enabled_providers()
         updated = replace(self.config)
+        updated.enabled_providers = list(self.enabled_providers)
         updated = await self._configure_providers(updated)
         updated = await self._configure_defaults(updated)
         updated = await self._configure_runtime(updated)
+        validate_config(updated)
         self._print_summary(updated)
         if await self._confirm("Save this configuration?", default=True):
-            path = save_config(updated)
+            path = save_config(
+                updated, explicit_secret_fields=self._explicit_secret_fields
+            )
             self.console.print(
                 Panel.fit(
                     f"Saved configuration to [bold]{path}[/bold]",
                     border_style=self.theme.ok,
                 )
             )
-            self.config = updated
         else:
             self.console.print(
                 Panel.fit("Configuration not saved.", border_style=self.theme.warn)
             )
+        self.config = updated
         return self.config
 
     def _print_banner(self) -> None:
@@ -153,7 +163,7 @@ class SetupWizard:
                 )
                 line = Text(f"  {idx}. ")
                 line.append(f"{marker} ", style=state_style)
-                line.append(PROVIDER_LABELS[provider], style="white")
+                line.append(PROVIDER_LABELS[provider], style=self.theme.text)
                 self.console.print(line)
             self.console.print(
                 Text(
@@ -198,16 +208,19 @@ class SetupWizard:
             config.openrouter_api_key = await self._secret_prompt(
                 "OpenRouter API key",
                 config.openrouter_api_key,
+                field_name="openrouter_api_key",
             )
         if "openai" in self.enabled_providers:
             config.openai_api_key = await self._secret_prompt(
                 "OpenAI API key",
                 config.openai_api_key,
+                field_name="openai_api_key",
             )
         if "anthropic" in self.enabled_providers:
             config.anthropic_api_key = await self._secret_prompt(
                 "Anthropic API key",
                 config.anthropic_api_key,
+                field_name="anthropic_api_key",
             )
         if "ollama" in self.enabled_providers:
             config.ollama_base_url = await self._prompt_text(
@@ -218,36 +231,43 @@ class SetupWizard:
             config.github_token = await self._secret_prompt(
                 "GitHub token",
                 config.github_token,
+                field_name="github_token",
             )
         if "nvidia" in self.enabled_providers:
             config.nvidia_api_key = await self._secret_prompt(
                 "NVIDIA API key",
                 config.nvidia_api_key,
+                field_name="nvidia_api_key",
             )
         if "xai" in self.enabled_providers:
             config.xai_api_key = await self._secret_prompt(
                 "xAI / Grok API key",
                 config.xai_api_key,
+                field_name="xai_api_key",
             )
         if "groq" in self.enabled_providers:
             config.groq_api_key = await self._secret_prompt(
                 "Groq API key",
                 config.groq_api_key,
+                field_name="groq_api_key",
             )
         if "deepseek" in self.enabled_providers:
             config.deepseek_api_key = await self._secret_prompt(
                 "DeepSeek API key",
                 config.deepseek_api_key,
+                field_name="deepseek_api_key",
             )
         if "together" in self.enabled_providers:
             config.together_api_key = await self._secret_prompt(
                 "Together AI API key",
                 config.together_api_key,
+                field_name="together_api_key",
             )
         if "perplexity" in self.enabled_providers:
             config.perplexity_api_key = await self._secret_prompt(
                 "Perplexity API key",
                 config.perplexity_api_key,
+                field_name="perplexity_api_key",
             )
         if "lmstudio" in self.enabled_providers:
             config.lmstudio_base_url = await self._prompt_text(
@@ -262,6 +282,7 @@ class SetupWizard:
             config.vllm_api_key = await self._secret_prompt(
                 "vLLM API key (optional, press Enter to skip)",
                 config.vllm_api_key,
+                field_name="vllm_api_key",
             )
         if "azure" in self.enabled_providers:
             config.azure_openai_endpoint = await self._prompt_text(
@@ -271,6 +292,7 @@ class SetupWizard:
             config.azure_openai_api_key = await self._secret_prompt(
                 "Azure OpenAI API key",
                 config.azure_openai_api_key,
+                field_name="azure_openai_api_key",
             )
             config.azure_openai_deployment = await self._prompt_text(
                 "Azure OpenAI deployment name",
@@ -280,11 +302,13 @@ class SetupWizard:
             config.gemini_api_key = await self._secret_prompt(
                 "Google Gemini API key",
                 config.gemini_api_key,
+                field_name="gemini_api_key",
             )
         if "mistral" in self.enabled_providers:
             config.mistral_api_key = await self._secret_prompt(
                 "Mistral API key",
                 config.mistral_api_key,
+                field_name="mistral_api_key",
             )
         if "bedrock" in self.enabled_providers:
             self.console.print(
@@ -298,11 +322,13 @@ class SetupWizard:
             config.fireworks_api_key = await self._secret_prompt(
                 "Fireworks AI API key",
                 config.fireworks_api_key,
+                field_name="fireworks_api_key",
             )
         if "cohere" in self.enabled_providers:
             config.cohere_api_key = await self._secret_prompt(
                 "Cohere API key",
                 config.cohere_api_key,
+                field_name="cohere_api_key",
             )
         if "omniroute" in self.enabled_providers:
             config.omniroute_base_url = await self._prompt_text(
@@ -312,6 +338,7 @@ class SetupWizard:
             config.omniroute_api_key = await self._secret_prompt(
                 "OmniRoute API key (optional, press Enter to skip)",
                 config.omniroute_api_key,
+                field_name="omniroute_api_key",
             )
         return config
 
@@ -334,13 +361,14 @@ class SetupWizard:
 
         default_provider = await self._choose_default_provider(config.provider)
         config.provider = default_provider
+        config.mark_provider_explicit()
 
         models = await list_available_models(config)
         suggested = [option.id for option in models[:8]]
 
         if suggested:
             table = Table(box=box.SIMPLE_HEAD, border_style=self.theme.accent_soft)
-            table.add_column("Suggested models", style="white")
+            table.add_column("Suggested models", style=self.theme.text)
             for model in suggested:
                 table.add_row(model)
             self.console.print(table)
@@ -372,6 +400,7 @@ class SetupWizard:
         config.max_iterations = await self._int_prompt(
             "Max iterations",
             config.max_iterations,
+            minimum=1,
         )
         config.safe_mode = await self._confirm(
             "Enable safe mode?",
@@ -379,6 +408,7 @@ class SetupWizard:
         )
         config.theme = await self._pick_theme()
         self.theme = load_theme(config.theme)
+        self.session.style = Style.from_dict(build_wizard_prompt_style(self.theme))
         return config
 
     async def _pick_theme(self) -> str:
@@ -416,7 +446,7 @@ class SetupWizard:
         """
         table = Table(title="Phoson configuration summary", box=box.ROUNDED)
         table.add_column("Setting", style=f"{self.theme.accent} bold")
-        table.add_column("Value", style="white")
+        table.add_column("Value", style=self.theme.text)
         table.add_row("Enabled providers", ", ".join(self.enabled_providers))
         table.add_row("Default provider", config.provider)
         table.add_row("Model", config.model)
@@ -512,7 +542,9 @@ class SetupWizard:
         )
         return result.strip() or (default or "")
 
-    async def _int_prompt(self, label: str, default: int) -> int:
+    async def _int_prompt(
+        self, label: str, default: int, *, minimum: int | None = None
+    ) -> int:
         """Prompt for an integer value, retrying until a valid integer is entered.
 
         Args:
@@ -525,16 +557,35 @@ class SetupWizard:
         while True:
             value = await self._prompt_text(label, str(default))
             try:
-                return int(value)
+                parsed = int(value)
             except ValueError:
                 self.console.print(
                     Text(
                         "Please enter a valid integer.", style=f"bold {self.theme.err}"
                     )
                 )
+                continue
+            if minimum is not None and parsed < minimum:
+                self.console.print(
+                    Text(
+                        f"Please enter an integer of at least {minimum}.",
+                        style=f"bold {self.theme.err}",
+                    )
+                )
+                continue
+            return parsed
+
+    @property
+    def explicit_secret_fields(self) -> frozenset[str]:
+        """Secret fields for which setup received explicit non-empty input."""
+        return frozenset(self._explicit_secret_fields)
 
     async def _secret_prompt(
-        self, label: str, default: str | None = None
+        self,
+        label: str,
+        default: str | None = None,
+        *,
+        field_name: str | None = None,
     ) -> str | None:
         """Prompt for a secret value (e.g. API key) with masked input.
 
@@ -559,6 +610,8 @@ class SetupWizard:
             is_password=True,
         )
         result = result.strip()
+        if result and field_name is not None:
+            self._explicit_secret_fields.add(field_name)
         return result or default
 
     async def _confirm(self, label: str, default: bool = True) -> bool:
@@ -609,6 +662,14 @@ class SetupWizard:
         Returns:
             Ordered list of enabled provider names.
         """
+        if config.enabled_providers is not None:
+            return canonicalize_enabled_providers(
+                list(config.enabled_providers),
+                active_provider=config.provider,
+                allow_transient_active=getattr(config, "_provider_source", "explicit")
+                in {"env", "cli"},
+            )
+
         enabled: list[str] = []
         if config.openrouter_api_key or config.provider == "openrouter":
             enabled.append("openrouter")

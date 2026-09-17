@@ -107,7 +107,9 @@ async def test_non_interactive_ui_never_prompts_and_returns_unavailable(capsys) 
     ui.publish(ProgressBlock("job", "Finished", 1, 1))
 
     assert result == InteractionResult(status="unavailable")
-    assert "Finished 1/1" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Finished 1/1" in captured.err
 
 
 def test_classic_sink_forwards_plugin_blocks_to_renderer() -> None:

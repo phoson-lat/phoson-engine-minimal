@@ -74,6 +74,20 @@ class AgentEventSink(Protocol):
 
 
 @runtime_checkable
+class TransactionalSessionViewSink(Protocol):
+    """Optional capability for front ends whose session view is replaceable."""
+
+    def snapshot_session_view(self) -> object:
+        """Capture view state that must survive a failed session switch."""
+
+    def reset_session_view(self) -> None:
+        """Clear the visible state before rendering another session."""
+
+    def restore_session_view(self, snapshot: object) -> None:
+        """Restore a snapshot after a failed session switch."""
+
+
+@runtime_checkable
 class ConfirmationService(Protocol):
     """Human-in-the-loop confirmations.
 
@@ -106,4 +120,8 @@ class ConfirmationService(Protocol):
         ...
 
 
-__all__ = ["AgentEventSink", "ConfirmationService"]
+__all__ = [
+    "AgentEventSink",
+    "ConfirmationService",
+    "TransactionalSessionViewSink",
+]

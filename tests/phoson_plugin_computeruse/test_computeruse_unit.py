@@ -294,13 +294,20 @@ def test_auto_refuses_wayland_on_non_gnome(monkeypatch):
 
 
 def test_auto_selects_x11_on_non_wayland(monkeypatch):
+    from unittest.mock import Mock
+
+    from phoson_plugin_computeruse.backends import x11, factory
+
+    monkeypatch.setattr(factory.sys, "platform", "linux")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
     monkeypatch.setenv("DISPLAY", ":99")
-    # The X11 deps are not installed here, so the dependency error itself
-    # proves the X11 backend was selected (and not another one).
-    with pytest.raises(ComputerUseError, match="X11 backend"):
-        detect_backend(name="auto")
+    # Test selection, not installed extras or access to a live display.
+    backend = object()
+    constructor = Mock(return_value=backend)
+    monkeypatch.setattr(x11, "X11Backend", constructor)
+    assert detect_backend(name="auto") is backend
+    constructor.assert_called_once_with()
 
 
 def test_fake_backend_works_even_on_wayland(monkeypatch):

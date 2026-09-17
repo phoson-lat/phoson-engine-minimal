@@ -213,6 +213,38 @@ async def test_model_command_persists_provider_and_model(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_model_command_enables_credential_free_provider_before_save(
+    tmp_path, monkeypatch
+) -> None:
+    """Cross-provider /model keeps an explicit enabled-provider list coherent."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="openai",
+        model="gpt-4o",
+        openai_api_key="sk-openai-test",
+        enabled_providers=["openai"],
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        openai=["gpt-4o"],
+        bedrock=["amazon.nova-pro-v1:0"],
+    )
+
+    result = await _handler(repl).handle(
+        Command(name="/model", args="amazon.nova-pro-v1:0")
+    )
+
+    assert result is True
+    assert repl.model_calls == [("amazon.nova-pro-v1:0", "bedrock")]
+    reloaded = load_config()
+    assert reloaded.provider == "bedrock"
+    assert reloaded.model == "amazon.nova-pro-v1:0"
+    assert reloaded.enabled_providers == ["openai", "bedrock"]
+
+
+@pytest.mark.asyncio
 async def test_model_command_refuses_unconfigured_provider(
     tmp_path, monkeypatch
 ) -> None:
@@ -270,6 +302,58 @@ async def test_model_command_router_prefix_keeps_provider(
     text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
     assert 'provider = "openrouter"' in text
     assert 'model = "openai/gpt-4o"' in text
+
+
+@pytest.mark.asyncio
+async def test_typed_model_preserves_active_provider_when_multiple_serve_id(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="openrouter",
+        model="old-model",
+        openrouter_api_key="sk-or-test",
+        openai_api_key="sk-openai-test",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        openrouter=["openai/gpt-4o"],
+        openai=["openai/gpt-4o"],
+    )
+
+    await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
+
+    assert repl.model_calls == [("openai/gpt-4o", None)]
+    assert config.provider == "openrouter"
+
+
+@pytest.mark.asyncio
+async def test_typed_model_refuses_ambiguous_non_active_provider_matches(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="ollama",
+        model="local-model",
+        openrouter_api_key="sk-or-test",
+        openai_api_key="sk-openai-test",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+    _mock_listings(
+        monkeypatch,
+        ollama=["local-model"],
+        openrouter=["openai/gpt-4o"],
+        openai=["openai/gpt-4o"],
+    )
+
+    await _handler(repl).handle(Command(name="/model", args="openai/gpt-4o"))
+
+    assert repl.model_calls == []
+    assert config.provider == "ollama"
+    assert any("multiple providers" in message for message in repl.renderer.errors)
 
 
 @pytest.mark.asyncio
@@ -366,6 +450,48 @@ async def test_model_command_picker_option_provider_is_authoritative(
     text = (tmp_path / ".phoson" / "config.toml").read_text(encoding="utf-8")
     assert 'provider = "groq"' in text
     assert 'model = "llama-3.3-70b"' in text
+
+
+@pytest.mark.asyncio
+async def test_model_picker_preserves_provider_identity_for_duplicate_id(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = PhosonConfig(
+        provider="ollama",
+        model="local-model",
+        openrouter_api_key="sk-or-test",
+        openai_api_key="sk-openai-test",
+        sessions_dir=tmp_path / "sessions",
+    )
+    repl = _DummyRepl(config)
+
+    from phoson_cli.model_selector import ProviderListing
+
+    monkeypatch.setattr(
+        "phoson_cli.commands.list_models_for_providers",
+        AsyncMock(
+            return_value=[
+                ProviderListing(
+                    provider=provider,
+                    options=[SimpleNamespace(id="shared-model", provider=provider)],
+                )
+                for provider in ("openrouter", "openai")
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "phoson_cli.commands.pick_model",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                model_id="shared-model", provider="openai", cancelled=False
+            )
+        ),
+    )
+
+    await _handler(repl).handle(Command(name="/model", args=""))
+
+    assert repl.model_calls == [("shared-model", "openai")]
 
 
 @pytest.mark.asyncio

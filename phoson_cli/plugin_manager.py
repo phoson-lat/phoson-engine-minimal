@@ -1,5 +1,6 @@
 """Community plugin installation and configuration management (I-110)."""
 
+import os
 import sys
 import json
 import tomllib
@@ -69,11 +70,16 @@ def _save_lockfile(entries: list[dict[str, str]], path: Path | None = None) -> P
             if value is not None:
                 lines.append(f"{key} = {_toml_string(value)}\n")
         lines.append("\n")
-    file_path.write_text("".join(lines), encoding="utf-8")
+    temporary = file_path.with_name(f".{file_path.name}.{os.getpid()}.tmp")
     try:
-        file_path.chmod(0o600)
-    except OSError:  # pragma: no cover - non-POSIX filesystems
-        pass
+        temporary.write_text("".join(lines), encoding="utf-8")
+        try:
+            temporary.chmod(0o600)
+        except OSError:  # pragma: no cover - non-POSIX filesystems
+            pass
+        temporary.replace(file_path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return file_path
 
 
@@ -409,15 +415,38 @@ def update_plugin(
 def remove_plugin(plugin_id: str, config: PhosonConfig) -> None:
     """Remove a plugin from runtime configuration without deleting its package.
 
-    Package uninstallation is deliberately not coupled to this action: several
-    entry points may share a distribution, and reliably resolving ownership is
-    a separate package-metadata concern. Users may uninstall it with their
-    package manager after confirming no other plugin uses it.
+    Specs are deleted from both enabled and disabled configuration. Package
+    uninstallation is deliberately not coupled to this action: several entry
+    points may share a distribution, and reliably resolving ownership is a
+    separate package-metadata concern.
     """
-    disable_plugin(plugin_id, config)
-    _save_lockfile(
-        [entry for entry in _load_lockfile() if entry.get("id") != plugin_id]
-    )
+    previous_plugins = list(config.plugins)
+    previous_disabled = list(config.disabled_plugins)
+    previous_lock = _load_lockfile()
+    plugins = [spec for spec in previous_plugins if not _matches(spec, plugin_id)]
+    disabled = [spec for spec in previous_disabled if not _matches(spec, plugin_id)]
+    if plugins == previous_plugins and disabled == previous_disabled:
+        raise PluginManagerError(f"Configured plugin not found: {plugin_id}")
+    next_lock = [entry for entry in previous_lock if entry.get("id") != plugin_id]
+
+    # Persist the inventory first. If it is unavailable, runtime configuration
+    # remains untouched. A later config failure rolls both stores back.
+    _save_lockfile(next_lock)
+    config.plugins = plugins
+    config.disabled_plugins = disabled
+    try:
+        save_config(config, only_fields={"plugins", "disabled_plugins"})
+    except Exception:
+        config.plugins = previous_plugins
+        config.disabled_plugins = previous_disabled
+        try:
+            _save_lockfile(previous_lock)
+            save_config(config, only_fields={"plugins", "disabled_plugins"})
+        except Exception as rollback_error:  # noqa: BLE001
+            raise PluginManagerError(
+                f"Plugin removal failed and rollback was incomplete: {rollback_error}"
+            ) from rollback_error
+        raise
 
 
 def doctor_plugin(plugin_id: str, config: PhosonConfig) -> Plugin:

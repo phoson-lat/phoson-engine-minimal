@@ -5,10 +5,10 @@ The interactive front ends render tool activity live, but one-shot
 adapter) prints **only the final answer** — the agent's tool calls are
 invisible. That makes a failed run impossible to debug.
 
-This middleware emits one machine-readable JSON line per agent event
-(``start`` / ``tool_start`` / ``tool_done`` / ``step_done`` / ``done`` /
-``error``) to a stream. It defaults to **stderr** so stdout keeps carrying
-exactly the final answer (external harnesses capture stdout).
+The middleware emits machine-readable progress records (``start`` /
+``tool_start`` / ``tool_done`` / ``step_done``). The one-shot process owner
+emits exactly one terminal ``done`` or ``error`` after resource cleanup.
+Records default to **stderr** so stdout carries exactly the final answer.
 
 Enable per run with ``--trace`` (or the ``PHOSON_TRACE=1`` env var for
 harnesses that cannot pass flags).
@@ -21,7 +21,6 @@ from typing import Any, TextIO
 
 from phoson_agent.models import (
     AgentEvent,
-    AgentDoneEvent,
     AgentErrorEvent,
     AgentStartEvent,
     AgentStepDoneEvent,
@@ -48,6 +47,38 @@ def _clip(value: Any, limit: int = _CLIP_CHARS) -> str:
     return text[:limit] + f"… (+{len(text) - limit} chars)"
 
 
+class TraceWriter:
+    """Best-effort JSONL writer shared by trace events and diagnostics."""
+
+    def __init__(self, stream: TextIO | None = None) -> None:
+        self._out = stream if stream is not None else sys.stderr
+
+    def emit(self, event: str, **fields: Any) -> None:
+        record = {"phoson_trace": event, **fields}
+        try:
+            self._out.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            self._out.flush()
+        except Exception:  # noqa: BLE001 - tracing must never break the run
+            pass
+
+    def diagnostic(
+        self, message: str, *, level: str = "warning", source: str = "runtime"
+    ) -> None:
+        self.emit("diagnostic", level=level, source=source, message=message)
+
+    def error(
+        self,
+        message: str,
+        *,
+        code: str = "runtime_error",
+        retryable: bool = False,
+    ) -> None:
+        self.emit("error", message=message, code=code, retryable=retryable)
+
+    def done(self, final: Any) -> None:
+        self.emit("done", final=_clip(final))
+
+
 class TraceMiddleware(AgentMiddleware):
     """Emit one JSON line per agent event for a headless run.
 
@@ -56,19 +87,21 @@ class TraceMiddleware(AgentMiddleware):
     Writing never raises: a tracing failure must not break the run.
     """
 
-    def __init__(self, stream: TextIO | None = None) -> None:
-        self._out = stream if stream is not None else sys.stderr
+    def __init__(
+        self,
+        stream: TextIO | None = None,
+        *,
+        writer: TraceWriter | None = None,
+    ) -> None:
+        self._writer = writer or TraceWriter(stream)
+        self.terminal_error: AgentErrorEvent | None = None
 
     def _emit(self, event: str, **fields: Any) -> None:
-        record = {"phoson_trace": event, **fields}
-        try:
-            self._out.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-            self._out.flush()
-        except Exception:  # noqa: BLE001 — tracing must never break the run
-            pass
+        self._writer.emit(event, **fields)
 
     async def on_agent_event(self, event: AgentEvent) -> None:
         if isinstance(event, AgentStartEvent):
+            self.terminal_error = None
             self._emit(
                 "start",
                 model=event.model,
@@ -93,15 +126,5 @@ class TraceMiddleware(AgentMiddleware):
                 tool=getattr(step, "tool_name", None),
                 duration_ms=getattr(step, "duration_ms", None),
             )
-        elif isinstance(event, AgentDoneEvent):
-            self._emit(
-                "done",
-                final=_clip(getattr(event.result, "final_content", None)),
-            )
         elif isinstance(event, AgentErrorEvent):
-            self._emit(
-                "error",
-                message=event.message,
-                code=event.code,
-                retryable=event.retryable,
-            )
+            self.terminal_error = event

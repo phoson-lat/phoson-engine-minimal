@@ -12,23 +12,16 @@ from typing import Any
 def request_exit(app: Any) -> None:
     """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
 
-    ``sink.current_turn`` is set exactly while there is something
-    the user can see happening (tokens, a running tool, a tool
-    awaiting confirmation) — and, because ``AgentDoneEvent``/
-    ``AgentErrorEvent`` are dispatched to the sink from inside the
-    same stream-consumption task ``is_running`` reflects, the two
-    become False together. There is no window where content is
-    still visibly streaming but ``is_running`` has already gone
-    False, so ``cancel_current()`` is always effective here.
-
-    Once the turn's content is fully rendered, only invisible
-    trailing bookkeeping remains (persisting reasoning, saving the
-    session) — not cancel-worthy, so this just quits; a pending
-    background task gets cancelled for free by the Application
-    shutting down.
+    The app-managed outer task covers commands, preparation, bash, palette
+    dispatch, and wake turns in addition to the controller's stream task.
+    Normal work is cancelled through that outer task. Once an agent terminal
+    event makes session persistence mandatory, exit is deferred until the
+    same task has fully settled.
     """
-    if app.sink.current_turn is not None:
-        app.repl.cancel_current()
+    if app._is_run_in_flight():
+        result = app._cancel_operation(exit_when_done=True)
+        if result == "protected":
+            app.sink.notify("info", "Saving session before exit...")
         return
     app.app.exit()
 

@@ -17,6 +17,7 @@ are untouched.
 """
 
 import time
+from html import escape
 from pathlib import Path
 
 from prompt_toolkit.formatted_text import HTML
@@ -88,12 +89,12 @@ class HeaderModel:
         # the single source of truth for the check result in both
         # front ends (the TUI starts it in ``run_async``).
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
-        status = app.sink.status_text()
+        status = app.sink.status_text() or app._operation_status()
         # T-2: the idle status is empty (no "Online"); only show the
         # separator when there is actually a live status to display.
         status_part = (
             f'<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{status}</style>'
+            f'<style class="header_dim">{escape(status, quote=True)}</style>'
             if status
             else ""
         )
@@ -111,7 +112,7 @@ class HeaderModel:
         # throttle like the permission policy file read is needed.
         effort = repl.config.reasoning_effort
         effort_part = (
-            f' <style class="header">effort: {effort}</style>'
+            f' <style class="header">effort: {escape(effort, quote=True)}</style>'
             if effort in REASONING_EFFORTS
             else ' <style class="header_dim">· effort off</style>'
         )
@@ -131,19 +132,20 @@ class HeaderModel:
         if app._header_cache_key != key:
             app._header_cache_key = key
             extras = f"{attach_part}{memory_part}{monitors_part}"
+            model_provider_html = escape(model_provider, quote=True)
             app._header_cache = HTML(
                 '<style class="header"> phoson </style>'
                 '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{model_provider}</style>'
+                f'<style class="header_dim">{model_provider_html}</style>'
                 '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{cwd}</style>'
+                f'<style class="header_dim">{escape(cwd, quote=True)}</style>'
                 '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{token_cost}</style>'
+                f'<style class="header_dim">{escape(token_cost, quote=True)}</style>'
                 f"{mode_part}"
                 f"{effort_part}"
-                f'<style class="header_dim">{extras}</style>'
+                f'<style class="header_dim">{escape(extras, quote=True)}</style>'
                 f"{status_part}"
-                f'<style class="header_dim">{update_part}</style>'
+                f'<style class="header_dim">{escape(update_part, quote=True)}</style>'
             )
         return app._header_cache
 

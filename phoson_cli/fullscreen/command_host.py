@@ -41,6 +41,9 @@ class FullScreenCommandHost:
     def __init__(self, app: "PhosonApp") -> None:
         self.app = app
 
+    def picker_unavailable(self, usage: str) -> bool:  # noqa: ARG002
+        return False
+
     def print_info(self, message: str) -> None:
         self.app.sink.notify("info", message)
 
@@ -155,6 +158,8 @@ class FullScreenCommandHost:
         confirm deletes nothing and just reopens the picker.
         """
         remaining = list(sessions)
+        if not remaining:
+            return SessionPickerResult(cancelled=True)
         while True:
             picker = build_session_picker(remaining, current_id, theme=self.app.theme)
             result = await self.app.run_float_picker(picker)
@@ -172,6 +177,8 @@ class FullScreenCommandHost:
                 await self.app.repl.storage.delete(sid)
                 remaining = [s for s in remaining if str(s.id) != sid]
             self.app.sink.notify("info", f"Deleted {len(ids)} session(s).")
+            if not remaining:
+                return SessionPickerResult(deleted_count=len(ids))
 
     async def confirm(self, prompt: str) -> bool:
         return await self.app.run_float_confirm(prompt)

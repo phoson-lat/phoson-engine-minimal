@@ -19,6 +19,7 @@ def clear_transcript(app: Any) -> None:
     """Ctrl+L: drop the transcript and its ANSI cache."""
     app.sink.blocks.clear()
     app.sink.clear_reasoning_state()
+    app.repl._expanded_reasoning.clear()
     # The banner is dropped with the transcript (unlike rewind, which
     # re-seeds it): forget the reference so a later apply_theme doesn't
     # look for an object that no longer exists in the pane.
@@ -52,22 +53,25 @@ def toggle_reasoning(app: Any) -> None:
         path_ids.append(cursor)
         node = app.repl.tree.nodes.get(cursor)
         cursor = node.parent_id if node is not None else None
-    path_ids.reverse()
-
+    found_reasoning = False
     for node_id in path_ids:
         node = app.repl.tree.nodes.get(node_id)
         reasoning = node.metadata.get("reasoning") if node else None
         if not reasoning:
             continue
+        found_reasoning = True
         if node_id in app.repl._expanded_reasoning:
-            app.sink.notify(
-                "info",
-                "Reasoning already expanded (the transcript is append-only).",
-            )
+            continue
+        if app.sink.expand_reasoning(node_id, str(reasoning)):
+            app.repl._expanded_reasoning.add(node_id)
             return
-        app.repl._expanded_reasoning.add(node_id)
-        app.sink.expand_reasoning(str(reasoning))
+        app.sink.notify("error", "Could not render captured reasoning.")
         return
+    if found_reasoning:
+        app.sink.notify(
+            "info",
+            "Reasoning already expanded (the transcript is append-only).",
+        )
 
 
 def cycle_permission_mode(app: Any) -> None:
@@ -80,6 +84,10 @@ def cycle_permission_mode(app: Any) -> None:
     wins over auto. The header chip refreshes immediately and the change is
     pushed into the live gate (no restart needed).
     """
+    if app._is_run_in_flight():
+        app.sink.notify("warn", "Wait for the current operation to finish.")
+        return
+
     from ..permissions_store import (
         LEVEL_ASK,
         set_level,
@@ -122,6 +130,9 @@ def cycle_reasoning_effort(app: Any) -> None:
     """Ctrl+E: cycle the reasoning effort off → low → medium → high →
     xhigh → max (wraps to off).
     """
+    if app._is_run_in_flight():
+        app.sink.notify("warn", "Wait for the current operation to finish.")
+        return
     current = app.repl.config.reasoning_effort
     if current not in REASONING_EFFORTS:
         current = None  # "off"

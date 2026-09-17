@@ -148,15 +148,16 @@ def test_should_use_classic_auto_detects_dumb_term(monkeypatch) -> None:
 
 def test_should_use_classic_not_auto_on_real_terminal(monkeypatch) -> None:
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setenv("TERM", "xterm-256color")
     assert _should_use_classic(parse_args([])) is False
 
 
-def test_should_use_classic_not_auto_without_tty(monkeypatch) -> None:
-    """Piped stdin is one-shot mode, never classic — even with TERM=dumb."""
+def test_should_use_classic_without_input_tty(monkeypatch) -> None:
+    """A non-capable input can never select the full-screen frontend."""
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setenv("TERM", "dumb")
-    assert _should_use_classic(parse_args([])) is False
+    assert _should_use_classic(parse_args([])) is True
 
 
 # ── main() integration ───────────────────────────────────────────────────────
@@ -200,6 +201,7 @@ def test_main_classic_flag_launches_repl_not_app(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli", "--classic"])
     monkeypatch.setattr(main_module, "load_config", lambda: PhosonConfig())
     monkeypatch.setattr(main_module, "build_chat", lambda config: None)
@@ -269,6 +271,8 @@ def test_main_overrides_reach_the_app_config(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -318,6 +322,8 @@ def test_main_overrides_survive_setup_reload(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli", "--model", "x/y"])
     monkeypatch.setattr(
         main_module, "load_config", lambda: PhosonConfig(provider="openrouter")

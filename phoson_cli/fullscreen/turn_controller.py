@@ -53,23 +53,18 @@ def submit(app: Any) -> None:
     # T-12: a leading "!" (with the rest non-blank) is a shell command,
     # not an agent turn or a slash command.
     if text.startswith("!") and text[1:].strip():
-        app._run_task = app.app.create_background_task(
-            app._run_bash_line(text[1:].strip())
-        )
+        app._start_operation(app._run_bash_line(text[1:].strip()), "bash")
         return
-    app._run_task = app.app.create_background_task(app._dispatch(text))
+    app._start_operation(app._dispatch(text), "input")
 
 
 def is_run_in_flight(app: Any) -> bool:
     """True from the moment Enter is pressed until the turn fully settles.
 
-    Guards against a second submission overlapping the first (which
-    would race two mutations of the same tree/session state) —
-    including the brief window after the visible answer is already
-    rendered but ``run_turn`` is still persisting it. For "should
-    Ctrl+C/Ctrl+Q interrupt something visible" use
-    ``sink.current_turn is not None`` instead (see ``request_exit``)
-    — that invisible trailing save is not cancel-worthy.
+    Guards against overlapping Enter, palette, and autonomous-wake work,
+    including the brief window after a visible answer is rendered while
+    ``run_turn`` is still persisting it. ``request_exit`` uses the same
+    authoritative task and defers exit when persistence is required.
     """
     return app._run_task is not None and not app._run_task.done()
 

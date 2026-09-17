@@ -37,32 +37,41 @@ def test_parse_oneshot_print_flag(monkeypatch) -> None:
     assert parse_args(["--print", "a task"]).task == "a task"
 
 
-def test_parse_oneshot_piped_stdin(monkeypatch) -> None:
+def test_parse_oneshot_piped_stdin_is_resolved_after_parsing(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="piped task"))
-    assert parse_args([]).task == "piped task"
+    options = parse_args([])
+    main_module._resolve_task(options)
+    assert options.task == "piped task"
 
 
-def test_parse_oneshot_piped_empty_returns_none(monkeypatch) -> None:
+def test_parse_oneshot_piped_empty_exits(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="   "))
-    assert parse_args([]).task is None
+    options = parse_args([])
+    with pytest.raises(SystemExit) as exc_info:
+        main_module._resolve_task(options)
+    assert exc_info.value.code == 1
 
 
 def test_parse_oneshot_print_flag_with_piped_stdin(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text="via pipe"))
-    assert parse_args(["-p"]).task == "via pipe"
+    options = parse_args(["-p"])
+    main_module._resolve_task(options)
+    assert options.task == "via pipe"
 
 
 def test_parse_oneshot_print_flag_empty_stdin_exits(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text=""))
+    options = parse_args(["-p"])
     with pytest.raises(SystemExit) as exc_info:
-        parse_args(["-p"])
+        main_module._resolve_task(options)
     assert exc_info.value.code == 1
 
 
 def test_parse_oneshot_print_flag_interactive_tty_exits(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+    options = parse_args(["-p"])
     with pytest.raises(SystemExit) as exc_info:
-        parse_args(["-p"])
+        main_module._resolve_task(options)
     assert exc_info.value.code == 1
 
 
@@ -71,8 +80,7 @@ def test_parse_oneshot_interactive_default(monkeypatch) -> None:
     assert parse_args([]).task is None
 
 
-def test_parse_oneshot_stdin_read_error_is_not_fatal(monkeypatch) -> None:
-    """Closed/captured stdin (OSError on read) degrades to interactive mode."""
+def test_parse_oneshot_stdin_read_error_exits(monkeypatch) -> None:
 
     class _RaisingStdin:
         def isatty(self) -> bool:
@@ -82,7 +90,10 @@ def test_parse_oneshot_stdin_read_error_is_not_fatal(monkeypatch) -> None:
             raise OSError("no stdin here")
 
     monkeypatch.setattr(sys, "stdin", _RaisingStdin())
-    assert parse_args([]).task is None
+    options = parse_args([])
+    with pytest.raises(SystemExit) as exc_info:
+        main_module._resolve_task(options)
+    assert exc_info.value.code == 1
 
 
 # ── _run_oneshot ──────────────────────────────────────────────────────────────
@@ -121,7 +132,9 @@ async def test_run_oneshot_success_prints_result(capsys, tmp_path) -> None:
         )
 
     assert rc == 0
-    assert "ONE-SHOT RESULT" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == "ONE-SHOT RESULT\n"
+    assert captured.err == ""
     assert chat.closed == 1
 
 

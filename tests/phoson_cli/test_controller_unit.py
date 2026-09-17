@@ -5,6 +5,7 @@ no prompt_toolkit, no Rich, no TTY. This is the guarantee that a new
 front end is a sink, not a fork.
 """
 
+import asyncio
 import datetime
 from types import SimpleNamespace
 from pathlib import Path
@@ -12,9 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from phoson_agent import Plugin
+from phoson_agent import Plugin, AgentMiddleware
 from phoson_cli.config import PhosonConfig
-from phoson_llm.schemas import Message, TokenUsage
+from phoson_llm.schemas import Message, TokenUsage, LLMDoneEvent
 from phoson_agent.models import (
     RunStep,
     AgentDoneEvent,
@@ -78,6 +79,32 @@ class FakeSink:
 
 
 assert isinstance(FakeSink(), AgentEventSink)  # runtime_checkable conformance
+
+
+class TransactionalFakeSink(FakeSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.visible_blocks: list[object] = []
+        self.reset_count = 0
+        self.restore_count = 0
+        self.fail_replay = False
+
+    def snapshot_session_view(self) -> object:
+        return list(self.visible_blocks)
+
+    def reset_session_view(self) -> None:
+        self.reset_count += 1
+        self.visible_blocks.clear()
+
+    def restore_session_view(self, snapshot: object) -> None:
+        self.restore_count += 1
+        self.visible_blocks = list(snapshot)  # type: ignore[arg-type]
+
+    def print_history(self, path, tail=None, timestamps=None) -> None:
+        super().print_history(path, tail=tail, timestamps=timestamps)
+        self.visible_blocks.append("loaded history")
+        if self.fail_replay:
+            raise RuntimeError("replay failed")
 
 
 def _make_controller(tmp_path, **cfg) -> tuple[SessionController, FakeSink]:
@@ -574,16 +601,31 @@ async def test_set_provider_uses_default_model_when_configured(tmp_path) -> None
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
 
-def test_new_session_resets_state(tmp_path) -> None:
+async def test_new_session_resets_state(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
     first_id = controller.tree.session_id
     controller.tree.append(parent_id=None, message=Message(role="user", content="x"))
 
-    controller.new_session()
+    await controller.new_session()
 
     assert controller.tree.session_id != first_id
     assert controller.current_node_id is None
     assert sink.session_ids[-1] == controller.tree.session_id
+
+
+async def test_new_session_resets_context_and_stamps_current_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    controller, _ = _make_controller(tmp_path)
+    cwd = tmp_path / "new-cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    controller._context_tokens = 1234
+
+    await controller.new_session()
+
+    assert controller.tree.cwd == str(cwd)
+    assert controller.context_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -628,6 +670,535 @@ async def test_load_session_replays_tail_and_metrics(tmp_path) -> None:
     # Full path replayed, not a fixed-size slice of it.
     expected = controller2.tree.get_path(controller2.current_node_id)
     assert len(path) == len(expected)
+
+
+@pytest.mark.asyncio
+async def test_load_session_clears_attachments_and_recomputes_context(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    loaded = controller.tree.__class__.new(session_id="loaded-session")
+    loaded.append(parent_id=None, message=Message(role="user", content="loaded"))
+    await controller.storage.save(loaded)
+    controller.attachments._pending.append(object())  # type: ignore[arg-type]
+    controller._context_tokens = 987654
+
+    outcome = await controller.load_session(loaded.session_id)
+
+    assert outcome.ok
+    assert len(controller.attachments) == 0
+    assert controller.context_tokens == controller.estimate_active_path()
+    assert controller.context_tokens != 987654
+
+
+@pytest.mark.asyncio
+async def test_load_session_rolls_back_when_metadata_loading_fails(tmp_path) -> None:
+    controller, sink = _make_controller(tmp_path)
+    old_node = controller.tree.append(
+        parent_id=None, message=Message(role="user", content="keep me")
+    )
+    controller.current_node_id = old_node.id
+    controller.session_metrics.total_cost_usd = 4.25
+    controller._context_tokens = 321
+    controller.attachments._pending.append(object())  # type: ignore[arg-type]
+    old_tree = controller.tree
+    old_metrics = controller.session_metrics
+
+    loaded = controller.tree.__class__.new(session_id="candidate-session")
+    loaded.append(parent_id=None, message=Message(role="user", content="candidate"))
+    await controller.storage.save(loaded)
+    controller.storage.list_meta = AsyncMock(side_effect=RuntimeError("meta failed"))
+
+    outcome = await controller.load_session(loaded.session_id)
+
+    assert not outcome.ok
+    assert controller.tree is old_tree
+    assert controller.current_node_id == old_node.id
+    assert controller.session_metrics is old_metrics
+    assert controller.session_metrics.total_cost_usd == 4.25
+    assert controller.context_tokens == 321
+    assert len(controller.attachments) == 1
+    assert sink.session_ids[-1] == old_tree.session_id
+
+
+@pytest.mark.asyncio
+async def test_load_session_restores_view_when_replay_sink_fails(tmp_path) -> None:
+    sink = TransactionalFakeSink()
+    config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
+    with patch(
+        "phoson_cli.controller.build_chat",
+        return_value=MagicMock(aclose=AsyncMock()),
+    ):
+        controller = SessionController(config, sink)
+
+    old_node = controller.tree.append(
+        parent_id=None, message=Message(role="user", content="keep me")
+    )
+    controller.current_node_id = old_node.id
+    controller.session_metrics.total_cost_usd = 7.5
+    controller._context_tokens = 4321
+    controller.attachments._pending.append(object())  # type: ignore[arg-type]
+    old_tree = controller.tree
+    old_metrics = controller.session_metrics
+    old_block = object()
+    sink.visible_blocks.append(old_block)
+
+    loaded = controller.tree.__class__.new(session_id="replay-failure")
+    loaded.append(parent_id=None, message=Message(role="user", content="candidate"))
+    await controller.storage.save(loaded)
+    sink.fail_replay = True
+
+    outcome = await controller.load_session(loaded.session_id)
+
+    assert not outcome.ok
+    assert sink.reset_count == 1
+    assert sink.restore_count == 1
+    assert sink.visible_blocks == [old_block]
+    assert sink.session_ids[-1] == old_tree.session_id
+    assert controller.tree is old_tree
+    assert controller.current_node_id == old_node.id
+    assert controller.session_metrics is old_metrics
+    assert controller.session_metrics.total_cost_usd == 7.5
+    assert controller.context_tokens == 4321
+    assert len(controller.attachments) == 1
+
+
+@pytest.mark.asyncio
+async def test_load_session_rollback_preserves_error_when_view_restore_fails(
+    tmp_path, caplog
+) -> None:
+    class FailingRollbackSink(TransactionalFakeSink):
+        old_session_id = ""
+
+        def restore_session_view(self, snapshot: object) -> None:
+            raise RuntimeError("restore failed")
+
+        def set_session(self, session_id: str) -> None:
+            if session_id == self.old_session_id:
+                raise RuntimeError("set session failed")
+            super().set_session(session_id)
+
+    sink = FailingRollbackSink()
+    config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
+    with patch(
+        "phoson_cli.controller.build_chat",
+        return_value=MagicMock(aclose=AsyncMock()),
+    ):
+        controller = SessionController(config, sink)
+
+    old_tree = controller.tree
+    old_metrics = controller.session_metrics
+    sink.old_session_id = old_tree.session_id
+    controller._context_tokens = 55
+    controller.attachments._pending.append(object())  # type: ignore[arg-type]
+    loaded = controller.tree.__class__.new(session_id="rollback-errors")
+    loaded.append(parent_id=None, message=Message(role="user", content="candidate"))
+    await controller.storage.save(loaded)
+    sink.fail_replay = True
+
+    with caplog.at_level("WARNING"):
+        outcome = await controller.load_session(loaded.session_id)
+
+    assert not outcome.ok
+    assert "replay failed" in outcome.message
+    assert controller.tree is old_tree
+    assert controller.session_metrics is old_metrics
+    assert controller.context_tokens == 55
+    assert len(controller.attachments) == 1
+    assert "Could not restore session view" in caplog.text
+    assert "Could not restore displayed session id" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_session_blocks_user_turn_until_switch_commits(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    loaded = controller.tree.__class__.new(session_id="loaded-before-user-turn")
+    load_started = asyncio.Event()
+    release_load = asyncio.Event()
+
+    async def paused_load(session_id: str):
+        assert session_id == loaded.session_id
+        load_started.set()
+        await release_load.wait()
+        return loaded
+
+    controller.storage.load = paused_load  # type: ignore[method-assign]
+    controller.storage.list_meta = AsyncMock(return_value=[])
+    controller._execute_turn = AsyncMock(return_value=SimpleNamespace(status="done"))
+
+    load_task = asyncio.create_task(controller.load_session(loaded.session_id))
+    await load_started.wait()
+    turn_task = asyncio.create_task(controller.run_turn("after load"))
+    await asyncio.sleep(0)
+
+    controller._execute_turn.assert_not_awaited()
+    release_load.set()
+    assert (await load_task).ok
+    await turn_task
+
+    controller._execute_turn.assert_awaited_once()
+    assert controller.tree.session_id == loaded.session_id
+
+
+@pytest.mark.asyncio
+async def test_load_preparation_keeps_previous_session_public_until_commit(
+    tmp_path,
+) -> None:
+    controller, _ = _make_controller(tmp_path)
+    old_tree = controller.tree
+    old_node = old_tree.append(
+        parent_id=None, message=Message(role="user", content="current")
+    )
+    controller.current_node_id = old_node.id
+    session_id_provider = controller.engine.context.extra["session_id_provider"]
+
+    loaded = controller.tree.__class__.new(session_id="locally-prepared-session")
+    loaded.append(parent_id=None, message=Message(role="user", content="candidate"))
+    preparation_started = asyncio.Event()
+    release_preparation = asyncio.Event()
+
+    async def paused_list_meta():
+        preparation_started.set()
+        await release_preparation.wait()
+        return []
+
+    controller.storage.load = AsyncMock(return_value=loaded)
+    controller.storage.list_meta = paused_list_meta  # type: ignore[method-assign]
+
+    load_task = asyncio.create_task(controller.load_session(loaded.session_id))
+    await preparation_started.wait()
+
+    assert controller.tree is old_tree
+    assert controller.tree.session_id == old_tree.session_id
+    assert controller.current_node_id == old_node.id
+    assert session_id_provider() == old_tree.session_id
+
+    release_preparation.set()
+    assert (await load_task).ok
+    assert controller.tree is loaded
+    assert session_id_provider() == loaded.session_id
+
+
+@pytest.mark.asyncio
+async def test_load_session_blocks_wake_turn_until_switch_commits(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    loaded = controller.tree.__class__.new(session_id="loaded-before-wake-turn")
+    load_started = asyncio.Event()
+    release_load = asyncio.Event()
+
+    async def paused_load(session_id: str):
+        load_started.set()
+        await release_load.wait()
+        return loaded
+
+    controller.storage.load = paused_load  # type: ignore[method-assign]
+    controller.storage.list_meta = AsyncMock(return_value=[])
+    controller._execute_turn = AsyncMock(return_value=SimpleNamespace(status="done"))
+    drain = AsyncMock(return_value=[(object(), [object()])])
+
+    with (
+        patch("phoson_cli.controller.has_pending_wakes", return_value=True),
+        patch("phoson_cli.controller.drain_all_wakes", drain),
+        patch("phoson_cli.controller._render_wake_batches", return_value="wake"),
+    ):
+        load_task = asyncio.create_task(controller.load_session(loaded.session_id))
+        await load_started.wait()
+        wake_task = asyncio.create_task(controller._wake_loop_tick())
+        await asyncio.sleep(0)
+
+        controller._execute_turn.assert_not_awaited()
+        release_load.set()
+        assert (await load_task).ok
+        await wake_task
+
+    controller._execute_turn.assert_awaited_once()
+    assert drain.await_args.args[1] == loaded.session_id
+
+
+@pytest.mark.asyncio
+async def test_new_session_waits_for_active_user_turn(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    original_id = controller.tree.session_id
+    turn_started = asyncio.Event()
+    release_turn = asyncio.Event()
+
+    async def paused_turn(*args, **kwargs):
+        turn_started.set()
+        await release_turn.wait()
+        return SimpleNamespace(status="done")
+
+    controller._execute_turn = paused_turn  # type: ignore[method-assign]
+    turn_task = asyncio.create_task(controller.run_turn("active"))
+    await turn_started.wait()
+    new_task = asyncio.create_task(controller.new_session())
+    await asyncio.sleep(0)
+
+    assert controller.tree.session_id == original_id
+    assert not new_task.done()
+    release_turn.set()
+    await turn_task
+    await new_task
+
+    assert controller.tree.session_id != original_id
+
+
+@pytest.mark.asyncio
+async def test_sync_new_session_rejects_while_turn_lock_is_held(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    turn_started = asyncio.Event()
+    release_turn = asyncio.Event()
+
+    async def paused_turn(*args, **kwargs):
+        turn_started.set()
+        await release_turn.wait()
+        return SimpleNamespace(status="done")
+
+    controller._execute_turn = paused_turn  # type: ignore[method-assign]
+    turn_task = asyncio.create_task(controller.run_turn("active"))
+    await turn_started.wait()
+
+    with pytest.raises(RuntimeError, match="turn is active"):
+        controller.new_session_now()
+
+    release_turn.set()
+    await turn_task
+
+
+@pytest.mark.asyncio
+async def test_cancel_current_cancels_authoritative_turn_during_preparation(
+    tmp_path,
+) -> None:
+    controller, _ = _make_controller(tmp_path)
+    preparation_started = asyncio.Event()
+
+    async def paused_context_refresh() -> None:
+        preparation_started.set()
+        await asyncio.Event().wait()
+
+    controller._refresh_context_window = paused_context_refresh  # type: ignore[method-assign]
+    run_task = asyncio.create_task(controller.run_turn("cancel before stream"))
+    await preparation_started.wait()
+
+    assert controller.is_running
+    assert controller.current_task is None
+    assert controller.cancel_current() is True
+    outcome = await run_task
+
+    assert outcome.status == "cancelled"
+    assert controller.is_running is False
+
+
+async def _seed_residual_engine_history(controller) -> None:
+    """Complete real engine turns; only the provider transport is fake."""
+
+    async def chat_stream(history, config, tools=None):
+        yield LLMDoneEvent(content="residual answer from previous session")
+
+    controller.chat.stream = chat_stream
+    controller._refresh_context_window = AsyncMock()
+    controller.summarizer._resolver.resolve = AsyncMock(return_value=128_000)
+    # Longer than the loaded path too, so slicing by base_count cannot hide
+    # the leak in either session-switch case.
+    for index in range(3):
+        assert (
+            await controller.run_turn(f"previous question {index}")
+        ).status == "done"
+    assert len(controller.engine.get_partial_history()) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("switch", ["new", "new_now", "load"])
+@pytest.mark.parametrize(
+    "cancel_at",
+    ["refresh", "task_pending", "engine_lock", "start_middleware", "started"],
+)
+async def test_cancel_after_session_switch_never_imports_residual_history(
+    tmp_path, monkeypatch, switch, cancel_at
+) -> None:
+    controller, sink = _make_controller(tmp_path)
+    await _seed_residual_engine_history(controller)
+    engine = controller.engine
+    residual = engine.get_partial_history()
+    previous_id = controller.tree.session_id
+    previous_run_id = controller.tree.last_run_id
+    expected = []
+    if switch == "load":
+        saved, _ = _make_controller(tmp_path)
+        expected = [
+            Message(role="user", content="loaded question"),
+            Message(role="assistant", content="loaded answer"),
+        ]
+        saved.tree.append_many(None, expected)
+        await saved.storage.save(saved.tree)
+        assert (await controller.load_session(saved.tree.session_id)).ok
+    elif switch == "new_now":
+        controller.new_session_now()
+    else:
+        await controller.new_session()
+    assert controller.engine is engine
+    assert engine.get_partial_history() == residual
+    sink.events.clear()
+    reached = asyncio.Event()
+
+    async def pause_refresh():
+        reached.set()
+        await asyncio.Event().wait()
+
+    class PauseStart(AgentMiddleware):
+        async def on_agent_event(self, event):
+            if isinstance(event, AgentStartEvent):
+                reached.set()
+                await asyncio.Event().wait()
+
+    async def pause_chat(history, config, tools=None):
+        reached.set()
+        await asyncio.Event().wait()
+        yield LLMDoneEvent(content="must not finish")
+
+    if cancel_at == "refresh":
+        controller._refresh_context_window = pause_refresh
+    elif cancel_at == "start_middleware":
+        engine.middlewares.insert(0, PauseStart())
+    elif cancel_at == "started":
+        controller.chat.stream = pause_chat
+    else:
+        # Hold the real engine before _stream_impl initializes its history.
+        await engine._running_lock.acquire()
+        create_task = asyncio.create_task
+
+        def observe_stream_task(coro, **kwargs):
+            task = create_task(coro, **kwargs)
+            if coro.cr_code.co_name == "consume":
+                reached.set()
+                if cancel_at == "task_pending":
+                    task.cancel()  # no byte of the consumer has run yet
+            return task
+
+        monkeypatch.setattr(asyncio, "create_task", observe_stream_task)
+
+    task = asyncio.create_task(controller.run_turn("new question to preserve"))
+    try:
+        await asyncio.wait_for(reached.wait(), timeout=5)
+        if cancel_at != "task_pending":
+            assert controller.cancel_current()
+        outcome = await asyncio.wait_for(task, timeout=5)
+    finally:
+        if cancel_at in {"task_pending", "engine_lock"}:
+            engine._running_lock.release()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert sink.user_messages[-1][0] == "new question to preserve"
+    expected = [*expected, sink.user_messages[-1][1]]
+    assert outcome.status == "cancelled"
+    assert not controller.is_running
+    assert controller.current_task is None
+    assert controller.tree.get_path(controller.current_node_id) == expected
+    assert len(controller.tree.nodes) == len(expected)
+    assert controller.tree.status == "aborted"
+    assert controller.tree.last_run_id
+    assert controller.tree.last_run_id != previous_run_id
+    loaded = await controller.storage.load(controller.tree.session_id)
+    assert loaded.get_path(controller.current_node_id) == expected
+    assert len(loaded.nodes) == len(expected)
+    assert loaded.status == "aborted"
+    assert loaded.last_run_id == controller.tree.last_run_id
+    meta = next(
+        m
+        for m in await controller.storage.list_meta()
+        if str(m.id) == controller.tree.session_id
+    )
+    assert meta.status == "aborted"
+    assert meta.last_run_id == controller.tree.last_run_id
+    previous = await controller.storage.load(previous_id)
+    assert len(previous.nodes) == 6
+    assert previous.status == "completed"
+    assert sink.partial_captures == 1
+    assert any("Partial progress saved" in text for _, text in sink.notifications)
+    assert any(isinstance(e, AgentStartEvent) for e in sink.events) == (
+        cancel_at == "started"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_initialized_turn_keeps_current_history_not_previous(
+    tmp_path,
+) -> None:
+    controller, _ = _make_controller(tmp_path)
+    await _seed_residual_engine_history(controller)
+    await controller.new_session()
+    reached = asyncio.Event()
+
+    class PauseDone(AgentMiddleware):
+        async def on_agent_event(self, event):
+            if isinstance(event, AgentDoneEvent):
+                # The real engine has appended the current assistant message,
+                # but the controller has not received the terminal event yet.
+                reached.set()
+                await asyncio.Event().wait()
+
+    async def chat_stream(history, config, tools=None):
+        yield LLMDoneEvent(content="current answer worth preserving")
+
+    controller.chat.stream = chat_stream
+    controller.engine.middlewares.insert(0, PauseDone())
+    task = asyncio.create_task(controller.run_turn("current question"))
+    try:
+        await asyncio.wait_for(reached.wait(), timeout=5)
+        expected = controller.engine.get_partial_history()
+        assert len(expected) == 2
+        assert "current answer worth preserving" in str(expected[-1].content)
+        assert controller.cancel_current()
+        assert (await asyncio.wait_for(task, timeout=5)).status == "cancelled"
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert controller.tree.get_path(controller.current_node_id) == expected
+    loaded = await controller.storage.load(controller.tree.session_id)
+    assert loaded.get_path(controller.current_node_id) == expected
+    assert loaded.status == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_cancel_current_tracks_wake_owner_and_clears_it(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+    wake_started = asyncio.Event()
+
+    async def paused_wake(*args, **kwargs):
+        wake_started.set()
+        await asyncio.Event().wait()
+
+    controller._execute_turn = paused_wake  # type: ignore[method-assign]
+    with (
+        patch(
+            "phoson_cli.controller.drain_all_wakes",
+            new=AsyncMock(return_value=[(object(), [object()])]),
+        ),
+        patch("phoson_cli.controller._render_wake_batches", return_value="wake"),
+    ):
+        wake_task = asyncio.create_task(controller._run_wake_turn([object()]))
+        await wake_started.wait()
+        assert controller.cancel_current() is True
+        with pytest.raises(asyncio.CancelledError):
+            await wake_task
+
+    assert controller.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_current_does_not_cancel_calling_turn_owner(tmp_path) -> None:
+    controller, _ = _make_controller(tmp_path)
+
+    async def self_probe(*args, **kwargs):
+        assert controller.cancel_current() is False
+        return SimpleNamespace(status="done")
+
+    controller._execute_turn = self_probe  # type: ignore[method-assign]
+
+    outcome = await controller.run_turn("self probe")
+
+    assert outcome.status == "done"
 
 
 @pytest.mark.asyncio

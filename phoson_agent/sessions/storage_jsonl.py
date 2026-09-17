@@ -3,7 +3,8 @@ import json
 import asyncio
 import logging
 import datetime
-from pathlib import Path
+import unicodedata
+from pathlib import Path, PureWindowsPath
 from dataclasses import dataclass
 
 from phoson_agent.exceptions import PhosonSessionNotFoundError
@@ -21,6 +22,24 @@ from phoson_agent.sessions.serialization import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_session_id(session_id: str) -> None:
+    """Require an ID that is safe and portable as one filename stem."""
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or session_id in {".", ".."}
+        or any(
+            char in '<>:"/\\|?*' or unicodedata.category(char) == "Cc"
+            for char in session_id
+        )
+        or session_id[-1] in {".", " "}
+        or PureWindowsPath(session_id).name != session_id
+        or PureWindowsPath(f"{session_id}.jsonl").is_reserved()
+        or Path(f"{session_id}.jsonl").stem != session_id
+    ):
+        raise ValueError("session_id must be a safe, non-empty filename stem")
 
 
 @dataclass
@@ -57,6 +76,7 @@ class JsonlStorage(SessionStorage):
 
     def _session_file(self, session_id: str) -> Path:
         """Get the file path for a session."""
+        _validate_session_id(session_id)
         return self.base_path / f"{session_id}.jsonl"
 
     # ── Public async API ────────────────────────────────────────────────
@@ -186,6 +206,12 @@ def list_session_metas(base_path: Path, cwd: str | None = None) -> list[SessionM
     if not Path(base_path).is_dir():
         return sessions
     for file_path in sorted(Path(base_path).glob("*.jsonl")):
+        session_id = file_path.name.removesuffix(".jsonl")
+        try:
+            _validate_session_id(session_id)
+        except ValueError:
+            logger.warning("Skipping session file with unsafe id: %s", file_path.name)
+            continue
         meta = _read_session_meta(file_path)
         if meta is not None:
             # A session with no recorded cwd (legacy/global) is shown from
@@ -255,7 +281,7 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
         meta_values.get("status") if meta_values and meta_values.get("status") else None
     ) or STATUS_ACTIVE
     return SessionMeta(
-        id=file_path.stem,
+        id=file_path.name.removesuffix(".jsonl"),
         created_at=created_at,
         updated_at=updated_at,
         message_count=message_count,

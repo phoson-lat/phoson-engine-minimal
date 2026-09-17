@@ -19,6 +19,7 @@ is the home of the classic rendering primitives (``Renderer``,
 ``ClassicSink``) that both front ends share where possible.
 """
 
+import sys
 import asyncio
 import logging
 from typing import Any
@@ -36,7 +37,7 @@ from prompt_toolkit.formatted_text import FormattedText
 from phoson_agent import AgentEngine  # noqa: F401
 from phoson_agent.sessions import ConversationTree  # noqa: F401
 
-from .theme import Theme, load_theme, build_prompt_style
+from .theme import Theme, load_theme, build_prompt_style, resolve_runtime_theme
 from ._views import print_banner, render_tree_ascii
 from .config import (
     PhosonConfig,
@@ -50,6 +51,7 @@ from .commands import (
     parse_command,
 )
 from .renderer import Renderer, ClassicSink
+from .terminal import stream_is_tty, cursor_output_capable
 from .controller import SessionController
 from .formatting import format_token_indicator
 from .confirmation import PromptToolkitConfirmationService
@@ -102,8 +104,11 @@ class PhosonRepl:
         # Plugin-provided themes cannot be known until the controller has
         # loaded plugins. Start with a safe built-in tier, then resolve the
         # configured theme against its per-session registry below.
-        self.theme: Theme = load_theme()
+        self.theme: Theme = getattr(config, "_startup_theme", None) or load_theme()
         self.renderer = Renderer(theme=self.theme)
+        self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
+            self.renderer.console.file
+        )
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
         self._expanded_reasoning: set[str] = set()
@@ -125,9 +130,7 @@ class PhosonRepl:
                 else confirmation
             ),
         )
-        self.apply_theme(
-            load_theme(config.theme, registry=self._controller.theme_registry)
-        )
+        self.apply_theme(resolve_runtime_theme(config, self._controller.theme_registry))
 
     # ── Config / controller state ─────────────────────────────────────────
 
@@ -286,11 +289,14 @@ class PhosonRepl:
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
-        self._controller.new_session()
+        self._controller.new_session_now()
+        self._expanded_reasoning.clear()
 
     async def load_session(self, session_id: str) -> bool:
         """Load a session from storage and replay its tail."""
         outcome = await self._controller.load_session(session_id)
+        if outcome.ok:
+            self._expanded_reasoning.clear()
         return outcome.ok
 
     async def compact_context(
@@ -329,7 +335,16 @@ class PhosonRepl:
         """
         self.theme = theme
         self.renderer.theme = theme
+        self.renderer._spinner._enabled = (
+            theme.name != "no-color" and self.renderer._spinner._detect_enabled()
+        )
         self.renderer._subagent_spinner._theme = theme
+        self.renderer._subagent_spinner._enabled = (
+            self.renderer._subagent_spinner._detect_enabled()
+        )
+        plugin_ui = getattr(self._controller, "plugin_ui", None)
+        if plugin_ui is not None:
+            plugin_ui.set_theme(theme)
 
     async def set_model(self, model: str, provider: str | None = None) -> None:
         """Switch model (and provider, when given) and rebuild the engine."""
@@ -550,25 +565,29 @@ class PhosonRepl:
             path_ids.append(cursor)
             node = self.tree.nodes.get(cursor)
             cursor = node.parent_id if node is not None else None
-        path_ids.reverse()
-
+        found_reasoning = False
         for node_id in path_ids:
             node = self.tree.nodes.get(node_id)
             reasoning = node.metadata.get("reasoning") if node else None
             if not reasoning:
                 continue
+            found_reasoning = True
             if node_id in self._expanded_reasoning:
-                self.renderer.print_info(
-                    "Reasoning already expanded (the terminal is append-only)."
-                )
-                return
-            self._expanded_reasoning.add(node_id)
+                continue
             self.renderer.console.print(
                 self.renderer.render_reasoning_panel(str(reasoning))
             )
+            self._expanded_reasoning.add(node_id)
             return
 
-        self.renderer.print_info("No reasoning captured in the current conversation.")
+        if found_reasoning:
+            self.renderer.print_info(
+                "Reasoning already expanded (the terminal is append-only)."
+            )
+        else:
+            self.renderer.print_info(
+                "No reasoning captured in the current conversation."
+            )
 
     # ── Tree rendering ────────────────────────────────────────────────────
 

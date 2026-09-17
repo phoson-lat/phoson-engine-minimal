@@ -17,6 +17,7 @@ class _ProviderState(TypedDict):
 class ProviderPickerResult:
     provider: str | None = None
     cancelled: bool = False
+    unavailable: bool = False
 
 
 def _render_providers(

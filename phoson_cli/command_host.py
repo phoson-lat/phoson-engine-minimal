@@ -103,6 +103,14 @@ class RendererCommandHost:
     def __init__(self, repl: Any) -> None:
         self.repl = repl
 
+    def picker_unavailable(self, usage: str) -> bool:
+        if getattr(self.repl, "picker_capable", True):
+            return False
+        self.print_warn(
+            f"Interactive picker unavailable on this terminal. Use {usage}."
+        )
+        return True
+
     def print_info(self, message: str) -> None:
         self.repl.renderer.print_info(message)
 
@@ -156,6 +164,8 @@ class RendererCommandHost:
     async def pick_provider(
         self, providers: list[str], current_provider: str
     ) -> ProviderPickerResult:
+        if self.picker_unavailable("/provider <id>"):
+            return ProviderPickerResult(unavailable=True)
         from phoson_cli import commands as commands_mod
 
         return await commands_mod.pick_provider(
@@ -167,6 +177,8 @@ class RendererCommandHost:
     async def pick_theme(
         self, current_theme: str, *, detected_theme: str | None = None
     ) -> ThemePickerResult:
+        if self.picker_unavailable("/theme <system|dark|light|ansi|no-color>"):
+            return ThemePickerResult(unavailable=True)
         from phoson_cli import commands as commands_mod
 
         return await commands_mod.pick_theme(
@@ -183,6 +195,8 @@ class RendererCommandHost:
     async def pick_session(
         self, sessions: list[SessionMeta], current_id: str
     ) -> SessionPickerResult:
+        if self.picker_unavailable("/sessions list or /sessions load <#>"):
+            return SessionPickerResult(unavailable=True)
         from phoson_cli.session_picker import pick_session
 
         return await pick_session(

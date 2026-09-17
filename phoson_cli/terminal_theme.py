@@ -18,6 +18,7 @@ the OSC 11 read, which is bounded by a ~150 ms timeout.
 
 import os
 import re
+import time
 import select
 import warnings
 from collections.abc import Callable
@@ -75,6 +76,17 @@ def _parse_color_token(token: str) -> tuple[int, int, int] | None:
     is worse than no guess.
     """
     token = token.strip()
+    if token.startswith("rgb:") and "/" in token:
+        components = token[4:].split("/")
+        if len(components) != 3:
+            return None
+        scaled: list[int] = []
+        for component in components:
+            if not re.fullmatch(r"[0-9a-fA-F]{1,4}", component):
+                return None
+            maximum = (16 ** len(component)) - 1
+            scaled.append(round(int(component, 16) * 255 / maximum))
+        return scaled[0], scaled[1], scaled[2]
     if token.startswith("#") and len(token) == 7:
         try:
             return (
@@ -85,15 +97,15 @@ def _parse_color_token(token: str) -> tuple[int, int, int] | None:
         except ValueError:
             return None
     body = token[4:] if token.startswith("rgb:") else token
-    parts = [p for p in body.split(",") if p]
-    if len(parts) != 3:
-        parts = [p for p in body.split(";") if p]
-    if len(parts) != 3:
+    separator = "," if "," in body else ";"
+    parts = body.split(separator)
+    if len(parts) != 3 or any(not part for part in parts):
         return None
     try:
-        return (int(parts[0]), int(parts[1]), int(parts[2]))
+        rgb = int(parts[0]), int(parts[1]), int(parts[2])
     except ValueError:
         return None
+    return rgb if all(0 <= component <= 255 for component in rgb) else None
 
 
 def parse_colorfgbg(value: str | None) -> bool | None:
@@ -163,6 +175,31 @@ def query_terminal_bg_light(
     and switches the tty to raw mode for the duration of the probe
     (canonical mode would line-buffer the reply away), restored after.
     """
+
+    def collect_response(
+        wait_until_readable: Callable[[float], bool] | None,
+    ) -> bool | None:
+        assert read is not None
+        deadline = time.monotonic() + max(timeout, 0.0)
+        response = bytearray()
+        # Both limits guard injected/misbehaving readers independently of time.
+        for _ in range(32):
+            remaining = deadline - time.monotonic()
+            if remaining < 0:
+                break
+            if wait_until_readable is not None and not wait_until_readable(remaining):
+                break
+            chunk = read()
+            if not chunk:
+                break
+            response.extend(chunk[: 1024 - len(response)])
+            result = parse_osc11_response(bytes(response))
+            if result is not None:
+                return result
+            if len(response) >= 1024:
+                break
+        return None
+
     # ── Fast path: injected read (unit tests) ─────────────────────────────
     # Tests supply a non-blocking, in-memory ``read``. There is no real
     # fd to select on (a bare ``select.select([7])`` raises ``OSError`` on
@@ -177,7 +214,7 @@ def query_terminal_bg_light(
         try:
             if write is not None:
                 write(b"\x1b]11;?\x07")
-            return parse_osc11_response(read())
+            return collect_response(None)
         except OSError:
             return None
 
@@ -222,10 +259,12 @@ def query_terminal_bg_light(
 
     try:
         write(b"\x1b]11;?\x07")
-        ready, _, _ = select.select([tty_fd], [], [], timeout)
-        if not ready:
-            return None
-        return parse_osc11_response(read())
+
+        def wait_until_readable(remaining: float) -> bool:
+            ready, _, _ = select.select([tty_fd], [], [], remaining)
+            return bool(ready)
+
+        return collect_response(wait_until_readable)
     except OSError:
         return None
     except Exception as exc:  # pragma: no cover - defensive: never crash startup

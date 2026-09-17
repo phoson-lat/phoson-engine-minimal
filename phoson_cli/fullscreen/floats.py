@@ -50,6 +50,8 @@ class FloatsController:
 
     def __init__(self, app: Any) -> None:
         self.app = app
+        self._lock = asyncio.Lock()
+        self._form_error = ""
 
     @property
     def _root_container(self) -> Any:
@@ -76,14 +78,19 @@ class FloatsController:
     def close_float(self, float_: Float) -> None:
         if float_ in self._root_container.floats:
             self._root_container.floats.remove(float_)
-        self.app._float_kb = None
-        self.app._active_float = None
-        self.app.app.layout.focus(self._prompt_input)
+        if self.app._active_float is float_:
+            self.app._float_kb = None
+            self.app._active_float = None
+            self.app.app.layout.focus(self._prompt_input)
         self.app.app.invalidate()
 
     # ── Dialogs ────────────────────────────────────────────────────────────
 
     async def run_float_picker(self, picker: BasePicker) -> Any:
+        async with self._lock:
+            return await self._run_float_picker(picker)
+
+    async def _run_float_picker(self, picker: BasePicker) -> Any:
         """Show ``picker`` as a modal Float; return its result once resolved."""
         result_future: asyncio.Future = asyncio.get_running_loop().create_future()
 
@@ -102,6 +109,10 @@ class FloatsController:
             self.close_float(float_)
 
     async def run_float_confirm(self, prompt: str) -> bool:
+        async with self._lock:
+            return await self._run_float_confirm(prompt)
+
+    async def _run_float_confirm(self, prompt: str) -> bool:
         """Show a yes/no Float; return the answer (False on cancel/Ctrl+C).
 
         Resolving "no" on Ctrl+C (rather than leaving it unhandled) matters
@@ -147,6 +158,15 @@ class FloatsController:
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
     ) -> bool:
+        async with self._lock:
+            return await self._run_float_bash_card(command, on_always=on_always)
+
+    async def _run_float_bash_card(
+        self,
+        command: str,
+        *,
+        on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+    ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions.
 
         ``y`` runs the command once; ``a`` runs it and remembers this
@@ -157,26 +177,51 @@ class FloatsController:
         """
         result_future: asyncio.Future = asyncio.get_running_loop().create_future()
 
-        def resolve(answer: bool, always: bool = False) -> None:
-            if result_future.done():
+        persistence_task: asyncio.Task | None = None
+        always_selected = False
+
+        def resolve(answer: bool) -> None:
+            if always_selected or result_future.done():
                 return
-            if always and on_always is not None:
-                try:
-                    self.app.app.create_background_task(on_always(command))
-                except Exception:
-                    # The Application isn't tracking tasks (unit tests):
-                    # schedule the grant on the running loop instead.
-                    try:
-                        asyncio.get_running_loop().create_task(on_always(command))
-                    except RuntimeError:  # pragma: no cover - no loop at all
-                        pass
             result_future.set_result(answer)
+
+        def resolve_always() -> None:
+            nonlocal always_selected, persistence_task
+            if always_selected or result_future.done():
+                return
+            always_selected = True
+            persist = on_always
+            if persist is None:
+                result_future.set_result(True)
+                return
+
+            async def persist_then_approve() -> None:
+                try:
+                    await persist(command)
+                except asyncio.CancelledError:
+                    if not result_future.done():
+                        result_future.cancel()
+                    raise
+                except Exception as exc:
+                    try:
+                        self.app.sink.notify(
+                            "error", f"Could not save bash permission: {exc}"
+                        )
+                    except Exception:  # noqa: BLE001 - denial must still resolve
+                        pass
+                    if not result_future.done():
+                        result_future.set_result(False)
+                else:
+                    if not result_future.done():
+                        result_future.set_result(True)
+
+            persistence_task = asyncio.create_task(persist_then_approve())
 
         kb = KeyBindings()
         kb.add("y")(lambda event: resolve(True))  # noqa: ARG005
         kb.add("Y")(lambda event: resolve(True))  # noqa: ARG005
-        kb.add("a")(lambda event: resolve(True, always=True))  # noqa: ARG005
-        kb.add("A")(lambda event: resolve(True, always=True))  # noqa: ARG005
+        kb.add("a")(lambda event: resolve_always())  # noqa: ARG005
+        kb.add("A")(lambda event: resolve_always())  # noqa: ARG005
         kb.add("n")(lambda event: resolve(False))  # noqa: ARG005
         kb.add("N")(lambda event: resolve(False))  # noqa: ARG005
         kb.add("escape")(lambda event: resolve(False))  # noqa: ARG005
@@ -195,9 +240,18 @@ class FloatsController:
         try:
             return await result_future
         finally:
+            if persistence_task is not None and not persistence_task.done():
+                persistence_task.cancel()
+                await asyncio.gather(persistence_task, return_exceptions=True)
             self.close_float(float_)
 
     async def run_float_select(
+        self, title: str, message: str, choices: Sequence[Choice]
+    ) -> str | None:
+        async with self._lock:
+            return await self._run_float_select(title, message, choices)
+
+    async def _run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]
     ) -> str | None:
         """Show a simple keyboard selector for a plugin interaction."""
@@ -255,6 +309,16 @@ class FloatsController:
     async def run_float_form(
         self, title: str, fields: Sequence[FormField]
     ) -> dict[str, str] | None:
+        async with self._lock:
+            return await self._run_float_form(title, fields)
+
+    def _form_error_content(self) -> list[tuple[str, str]]:
+        """Formatted validation line used by the active form modal."""
+        return [("class:error", f"  {self._form_error}\n")]
+
+    async def _run_float_form(
+        self, title: str, fields: Sequence[FormField]
+    ) -> dict[str, str] | None:
         """Collect a small plugin form in a modal, never exposing widgets to plugins."""
         values: dict[str, TextArea] = {}
         widgets = []
@@ -277,31 +341,64 @@ class FloatsController:
         result_future: asyncio.Future[dict[str, str] | None] = (
             asyncio.get_running_loop().create_future()
         )
+        self._form_error = ""
         kb = KeyBindings()
 
         def resolve() -> None:
             result: dict[str, str] = {}
+            errors: list[str] = []
+            first_invalid: TextArea | None = None
             for field in fields:
                 value = values[field.id].text.strip()
                 if field.required and not value:
-                    return
+                    errors.append(f"{field.label} is required")
+                    first_invalid = first_invalid or values[field.id]
                 if field.kind == "integer" and value:
                     try:
                         int(value)
                     except ValueError:
-                        return
+                        errors.append(f"{field.label} must be an integer")
+                        first_invalid = first_invalid or values[field.id]
                 result[field.id] = value
+            if errors:
+                self._form_error = "; ".join(errors)
+                if first_invalid is not None:
+                    self.app.app.layout.focus(first_invalid)
+                self.app.app.invalidate()
+                return
             if not result_future.done():
                 result_future.set_result(result)
 
+        areas = list(values.values())
+
+        def move_focus(delta: int) -> None:
+            if not areas:
+                return
+            current = self.app.app.layout.current_control
+            current_index = next(
+                (index for index, area in enumerate(areas) if area.control is current),
+                0,
+            )
+            self.app.app.layout.focus(areas[(current_index + delta) % len(areas)])
+
         kb.add("enter")(lambda event: resolve())  # noqa: ARG005
+        kb.add("tab")(lambda event: move_focus(1))  # noqa: ARG005
+        kb.add("s-tab")(lambda event: move_focus(-1))  # noqa: ARG005
         kb.add("escape")(lambda event: result_future.set_result(None))  # noqa: ARG005
         kb.add("c-c")(lambda event: result_future.set_result(None))  # noqa: ARG005
+        validation_window = Window(
+            content=FormattedTextControl(
+                self._form_error_content,
+                focusable=not areas,
+            ),
+            height=1,
+        )
+        widgets.append(validation_window)
         body = HSplit(widgets)
         float_ = Float(
             content=Frame(body, title=title), left=4, right=4, top=4, bottom=4
         )
-        self.open_float(float_, kb, next(iter(values.values()), self._prompt_input))
+        self.open_float(float_, kb, areas[0] if areas else validation_window)
         try:
             return await result_future
         finally:

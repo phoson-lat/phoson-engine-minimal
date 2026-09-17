@@ -471,6 +471,8 @@ def test_main_fails_friendly_on_conflicting_keys(monkeypatch, tmp_path, capsys) 
     )
 
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(sys, "argv", ["phoson-cli"])
     monkeypatch.setattr(main_module, "load_config", lambda: load_config())
     monkeypatch.setattr(main_module, "build_chat", lambda config: None)

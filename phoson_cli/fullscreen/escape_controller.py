@@ -91,8 +91,13 @@ def handle_escape(app: Any) -> None:
     if is_prefixed_escape(app):
         return
     if app._is_run_in_flight():
-        app.repl.cancel_current()
-        app.sink.notify("info", "Cancelling current run (Esc)...")
+        result = app._cancel_operation()
+        if result == "protected":
+            app.sink.notify(
+                "info", "Saving session; required persistence cannot be cancelled."
+            )
+        elif result == "cancelled":
+            app.sink.notify("info", "Cancelling current operation (Esc)...")
         return
     now = time.monotonic()
     if now - app._last_escape_at <= _REWIND_DOUBLE_ESC_WINDOW_SECONDS:

@@ -448,17 +448,18 @@ async def test_run_turn_sets_status_aborted_on_error(tmp_path):
 @pytest.mark.asyncio
 async def test_run_turn_sets_status_aborted_on_cancel(tmp_path):
     controller = _make_controller(tmp_path)
+    preparation_started = asyncio.Event()
 
-    async def stream(path, config):
-        await asyncio.sleep(60)  # will be cancelled
-        yield _done_event()  # pragma: no cover
+    async def paused_context_refresh() -> None:
+        preparation_started.set()
+        await asyncio.Event().wait()
 
-    controller.engine.stream = stream
+    controller._refresh_context_window = paused_context_refresh
 
     run_task = asyncio.ensure_future(controller.run_turn("q"))
-    while not controller.is_running:
-        await asyncio.sleep(0.01)
-    controller.cancel_current()
+    await preparation_started.wait()
+    assert controller.current_task is None
+    assert controller.cancel_current() is True
     outcome = await run_task
 
     assert outcome.status == "cancelled"

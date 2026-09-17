@@ -188,3 +188,139 @@ def test_reset_notice_printer_restores_default() -> None:
     wh.notice_printer = lambda line: None
     wh.reset_notice_printer()
     assert wh.notice_printer is wh._default_notice_printer
+
+
+def test_install_restores_preconfigured_printer() -> None:
+    def original(line: str) -> None:
+        pass
+
+    def active(line: str) -> None:
+        pass
+
+    wh.notice_printer = original
+    restore = wh.install()
+    wh.notice_printer = active
+
+    restore()
+
+    assert wh.notice_printer is original
+
+
+def test_nested_install_restores_each_printer_scope() -> None:
+    def before(line: str) -> None:
+        pass
+
+    def outer(line: str) -> None:
+        pass
+
+    def inner(line: str) -> None:
+        pass
+
+    wh.notice_printer = before
+    restore_outer = wh.install()
+    wh.notice_printer = outer
+    restore_inner = wh.install()
+    wh.notice_printer = inner
+
+    restore_inner()
+    assert wh.notice_printer is outer
+    assert wh._installed
+    restore_outer()
+    assert wh.notice_printer is before
+    assert not wh._installed
+
+
+def test_nested_fullscreen_routes_restore_outer_printer() -> None:
+    outer: list[str] = []
+    inner: list[str] = []
+    restore = wh.install()
+    try:
+        wh.set_fullscreen_active(True, outer.append)
+        wh.set_fullscreen_active(True, inner.append)
+        warnings.warn("inner warning")
+        wh.set_fullscreen_active(False)
+        warnings.warn("outer warning")
+        wh.set_fullscreen_active(False)
+    finally:
+        restore()
+
+    assert any("inner warning" in line for line in inner)
+    assert any("outer warning" in line for line in outer)
+
+
+def test_capture_warnings_scope_preserves_preexisting_capture() -> None:
+    logging.captureWarnings(True)
+    try:
+        restore = wh.capture_warnings()
+        restore()
+        assert getattr(logging, "_warnings_showwarning", None) is not None
+    finally:
+        logging.captureWarnings(False)
+
+
+def test_fullscreen_captured_warning_redacts_path_and_source_line() -> None:
+    notices: list[str] = []
+    handler = wh._PhosonNoticeHandler()
+    wh.set_fullscreen_active(True, notices.append)
+    try:
+        handler.emit(
+            logging.LogRecord(
+                "py.warnings",
+                logging.WARNING,
+                "/secret/internal.py",
+                42,
+                "/secret/internal.py:42: UserWarning: degraded\n  source()\n",
+                (),
+                None,
+            )
+        )
+    finally:
+        wh.set_fullscreen_active(False)
+
+    assert notices == ["UserWarning: degraded"]
+    assert "/secret" not in notices[0]
+    assert "source()" not in notices[0]
+
+
+def test_fullscreen_captured_custom_category_redacts_path() -> None:
+    class Degraded(UserWarning):
+        pass
+
+    notices: list[str] = []
+    handler = wh._PhosonNoticeHandler()
+    wh.set_fullscreen_active(True, notices.append)
+    try:
+        handler.emit(
+            logging.LogRecord(
+                "py.warnings",
+                logging.WARNING,
+                "/secret/internal.py",
+                9,
+                "/secret/internal.py:9: Degraded: fallback used\n  source()\n",
+                (),
+                None,
+            )
+        )
+    finally:
+        wh.set_fullscreen_active(False)
+
+    assert notices == ["Degraded: fallback used"]
+    assert Degraded.__name__ in notices[0]
+    assert "/secret" not in notices[0]
+
+
+def test_nested_install_out_of_order_restore_fully_unwinds() -> None:
+    previous_showwarning = warnings.showwarning
+    previous_handlers = list(logging.getLogger().handlers)
+    restore_outer = wh.install()
+    restore_inner = wh.install()
+
+    restore_outer()
+    assert wh._installed
+    restore_outer()
+    restore_inner()
+    restore_inner()
+
+    assert not wh._installed
+    assert warnings.showwarning is previous_showwarning
+    assert logging.getLogger().handlers == previous_handlers

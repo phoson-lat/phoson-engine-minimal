@@ -7,16 +7,17 @@ Manual parsing is deliberate: typer/click would add a dependency against
 the "minimal" philosophy.
 """
 
-import os
 import sys
 import shutil
 import asyncio
 import subprocess
+from typing import NoReturn
 from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_cli import warnings_hook
 from phoson_cli.repl import PhosonRepl
+from phoson_cli.trace import TraceWriter, trace_enabled
 from phoson_cli.config import (
     PhosonConfig,
     PhosonConfigError,
@@ -26,6 +27,7 @@ from phoson_cli.config import (
     has_configured_provider,
 )
 from phoson_cli.updater import get_current_version, perform_self_update
+from phoson_cli.terminal import stream_is_tty, cursor_output_capable
 from phoson_cli.installer import run_install_wizard
 from phoson_cli.fullscreen.app import PhosonApp
 
@@ -84,9 +86,12 @@ class CliOptions:
     assume_yes: bool = False
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     """Print a usage error and exit 2 (argparse-compatible behavior)."""
-    print(f"phoson-cli: {message}", file=sys.stderr)
+    if "--trace" in sys.argv[1:] or trace_enabled():
+        TraceWriter().error(message, code="usage_error")
+    else:
+        print(f"phoson-cli: {message}", file=sys.stderr)
     sys.exit(2)
 
 
@@ -110,10 +115,9 @@ def _parse_max_turns(value: str) -> int:
 def parse_args(argv: list[str]) -> CliOptions:
     """Parse *argv* (without the program name) into :class:`CliOptions`.
 
-    Pure with respect to argv: the only side effect is reading piped
-    stdin (``echo "task" | phoson-cli``), which is inherent to one-shot
-    mode. Unknown flags, missing values and bad numbers exit 2 with a
-    message (argparse-compatible behavior).
+    Stdin is deliberately resolved later, after immediate actions have
+    dispatched. Unknown flags, missing values and bad numbers exit 2 with
+    a message (argparse-compatible behavior).
     """
     options = CliOptions()
     task_parts: list[str] = []
@@ -163,7 +167,9 @@ def parse_args(argv: list[str]) -> CliOptions:
             elif arg == "--provider":
                 options.provider = value
             elif arg == "--theme":
-                options.theme = value
+                options.theme = value.strip().lower()
+                if not options.theme:
+                    _fail("option --theme requires a non-empty value")
             else:
                 options.max_turns = _parse_max_turns(value)
         elif arg.startswith("-") and arg != "-":
@@ -172,44 +178,111 @@ def parse_args(argv: list[str]) -> CliOptions:
             task_parts.append(arg)
         i += 1
 
-    # Plugin management owns stdin itself (notably install confirmation).
-    # Do not consume a piped "y" as a one-shot agent task before the
-    # subcommand has a chance to read it.
-    if options.plugin_args is not None:
-        return options
-
-    task = " ".join(task_parts) if task_parts else None
-    if task is None:
-        if not sys.stdin.isatty():
-            task = _read_stdin_task() or None
-            if options.print_mode and task is None:
-                print("Error: -p/--print received empty stdin.", file=sys.stderr)
-                sys.exit(1)
-        elif options.print_mode:
-            print(
-                "Error: -p/--print needs a task argument or piped stdin.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    options.task = task
+    options.task = " ".join(task_parts) if task_parts else None
     return options
+
+
+def _resolve_task(options: CliOptions, trace_writer: TraceWriter | None = None) -> None:
+    """Resolve piped input only after non-agent actions have returned."""
+
+    def fail(message: str) -> NoReturn:
+        if trace_writer is not None:
+            trace_writer.error(message, code="input_error")
+        else:
+            print(f"Error: {message}", file=sys.stderr)
+        sys.exit(1)
+
+    if options.task is not None:
+        return
+    if stream_is_tty(sys.stdin):
+        if options.print_mode:
+            fail("-p/--print needs a task argument or piped stdin.")
+        return
+    try:
+        reader = getattr(sys.stdin, "read", None)
+        if not callable(reader):
+            raise AttributeError("stdin has no readable stream")
+        raw = reader()
+        if not isinstance(raw, str):
+            raise TypeError("stdin did not return text")
+        task = raw.strip()
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        fail(f"could not read stdin: {exc}")
+    if not task:
+        if options.print_mode:
+            fail("-p/--print received empty stdin.")
+        else:
+            fail(
+                "stdin was empty; provide a task argument or run from an "
+                "interactive terminal."
+            )
+    options.task = task
+
+
+def _require_interactive_stdin(action: str) -> None:
+    """Reject prompt-driven actions before they can consume redirected stdin."""
+    if stream_is_tty(sys.stdin):
+        return
+    print(
+        f"Error: {action} requires an interactive terminal; re-run it from a TTY.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _apply_overrides(config: PhosonConfig, options: CliOptions) -> None:
     """Apply the one-off CLI overrides on top of the loaded config (D5).
 
-    Precedence: flag > config.toml > env > default. The config object is
+    Precedence: flag > environment > config.toml > default. The config object is
     mutated in place (it is a dataclass, not persisted back to disk).
     """
     if options.provider:
         config.provider = options.provider
+        config._provider_source = "cli"
     if options.model:
         config.model = options.model
     if options.theme:
         config.theme = options.theme
+        config.cli_theme = options.theme
     if options.max_turns is not None:
         config.max_iterations = options.max_turns
+
+
+class _CliThemeError(ValueError):
+    pass
+
+
+def _prepare_cli_theme(config: PhosonConfig):
+    """Classify a CLI theme using built-in and JSON themes only."""
+    from phoson_cli.theme import load_theme, default_theme_registry
+
+    registry = default_theme_registry()
+    requested = config.cli_theme or ""
+    theme = registry.get(requested)
+    deferred = theme is None
+    if deferred:
+        # Keep constructors quiet until the normal runtime plugin load can
+        # decide whether the name is plugin-contributed.
+        theme = load_theme(None, registry=registry)
+    else:
+        theme = load_theme(config.theme, registry=registry, cli_value=requested)
+    setattr(config, "_startup_theme_registry", registry)
+    setattr(config, "_startup_theme", theme)
+    setattr(config, "_cli_theme_deferred", deferred)
+    return registry
+
+
+def _validate_runtime_cli_theme(config: PhosonConfig, registry):
+    """Validate a deferred CLI theme against one runtime's loaded plugins."""
+    from phoson_cli.theme import resolve_runtime_theme
+
+    requested = config.cli_theme
+    if requested and registry.get(requested) is None:
+        raise _CliThemeError(
+            "option --theme expects one of "
+            f"{', '.join(registry.valid_names())}, got {requested!r}"
+        )
+    return resolve_runtime_theme(config, registry)
 
 
 def _should_use_classic(options: CliOptions) -> bool:
@@ -219,13 +292,13 @@ def _should_use_classic(options: CliOptions) -> bool:
     classic front end is selected as a degraded mode when the terminal
     cannot do full-screen (``TERM`` unset or ``dumb``) — the full-screen
     ``Application`` needs a real TTY with cursor/alternate-screen
-    capabilities. The auto-detection only applies to genuinely
-    interactive terminals (``sys.stdin.isatty()``); piped/redirected
-    stdin is one-shot mode, which is resolved before front-end selection.
+    capabilities. Both stdin and stdout must be TTYs; piped stdin is resolved
+    as one-shot input before front-end selection, while redirected stdout
+    degrades to the line-oriented frontend.
     """
     if options.classic:
         return True
-    return sys.stdin.isatty() and os.environ.get("TERM", "") in {"", "dumb"}
+    return not (stream_is_tty(sys.stdin) and cursor_output_capable(sys.stdout))
 
 
 def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> None:
@@ -248,10 +321,9 @@ def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> 
 
 def _run_plugin_command(
     args: list[str], config: PhosonConfig, *, assume_yes: bool = False
-) -> None:
+) -> int:
     """Run a non-interactive community-plugin management command."""
     from phoson_cli.plugin_manager import (
-        PluginManagerError,
         doctor_plugin,
         enable_plugin,
         remove_plugin,
@@ -274,26 +346,29 @@ def _run_plugin_command(
         for entry in entries:
             status = "enabled" if entry.enabled else "disabled"
             print(f"{status:8} {entry.name}")
-        return
+        return 0
     if command == "install" and len(rest) == 1:
         source = rest[0]
         print(f"Installing plugin from {source!r}. Plugins execute Python code as you.")
         if not assume_yes:
+            if not stream_is_tty(sys.stdin):
+                print("Cancelled. Re-run with --yes to install non-interactively.")
+                return 0
             try:
                 answer = input("Continue? [y/N] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 print("Cancelled.")
-                return
+                return 0
             if answer not in {"y", "yes"}:
                 print("Cancelled.")
-                return
+                return 0
         try:
             name = install_plugin(source, config)
-        except PluginManagerError as exc:
+        except Exception as exc:  # noqa: BLE001 - operational CLI boundary
             print(f"Error: {exc}", file=sys.stderr)
-            return
+            return 1
         print(f"Installed and enabled plugin: {name}")
-        return
+        return 0
     if (
         command in {"enable", "disable", "remove", "update", "doctor"}
         and len(rest) == 1
@@ -316,9 +391,10 @@ def _run_plugin_command(
                 plugin = doctor_plugin(plugin_id, config)
                 print(f"Plugin OK: {plugin.name} {plugin.version}")
                 plugin.cleanup()
-        except PluginManagerError as exc:
+        except Exception as exc:  # noqa: BLE001 - operational CLI boundary
             print(f"Error: {exc}", file=sys.stderr)
-        return
+            return 1
+        return 0
     _fail(f"invalid plugin command: {' '.join(args)}")
 
 
@@ -384,8 +460,9 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
 
     from phoson_agent import AgentEngine
     from phoson_cli.repl import close_plugins, build_plugin_specs, build_system_prompt
-    from phoson_cli.theme import load_theme
+    from phoson_cli.theme import load_theme, build_theme_registry
     from phoson_cli.tools import build_tools, build_tools_dict
+    from phoson_cli.trace import TraceMiddleware
     from phoson_llm.schemas import Message, ModelConfig
     from phoson_cli.plugin_ui import NonInteractivePluginUiService
     from phoson_cli.session_utils import (
@@ -400,9 +477,23 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         build_permission_middleware,
     )
 
-    chat = build_chat(config)
+    tracing = trace or trace_enabled()
+    trace_writer = TraceWriter() if tracing else None
+    previous_notice_printer = warnings_hook.notice_printer
+    warnings_hook.notice_printer = lambda message: (
+        trace_writer.diagnostic(message, source="warning")
+        if trace_writer is not None
+        else print(message, file=sys.stderr)
+    )
+
+    chat = None
     engine: AgentEngine | None = None
+    trace_middleware: TraceMiddleware | None = None
+    terminal: tuple[str, str, str, bool] | None = None
     try:
+        if config.cli_theme and not hasattr(config, "_startup_theme_registry"):
+            _prepare_cli_theme(config)
+        chat = build_chat(config)
         tools = build_tools()
         # Same middleware chain as the REPL. One-shot has no confirmation
         # service, so the permission gate fails closed for ``ask`` tools.
@@ -425,10 +516,9 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         )
         # #139: optional structured run trace for headless one-shot. Appended
         # last (it only implements on_agent_event, so chain order is inert).
-        from phoson_cli.trace import TraceMiddleware, trace_enabled
-
-        if trace or trace_enabled():
-            middlewares.append(TraceMiddleware())
+        if tracing:
+            trace_middleware = TraceMiddleware(writer=trace_writer)
+            middlewares.append(trace_middleware)
         engine = AgentEngine(
             chat=chat,
             tools=tools,
@@ -441,6 +531,21 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         # One-shot has no confirmation callback, so an annotated MCP tool that
         # is not read-only resolves to ask → refused (fail closed).
         apply_tool_hints(permission.policy, engine.tools)
+        theme_registry = build_theme_registry(
+            list(getattr(engine, "_loaded_plugins", []))
+        )
+        try:
+            active_theme = (
+                _validate_runtime_cli_theme(config, theme_registry)
+                if config.cli_theme
+                else load_theme(config.theme, registry=theme_registry)
+            )
+        except _CliThemeError as exc:
+            if trace_writer is not None:
+                terminal = ("error", str(exc), "usage_error", False)
+            else:
+                print(f"phoson-cli: {exc}", file=sys.stderr)
+            return 2
         # #227 phase 3: forward every permission decision to exporters (the
         # OTel plugin, when enabled) now that the plugins are loaded.
         from phoson_cli.session_utils import record_permission_decision
@@ -452,7 +557,8 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         engine.context.extra["safe_mode"] = config.safe_mode
         engine.context.extra["middlewares"] = middlewares
         engine.context.extra["plugin_ui"] = NonInteractivePluginUiService(
-            load_theme(config.theme)
+            active_theme,
+            trace_writer=trace_writer,
         )
         engine.context.extra["available_tools"] = build_tools_dict()
         engine.context.extra["default_model"] = config.subagent_model or config.model
@@ -489,41 +595,56 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
             except TimeoutError:
                 # wait_for has already cancelled the task and reaped it;
                 # the teardown in ``finally`` still closes plugins + chat.
-                print(
-                    f"Error: run exceeded the {budget:g}s wall-clock budget "
-                    f"(PHOSON_RUN_BUDGET_SECONDS). "
-                    "Set it to 0 to disable the budget.",
-                    file=sys.stderr,
+                message = (
+                    f"run exceeded the {budget:g}s wall-clock budget "
+                    "(PHOSON_RUN_BUDGET_SECONDS). Set it to 0 to disable "
+                    "the budget."
                 )
+                if trace_writer is not None:
+                    terminal = ("error", message, "timeout", False)
+                else:
+                    print(f"Error: {message}", file=sys.stderr)
                 return 124
         else:
             result = await run_task
         # Print an empty string (not ``None``) when there is no content.
-        print(result.final_content or "")
-        # #167: cue the terminal on success. One-shot is usually piped
-        # (scripts/CI), so the TTY gate in notify_run_done keeps escape
-        # sequences out of program output; it only rings when stdout is a
-        # real terminal.
-        from phoson_cli.notify import notify_run_done
-
-        notify_run_done(
-            getattr(config, "notify_on_completion", "off"),
-            "done",
-            title="Phoson finished",
-        )
+        sys.stdout.write((result.final_content or "").rstrip("\n") + "\n")
+        sys.stdout.flush()
+        if trace_writer is not None:
+            terminal = ("done", result.final_content or "", "", False)
         return 0
+    except asyncio.CancelledError:
+        if trace_writer is not None:
+            terminal = ("error", "Run cancelled.", "cancelled", False)
+        raise
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        if trace_writer is not None:
+            event = trace_middleware.terminal_error if trace_middleware else None
+            terminal = (
+                "error",
+                event.message if event is not None else str(exc),
+                (event.code or "agent_error") if event is not None else "runtime_error",
+                event.retryable if event is not None else False,
+            )
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
         return 1
     finally:
         if engine is not None:
             await close_plugins(list(getattr(engine, "_loaded_plugins", [])))
-        aclose = getattr(chat, "aclose", None)
+        aclose = getattr(chat, "aclose", None) if chat is not None else None
         if aclose is not None:
             try:
                 await aclose()
             except Exception:  # noqa: BLE001
                 pass
+        if trace_writer is not None and terminal is not None:
+            kind, message, code, retryable = terminal
+            if kind == "done":
+                trace_writer.done(message)
+            else:
+                trace_writer.error(message, code=code, retryable=retryable)
+        warnings_hook.notice_printer = previous_notice_printer
 
 
 def main() -> None:
@@ -556,7 +677,11 @@ def _run_cli() -> None:
         except PhosonConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
-        _run_plugin_command(options.plugin_args, config, assume_yes=options.assume_yes)
+        status = _run_plugin_command(
+            options.plugin_args, config, assume_yes=options.assume_yes
+        )
+        if status:
+            sys.exit(status)
         return
 
     if options.bg_args is not None:
@@ -567,28 +692,53 @@ def _run_cli() -> None:
         sys.exit(run_bg_command(options.bg_args))
 
     if options.self_update:
+        _require_interactive_stdin("--self-update")
         self_update()
         return
 
     if options.uninstall:
+        _require_interactive_stdin("--uninstall")
         uninstall()
         return
 
     if options.setup:
+        _require_interactive_stdin("--setup")
         try:
             config = load_config()
+            asyncio.run(run_install_wizard(config))
         except PhosonConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
-        asyncio.run(run_install_wizard(config))
         return
+
+    trace_writer = TraceWriter() if options.trace or trace_enabled() else None
+    _resolve_task(options, trace_writer)
+
+    if trace_writer is not None and options.task is None:
+        trace_writer.error(
+            "--trace requires a one-shot task argument or piped stdin.",
+            code="usage_error",
+        )
+        sys.exit(2)
+
+    if options.task is not None:
+        warnings_hook.notice_printer = lambda message: (
+            trace_writer.diagnostic(message, source="warning")
+            if trace_writer is not None
+            else print(message, file=sys.stderr)
+        )
 
     try:
         config = load_config()
     except PhosonConfigError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        if trace_writer is not None:
+            trace_writer.error(str(exc), code="config_error")
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     _apply_overrides(config, options)
+    if options.theme:
+        _prepare_cli_theme(config)
 
     # One-shot mode: phoson-cli "task" | -p "task" | piped stdin.
     # Skips the interactive wizard — missing credentials surface as the
@@ -597,12 +747,19 @@ def _run_cli() -> None:
         try:
             build_chat(config)
         except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            print(
-                "Set the provider's API key in ~/.phoson/config.toml "
-                "or run: phoson-cli --setup",
-                file=sys.stderr,
+            message = (
+                f"{exc}. Set the provider's API key in ~/.phoson/config.toml "
+                "or run: phoson-cli --setup"
             )
+            if trace_writer is not None:
+                trace_writer.error(message, code="configuration_error")
+            else:
+                print(f"Error: {exc}", file=sys.stderr)
+                print(
+                    "Set the provider's API key in ~/.phoson/config.toml "
+                    "or run: phoson-cli --setup",
+                    file=sys.stderr,
+                )
             sys.exit(1)
         sys.exit(asyncio.run(_run_oneshot(config, options.task, trace=options.trace)))
 
@@ -610,10 +767,16 @@ def _run_cli() -> None:
 
     if not config_path.exists() and not has_configured_provider(config):
         print("No API keys configured. Running setup wizard...")
-        asyncio.run(run_install_wizard(config))
-        # Reload config after setup and re-apply the CLI overrides on top.
-        config = load_config()
+        try:
+            asyncio.run(run_install_wizard(config))
+            # Reload config after setup and re-apply the CLI overrides on top.
+            config = load_config()
+        except PhosonConfigError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         _apply_overrides(config, options)
+        if options.theme:
+            _prepare_cli_theme(config)
 
     # Fail fast with a friendly message instead of a traceback when the
     # active provider has no usable credential (e.g. stale config.toml).
@@ -635,10 +798,17 @@ def _run_cli() -> None:
     if _should_use_classic(options):
         if not options.classic:
             print(
-                "Full-screen UI unavailable (TERM=dumb) — using the classic REPL.",
+                "Full-screen UI unavailable; using the classic REPL. Both stdin "
+                "and stdout must be capable TTYs with TERM set.",
                 file=sys.stderr,
             )
         repl = PhosonRepl(config)
+        if options.theme and getattr(config, "_cli_theme_deferred", False):
+            try:
+                _validate_runtime_cli_theme(config, repl.theme_registry)
+            except _CliThemeError as exc:
+                asyncio.run(repl.shutdown())
+                _fail(str(exc))
         # I-112: point the warnings hook's printer at the themed renderer so
         # notices match the front end's style (live theme; /theme re-points it).
         # getattr keeps fakes without a renderer (tests) on the plain default.
@@ -667,6 +837,12 @@ def _run_cli() -> None:
         # with the same friendly message as every other config error.
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    if options.theme and getattr(config, "_cli_theme_deferred", False):
+        try:
+            _validate_runtime_cli_theme(config, app.repl.theme_registry)
+        except _CliThemeError as exc:
+            asyncio.run(app.repl.shutdown())
+            _fail(str(exc))
     # Backstop: capture stray stderr (stray prints/logging) to a log file +
     # in-memory tail while the front end runs, so it cannot tear the render.
     # stdout is left alone (it is the prompt_toolkit paint channel).

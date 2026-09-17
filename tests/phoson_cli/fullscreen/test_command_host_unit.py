@@ -175,6 +175,17 @@ async def test_pick_session_delegates_to_float_and_returns_its_result() -> None:
     assert isinstance(app.seen_pickers[0], BasePicker)
 
 
+@pytest.mark.asyncio
+async def test_pick_session_empty_returns_cancelled_without_float() -> None:
+    app = _FakeApp()
+    host = FullScreenCommandHost(app)
+
+    result = await host.pick_session([], "current-id")
+
+    assert result.cancelled
+    app.run_float_picker.assert_not_called()
+
+
 # ── B3: destructive deletes must confirm ─────────────────────────────────────
 
 
@@ -196,7 +207,7 @@ def _meta(id: str):
 
 @pytest.mark.asyncio
 async def test_pick_session_multi_delete_asks_and_deletes_on_confirm() -> None:
-    """B3: X (delete marked) must confirm; confirming deletes and reopens."""
+    """B3: X confirms and deleting every row completes without reopening."""
     app = _FakeApp(
         picker_results=[
             SessionPickerResult(delete_ids=["aaa111", "bbb222"]),
@@ -208,11 +219,29 @@ async def test_pick_session_multi_delete_asks_and_deletes_on_confirm() -> None:
 
     result = await host.pick_session([_meta("aaa111"), _meta("bbb222")], "current-id")
 
-    assert result.cancelled is True
+    assert result.deleted_count == 2
     assert app.repl.storage.deleted == ["aaa111", "bbb222"]
     app.run_float_confirm.assert_awaited_once()
+    assert app.run_float_picker.await_count == 1
     assert "2 session(s)" in app.run_float_confirm.call_args[0][0]
     assert any(kind == "info" and "Deleted 2" in msg for kind, msg in app.sink.notices)
+
+
+@pytest.mark.asyncio
+async def test_pick_session_does_not_reopen_after_deleting_final_row() -> None:
+    app = _FakeApp(
+        picker_results=[SessionPickerResult(delete_ids=["aaa111"])],
+        confirm_result=True,
+    )
+    host = FullScreenCommandHost(app)
+
+    result = await host.pick_session([_meta("aaa111")], "current-id")
+
+    assert result.deleted_count == 1
+    assert not result.cancelled
+    assert app.repl.storage.deleted == ["aaa111"]
+    assert app.run_float_picker.await_count == 1
+    assert app.sink.notices == [("info", "Deleted 1 session(s).")]
 
 
 @pytest.mark.asyncio

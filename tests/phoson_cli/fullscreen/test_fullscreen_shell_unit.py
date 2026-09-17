@@ -15,9 +15,16 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from rich.text import Text
 
+from phoson_agent import AgentDoneEvent, AgentStartEvent, AgentReasoningEvent
 from phoson_cli.config import PhosonConfig
+from phoson_llm.schemas import Message, TextBlock
+from phoson_agent.models import AgentRunResult
+from phoson_cli.commands import Command
+from phoson_agent.sessions import STATUS_ABORTED, JsonlStorage
 from phoson_cli.fullscreen.app import PhosonApp
+from phoson_agent.sessions.models import ConversationTree
 from phoson_cli.fullscreen.header_model import (
     _FOOTER_HINT_IDLE,
     _FOOTER_HINT_PICKER,
@@ -82,6 +89,72 @@ def app(tmp_path) -> PhosonApp:
 def test_shell_builds_full_screen_application(app: PhosonApp) -> None:
     assert app.app.layout is not None
     assert app.app.style is not None
+
+
+@pytest.mark.asyncio
+async def test_new_command_replaces_fullscreen_session_view(app: PhosonApp) -> None:
+    old_block = Text("old transcript")
+    app.sink.blocks.append(old_block)
+    old_cache = app._block_ansi_cache
+    old_cache.get_or_render(old_block, 80)
+    app._rewind_stack.append("old-node")
+    app._auto_scroll = False
+    app._chat_scroll_top = 17
+
+    await app._commands.handle(Command(name="/new", args=""))
+
+    assert all(block is not old_block for block in app.sink.blocks)
+    assert app._rewind_stack == []
+    assert app._auto_scroll is True
+    assert app._chat_scroll_top == 0
+    assert app._block_ansi_cache is not old_cache
+
+
+@pytest.mark.asyncio
+async def test_sessions_load_replaces_fullscreen_history(app: PhosonApp) -> None:
+    loaded = ConversationTree.new(session_id="loaded-fullscreen-session")
+    loaded.append(parent_id=None, message=Message(role="user", content="loaded text"))
+    loaded.cwd = str(Path.cwd())
+    await app.repl.storage.save(loaded)
+
+    old_block = Text("old transcript")
+    app.sink.blocks.append(old_block)
+    old_cache = app._block_ansi_cache
+    app._rewind_stack.append("old-node")
+    app._auto_scroll = False
+    app._chat_scroll_top = 9
+
+    await app._commands.handle(Command(name="/sessions", args="load 1"))
+
+    assert app.repl.tree.session_id == loaded.session_id
+    assert all(block is not old_block for block in app.sink.blocks)
+    assert app._rewind_stack == []
+    assert app._auto_scroll is True
+    assert app._chat_scroll_top == 0
+    assert app._block_ansi_cache is not old_cache
+
+
+def test_fullscreen_session_view_rollback_restores_app_state(app: PhosonApp) -> None:
+    old_block = Text("old transcript")
+    app.sink.blocks.append(old_block)
+    old_ansi_cache = app._block_ansi_cache
+    old_ft_cache = app._block_ft_cache
+    app._rewind_stack.append("old-node")
+    app.repl._expanded_reasoning.add("old-reasoning-node")
+    app._auto_scroll = False
+    app._chat_scroll_top = 11
+    snapshot = app.sink.snapshot_session_view()
+
+    app.sink.reset_session_view()
+    app.sink.restore_session_view(snapshot)
+
+    assert app.sink.blocks == [old_block]
+    assert app._rewind_stack == ["old-node"]
+    assert app.repl._expanded_reasoning == {"old-reasoning-node"}
+    assert app._auto_scroll is False
+    assert app._chat_scroll_top == 11
+    assert app._block_ansi_cache is old_ansi_cache
+    assert app._block_ft_cache is old_ft_cache
 
 
 def test_shell_caps_redraw_frequency_with_min_redraw_interval(app: PhosonApp) -> None:
@@ -620,6 +693,245 @@ async def test_ctrl_c_cancels_instead_of_exiting_while_content_is_visible(
         app._run_task.cancel()
 
 
+@pytest.mark.parametrize(
+    ("text", "method_name", "key"),
+    [
+        ("/model list", "_run_command", "escape"),
+        ("! sleep 30", "_run_bash_line", "c-c"),
+    ],
+)
+async def test_cancel_targets_outer_operation_before_controller_task_exists(
+    app: PhosonApp, text: str, method_name: str, key: str
+) -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def slow_operation(*args) -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with (
+        patch.object(app, method_name, new=slow_operation),
+        patch.object(app.app, "exit") as mock_exit,
+    ):
+        app._prompt_input.text = text
+        _trigger(app, "enter")
+        await started.wait()
+        task = app._run_task
+        assert task is not None
+        assert app.repl.current_task is None
+
+        _trigger(app, key)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert cancelled.is_set()
+    mock_exit.assert_not_called()
+
+
+async def test_cancel_during_context_refresh_persists_user_turn_to_disk(
+    app: PhosonApp, monkeypatch
+) -> None:
+    refresh_started = asyncio.Event()
+
+    async def paused_refresh() -> None:
+        refresh_started.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(app.repl._controller, "_refresh_context_window", paused_refresh)
+    session_id = app.repl.tree.session_id
+    app._prompt_input.text = "persist before stream"
+    _trigger(app, "enter")
+    await refresh_started.wait()
+    task = app._run_task
+    assert task is not None
+
+    _trigger(app, "escape")
+    await task
+
+    storage = JsonlStorage(base_path=app.repl.config.sessions_dir)
+    reloaded = await storage.load(session_id)
+    leaf = next(iter(reloaded.get_leaves()))
+    messages = [node.message for node in reloaded.get_node_path(leaf)]
+    assert [message.role for message in messages] == ["user"]
+    content = messages[0].content
+    text = (
+        content
+        if isinstance(content, str)
+        else "".join(block.text for block in content if isinstance(block, TextBlock))
+    )
+    assert text == "persist before stream"
+    assert reloaded.status == STATUS_ABORTED
+    assert reloaded.last_run_id
+    assert "Partial progress saved" in _transcript(app)
+
+
+def _install_done_stream(app: PhosonApp) -> None:
+    async def stream(path, config):
+        yield AgentStartEvent(model="m", message_count=len(path))
+        history = [*path, Message(role="assistant", content="ok")]
+        yield AgentDoneEvent(
+            result=AgentRunResult(
+                final_content="ok", history=history, input_messages=path
+            )
+        )
+
+    app.repl.engine.stream = stream
+    app.repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
+
+
+async def test_ctrl_c_defers_exit_until_real_session_save_settles(
+    app: PhosonApp, monkeypatch
+) -> None:
+    saving = asyncio.Event()
+    release_save = asyncio.Event()
+    _install_done_stream(app)
+    real_save = app.repl.storage.save
+
+    async def paused_save(tree) -> None:
+        saving.set()
+        await release_save.wait()
+        await real_save(tree)
+
+    monkeypatch.setattr(app.repl.storage, "save", paused_save)
+    with (
+        patch.object(app.app, "exit") as mock_exit,
+    ):
+        app._prompt_input.text = "persist this"
+        _trigger(app, "enter")
+        await saving.wait()
+        task = app._run_task
+        assert task is not None
+
+        _trigger(app, "c-c")
+        await asyncio.sleep(0)
+        assert not task.cancelled()
+        assert not task.done()
+        assert "Saving session before exit" in _transcript(app)
+        mock_exit.assert_not_called()
+
+        release_save.set()
+        await task
+        await asyncio.sleep(0)
+        mock_exit.assert_called_once()
+
+
+async def test_deferred_exit_is_not_honored_when_real_session_save_fails(
+    app: PhosonApp, monkeypatch
+) -> None:
+    saving = asyncio.Event()
+    release_save = asyncio.Event()
+    _install_done_stream(app)
+
+    async def failing_save(tree) -> None:
+        saving.set()
+        await release_save.wait()
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.repl.storage, "save", failing_save)
+    with patch.object(app.app, "exit") as mock_exit:
+        app._prompt_input.text = "must remain open"
+        _trigger(app, "enter")
+        await saving.wait()
+        task = app._run_task
+        assert task is not None
+
+        _trigger(app, "c-c")
+        release_save.set()
+        result = await task
+        await asyncio.sleep(0)
+
+        assert isinstance(result.error, OSError)
+        assert task.exception() is None
+        mock_exit.assert_not_called()
+        assert "Could not save session" in _transcript(app)
+
+
+async def test_normal_save_failure_is_captured_and_rendered(
+    app: PhosonApp, monkeypatch
+) -> None:
+    _install_done_stream(app)
+
+    async def failing_save(tree) -> None:
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(app.repl.storage, "save", failing_save)
+    app._prompt_input.text = "normal failure"
+    _trigger(app, "enter")
+    task = app._run_task
+    assert task is not None
+
+    result = await task
+
+    assert isinstance(result.error, OSError)
+    assert task.exception() is None
+    assert "Could not save session" in _transcript(app)
+    assert "read-only filesystem" in " ".join(_transcript(app).split())
+
+
+async def test_escape_abort_save_failure_is_captured_and_rendered(
+    app: PhosonApp, monkeypatch
+) -> None:
+    refresh_started = asyncio.Event()
+
+    async def paused_refresh() -> None:
+        refresh_started.set()
+        await asyncio.sleep(30)
+
+    async def failing_save(tree) -> None:
+        raise OSError("abort save failed")
+
+    monkeypatch.setattr(app.repl._controller, "_refresh_context_window", paused_refresh)
+    monkeypatch.setattr(app.repl.storage, "save", failing_save)
+    app._prompt_input.text = "abort failure"
+    _trigger(app, "enter")
+    await refresh_started.wait()
+    task = app._run_task
+    assert task is not None
+
+    _trigger(app, "escape")
+    result = await task
+
+    assert isinstance(result.error, OSError)
+    assert task.exception() is None
+    assert "Could not save session" in _transcript(app)
+    assert "abort save failed" in _transcript(app)
+
+
+async def test_escape_reports_persistence_is_protected(
+    app: PhosonApp, monkeypatch
+) -> None:
+    saving = asyncio.Event()
+    release_save = asyncio.Event()
+    _install_done_stream(app)
+    real_save = app.repl.storage.save
+
+    async def paused_save(tree) -> None:
+        saving.set()
+        await release_save.wait()
+        await real_save(tree)
+
+    monkeypatch.setattr(app.repl.storage, "save", paused_save)
+    app._prompt_input.text = "protected"
+    _trigger(app, "enter")
+    await saving.wait()
+    task = app._run_task
+    assert task is not None
+
+    _trigger(app, "escape")
+
+    transcript = _transcript(app)
+    assert "required persistence cannot be cancelled" in transcript
+    assert "Cancelling current operation" not in transcript
+    assert not task.done()
+    release_save.set()
+    await task
+
+
 def test_scroll_page_up_disables_auto_scroll(app: PhosonApp) -> None:
     app._total_chat_lines = 100
     app._auto_scroll = True
@@ -760,6 +1072,39 @@ async def test_run_float_confirm_resolves_no_on_ctrl_c(app: PhosonApp) -> None:
     assert await task is False
 
 
+async def test_concurrent_float_confirmations_are_serialized(app: PhosonApp) -> None:
+    first = asyncio.create_task(app.run_float_confirm("First?"))
+    second = asyncio.create_task(app.run_float_confirm("Second?"))
+    await asyncio.sleep(0)
+
+    first_float = app._active_float
+    assert first_float is not None
+    _trigger(app, "y")
+    assert await first is True
+
+    await asyncio.sleep(0)
+    assert app._active_float is not None
+    assert app._active_float is not first_float
+    _trigger(app, "n")
+    assert await second is False
+    assert app._active_float is None
+
+
+async def test_cancelling_one_float_does_not_clear_the_next(app: PhosonApp) -> None:
+    first = asyncio.create_task(app.run_float_confirm("First?"))
+    second = asyncio.create_task(app.run_float_confirm("Second?"))
+    await asyncio.sleep(0)
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await asyncio.sleep(0)
+
+    assert app._active_float is not None
+    _trigger(app, "y")
+    assert await second is True
+
+
 # ── Ctrl+D, header indicators, banner, completer ──────────────────────────────
 
 
@@ -854,6 +1199,42 @@ async def test_ctrl_v_falls_back_to_text_paste_when_no_image(app: PhosonApp) -> 
 
     assert app._prompt_input.text == "pasted text"
     assert len(app.repl.attachments) == 0
+
+
+async def test_delayed_ctrl_v_cannot_cross_session_or_outlive_exit(
+    app: PhosonApp,
+) -> None:
+    clipboard_started = asyncio.Event()
+    release_clipboard = asyncio.Event()
+
+    async def delayed_image():
+        clipboard_started.set()
+        await release_clipboard.wait()
+        return b"image", "image/png"
+
+    with patch(
+        "phoson_cli.fullscreen.clipboard.read_clipboard_image",
+        new=delayed_image,
+    ):
+        original_id = app.repl.tree.session_id
+        _trigger(app, "c-v")
+        await clipboard_started.wait()
+        assert app._is_run_in_flight()
+
+        app._prompt_input.text = "/new"
+        _trigger(app, "enter")
+        assert app.repl.tree.session_id == original_id
+
+        with patch.object(app.app, "exit") as mock_exit:
+            app.request_exit()
+            await asyncio.sleep(0)
+            release_clipboard.set()
+            await asyncio.sleep(0)
+            app.request_exit()
+            mock_exit.assert_called_once()
+
+    assert len(app.repl.attachments) == 0
+    assert "[image" not in app._prompt_input.text
 
 
 def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
@@ -1061,6 +1442,71 @@ async def test_bash_card_always_resolves_and_notifies(
             task.cancel()
     assert always_calls == ["rm -rf /tmp/x"]
     assert app._active_float is None  # the float closed on resolve
+
+
+@pytest.mark.asyncio
+async def test_bash_card_always_waits_for_persistence(app: PhosonApp) -> None:
+    persistence_started = asyncio.Event()
+    persistence_release = asyncio.Event()
+
+    async def on_always(command: str) -> None:
+        persistence_started.set()
+        await persistence_release.wait()
+
+    task = asyncio.create_task(app.run_float_bash_card("echo ok", on_always=on_always))
+    await asyncio.sleep(0)
+    _trigger(app, "a")
+    await persistence_started.wait()
+    assert not task.done()
+    assert app._active_float is not None
+
+    persistence_release.set()
+    assert await task is True
+    assert app._active_float is None
+
+
+@pytest.mark.asyncio
+async def test_bash_card_always_persistence_failure_does_not_approve(
+    app: PhosonApp,
+) -> None:
+    async def fail(command: str) -> None:
+        raise OSError("disk full")
+
+    task = asyncio.create_task(app.run_float_bash_card("echo ok", on_always=fail))
+    await asyncio.sleep(0)
+    _trigger(app, "a")
+
+    assert await task is False
+    assert app._active_float is None
+    assert "Could not save bash permission" in _transcript(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("followup", ["y", "a", "n", "escape", "c-c"])
+async def test_bash_card_always_is_one_shot_while_persisting(
+    app: PhosonApp, followup: str
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def persist(command: str) -> None:
+        calls.append(command)
+        started.set()
+        await release.wait()
+
+    task = asyncio.create_task(app.run_float_bash_card("echo one", on_always=persist))
+    await asyncio.sleep(0)
+    _trigger(app, "a")
+    await started.wait()
+    assert _trigger_if_enabled(app, followup)
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert calls == ["echo one"]
+    release.set()
+    assert await task is True
+    assert calls == ["echo one"]
 
 
 def test_transcript_is_empty_on_init(app: PhosonApp) -> None:
@@ -1291,6 +1737,323 @@ async def test_t12_ctrl_p_opens_palette_and_dispatches_selected_command(
     await started.wait()
     await asyncio.sleep(0)
     assert dispatched == ["/help"]
+
+
+async def test_palette_dispatched_command_remains_single_flight(
+    app: PhosonApp, monkeypatch
+) -> None:
+    _set_palette_catalog(app)
+    command_started = asyncio.Event()
+    command_release = asyncio.Event()
+
+    async def fake_picker(picker):
+        from phoson_cli.palette_picker import PalettePickerResult
+
+        return PalettePickerResult(command_name="/help")
+
+    async def slow_command(cmd) -> None:
+        command_started.set()
+        await command_release.wait()
+
+    monkeypatch.setattr(app, "run_float_picker", fake_picker)
+    monkeypatch.setattr(app, "_run_command", slow_command)
+
+    _trigger(app, "c-p")
+    await command_started.wait()
+    assert app._is_run_in_flight()
+    assert "esc cancel" in app._get_footer_text().value
+
+    app._prompt_input.text = "draft"
+    _trigger(app, "enter")
+    assert app._prompt_input.text == "draft"
+
+    command_release.set()
+    task = app._run_task
+    assert task is not None
+    await task
+
+
+async def test_autonomous_wake_is_registered_as_app_operation(
+    app: PhosonApp, monkeypatch
+) -> None:
+    from phoson_cli import controller as controller_module
+
+    wake_started = asyncio.Event()
+    wake_release = asyncio.Event()
+
+    async def execute_turn(*args, **kwargs):
+        wake_started.set()
+        await wake_release.wait()
+
+    monkeypatch.setattr(controller_module, "has_pending_wakes", lambda *args: True)
+    monkeypatch.setattr(
+        controller_module,
+        "drain_all_wakes",
+        AsyncMock(return_value=[(object(), [object()])]),
+    )
+    monkeypatch.setattr(
+        controller_module, "_render_wake_batches", lambda batches: "wake"
+    )
+    monkeypatch.setattr(app.repl._controller, "_execute_turn", execute_turn)
+
+    tick = asyncio.create_task(app.repl._controller._wake_loop_tick())
+    await wake_started.wait()
+    assert app._is_run_in_flight()
+    assert app._run_task is not None
+    assert "Background wake" in app._get_header_text().value
+    assert "esc cancel" in app._get_footer_text().value
+
+    before_effort = app.repl.config.reasoning_effort
+    _trigger(app, "c-e")
+    assert app.repl.config.reasoning_effort == before_effort
+    app._prompt_input.text = "draft"
+    _trigger(app, "enter")
+    assert app._prompt_input.text == "draft"
+
+    wake_release.set()
+    await tick
+
+
+async def test_cancelling_delegated_wake_keeps_monitor_polling(
+    app: PhosonApp, monkeypatch
+) -> None:
+    from phoson_cli import controller as controller_module
+
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    calls = 0
+
+    async def execute_turn(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            await asyncio.sleep(30)
+        else:
+            second_started.set()
+
+    monkeypatch.setattr(controller_module, "has_pending_wakes", lambda *args: calls < 2)
+    monkeypatch.setattr(
+        controller_module,
+        "drain_all_wakes",
+        AsyncMock(return_value=[(object(), [object()])]),
+    )
+    monkeypatch.setattr(
+        controller_module, "_render_wake_batches", lambda batches: "wake"
+    )
+    monkeypatch.setattr(app.repl._controller, "_execute_turn", execute_turn)
+    app.repl._controller._wake_poll_seconds = 0.01
+    monitor_task = asyncio.create_task(app.repl._controller._monitor_wake_loop())
+
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        assert app._cancel_operation() == "cancelled"
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        assert not monitor_task.done()
+        assert calls == 2
+    finally:
+        monitor_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await monitor_task
+
+
+async def test_wake_save_failure_denies_deferred_exit_and_reaches_owner(
+    app: PhosonApp, monkeypatch
+) -> None:
+    from phoson_cli import controller as controller_module
+
+    saving = asyncio.Event()
+    release_save = asyncio.Event()
+    _install_done_stream(app)
+
+    async def failing_save(tree) -> None:
+        saving.set()
+        await release_save.wait()
+        raise OSError("wake save failed")
+
+    monkeypatch.setattr(app.repl.storage, "save", failing_save)
+    monkeypatch.setattr(controller_module, "has_pending_wakes", lambda *args: True)
+    monkeypatch.setattr(
+        controller_module,
+        "drain_all_wakes",
+        AsyncMock(return_value=[(object(), [object()])]),
+    )
+    monkeypatch.setattr(
+        controller_module, "_render_wake_batches", lambda batches: "wake"
+    )
+
+    with patch.object(app.app, "exit") as mock_exit:
+        tick = asyncio.create_task(app.repl._controller._wake_loop_tick())
+        await saving.wait()
+        _trigger(app, "c-c")
+        release_save.set()
+
+        with pytest.raises(OSError, match="wake save failed"):
+            await tick
+
+        mock_exit.assert_not_called()
+        assert "Could not save session" in _transcript(app)
+
+
+async def test_monitor_owner_reports_operation_failure_and_keeps_polling(
+    app: PhosonApp, monkeypatch, caplog
+) -> None:
+    from phoson_cli import controller as controller_module
+
+    attempts = 0
+    second_attempt = asyncio.Event()
+
+    async def wake_turn(plugins) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("first wake failed")
+        second_attempt.set()
+
+    monkeypatch.setattr(
+        controller_module, "has_pending_wakes", lambda *args: attempts < 2
+    )
+    monkeypatch.setattr(app.repl._controller, "_run_wake_turn", wake_turn)
+    app.repl._controller._wake_poll_seconds = 0.01
+    monitor_task = asyncio.create_task(app.repl._controller._monitor_wake_loop())
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="phoson_cli.controller"):
+            await asyncio.wait_for(second_attempt.wait(), timeout=1)
+        assert attempts == 2
+        assert not monitor_task.done()
+        assert "Monitor wake loop tick failed" in caplog.text
+    finally:
+        monitor_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await monitor_task
+
+
+def test_fullscreen_reasoning_expands_newest_then_older(app: PhosonApp) -> None:
+    result = AgentRunResult(final_content="", history=[], input_messages=[])
+    parent = None
+    turns = (("old question", "old reasoning"), ("new question", "new reasoning"))
+    for prompt, reasoning in turns:
+        user = app.repl.tree.append(
+            parent_id=parent, message=Message(role="user", content=prompt)
+        )
+        assistant = app.repl.tree.append(
+            parent_id=user.id,
+            message=Message(role="assistant", content="answer"),
+            metadata={"reasoning": reasoning},
+        )
+        parent = assistant.id
+        app.sink.on_event(AgentStartEvent(model="m", message_count=1))
+        app.sink.on_event(AgentReasoningEvent(content=reasoning))
+        app.sink.on_event(AgentDoneEvent(result=result))
+    app.repl.current_node_id = parent
+
+    app.toggle_reasoning()
+    first = _transcript(app)
+    assert "new reasoning" in first
+    assert "old reasoning" not in first
+
+    app.toggle_reasoning()
+    second = _transcript(app)
+    assert "new reasoning" in second
+    assert "old reasoning" in second
+
+
+def test_reasoning_expands_new_live_then_older_resumed_block(app: PhosonApp) -> None:
+    result = AgentRunResult(final_content="", history=[], input_messages=[])
+    old_user = app.repl.tree.append(
+        parent_id=None, message=Message(role="user", content="resumed question")
+    )
+    old_assistant = app.repl.tree.append(
+        parent_id=old_user.id,
+        message=Message(role="assistant", content="resumed answer"),
+        metadata={"reasoning": "resumed reasoning"},
+    )
+    new_user = app.repl.tree.append(
+        parent_id=old_assistant.id,
+        message=Message(role="user", content="live question"),
+    )
+    new_assistant = app.repl.tree.append(
+        parent_id=new_user.id,
+        message=Message(role="assistant", content="live answer"),
+        metadata={"reasoning": "live reasoning"},
+    )
+    app.repl.current_node_id = new_assistant.id
+    app.sink.on_event(AgentStartEvent(model="m", message_count=1))
+    app.sink.on_event(AgentReasoningEvent(content="live reasoning"))
+    app.sink.on_event(AgentDoneEvent(result=result))
+
+    app.toggle_reasoning()
+    app.toggle_reasoning()
+
+    transcript = _transcript(app)
+    assert transcript.count("live reasoning") == 1
+    assert transcript.count("resumed reasoning") == 1
+    assert app.repl._expanded_reasoning == {new_assistant.id, old_assistant.id}
+
+
+def test_identical_live_and_resumed_reasoning_expand_by_node_identity(
+    app: PhosonApp,
+) -> None:
+    reasoning = "identical reasoning"
+    result = AgentRunResult(final_content="", history=[], input_messages=[])
+    old_user = app.repl.tree.append(
+        parent_id=None, message=Message(role="user", content="resumed question")
+    )
+    old_assistant = app.repl.tree.append(
+        parent_id=old_user.id,
+        message=Message(role="assistant", content="resumed answer"),
+        metadata={"reasoning": reasoning},
+    )
+    new_user = app.repl.tree.append(
+        parent_id=old_assistant.id,
+        message=Message(role="user", content="live question"),
+    )
+    new_assistant = app.repl.tree.append(
+        parent_id=new_user.id,
+        message=Message(role="assistant", content="live answer"),
+        metadata={"reasoning": reasoning},
+    )
+    app.repl.current_node_id = new_assistant.id
+    app.sink.on_event(AgentStartEvent(model="m", message_count=1))
+    app.sink.on_event(AgentReasoningEvent(content=reasoning))
+    app.sink.on_event(AgentDoneEvent(result=result))
+
+    app.toggle_reasoning()
+    assert _transcript(app).count(reasoning) == 1
+    app.toggle_reasoning()
+
+    assert _transcript(app).count(reasoning) == 2
+    expected = {new_assistant.id, old_assistant.id}
+    assert app.repl._expanded_reasoning == expected
+    assert app.sink._expanded_reasoning_nodes == expected
+
+
+def test_reasoning_node_is_marked_only_after_sink_renders(
+    app: PhosonApp, monkeypatch
+) -> None:
+    node = app.repl.tree.append(
+        parent_id=None,
+        message=Message(role="assistant", content="answer"),
+        metadata={"reasoning": "cannot render"},
+    )
+    app.repl.current_node_id = node.id
+    monkeypatch.setattr(app.sink, "expand_reasoning", lambda node_id, reasoning: False)
+
+    app.toggle_reasoning()
+
+    assert node.id not in app.repl._expanded_reasoning
+    assert "Could not render captured reasoning" in _transcript(app)
+
+
+def test_transcript_reset_clears_reasoning_expansion_records(app: PhosonApp) -> None:
+    app.repl._expanded_reasoning.update({"old", "new"})
+    app.sink._reasoning_blocks.append((object(), "stale", True))
+
+    app._reset_transcript()
+
+    assert app.repl._expanded_reasoning == set()
+    assert app.sink._reasoning_blocks == []
 
 
 async def test_t12_ctrl_p_is_a_noop_while_a_run_is_in_flight(app: PhosonApp) -> None:

@@ -76,6 +76,41 @@ async def _read_capped_stream(
     return b"".join(chunks), truncated
 
 
+async def _terminate_process_group(
+    proc: asyncio.subprocess.Process,
+    stream_tasks: tuple[asyncio.Task, asyncio.Task],
+) -> None:
+    """Kill the isolated process group, reap the shell, and clean pipe readers."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        await proc.wait()
+    finally:
+        for task in stream_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*stream_tasks, return_exceptions=True)
+
+
+async def _await_process_cleanup(
+    proc: asyncio.subprocess.Process,
+    stream_tasks: tuple[asyncio.Task, asyncio.Task],
+) -> None:
+    """Finish process cleanup even if more cancellation arrives while awaiting."""
+    cleanup = asyncio.create_task(_terminate_process_group(proc, stream_tasks))
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            continue
+    await cleanup
+
+
 async def _run_bash(
     command: str,
     safe_mode: bool = False,
@@ -116,11 +151,11 @@ async def _run_bash(
     if proc.stdout is None or proc.stderr is None:
         return "Failed to capture subprocess streams"
 
+    stdout_task = asyncio.create_task(_read_capped_stream(proc.stdout, MAX_BYTES))
+    stderr_task = asyncio.create_task(_read_capped_stream(proc.stderr, MAX_BYTES))
+    stream_tasks = (stdout_task, stderr_task)
+
     async def _capture() -> tuple[tuple[bytes, bool], tuple[bytes, bool]]:
-        assert proc.stdout is not None
-        assert proc.stderr is not None
-        stdout_task = asyncio.create_task(_read_capped_stream(proc.stdout, MAX_BYTES))
-        stderr_task = asyncio.create_task(_read_capped_stream(proc.stderr, MAX_BYTES))
         out_res, err_res = await asyncio.gather(stdout_task, stderr_task)
         await proc.wait()
         return out_res, err_res
@@ -130,18 +165,11 @@ async def _run_bash(
             _capture(), timeout=timeout
         )
     except TimeoutError:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-        try:
-            await proc.wait()
-        except Exception:  # noqa: BLE001
-            pass
+        await _await_process_cleanup(proc, stream_tasks)
         return f"Command timed out after {timeout:.0f}s"
+    except asyncio.CancelledError:
+        await _await_process_cleanup(proc, stream_tasks)
+        raise
 
     stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
     stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""

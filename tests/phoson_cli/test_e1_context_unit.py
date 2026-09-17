@@ -565,6 +565,22 @@ async def test_compact_unknown_arg_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_compact_pick_is_normal_usage_error_not_picker_fallback() -> None:
+    host = _CommandHost()
+    host.picker_unavailable = MagicMock(
+        side_effect=AssertionError("compact must not probe picker capability")
+    )
+    repl = _command_repl()
+    handler = CommandHandler(repl, host=host)
+
+    await handler.handle(Command(name="/compact", args="pick"))
+
+    host.picker_unavailable.assert_not_called()
+    assert host.errors == ["Usage: /compact [balanced|aggressive|on|off|yes]"]
+    repl.compact_context.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_compact_blocked_while_run_in_flight() -> None:
     host = _CommandHost()
     repl = _command_repl(running=True)
