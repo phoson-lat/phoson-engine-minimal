@@ -52,7 +52,7 @@ class HeaderModel:
     # ── Header ─────────────────────────────────────────────────────────────
 
     def get_header_text(self) -> HTML:
-        """Compact runtime header: brand · model (provider) · cwd · usage · status.
+        """Compact runtime header: brand · title (id) · model · cwd · usage · status.
 
         The header is the single location for session facts in the
         full-screen UI. The lower line deliberately contains only keyboard
@@ -67,6 +67,36 @@ class HeaderModel:
         cost = repl.session_metrics.total_cost_usd
         model_provider = f"{repl.current_model} ({repl.config.provider})"
         cwd = short_cwd(Path.cwd())
+        # Session identity (title + short id): the header is the single
+        # location for session facts, so the auto/LLM title and the session
+        # id live here. It is only shown once the session has actually begun
+        # (first message / resume) — a fresh controller has an in-memory id
+        # but no session yet, so nothing is displayed. The title is truncated
+        # so a long name cannot push the model/token segments off a narrow
+        # terminal.
+        if repl._controller.session_started:
+            short_id = (repl.tree.session_id or "")[:8] or "—"
+            title = (repl.tree.title or "").strip()
+            if len(title) > 40:
+                title = title[:39] + "…"
+            if title:
+                session_html = (
+                    '<style class="header_dim"> | </style>'
+                    f'<style class="header">{escape(title, quote=True)}</style>'
+                    '<style class="header_dim"> '
+                    f"({escape(short_id, quote=True)})</style>"
+                )
+                session_part = f"{title} ({short_id})"
+            else:
+                session_html = (
+                    '<style class="header_dim"> | </style>'
+                    '<style class="header_dim">untitled '
+                    f"({escape(short_id, quote=True)})</style>"
+                )
+                session_part = f"untitled ({short_id})"
+        else:
+            session_html = ""
+            session_part = ""
         # T-2: cost only when > 0 — an idle/fresh session shows just the
         # token count, not a $0.0000 that reads as noise.
         token_cost = (
@@ -120,6 +150,7 @@ class HeaderModel:
         key = (
             model_provider,
             cwd,
+            session_part,
             token_cost,
             attach_part,
             memory_part,
@@ -135,6 +166,7 @@ class HeaderModel:
             model_provider_html = escape(model_provider, quote=True)
             app._header_cache = HTML(
                 '<style class="header"> phoson </style>'
+                f"{session_html}"
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{model_provider_html}</style>'
                 '<style class="header_dim"> | </style>'
