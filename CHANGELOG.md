@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.42.0 (2026-09-17)
+
+### Feat
+
+- **cli**: highlight the user's turn as a single full-width band
+  (`› message · DD-MM-YYYY HH:MM`) and render monitor/background-job wakes
+  as a compact one-line notice (`⚡ Message from Monitor (name) at …`) instead
+  of a bordered card.
+- **cli**: name new sessions with a short, tool-free, reasoning-disabled LLM
+  call after the first completed turn. The heuristic title is seeded instantly
+  and upgraded in the background; models are tried `title_model` →
+  `subagent_model` → active model, and any failure keeps the heuristic. New
+  `llm_titles` / `title_model` / `title_timeout_s` config plus their env vars;
+  `/title` always wins and is never overwritten.
+- **cli**: show the session title and short id in the full-screen header,
+  created lazily — nothing is shown or written before the first message.
+  Add `--session`/`--resume <id>` (prefix match) and print
+  `To resume run: phoson-cli --session <id>` on interactive exit.
+- **llm**: honor `think=False` in the OpenRouter adapter as a per-request
+  reasoning opt-out (`extra_body.reasoning.enabled = false`), so utility calls
+  (e.g. session titles) never burn their output budget thinking.
+
+### Fix
+
+- **cli**: expose `note_user_title` on `PhosonRepl` so `/title` delegates to
+  the controller and the background title can never overwrite a user title.
+
 ## v0.41.0 (2026-09-17)
 
 ### Feat
