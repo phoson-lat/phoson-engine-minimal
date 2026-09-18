@@ -146,6 +146,68 @@ MAX_RESUME_REPLAY_MESSAGES = 200
 
 _LOGGER = logging.getLogger("phoson_cli.controller")
 
+#: Prompt for the LLM session-title call (#55 follow-up). Tool-free, tiny and
+#: temperature-cold: the model only has to name the conversation, nothing else.
+_TITLE_PROMPT = (
+    "Name this conversation with a short, specific title of 3 to 6 words. "
+    "Use the same language as the message. Reply with the title only — no "
+    "quotes, no trailing punctuation, no explanation.\n\n"
+    "First user message:\n{message}"
+)
+
+#: Cap on how much of the first message is sent to the title model.
+_TITLE_INPUT_CHARS = 1200
+
+#: Cap on the generated title length (chars); longer replies are truncated.
+_TITLE_MAX_CHARS = 80
+
+#: Output cap for the title call. Generous on purpose: a reasoning model can
+#: spend the budget "thinking" before emitting the title, and a tiny cap (e.g.
+#: 32) can leave the completion with no content at all.
+_TITLE_MAX_TOKENS = 256
+
+#: Fallback timeout when the config is missing the field (matches the default).
+_TITLE_TIMEOUT_FALLBACK = 30.0
+
+
+def _sanitize_title(raw: str) -> str:
+    """Reduce a model reply to a clean one-line session title.
+
+    Strips surrounding markdown/quote noise, keeps the first non-empty line,
+    collapses whitespace and truncates. Returns ``""`` when nothing usable is
+    left, so the caller can keep the heuristic title instead.
+    """
+    text = (raw or "").strip() if isinstance(raw, str) else ""
+    if not text:
+        return ""
+    # Models like to wrap the title in quotes or markdown bullets/headings.
+    text = text.splitlines()[0].strip()
+    text = text.strip("“”\"'`*#-—• \t")
+    text = " ".join(text.split())
+    if len(text) > _TITLE_MAX_CHARS:
+        text = text[: _TITLE_MAX_CHARS - 1].rstrip() + "…"
+    return text
+
+
+def _title_candidate_models(config: PhosonConfig, current_model: str) -> list[str]:
+    """Ordered, de-duplicated models to try for the title call.
+
+    ``title_model`` → ``subagent_model`` → the active model. The subagent
+    default can belong to a *different* provider than the active one (e.g. a
+    Gemini id while the provider is DeepSeek), so the active model is the
+    guaranteed-good last resort — the title never silently falls back to the
+    heuristic just because a cheap model is stale.
+    """
+    models: list[str] = []
+    for model in (
+        getattr(config, "title_model", ""),
+        getattr(config, "subagent_model", ""),
+        current_model,
+    ):
+        if model and model not in models:
+            models.append(model)
+    return models
+
 
 def _drop_env_context(messages: list[Message]) -> list[Message]:
     """Strip environmental-context blocks from a message list.
@@ -226,6 +288,12 @@ class SessionController:
         self.confirmation = confirmation
         self.storage = JsonlStorage(base_path=config.sessions_dir)
         self._session = SessionState.new()
+        # Lazy session (#55 follow-up): a fresh controller holds an in-memory
+        # session id (monitors/sinks need it), but the session is not treated
+        # as *created* until the first message starts a run. Until then the
+        # header stays session-free and nothing is persisted. Loaded sessions
+        # (and any session that has run) are started.
+        self._session_started = False
         # #212: scope this (new) session to the working directory it starts in.
         # Resumed sessions replace this tree in load_session() and carry their
         # own recorded cwd, so they are never re-stamped here.
@@ -246,6 +314,14 @@ class SessionController:
         # points once an event loop exists (None until then / when the
         # monitor plugin is disabled).
         self._monitor_wake_task: asyncio.Task | None = None
+        # LLM session title (#55 follow-up). One background task per session,
+        # best-effort: the heuristic title is applied synchronously so the
+        # picker is never empty, then this upgrades it. ``_title_is_auto``
+        # marks a title *we* set (heuristic or generated) so a user ``/title``
+        # always wins; ``_title_llm_attempted`` makes the call one-shot.
+        self._title_task: asyncio.Task | None = None
+        self._title_llm_attempted = False
+        self._title_is_auto = False
         # Poll interval for the autonomous wake loop; tests shorten it.
         self._wake_poll_seconds = 1.0
         # Per-session plugin command catalog. It is rebuilt with the engine so
@@ -334,6 +410,18 @@ class SessionController:
     def context_window(self) -> int:
         """Resolved context window for the current model (tokens)."""
         return self._context_window
+
+    @property
+    def session_started(self) -> bool:
+        """Whether the session has actually begun.
+
+        False for a fresh controller — the in-memory session id exists (the
+        sinks and the monitor wake loop need it) but no message has been sent
+        yet, so the UI must not show a session and nothing is persisted. It
+        flips to True when the first turn starts, and is True immediately for
+        a session loaded with ``/resume``.
+        """
+        return self._session_started
 
     @property
     def context_tokens(self) -> int:
@@ -702,6 +790,19 @@ class SessionController:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._monitor_wake_task = None
+        # Give the one-shot LLM title task a brief chance to finish (and
+        # persist) before the chat client closes; its own call is time-bounded
+        # already. Cancel it if it lingers so no task outlives the session.
+        if self._title_task is not None and not self._title_task.done():
+            try:
+                await asyncio.wait_for(self._title_task, timeout=2.0)
+            except Exception:  # noqa: BLE001 — shutdown must not raise
+                self._title_task.cancel()
+                try:
+                    await self._title_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+        self._title_task = None
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
         if plugins:
             await close_plugins(plugins)
@@ -995,16 +1096,25 @@ class SessionController:
             },
         )
 
-    def _ensure_session_title(self) -> None:
-        """Auto-generate a session title from the first user message (#55).
+    _WAKE_TITLE_PREFIXES = ("[MONITOR EVENTS]", "[BACKGROUND JOB EVENTS]")
 
-        Only fires once, and only when the session has no title yet (the
-        user's explicit ``/title`` always wins). The heuristic is cheap
-        on purpose — first line of the first user message, truncated to
-        60 chars — so no extra LLM round trip is spent on naming.
+    def note_user_title(self) -> None:
+        """Mark the session title as user-set (``/title``).
+
+        A no-op when it is already user-set; it exists so a background LLM
+        title call that is still in flight cannot overwrite a title the user
+        chose (#55 follow-up).
         """
-        if self.tree.title:
-            return
+        self._title_is_auto = False
+
+    def _first_user_text(self) -> str | None:
+        """First genuine user message text, or ``None``.
+
+        Skips command-only inputs (``/...``) and injected autonomous wake
+        turns, which make poor titles — and returns ``None`` at the first
+        such message so a command-only or wake-only session stays untitled
+        rather than getting named after a system banner.
+        """
         for node in self.tree.nodes.values():
             msg = node.message
             if msg.role != "user":
@@ -1019,13 +1129,139 @@ class SessionController:
             ).strip()
             if not text:
                 continue
-            # Skip command-ish inputs; they make poor titles.
-            if text.startswith("/"):
-                return
-            first_line = text.splitlines()[0].strip()
-            title = first_line[:57] + "…" if len(first_line) > 60 else first_line
-            self.tree.title = title or None
+            if text.startswith("/") or text.lstrip().startswith(
+                self._WAKE_TITLE_PREFIXES
+            ):
+                return None
+            return text
+        return None
+
+    def _ensure_session_title(self) -> None:
+        """Seed a session title from the first user message (#55).
+
+        Cheap, synchronous heuristic — first line of the first user message,
+        truncated to 60 chars — so the picker is never empty while the
+        optional LLM title (see :meth:`_schedule_llm_title`) is generated in
+        the background. Only fires when the session has no title yet; the
+        user's explicit ``/title`` always wins.
+        """
+        if self.tree.title:
             return
+        text = self._first_user_text()
+        if not text:
+            return
+        first_line = text.splitlines()[0].strip()
+        title = first_line[:57] + "…" if len(first_line) > 60 else first_line
+        if title:
+            self.tree.title = title
+            self._title_is_auto = True
+
+    def _schedule_llm_title(self) -> None:
+        """Kick off the one-shot background LLM title call (best-effort).
+
+        Only for titles this controller auto-generated (``_title_is_auto``),
+        so a session resumed with a stored title — or one the user named with
+        ``/title`` — is never renamed. No-op when disabled, already attempted,
+        or there is no running loop to own the task.
+        """
+        if not getattr(self.config, "llm_titles", False):
+            return
+        if self._title_llm_attempted or not self._title_is_auto:
+            return
+        if self._title_task is not None and not self._title_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover — _save_session always has a loop
+            return
+        self._title_llm_attempted = True
+        self._title_task = loop.create_task(
+            self._generate_llm_title(), name="session:title"
+        )
+
+    async def _generate_llm_title(self) -> None:
+        """Generate a short session title with one tool-free model call.
+
+        Tries each candidate model in order (see
+        :func:`_title_candidate_models`) until one returns a usable title, so
+        a cheap model that does not belong to the active provider degrades to
+        the active model instead of leaving the heuristic title in place.
+        Never raises: every error/timeout/empty reply is swallowed.
+        """
+        text = self._first_user_text()
+        if not text:
+            return
+        # Bind the title to the session it was generated for: a /new or
+        # /resume can swap ``self._session.tree`` while the call is in flight.
+        session_id = self.tree.session_id
+        tree = self.tree
+        prompt = _TITLE_PROMPT.format(message=text[:_TITLE_INPUT_CHARS])
+
+        title = ""
+        last_error = ""
+        for model in _title_candidate_models(self.config, self.current_model):
+            title, last_error = await self._call_title_model(model, prompt)
+            if title:
+                break
+        if not title:
+            tried = ", ".join(_title_candidate_models(self.config, self.current_model))
+            detail = f" — last error: {last_error}" if last_error else ""
+            _LOGGER.warning(
+                "LLM session title: no model produced a title (tried %s)%s",
+                tried,
+                detail,
+            )
+            return
+        # The user may have run /title, or switched session, while the call
+        # was in flight — in both cases the title must not be applied.
+        if not self._title_is_auto or self.tree is not tree:
+            return
+        tree.title = title
+        try:
+            await self.storage.save_meta(session_id, {"title": title})
+        except Exception:  # noqa: BLE001 — persistence is best-effort too
+            _LOGGER.warning("Could not persist generated session title", exc_info=True)
+        # Repaint ancillary chrome (the full-screen header reads ``tree.title``
+        # every frame) without adding a visible notice to the transcript. The
+        # hook is optional: front ends with no chrome simply do nothing.
+        refresh = getattr(self.sink, "on_session_title", None)
+        if callable(refresh):
+            refresh()
+
+    async def _call_title_model(self, model: str, prompt: str) -> tuple[str, str]:
+        """One title attempt against *model*.
+
+        Returns ``(title, error)``: a non-empty title on success, otherwise
+        ``""`` and a short human-readable error (surfaced in the final warning
+        so a failing title call is diagnosable instead of silent).
+        """
+        request = ModelConfig(
+            model=model,
+            temperature=0.2,
+            max_tokens=_TITLE_MAX_TOKENS,
+            system=None,
+            # Naming needs no chain-of-thought; disabling it keeps the call
+            # fast and stops a reasoning model from burning the small output
+            # budget on thinking and returning nothing (OpenRouter honors
+            # ``think=False`` as a per-request ``reasoning`` opt-out).
+            think=False,
+        )
+        try:
+            done = await asyncio.wait_for(
+                self.chat.complete(
+                    [Message(role="user", content=prompt)],
+                    request,
+                ),
+                timeout=float(
+                    getattr(self.config, "title_timeout_s", _TITLE_TIMEOUT_FALLBACK)
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — a title failure must never surface
+            _LOGGER.warning(
+                "LLM session title call failed for model %s", model, exc_info=True
+            )
+            return "", f"{type(exc).__name__}: {exc}"[:200]
+        return _sanitize_title(getattr(done, "content", "") or ""), ""
 
     async def run_turn(self, user_input: str) -> RunOutcome:
         """Execute one agent turn (run, persist, notify the sink).
@@ -1101,6 +1337,9 @@ class SessionController:
         # The engine survives /new and session loads. Its partial history
         # belongs to an earlier run until this turn observes AgentStartEvent.
         self._turn_history_initialized = False
+        # The session is created the moment the first message starts a run:
+        # from here on it is real (shown in the header, persisted on save).
+        self._session_started = True
         user_message = self._build_user_message(effective_input)
         _node_id, path = self._append_user_turn(user_message)
         base_count = len(path)
@@ -1186,6 +1425,11 @@ class SessionController:
         self.summarizer.clear_retained_reasoning()
         self._set_run_status(STATUS_COMPLETED)
         await self._save_session()
+        # #55 follow-up: after a completed turn (and only then), upgrade the
+        # heuristic title with a model-generated one in the background. The
+        # tree is already saved, so the task's save_meta is safe; the turn
+        # end is never blocked by the call.
+        self._schedule_llm_title()
         # #167: cue the terminal when a run finishes (TTY-gated; "off" is a
         # no-op). Covers both interactive front ends and monitor-wake turns
         # since they all flow through run_turn.
@@ -1379,6 +1623,15 @@ class SessionController:
         self._session.tree.cwd = str(Path.cwd())
         self.attachments.clear()
         self._context_tokens = 0
+        # A fresh session starts untitled: drop the one-shot title state. Any
+        # in-flight title task for the previous session self-guards on the
+        # tree identity and will not apply.
+        self._title_is_auto = False
+        self._title_llm_attempted = False
+        self._title_task = None
+        # Back to "not created yet": the header hides the session until the
+        # next message starts a run.
+        self._session_started = False
         self.sink.set_session(self._session.tree.session_id)
 
     def new_session_now(self) -> None:
@@ -1839,6 +2092,13 @@ class SessionController:
                 view_sink.reset_session_view()
             self._session = candidate
             self._context_tokens = context_tokens
+            # A loaded session carries its own stored title (or none): never
+            # auto-generate one for it, and drop any pending state from the
+            # session we just left. A resumed session counts as created.
+            self._title_is_auto = False
+            self._title_llm_attempted = False
+            self._title_task = None
+            self._session_started = True
             self.sink.set_session(candidate.tree.session_id)
             if len(path) > MAX_RESUME_REPLAY_MESSAGES:
                 self.sink.print_history(

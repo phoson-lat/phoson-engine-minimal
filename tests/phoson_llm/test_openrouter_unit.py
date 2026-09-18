@@ -226,6 +226,39 @@ async def test_openrouter_sends_cache_control_for_anthropic_without_session() ->
     assert "session" not in extra_body
 
 
+@pytest.mark.asyncio
+async def test_openrouter_disables_reasoning_when_think_false() -> None:
+    """``think=False`` maps to OpenRouter's per-request reasoning opt-out, so
+    a reasoning model does not spend a tiny output budget thinking."""
+    captured: dict = {}
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClient(captured)
+
+    async for _ in chat.stream(
+        [Message(role="user", content="name this chat")],
+        ModelConfig(model="deepseek/deepseek-v4.1-flash", think=False),
+    ):
+        pass
+
+    assert captured["extra_body"]["reasoning"] == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_leaves_reasoning_untouched_by_default() -> None:
+    captured: dict = {}
+    chat = OpenRouterChat(api_key="test-key")
+    chat._client = _ORClient(captured)
+
+    async for _ in chat.stream(
+        [Message(role="user", content="hi")],
+        ModelConfig(model="deepseek/deepseek-v4.1-flash"),
+    ):
+        pass
+
+    # think=None → no reasoning override, no extra_body at all.
+    assert "extra_body" not in captured
+
+
 # ─── I-88: OpenRouter usage.cost → real USD in the UsageEvent ────────────────
 
 
