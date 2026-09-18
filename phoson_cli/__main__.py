@@ -49,6 +49,8 @@ Options:
   --provider <id>      Override the provider for this run
   --theme <tier>       Override the theme: system, dark, light, ansi, no-color
   --max-turns <n>      Override max_iterations for this run
+  --session <id>       Resume a saved session by id (prefix match works)
+  --resume <id>        Alias for --session
   --trace              One-shot only: emit a JSON line per agent event
                        (tool calls, steps, final/error) to stderr
   --classic            Use the classic line-by-line REPL
@@ -79,6 +81,7 @@ class CliOptions:
     provider: str | None = None
     theme: str | None = None
     max_turns: int | None = None
+    session: str | None = None
     trace: bool = False
     task: str | None = None
     plugin_args: list[str] | None = None
@@ -159,7 +162,14 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.print_mode = True
         elif arg == "--trace":
             options.trace = True
-        elif arg in {"--model", "--provider", "--theme", "--max-turns"}:
+        elif arg in {
+            "--model",
+            "--provider",
+            "--theme",
+            "--max-turns",
+            "--session",
+            "--resume",
+        }:
             value = _take_value(argv, i, arg)
             i += 1
             if arg == "--model":
@@ -170,6 +180,10 @@ def parse_args(argv: list[str]) -> CliOptions:
                 options.theme = value.strip().lower()
                 if not options.theme:
                     _fail("option --theme requires a non-empty value")
+            elif arg in {"--session", "--resume"}:
+                options.session = value.strip()
+                if not options.session:
+                    _fail(f"option {arg} requires a non-empty id")
             else:
                 options.max_turns = _parse_max_turns(value)
         elif arg.startswith("-") and arg != "-":
@@ -250,6 +264,79 @@ def _apply_overrides(config: PhosonConfig, options: CliOptions) -> None:
 
 class _CliThemeError(ValueError):
     pass
+
+
+async def _resume_session(repl, query: str) -> bool:
+    """Resolve *query* (session-id prefix) and load that session.
+
+    Mirrors ``/resume``: prefix match, ambiguity reported. Returns True when a
+    session was loaded; on failure prints a friendly error to stderr.
+    """
+    sessions = await repl.storage.list_meta(cwd=str(Path.cwd()))
+    matches = [s for s in sessions if str(s.id).startswith(query)]
+    if not matches:
+        print(
+            f"Error: no session matching {query!r}. "
+            "Resume interactively and run /sessions to list them.",
+            file=sys.stderr,
+        )
+        return False
+    if len(matches) > 1:
+        print(
+            f"Error: {len(matches)} sessions match {query!r}; be more specific:",
+            file=sys.stderr,
+        )
+        for session in matches[:10]:
+            title = getattr(session, "title", None) or "(untitled)"
+            print(f"  {str(session.id)[:8]}  [{title}]", file=sys.stderr)
+        return False
+    session_id = str(matches[0].id)
+    ok = await repl.load_session(session_id)
+    if not ok:
+        print(f"Error: could not load session {session_id[:8]}.", file=sys.stderr)
+        return False
+    return True
+
+
+def _print_resume_hint(repl) -> None:
+    """Print the command that resumes this session (interactive exit only).
+
+    Silent when nothing was ever sent (no session was created) — matching the
+    lazy-session behaviour — and never shown in one-shot mode, which returns
+    before this point.
+    """
+    if repl is None:
+        return
+    controller = getattr(repl, "_controller", None)
+    if controller is None or not getattr(controller, "session_started", False):
+        return
+    session_id = (getattr(repl.tree, "session_id", "") or "").strip()
+    if not session_id:
+        return
+    print(f"\nTo resume run: phoson-cli --session {session_id[:8]}")
+
+
+async def _run_classic(repl, session: str | None) -> bool:
+    """Resume *session* (when given) then run the classic REPL, one event loop.
+
+    Loading and running must share a loop: the controller holds asyncio
+    primitives that would otherwise bind to a throwaway loop and fail on the
+    real one. Returns False when the requested session could not be loaded.
+    """
+    if session and not await _resume_session(repl, session):
+        await repl.shutdown()
+        return False
+    await repl.run()
+    return True
+
+
+async def _run_fullscreen(app, session: str | None) -> bool:
+    """Resume *session* (when given) then run the full-screen app, one loop."""
+    if session and not await _resume_session(app.repl, session):
+        await app.repl.shutdown()
+        return False
+    await app.run_async()
+    return True
 
 
 def _prepare_cli_theme(config: PhosonConfig):
@@ -823,10 +910,13 @@ def _run_cli() -> None:
         guard = OutputGuard()
         guard.install()
         try:
-            asyncio.run(repl.run())
+            ran = asyncio.run(_run_classic(repl, options.session))
         finally:
             guard.restore()
             warnings_hook.reset_notice_printer()
+        if not ran:
+            sys.exit(1)
+        _print_resume_hint(repl)
         return
 
     try:
@@ -851,9 +941,12 @@ def _run_cli() -> None:
     guard = OutputGuard()
     guard.install()
     try:
-        asyncio.run(app.run_async())
+        ran = asyncio.run(_run_fullscreen(app, options.session))
     finally:
         guard.restore()
+    if not ran:
+        sys.exit(1)
+    _print_resume_hint(getattr(app, "repl", None))
 
 
 if __name__ == "__main__":

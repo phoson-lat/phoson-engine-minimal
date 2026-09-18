@@ -121,6 +121,14 @@ class OpenRouterChat(BaseLLMChat):
         if config.model.startswith("anthropic/"):
             extra_body["cache_control"] = _EPHEMERAL_CACHE_CONTROL
 
+        # Per-request reasoning opt-out (``think=False``). Utility calls (e.g.
+        # the session-title generator) do not want a reasoning model to spend
+        # its tiny output budget "thinking" and return no content at all;
+        # OpenRouter takes a per-request ``reasoning`` object for this.
+        # ``think=None`` (the default) leaves the model's behaviour untouched.
+        if config.think is False:
+            extra_body["reasoning"] = {"enabled": False}
+
         if extra_body:
             extra_kwargs["extra_body"] = extra_body
 

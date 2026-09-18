@@ -896,6 +896,15 @@ class FullScreenSink:
     def set_session(self, session_id: str) -> None:
         self.session_id = session_id
 
+    def on_session_title(self) -> None:
+        """Repaint chrome after a background session-title update.
+
+        Optional hook (not part of the ``AgentEventSink`` protocol): the
+        header reads ``tree.title`` each frame, so the async title landing
+        only needs an invalidate — deliberately *not* a visible notice.
+        """
+        self._touch()
+
     def print_history(
         self,
         path: list[Message],

@@ -216,6 +216,18 @@ class PhosonConfig:
     permission_classifier_model: str = ""
     permission_classifier_auto_allow: bool = False
     permission_classifier_timeout_s: float = 8.0
+    # LLM session titles (#55 follow-up): name a new session with a short
+    # model-generated title instead of only the truncated first message. On
+    # by default — it is one cheap, tool-free call per session, and the
+    # heuristic title is kept as an instant fallback while the user's
+    # ``/title`` always wins. ``title_model`` empty falls back to
+    # ``subagent_model`` (a cheap flash model) and then to the active model.
+    llm_titles: bool = True
+    title_model: str = ""
+    # Background and rarely on the critical path, so generous: a reasoning
+    # active model can take ~20s to answer even a tiny prompt (and the caller
+    # must not mistake "slow" for "broken").
+    title_timeout_s: float = 30.0
     # Third-party engine/CLI plugin specifications. They use the same
     # string/dict forms accepted by AgentEngine and are loaded in addition to
     # the optional MCP plugin. Config-file entries are data only; direct Plugin
@@ -1132,6 +1144,13 @@ def load_config() -> PhosonConfig:
             fd,
             d.permission_classifier_timeout_s,
         ),
+        llm_titles=_resolve_bool("PHOSON_LLM_TITLES", "llm_titles", fd, d.llm_titles),
+        title_model=_resolve_str(
+            "PHOSON_TITLE_MODEL", "title_model", fd, d.title_model
+        ),
+        title_timeout_s=_resolve_float(
+            "PHOSON_TITLE_TIMEOUT", "title_timeout_s", fd, d.title_timeout_s
+        ),
         plugins=_resolve_plugins(fd),
         disabled_plugins=_validate_plugin_specs(
             fd.get("disabled_plugins", []), "disabled_plugins"
@@ -1268,6 +1287,7 @@ def validate_config(config: PhosonConfig) -> None:
         "subagent_timeout_seconds",
         "ssh_command_timeout",
         "permission_classifier_timeout_s",
+        "title_timeout_s",
     )
     for field_name in positive_floats:
         value = getattr(config, field_name)
@@ -1509,6 +1529,9 @@ def save_config(
         ("loop_detect_mode", getattr(config, "loop_detect_mode", None)),
         ("llm_max_attempts", getattr(config, "llm_max_attempts", None)),
         ("notify_on_completion", getattr(config, "notify_on_completion", None)),
+        ("llm_titles", getattr(config, "llm_titles", None)),
+        ("title_model", getattr(config, "title_model", None)),
+        ("title_timeout_s", getattr(config, "title_timeout_s", None)),
         ("enable_mcp", getattr(config, "enable_mcp", None)),
         ("mcp_config_file", str(getattr(config, "mcp_config_file", ""))),
         ("enable_monitors", getattr(config, "enable_monitors", None)),

@@ -41,6 +41,18 @@ def test_parse_args_max_turns() -> None:
     assert options.max_turns == 12
 
 
+def test_parse_args_session_and_resume_alias() -> None:
+    assert parse_args(["--session", "abc123"]).session == "abc123"
+    assert parse_args(["--resume", "abc123"]).session == "abc123"
+    assert parse_args([]).session is None
+
+
+def test_parse_args_session_requires_value() -> None:
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["--session"])
+    assert exc.value.code == 2
+
+
 def test_parse_args_classic_and_alias() -> None:
     assert parse_args(["--classic"]).classic is True
     assert parse_args(["--no-fullscreen"]).classic is True

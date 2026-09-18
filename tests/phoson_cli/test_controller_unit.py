@@ -347,6 +347,50 @@ async def test_run_turn_success_end_to_end(tmp_path) -> None:
     assert len(loaded.nodes) == 2
 
 
+def test_new_controller_session_is_not_started(tmp_path) -> None:
+    """A fresh controller has an in-memory id but no session yet."""
+    controller, _sink = _make_controller(tmp_path)
+    assert controller.session_started is False
+
+
+def test_reset_session_marks_not_started(tmp_path) -> None:
+    controller, _sink = _make_controller(tmp_path)
+    controller._session_started = True
+    controller._reset_session()
+    assert controller.session_started is False
+
+
+@pytest.mark.asyncio
+async def test_session_started_when_first_turn_runs(tmp_path) -> None:
+    controller, _sink = _make_controller(tmp_path)
+    assert controller.session_started is False
+
+    controller.engine.stream = _fake_stream(
+        [
+            AgentStartEvent(model="m", message_count=1, max_iterations=50),
+            _done_event("ok"),
+        ]
+    )
+    await controller.run_turn("first message")
+
+    assert controller.session_started is True
+
+
+@pytest.mark.asyncio
+async def test_loaded_session_is_started(tmp_path) -> None:
+    controller, _sink = _make_controller(tmp_path)
+    controller._session_started = True
+    controller.tree.append(parent_id=None, message=Message(role="user", content="hi"))
+    await controller.storage.save(controller.tree)
+    session_id = controller.tree.session_id
+
+    other, _sink2 = _make_controller(tmp_path)
+    assert other.session_started is False
+    outcome = await other.load_session(session_id)
+    assert outcome.ok is True
+    assert other.session_started is True
+
+
 @pytest.mark.asyncio
 async def test_run_turn_drops_env_context_from_tree(tmp_path) -> None:
     """#212: env-context blocks (per-LLM-call request artifacts) must not be

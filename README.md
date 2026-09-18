@@ -508,6 +508,7 @@ PHOSON_RUN_BUDGET_SECONDS=300 phoson-cli -p "long task"
 | `--model <id>` / `--provider <id>` | Override model / provider for this run |
 | `--theme <tier>` | Override theme: `dark`, `light`, `ansi`, `no-color` |
 | `--max-turns <n>` | Override max iterations for this run |
+| `--session <id>` / `--resume <id>` | Resume a saved session by id (prefix match works) |
 | `-p, --print` | Print the final answer and exit (one-shot mode) |
 | `--classic` / `--no-fullscreen` | Use the classic line-by-line REPL |
 | `--setup` / `--install` | Run the setup wizard |

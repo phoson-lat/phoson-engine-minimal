@@ -448,24 +448,36 @@ def test_render_user_turn_shows_text() -> None:
     assert "hello there" in output
 
 
-def test_render_user_turn_plain_message_is_single_untinted_text() -> None:
-    """A regular user message keeps the legacy single-style render."""
+def test_render_user_turn_is_full_width_highlighted_band() -> None:
+    """The user turn has no speaker label, stamps the dated time at the end,
+    and the highlight fills the whole width of the line."""
+    import datetime
+
+    from rich.console import Console
+
+    from phoson_cli.formatting import format_day_time
+
+    at = datetime.datetime(2026, 9, 17, 14, 32)
+    console = Console(highlight=False, width=40)
+    with console.capture() as cap:
+        console.print(render_user_turn("hello there", DARK, at=at))
+    output = cap.get()
+    lines = output.splitlines()
+    assert "You" not in output
+    assert lines[0].startswith("›  hello there")
+    assert lines[0].rstrip().endswith(format_day_time(at))
+    # Full-width highlight band: the line is padded to the console width.
+    assert len(lines[0]) == 40
+
+
+def test_render_monitor_wake_is_one_notice_line() -> None:
+    """The wake renders as one compact notice naming the monitor and the
+    dated time; the raw payload is the *prompt* and is not re-embedded here."""
+    import datetime
+
     from rich.text import Text
 
-    group = render_user_turn("hello there", DARK)
-    body = group.renderables[1]
-    assert isinstance(body, Text)
-    # No per-character spans (whole message in one base ``text`` style): the
-    # monitor-wake tinting path must not kick in for ordinary input.
-    assert len(body.spans) == 0
-
-
-def test_render_monitor_wake_tints_without_changing_text() -> None:
-    """The dedicated ``render_monitor_wake_turn`` tints a wake header but keeps
-    the plain text byte-for-byte identical (prompt-safe): colour lives only in
-    the Rich style spans, so layout and the model-visible message are intact."""
-    from rich.text import Text
-
+    from phoson_cli.formatting import format_day_time
     from phoson_plugin_monitor import render_wake_message
     from phoson_plugin_monitor.storage import WakeEvent
 
@@ -473,32 +485,23 @@ def test_render_monitor_wake_tints_without_changing_text() -> None:
         "loop_free_sweep",
         "command",
         "sess",
-        {
-            "command": "grep -E 'RUN|END' log",
-            "returncode": 0,
-            "timed_out": False,
-            "output_tail": (
-                "--- estado ---\n### SWEEP START ###\nmmLu=50.18\n\nSWEEP: en curso"
-            ),
-        },
+        {"command": "grep -E 'RUN|END' log", "returncode": 0},
     )
     original = render_wake_message([event])
 
-    body = render_monitor_wake_turn(original, DARK).renderables[1]
-    # The model-visible text is preserved exactly (layout + prompt safety).
-    assert body.plain == original
-    # And it is actually tinted: more than one styled span across the block.
-    assert isinstance(body, Text)
-    assert len(body.spans) > 3
-    # The field separator must survive tinting (regression: the colon was
-    # dropped from the rendered output on the first attempt).
-    assert "command:" in body.plain
-    assert "returncode:" in body.plain
+    at = datetime.datetime(2026, 9, 17, 14, 32)
+    line = render_monitor_wake_turn(original, DARK, at=at).renderables[0]
+    assert isinstance(line, Text)
+    assert line.plain == (
+        f"⚡ Message from Monitor (loop_free_sweep) at {format_day_time(at)}"
+    )
+    # The prompt payload is not leaked into the rendered notice.
+    assert "returncode" not in line.plain
 
 
 def test_render_user_turn_delegates_monitor_wake_to_dedicated_renderer() -> None:
     """``render_user_turn`` is the detection seam: a wake header routes to the
-    tinted renderer, while ordinary input keeps the plain single-style body."""
+    compact notice renderer, while ordinary input stays a highlighted band."""
     from rich.text import Text
 
     from phoson_plugin_monitor import render_wake_message
@@ -507,14 +510,29 @@ def test_render_user_turn_delegates_monitor_wake_to_dedicated_renderer() -> None
     event = WakeEvent.create("watcher", "file", "sess", {"note": "hello"})
     original = render_wake_message([event])
 
-    # Wake header: tinted body (same renderer as the dedicated function).
-    wake_group = render_user_turn(original, DARK)
-    assert wake_group.renderables[1] is not None
-    assert wake_group.renderables[1].plain == original
-    # Ordinary input: plain single-style body.
-    plain_group = render_user_turn("hello there", DARK)
-    assert isinstance(plain_group.renderables[1], Text)
-    assert len(plain_group.renderables[1].spans) == 0
+    wake_line = render_user_turn(original, DARK).renderables[0]
+    assert isinstance(wake_line, Text)
+    assert wake_line.plain.startswith("⚡ Message from Monitor (watcher)")
+    # Ordinary input: highlighted band, no wake notice.
+    plain_out = _render(render_user_turn("hello there", DARK))
+    assert "hello there" in plain_out
+    assert "Message from" not in plain_out
+
+
+def test_render_user_turn_routes_background_job_wake_to_notice() -> None:
+    """A *pure* background-job wake also routes to the notice renderer — its
+    banner differs from ``[MONITOR EVENTS]`` but shares the design."""
+    from rich.text import Text
+
+    wake = (
+        "[BACKGROUND JOB EVENTS] A background job finished.\n"
+        "\n"
+        "[build] state=completed exit=0\n"
+        "  command: make\n"
+    )
+    line = render_user_turn(wake, DARK).renderables[0]
+    assert isinstance(line, Text)
+    assert line.plain == "⚡ Message from Background job (build)"
 
 
 def test_render_notice_variants() -> None:

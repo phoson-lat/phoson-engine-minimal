@@ -1076,6 +1076,8 @@ class CommandHandler:
             title = title[:80]
         # Persist on the tree and flush to the session_meta record.
         self.repl.tree.title = title
+        # Mark it user-set: a background LLM title must not overwrite it (#55).
+        self.repl.note_user_title()
         await self.repl.storage.save(self.repl.tree)
         meta = self.repl.session_metrics.to_meta()
         meta["title"] = title

@@ -895,3 +895,18 @@ def test_t12_bash_card_error_renders_refusal_not_output() -> None:
     assert "rm -rf /" in text
     assert "denied by the user" in text
     assert "should not show" not in text  # error path ignores the result body
+
+
+def test_on_session_title_repaints_without_a_notice() -> None:
+    """The async LLM title updates the header via a silent repaint hook — no
+    "Session titled" notice is appended to the transcript."""
+    sink, ticks = _make_sink()
+    sink.dirty = False
+    blocks = len(sink.blocks)
+    ticks.clear()
+
+    sink.on_session_title()
+
+    assert ticks == [1]  # invalidated (header repaints)
+    assert sink.dirty is True
+    assert len(sink.blocks) == blocks  # nothing visible added

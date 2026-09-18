@@ -260,9 +260,9 @@ def test_renderer_no_color_output_has_no_sgr_colors() -> None:
     assert "hello" in raw
 
 
-def test_renderer_user_turn_has_no_background_chip() -> None:
-    """T-2: the user turn is a › gutter, not a filled badge chip — no
-    background (48;…) SGR code in either theme."""
+def test_renderer_user_turn_highlight_is_themed() -> None:
+    """The user turn carries the ``badge_user`` highlight: a background
+    (48;…) in the RGB tiers, none in the terminal-native NO_COLOR tier."""
     import re
 
     from phoson_cli.renderer import Renderer
@@ -272,12 +272,13 @@ def test_renderer_user_turn_has_no_background_chip() -> None:
             Renderer(console=console, theme=theme).print_user_turn("hello")
 
         raw = _render_to_raw(build)
-        codes = re.findall(r"\x1b\[(\d+(?:;\d+)*)m", raw)
-        return codes
+        return re.findall(r"\x1b\[(\d+(?:;\d+)*)m", raw)
 
-    # No background-color (48;) SGR code in either palette.
-    assert not any(c.startswith("48;") for c in _codes(LIGHT))
-    assert not any(c.startswith("48;") for c in _codes(DARK))
+    # DARK/LIGHT highlight the line with a background colour.
+    assert any(c.startswith("48;") for c in _codes(LIGHT))
+    assert any(c.startswith("48;") for c in _codes(DARK))
+    # NO_COLOR stays plain (no background, no colour).
+    assert not any(c.startswith("48;") for c in _codes(NO_COLOR))
 
 
 def test_renderer_user_turn_shows_gutter_and_text() -> None:

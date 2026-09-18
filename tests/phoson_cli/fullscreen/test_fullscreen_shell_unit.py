@@ -1256,6 +1256,53 @@ def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None
     assert "📎" not in app._get_header_text().value
 
 
+def test_header_hides_session_until_first_message(app: PhosonApp) -> None:
+    """A fresh session is not created yet: no title and no id in the header."""
+    app.repl.tree.title = "Should not show"
+    header = app._get_header_text().value
+    assert "Should not show" not in header
+    assert app.repl.tree.session_id[:8] not in header
+    assert "untitled" not in header
+
+
+def test_header_shows_session_title_and_short_id(app: PhosonApp) -> None:
+    app.repl._controller._session_started = True
+    app.repl.tree.title = "Docker healthcheck"
+    header = app._get_header_text().value
+    assert "Docker healthcheck" in header
+    assert app.repl.tree.session_id[:8] in header
+
+
+def test_header_shows_untitled_placeholder_for_started_session(app: PhosonApp) -> None:
+    app.repl._controller._session_started = True
+    app.repl.tree.title = None
+    header = app._get_header_text().value
+    assert "untitled" in header
+    assert app.repl.tree.session_id[:8] in header
+
+
+def test_header_cache_rebuilds_when_title_changes(app: PhosonApp) -> None:
+    """The session title is part of the header cache key: an async LLM title
+    landing mid-session must repaint the header, not stay stale."""
+    app.repl._controller._session_started = True
+    app.repl.tree.title = "  "  # first paint caches "untitled"
+    first = app._get_header_text()
+    assert "untitled" in first.value
+
+    app.repl.tree.title = "Generated later"
+    second = app._get_header_text()
+    assert second is not first
+    assert "Generated later" in second.value
+
+
+def test_header_truncates_long_session_title(app: PhosonApp) -> None:
+    app.repl._controller._session_started = True
+    app.repl.tree.title = "x" * 120
+    header = app._get_header_text().value
+    assert "x" * 120 not in header
+    assert "…" in header
+
+
 def test_footer_is_contextual_and_never_truncates(app: PhosonApp) -> None:
     """T-9: the footer shows at most three state-dependent hints.
 
@@ -1264,11 +1311,14 @@ def test_footer_is_contextual_and_never_truncates(app: PhosonApp) -> None:
     cheatsheet was). Stable runtime facts belong to the header and are
     never duplicated below.
     """
+    app.repl._controller._session_started = True
     header = app._get_header_text().value
 
     assert app.repl.config.provider in header
     assert app.repl.current_model in header
-    assert app.repl.tree.session_id[:8] not in header
+    # Session identity lives in the header (title + short id)...
+    assert app.repl.tree.session_id[:8] in header
+    # ...and is therefore not duplicated in the footer hints.
     assert app.repl.config.provider not in _FOOTER_HINT_IDLE
     assert app.repl.current_model not in _FOOTER_HINT_IDLE
     for hint in (_FOOTER_HINT_IDLE, _FOOTER_HINT_RUNNING, _FOOTER_HINT_PICKER):

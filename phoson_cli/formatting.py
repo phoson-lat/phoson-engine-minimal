@@ -22,6 +22,7 @@ from rich import box
 from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
+from rich.style import Style
 from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 
@@ -253,6 +254,17 @@ def format_timestamp(
     return dt.strftime("%m-%d %H:%M")
 
 
+def format_day_time(dt: datetime.datetime) -> str:
+    """Local ``DD-MM-YYYY HH:MM`` stamp (#212): always carries the day.
+
+    Used as the trailing stamp on user turns, where the date matters more than
+    the compact live ``HH:MM`` (a turn may be reloaded days later). Aware
+    datetimes are converted to local first.
+    """
+    dt = _to_local(dt)
+    return dt.strftime("%d-%m-%Y %H:%M")
+
+
 def render_done_line(
     event: AgentDoneEvent, theme: Theme, *, ended_at: "datetime.datetime | None" = None
 ) -> Text | None:
@@ -370,109 +382,120 @@ def render_error_panel(event: AgentErrorEvent, theme: Theme) -> Panel:
     )
 
 
+class _HighlightedBlock:
+    """Render a ``Text`` as a full-width background band.
+
+    Rich's ``Text`` background only paints the glyphs, which leaves a ragged
+    highlight on wrapped turns. This wrapper wraps the text to the console
+    width and pads every visual line to the right edge with the same
+    background, so a user turn reads as a solid chat-bubble band. With an
+    empty *style* (terminal-native tiers) it degrades to a no-op wrapper.
+    """
+
+    def __init__(self, text: Text, style: str) -> None:
+        self._text = text
+        self._style = Style.parse(style) if style else None
+
+    def __rich_console__(self, console, options):  # noqa: ANN001, ANN201
+        for line in self._text.wrap(console, options.max_width):
+            pad = options.max_width - line.cell_len
+            if pad > 0:
+                line.append(" " * pad, style=self._style)
+            yield line
+
+
+def _user_line(text: str, theme: Theme, at: "datetime.datetime | None" = None) -> Text:
+    """Build the user turn: ``›  <message>  ·  DD-MM-YYYY HH:MM``.
+
+    No speaker label (``You`` was removed) — the ``›`` marker and the
+    full-width highlight are enough to identify a typed turn. The date always
+    carries the day and sits at the end of the message.
+    """
+    line = Text(style=theme.badge_user)
+    line.append("›  ", style=f"bold {theme.accent_soft}".strip())
+    line.append(text, style=theme.text)
+    if at is not None:
+        line.append(f"  ·  {format_day_time(at)}", style=theme.muted_deep)
+    return line
+
+
 def render_user_turn(
     text: str, theme: Theme, at: "datetime.datetime | None" = None
 ) -> Group:
-    """Render a user message as a ``›`` gutter + plain text (T-2).
+    """Render a user message as a full-width highlighted band (T-2).
 
-    The filled `` user `` badge chip is gone — a thin accent gutter reads
-    as a chat speaker marker without the IM-style chip.
+    The message reads inline — ``›  hello  ·  17-09-2026 14:32`` — with no
+    speaker label, and the ``badge_user`` highlight fills the whole width of
+    every line so the user's own turns stand out from the assistant's plain
+    Markdown at a glance.
 
-    Monitor-wake turns (text beginning with the ``[MONITOR EVENTS]`` header
-    that ``phoson_plugin_monitor.render_wake_message`` produces) are
-    delegated to :func:`render_monitor_wake_turn`, which tints them. Every
-    other user message keeps the legacy single-style render. Detection lives
-    here — the one seam both front ends share — so sinks keep calling a
-    single function and never special-case monitor wakes themselves.
-
-    ``at`` (#212) optionally stamps the message's local time on the gutter
-    line (``›  · 14:32``) so session messages carry a date/time. The body
-    (``renderables[1]``) is left untouched, preserving the single-style
-    contract the front ends rely on.
+    Monitor-wake turns (text beginning with the ``[MONITOR EVENTS]`` or
+    ``[BACKGROUND JOB EVENTS]`` banner that the monitor/bgjobs plugins
+    produce) are delegated to :func:`render_monitor_wake_turn`, which renders
+    them as a compact one-line notice. Detection lives here — the one seam
+    both front ends share — so sinks keep calling a single function and never
+    special-case monitor wakes themselves.
     """
-    if text.lstrip().startswith(_MONITOR_WAKE_HEADER):
-        return render_monitor_wake_turn(text, theme)
-    gutter = Text("›  ", style=theme.accent_soft)
-    if at is not None:
-        gutter = gutter + Text(f" ·  {format_timestamp(at)}", style=theme.muted_deep)
-    return Group(gutter, Text(text, style=theme.text))
+    if text.lstrip().startswith(_WAKE_HEADERS):
+        return render_monitor_wake_turn(text, theme, at=at)
+    return Group(_HighlightedBlock(_user_line(text, theme, at), theme.badge_user))
 
 
-# ── Monitor-wake turn tinting (I-126 presentation) ───────────────────────────
+# ── Monitor-wake notice (I-126 presentation) ─────────────────────────────────
 #
-# The monitor plugin ships *plain* text on purpose: it has no access to the
-# CLI theme, and its output doubles as the model's prompt, so colour codes
-# must never leak into context. The tinting therefore lives here, in the
-# presentation layer, where the active theme and the user's NO_COLOR /
-# custom-theme choices are honoured. Plain text is preserved byte-for-byte —
-# only Rich style spans are added, so layout and the model-visible message
-# are unchanged.
+# The monitor plugin ships *plain* text on purpose: it has no access to the CLI
+# theme, and its output doubles as the model's prompt, so colour codes must
+# never leak into context. This presentation layer turns that raw text into a
+# single compact notice — colour lives only in Rich style spans, and the
+# model-visible message is never touched (it is the raw string itself).
 
 _MONITOR_WAKE_HEADER: Final = "[MONITOR EVENTS]"
 # Background-jobs wakes carry their own banner (#217) but share the styling.
 _BGJOB_WAKE_HEADER: Final = "[BACKGROUND JOB EVENTS]"
 _WAKE_HEADERS: Final = (_MONITOR_WAKE_HEADER, _BGJOB_WAKE_HEADER)
 # ``[name] kind=command fired_at=...`` / ``[name] state=completed ...`` — the
-# per-event header line (monitor and background-job wakes both match).
-_MONITOR_EVENT_HEADER_RE = re.compile(r"^(\[[A-Za-z0-9._-]+\])\s+(\w+=.*)$")
-# ``  key: value`` — a payload field (exactly two leading spaces).
-_MONITOR_FIELD_RE = re.compile(r"^(\s{2})([A-Za-z_][A-Za-z0-9_]*):(\s+)(.*)$")
+# per-event header line, read here only to recover the monitor name(s).
+_MONITOR_EVENT_HEADER_RE = re.compile(r"^\[([A-Za-z0-9._-]+)\]\s+\w+=")
 
 
-def render_monitor_wake_turn(text: str, theme: Theme) -> Group:
-    """Render a ``[MONITOR EVENTS]`` wake turn as ``›`` gutter + tinted body.
+def _wake_monitor_names(text: str) -> list[str]:
+    """Recover the unique monitor/bgjob names from a wake payload, in order."""
+    names: list[str] = []
+    for line in text.split("\n"):
+        match = _MONITOR_EVENT_HEADER_RE.match(line)
+        if match and match.group(1) not in names:
+            names.append(match.group(1))
+    return names
 
-    The banner, each per-monitor event header and each ``key: value`` payload
-    field get their own style so the findings read as a structured block
-    rather than a wall of text. Defensive: any line matching none of the
-    rules falls back to the plain ``text`` style, so a malformed header still
-    renders readably instead of crashing the turn.
+
+def render_monitor_wake_turn(
+    text: str, theme: Theme, at: "datetime.datetime | None" = None
+) -> Group:
+    """Render a monitor/background-job wake as one compact notice line.
+
+    ``⚡ Message from Monitor (cpu-watch) at 14:32`` — a single scannable line
+    instead of a bordered card or a wall of payload. Wakes are *autonomous*,
+    so they must not read like a typed user turn; the ⚡ marker and the state
+    colour make that obvious. The raw wake text is the model's prompt and is
+    deliberately not embedded here — nothing is reformatted for the LLM.
+
+    ``at`` is the local receive time; when omitted the ``at …`` clause is
+    dropped (direct/unit calls).
     """
-    gutter = Text("›  ", style=theme.accent_soft)
-    body = _style_monitor_wake_body(text, theme)
-    return Group(gutter, body)
+    stripped = text.lstrip()
+    is_bgjob = stripped.startswith(_BGJOB_WAKE_HEADER)
+    source = "Background job" if is_bgjob else "Monitor"
+    color = theme.accent if is_bgjob else theme.warn
+    names = _wake_monitor_names(text)
 
-
-def _style_monitor_wake_body(text: str, theme: Theme) -> Text:
-    """Tint a wake header line-by-line, joined back with single newlines.
-
-    Empty theme tokens (``system``/``no-color`` tiers) degrade to the
-    terminal's own colours, which is the intended behaviour there.
-    """
-    segments: list[Text] = [_style_wake_line(line, theme) for line in text.split("\n")]
-    body = Text()
-    for i, seg in enumerate(segments):
-        body.append(seg)
-        if i < len(segments) - 1:
-            body.append("\n")
-    return body
-
-
-def _style_wake_line(line: str, theme: Theme) -> Text:
-    """Return one tinted ``Text`` segment for a single wake-header line."""
-    if not line.strip():
-        return Text("")
-    if line.lstrip().startswith(_WAKE_HEADERS):
-        return Text(line, style=f"bold {theme.accent}".strip())
-    event = _MONITOR_EVENT_HEADER_RE.match(line)
-    if event:
-        body = Text()
-        body.append(event.group(1), style=f"bold {theme.accent_soft}".strip())
-        body.append(" " + event.group(2), style=theme.muted)
-        return body
-    field = _MONITOR_FIELD_RE.match(line)
-    if field:
-        body = Text()
-        body.append(field.group(1), style=theme.text)
-        body.append(field.group(2) + ":", style=theme.muted)
-        body.append(field.group(3), style=theme.muted_deep)
-        body.append(field.group(4), style=theme.text)
-        return body
-    if line.startswith("    "):
-        # Continuation of a multi-line value (e.g. a command monitor's
-        # output_tail): muted raw output.
-        return Text(line, style=theme.muted)
-    return Text(line, style=theme.text)
+    line = Text()
+    line.append("⚡ ", style=f"bold {color}".strip())
+    line.append(f"Message from {source}", style=f"bold {color}".strip())
+    if names:
+        line.append(f" ({', '.join(names)})", style=f"bold {color}".strip())
+    if at is not None:
+        line.append(f" at {format_day_time(at)}", style=theme.muted_deep)
+    return Group(line)
 
 
 def render_notice(kind: str, message: str, theme: Theme) -> Text:
@@ -960,19 +983,22 @@ def render_history(
                 isinstance(b, ToolResultBlock) for b in content
             ):
                 continue
-            # T-2: same › gutter as the live turn (render_user_turn), no
-            # filled badge — history replay reuses the live primitives.
-            gutter = Text("›  ", style=theme.accent_soft)
-            stamp = _stamp(idx)
-            if stamp is not None:
-                gutter = gutter + stamp
-            items.append(gutter)
+            # Same speaker header + body as the live turn (render_user_turn),
+            # so history replay reuses the live primitives — including the
+            # monitor-wake card when the replay hits an injected wake turn.
+            at = (
+                timestamps[idx]
+                if timestamps is not None and idx < len(timestamps)
+                else None
+            )
             if isinstance(content, str):
-                items.append(Text(content, style=theme.text))
+                items.append(render_user_turn(content, theme, at=at))
             else:
-                for block in content:
-                    if isinstance(block, TextBlock):
-                        items.append(Text(block.text, style=theme.text))
+                text_parts = [
+                    block.text for block in content if isinstance(block, TextBlock)
+                ]
+                if text_parts:
+                    items.append(render_user_turn("\n".join(text_parts), theme, at=at))
 
         elif role == "assistant":
             stamp = _stamp(idx)

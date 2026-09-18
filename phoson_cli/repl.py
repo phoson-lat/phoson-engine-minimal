@@ -354,6 +354,13 @@ class PhosonRepl:
         """Label the current node with text."""
         self._controller.label_current_node(text)
 
+    def note_user_title(self) -> None:
+        """Mark the session title as user-set (``/title``).
+
+        A background LLM title must never overwrite a title the user chose.
+        """
+        self._controller.note_user_title()
+
     def undo_last_turn(self) -> tuple[bool, str]:
         """Move the cursor back to just before the last user turn."""
         return self._controller.undo_last_turn()
