@@ -78,6 +78,11 @@ class Theme:
 
     # containers
     panel_bg: str
+    # ``badge_user`` is the user-turn highlight: a base style (usually just a
+    # subtle ``on #rrggbb`` background) applied to the whole ``› You`` line so
+    # a typed message is scannable at a glance. Empty in the terminal-native
+    # tiers (system/ansi/no-color), where a background would fight the user's
+    # own palette.
     badge_user: str
     badge_assistant: str
     badge_history: str
@@ -142,7 +147,7 @@ SYSTEM = Theme(
     diff_add_bg="",
     diff_del_bg="",
     panel_bg="",
-    badge_user="bold",
+    badge_user="",
     badge_assistant="bold",
     badge_history="bold",
     code_theme="ansi_dark",
@@ -185,7 +190,7 @@ DARK = Theme(
     diff_add_bg="on #0f2417",
     diff_del_bg="on #2a1216",
     panel_bg="on #120d1d",
-    badge_user="bold white",
+    badge_user="on #2c2344",
     badge_assistant="bold white",
     badge_history="bold white",
     code_theme="monokai",
@@ -225,7 +230,7 @@ LIGHT = Theme(
     diff_add_bg="on #e0f2e4",
     diff_del_bg="on #f8d7da",
     panel_bg="on #f2eef8",
-    badge_user="bold",
+    badge_user="on #ece2fb",
     badge_assistant="bold",
     badge_history="bold",
     code_theme="friendly",
@@ -267,7 +272,7 @@ ANSI = Theme(
     diff_add_bg="",
     diff_del_bg="",
     panel_bg="",
-    badge_user="bold",
+    badge_user="",
     badge_assistant="bold",
     badge_history="bold",
     code_theme="monokai",
@@ -309,7 +314,7 @@ NO_COLOR = Theme(
     diff_add_bg="",
     diff_del_bg="",
     panel_bg="",
-    badge_user="bold",
+    badge_user="",
     badge_assistant="bold",
     badge_history="bold",
     code_theme="none",
