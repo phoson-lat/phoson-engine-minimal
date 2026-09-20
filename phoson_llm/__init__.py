@@ -22,6 +22,12 @@ lazily through :func:`__getattr__` (PEP 562). Importing this package — or
 any of its cheap submodules such as ``phoson_llm.schemas`` — therefore no
 longer imports the ``openai`` / ``anthropic`` SDKs; the SDK for a given
 provider is loaded only when its adapter class is first accessed.
+
+Do **not** use ``from phoson_llm import *``: a star-import walks ``__all__``
+and therefore touches :func:`__getattr__` for every adapter, importing all
+vendor SDKs at once — exactly what the lazy layout avoids. Use
+``import phoson_llm`` or import the specific names you need (the adapters
+remain available as ``phoson_llm.OpenAIChat``, …).
 """
 
 from typing import TYPE_CHECKING
