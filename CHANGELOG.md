@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.43.1 (2026-09-20)
+
+### Fix
+
+- **packaging**: exclude the `stt` extra on macOS Intel (`x86_64`).
+  `moonshine-voice` ships no wheel or sdist for that platform, so
+  `uv sync --all-extras` — used by the standalone-binary release build —
+  failed on the `macos-15-intel` runner and no binaries were attached to
+  v0.43.0. The dependency is now gated by a platform marker (the plugin
+  degrades gracefully without its runtime).
+
 ## v0.43.0 (2026-09-20)
 
 ### Feat
