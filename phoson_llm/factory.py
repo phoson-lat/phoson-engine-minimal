@@ -1,29 +1,45 @@
-"""Provider factory — maps provider names to chat adapter instances."""
+"""Provider factory — maps provider names to chat adapter instances.
+
+Adapters are imported lazily, per provider, inside :func:`build_chat`. Each
+adapter module pulls in a heavy vendor SDK (``openai``, ``anthropic``, …), so
+importing them all at module import time cost ~1 s of startup and loaded SDKs
+the user may never need. Now only the selected provider's adapter is imported,
+and only when it is actually constructed.
+"""
 
 from typing import Any
+from importlib import import_module
 
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_llm.chats.grok import GrokChat
-from phoson_llm.chats.groq import GroqChat
-from phoson_llm.chats.vllm import VLLMChat
 from phoson_llm.exceptions import PhosonLLMError
-from phoson_llm.chats.azure import AzureChat
-from phoson_llm.chats.cohere import CohereChat
-from phoson_llm.chats.gemini import GeminiChat
-from phoson_llm.chats.nvidia import NVIDIAChat
-from phoson_llm.chats.ollama import OllamaChat
-from phoson_llm.chats.openai import OpenAIChat
-from phoson_llm.chats.bedrock import BedrockChat
-from phoson_llm.chats.mistral import MistralChat
-from phoson_llm.chats.deepseek import DeepSeekChat
-from phoson_llm.chats.lmstudio import LMStudioChat
-from phoson_llm.chats.together import TogetherChat
-from phoson_llm.chats.anthropic import AnthropicChat
-from phoson_llm.chats.fireworks import FireworksChat
-from phoson_llm.chats.omniroute import OmniRouteChat
-from phoson_llm.chats.openrouter import OpenRouterChat
-from phoson_llm.chats.perplexity import PerplexityChat
-from phoson_llm.chats.github_models import GitHubModelsChat
+
+#: provider name → (adapter submodule, class name).
+#: Kept as strings so no adapter module is imported until ``build_chat``.
+_PROVIDERS: dict[str, tuple[str, str]] = {
+    "openai": (".chats.openai", "OpenAIChat"),
+    "anthropic": (".chats.anthropic", "AnthropicChat"),
+    "ollama": (".chats.ollama", "OllamaChat"),
+    "openrouter": (".chats.openrouter", "OpenRouterChat"),
+    "github": (".chats.github_models", "GitHubModelsChat"),
+    "nvidia": (".chats.nvidia", "NVIDIAChat"),
+    "xai": (".chats.grok", "GrokChat"),
+    "grok": (".chats.grok", "GrokChat"),
+    "groq": (".chats.groq", "GroqChat"),
+    "deepseek": (".chats.deepseek", "DeepSeekChat"),
+    "together": (".chats.together", "TogetherChat"),
+    "perplexity": (".chats.perplexity", "PerplexityChat"),
+    "lmstudio": (".chats.lmstudio", "LMStudioChat"),
+    "vllm": (".chats.vllm", "VLLMChat"),
+    "azure": (".chats.azure", "AzureChat"),
+    "gemini": (".chats.gemini", "GeminiChat"),
+    "google": (".chats.gemini", "GeminiChat"),
+    "mistral": (".chats.mistral", "MistralChat"),
+    "bedrock": (".chats.bedrock", "BedrockChat"),
+    "aws": (".chats.bedrock", "BedrockChat"),
+    "fireworks": (".chats.fireworks", "FireworksChat"),
+    "cohere": (".chats.cohere", "CohereChat"),
+    "omniroute": (".chats.omniroute", "OmniRouteChat"),
+}
 
 
 def build_chat(
@@ -46,38 +62,15 @@ def build_chat(
     Raises:
         PhosonLLMError: If the provider name is unknown.
     """
-    _PROVIDERS: dict[str, type[BaseLLMChat]] = {
-        "openai": OpenAIChat,
-        "anthropic": AnthropicChat,
-        "ollama": OllamaChat,
-        "openrouter": OpenRouterChat,
-        "github": GitHubModelsChat,
-        "nvidia": NVIDIAChat,
-        "xai": GrokChat,
-        "grok": GrokChat,
-        "groq": GroqChat,
-        "deepseek": DeepSeekChat,
-        "together": TogetherChat,
-        "perplexity": PerplexityChat,
-        "lmstudio": LMStudioChat,
-        "vllm": VLLMChat,
-        "azure": AzureChat,
-        "gemini": GeminiChat,
-        "google": GeminiChat,
-        "mistral": MistralChat,
-        "bedrock": BedrockChat,
-        "aws": BedrockChat,
-        "fireworks": FireworksChat,
-        "cohere": CohereChat,
-        "omniroute": OmniRouteChat,
-    }
-
-    cls = _PROVIDERS.get(provider.lower())
-    if cls is None:
+    entry = _PROVIDERS.get(provider.lower())
+    if entry is None:
         raise PhosonLLMError(
             f"Unknown provider: {provider!r}. "
             f"Available: {', '.join(sorted(_PROVIDERS))}"
         )
+    module_name, class_name = entry
+    # Lazy import: only the selected provider's (heavy) adapter is loaded.
+    cls = getattr(import_module(module_name, __package__), class_name)
 
     init_kwargs: dict[str, Any] = {}
     if api_key is not None:
