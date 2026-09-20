@@ -24,7 +24,36 @@ longer imports the ``openai`` / ``anthropic`` SDKs; the SDK for a given
 provider is loaded only when its adapter class is first accessed.
 """
 
+from typing import TYPE_CHECKING
 from importlib import import_module
+
+if TYPE_CHECKING:
+    # Static view of the lazily re-exported chat adapters (see __getattr__);
+    # never executed at runtime.
+    from phoson_llm.chats import (
+        GrokChat,
+        GroqChat,
+        VLLMChat,
+        AzureChat,
+        CohereChat,
+        GeminiChat,
+        NVIDIAChat,
+        OllamaChat,
+        OpenAIChat,
+        BaseLLMChat,
+        BedrockChat,
+        MistralChat,
+        DeepSeekChat,
+        LMStudioChat,
+        TogetherChat,
+        AnthropicChat,
+        FireworksChat,
+        OmniRouteChat,
+        OpenRouterChat,
+        PerplexityChat,
+        GitHubModelsChat,
+        OpenAICompatibleChat,
+    )
 
 from phoson_llm.factory import build_chat
 from phoson_llm.pricing import PriceEntry, calculate_cost

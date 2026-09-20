@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Any, Final
 from pathlib import Path
 from dataclasses import field, dataclass
-from collections.abc import Mapping
+from collections.abc import Mapping, Callable
 
 from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
@@ -52,8 +52,14 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
 }
 
 
-def _chat_class(name: str) -> type[BaseLLMChat]:
-    """Import and return a provider adapter class on first use."""
+def _chat_class(name: str) -> Callable[..., BaseLLMChat]:
+    """Import and return a provider adapter class on first use.
+
+    Annotated as a generic callable (not ``type[BaseLLMChat]``) because each
+    adapter declares its own constructor signature — model, keys and base URL
+    differ per provider — so binding to the abstract base's ``__init__`` would
+    reject every real call.
+    """
     from importlib import import_module
 
     return getattr(import_module(_CHAT_CLASS_MODULES[name]), name)
