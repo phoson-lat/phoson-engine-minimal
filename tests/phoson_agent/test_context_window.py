@@ -187,6 +187,26 @@ class TestResolverVLLM:
             for record in caplog.records
         )
 
+    async def test_second_different_model_reuses_one_listing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The /models catalog is fetched once, not per model (switch speed)."""
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "m1", "max_model_len": 4096},
+                {"id": "m2", "max_model_len": 8192},
+            ],
+        }
+        client = _FakeVLLMClient(payload)
+        _patch_vllm_httpx(monkeypatch, client)
+        r = ContextWindowResolver()
+
+        assert await r.resolve("vllm", "m1") == 4096
+        assert await r.resolve("vllm", "m2") == 8192
+        # Both served from a single fetch of the whole catalog.
+        assert len(client.get_calls) == 1
+
     async def test_default_base_url_used_when_not_configured(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -206,10 +226,14 @@ def test_clear_cache():
     r._ollama_cache["llama3"] = 8192
     r._openrouter_cache["anthropic/claude"] = 200_000
     r._vllm_cache["Qwen3.8-27B-FP8"] = 262_144
+    r._openrouter_windows = {"anthropic/claude": 200_000}
+    r._vllm_windows = {"Qwen3.8-27B-FP8": 262_144}
     r.clear_cache()
     assert r._ollama_cache == {}
     assert r._openrouter_cache == {}
     assert r._vllm_cache == {}
+    assert r._openrouter_windows is None
+    assert r._vllm_windows is None
 
 
 # ── Resolver: logging policy (issue #23) ─────────────────────────────

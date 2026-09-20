@@ -32,7 +32,9 @@ class DummyRepl:
         self.engine = SimpleNamespace(context=SimpleNamespace(extra={}))
         self.model_calls: list[str] = []
 
-    async def set_model(self, model: str) -> None:
+    async def set_model(
+        self, model: str, provider: str | None = None, *, reuse_engine: bool = False
+    ) -> None:
         self.model_calls.append(model)
         self.current_model = model
         self.config.model = model
