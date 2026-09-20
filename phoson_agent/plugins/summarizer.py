@@ -431,6 +431,9 @@ class SummarizationMiddleware(AgentMiddleware):
     # ``repr()``. They are non-Optional after ``__post_init__`` runs.
     _resolver: ContextWindowResolver = field(init=False, repr=False)
     _estimator: TokenEstimator = field(init=False, repr=False)
+    #: Provider the current ``_estimator`` was built for, so
+    #: :meth:`rebind_runtime` only rebuilds it when the encoding can change.
+    _estimator_provider: str = field(init=False, repr=False, default="")
     _pending_compact_events: list[SummarizationEvent] = field(
         default_factory=list, repr=False
     )
@@ -453,6 +456,38 @@ class SummarizationMiddleware(AgentMiddleware):
             vllm_base_url=self.vllm_base_url,
         )
         self._estimator = TokenEstimator.for_provider(self.provider)
+        self._estimator_provider = self.provider
+
+    def rebind_runtime(self) -> None:
+        """Refresh provider-derived internal state after a runtime switch.
+
+        :attr:`_estimator` picks a tiktoken encoding per provider and
+        :attr:`_resolver` captures the provider endpoints, both built once in
+        ``__post_init__``. A provider switch at runtime (``/provider``, the
+        ``/model`` picker) or a changed ``models.json`` base-url override must
+        refresh them explicitly, otherwise:
+
+        - token estimation keeps the previous provider's encoding — the
+          ``openai``/``o200k_base`` vs ``cl100k_base`` split (±10-20%) skews
+          the context meter and the auto-compaction gate; and
+        - the compaction context-window lookup keeps querying the old
+          endpoint, silently falling back to the default window.
+
+        Idempotent and cheap: ``tiktoken.get_encoding`` is cached, the
+        estimator is only rebuilt when the *provider* actually changed (a
+        same-provider model switch keeps the instance), and an unchanged
+        endpoint is a no-op that keeps :attr:`_resolver` (and the windows
+        learned via ``override()``) intact — so it is safe to call on every
+        engine rebuild.
+        """
+        if self.provider != self._estimator_provider:
+            self._estimator = TokenEstimator.for_provider(self.provider)
+            self._estimator_provider = self.provider
+        self._resolver.rebind_endpoints(
+            ollama_base_url=self.ollama_base_url,
+            openrouter_api_key=self.openrouter_api_key,
+            vllm_base_url=self.vllm_base_url or "http://localhost:8000/v1",
+        )
 
     def estimate_tokens(self, messages: list[Message]) -> int:
         """Estimate the token count for a list of messages.

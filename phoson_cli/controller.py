@@ -534,6 +534,20 @@ class SessionController:
         """
         return vllm_base_url(self.config)
 
+    def _rebind_cw_resolver(self) -> None:
+        """Refresh the header's context-window resolver endpoints in place.
+
+        ``_cw_resolver`` is built once in ``__init__``; a provider switch (or
+        a changed ``models.json`` base-url override) must not leave it querying
+        the previous endpoint. Uses the same resolution order as
+        :meth:`_vllm_base_url` and the one-shot path.
+        """
+        self._cw_resolver.rebind_endpoints(
+            ollama_base_url=self.config.ollama_base_url or "http://localhost:11434",
+            openrouter_api_key=self.config.openrouter_api_key,
+            vllm_base_url=self._vllm_base_url() or "http://localhost:8000/v1",
+        )
+
     def _apply_context_config(self) -> None:
         """Project the E1 context-management settings onto the middlewares.
 
@@ -617,6 +631,10 @@ class SessionController:
         # client so its summary call goes out tool-free.
         self.summarizer.chat = self.chat
         self.summarizer.vllm_base_url = self._vllm_base_url()
+        # Provider-derived internals (tiktoken encoding, resolver endpoints)
+        # are built once; refresh them here (see #242).
+        self.summarizer.rebind_runtime()
+        self._rebind_cw_resolver()
         self._apply_context_config()
 
         plugins = self._build_plugin_specs()
@@ -2245,6 +2263,10 @@ class SessionController:
         self.summarizer.model = self.current_model
         self.summarizer.chat = self.chat
         self.summarizer.vllm_base_url = self._vllm_base_url()
+        # Refresh provider-derived internals (tiktoken encoding, resolver
+        # endpoints) that __post_init__ froze at construction time (#242).
+        self.summarizer.rebind_runtime()
+        self._rebind_cw_resolver()
 
         extra = self.engine.context.extra
         extra["main_model"] = self.current_model

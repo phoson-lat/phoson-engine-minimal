@@ -725,6 +725,59 @@ async def test_set_model_reuse_engine_same_model_still_rebuilds(tmp_path) -> Non
     assert controller.engine is fake_engine
 
 
+async def test_set_model_reuse_engine_refreshes_token_estimator(tmp_path) -> None:
+    """#242: crossing into openai must rebind the summarizer's tiktoken encoding.
+
+    The estimator is built once from the provider; a stale ``cl100k_base``
+    after switching to ``openai`` (``o200k_base``) skews the context meter and
+    the auto-compaction gate.
+    """
+    controller, _ = _make_controller(tmp_path)  # provider ollama -> cl100k
+    assert controller.summarizer._estimator._encoding.name == "cl100k_base"
+
+    with (
+        patch.object(
+            controller._cw_resolver, "resolve", AsyncMock(return_value=128_000)
+        ),
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
+        patch("phoson_cli.controller.load_models_file", return_value={}),
+    ):
+        await controller.set_model("gpt-4o", provider="openai", reuse_engine=True)
+
+    assert controller.summarizer.provider == "openai"
+    assert controller.summarizer._estimator._encoding.name == "o200k_base"
+
+
+async def test_rebuild_engine_refreshes_token_estimator(tmp_path) -> None:
+    """#242: the full rebuild path refreshes the estimator too (was pre-existing)."""
+    controller, _ = _make_controller(tmp_path)
+    controller.config.provider = "openai"
+
+    with (
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
+        patch("phoson_cli.controller.load_models_file", return_value={}),
+    ):
+        controller._rebuild_engine()
+
+    assert controller.summarizer._estimator._encoding.name == "o200k_base"
+
+
+def test_rebind_cw_resolver_updates_endpoint(tmp_path) -> None:
+    """#242: the header resolver's vLLM endpoint follows a config change."""
+    controller, _ = _make_controller(tmp_path)
+
+    with patch.object(controller, "_vllm_base_url", return_value="http://new:9999/v1"):
+        controller._rebind_cw_resolver()
+
+    assert controller._cw_resolver._vllm_base_url == "http://new:9999/v1"
+
+
 async def test_set_model_refreshes_context_window(tmp_path) -> None:
     """Regression: the header's indicator must update on /model, not just
 
