@@ -77,6 +77,12 @@ class ContextWindowResolver:
         self._ollama_cache: dict[str, int] = {}
         self._openrouter_cache: dict[str, int] = {}
         self._vllm_cache: dict[str, int] = {}
+        # Whole-list caches for providers that expose context length in a
+        # *listing* endpoint (/models). Fetching per-model re-downloaded the
+        # entire catalog on every switch to an uncached model (OpenRouter's
+        # list is large); one fetch now serves every model of that provider.
+        self._openrouter_windows: dict[str, int] | None = None
+        self._vllm_windows: dict[str, int] | None = None
         self._overrides: dict[str, int] = {}
 
     # ── Public ────────────────────────────────────────────────────────
@@ -219,6 +225,25 @@ class ContextWindowResolver:
         if model in self._openrouter_cache:
             return self._openrouter_cache[model]
 
+        if self._openrouter_windows is None:
+            self._openrouter_windows = await self._load_openrouter_windows()
+
+        windows = self._openrouter_windows
+        if windows is not None:
+            val = windows.get(model)
+            if val is not None:
+                self._openrouter_cache[model] = val
+                return val
+
+        self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
+        return DEFAULT_CONTEXT_WINDOW
+
+    async def _load_openrouter_windows(self) -> dict[str, int] | None:
+        """Fetch OpenRouter's model catalog once, as ``id → context_length``.
+
+        Returns ``None`` on failure (soft-fail: callers fall back to the
+        default) so a later, different model can retry the fetch.
+        """
         # Same soft-fail policy as Ollama: best-effort lookup with default
         # fallback. See _resolve_ollama for rationale.
         try:
@@ -233,34 +258,24 @@ class ContextWindowResolver:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    models_list = data.get("data", [])
-                    for m in models_list:
-                        if m.get("id") == model:
-                            ctx = m.get("context_length")
-                            if ctx is not None:
-                                val = int(ctx)
-                                self._openrouter_cache[model] = val
-                                return val
-                            # Fallback: top_provider.context_length
-                            top = m.get("top_provider", {})
-                            ctx = top.get("context_length")
-                            if ctx is not None:
-                                val = int(ctx)
-                                self._openrouter_cache[model] = val
-                                return val
+                    windows: dict[str, int] = {}
+                    for m in data.get("data", []):
+                        ctx = m.get("context_length")
+                        if ctx is None:
+                            ctx = m.get("top_provider", {}).get("context_length")
+                        if ctx is not None:
+                            windows[m.get("id", "")] = int(ctx)
+                    return windows
         except (httpx.HTTPError, ValueError) as exc:
             # I-112: notice channel renders this log record — no separate
             # warnings.warn (would double-notify); log = issue-#23 trace.
             logger.warning(
-                "OpenRouter context window lookup failed for %r; "
+                "OpenRouter context window lookup failed; "
                 "falling back to default (%d tokens): %s",
-                model,
                 DEFAULT_CONTEXT_WINDOW,
                 exc,
             )
-
-        self._openrouter_cache[model] = DEFAULT_CONTEXT_WINDOW
-        return DEFAULT_CONTEXT_WINDOW
+        return None
 
     # ── vLLM ──────────────────────────────────────────────────────────
 
@@ -268,55 +283,64 @@ class ContextWindowResolver:
         """Resolve the context window from a vLLM server's ``/v1/models``.
 
         vLLM exposes each served model's ``max_model_len`` in the
-        ``/v1/models`` list response. We match on the model ``id`` and
-        read ``max_model_len``. Same soft-fail policy as Ollama/OpenRouter:
-        best-effort lookup with default fallback.
+        ``/v1/models`` list response. The whole list is fetched once and
+        cached (see also the OpenRouter list cache); a later switch to a
+        different served model reuses it. Same soft-fail policy as
+        Ollama/OpenRouter: best-effort lookup with default fallback.
         """
         if model in self._vllm_cache:
             return self._vllm_cache[model]
 
-        found = False
-        ok = False
+        if self._vllm_windows is None:
+            self._vllm_windows = await self._load_vllm_windows()
+
+        windows = self._vllm_windows
+        if windows is not None:
+            val = windows.get(model)
+            if val is not None:
+                self._vllm_cache[model] = val
+                return val
+            # I-112: server is up but the model id is missing (or carries no
+            # max_model_len) — the warnings.warn is the single signal here
+            # (no paired log), so the CLI notice channel shows it once, styled.
+            warnings.warn(
+                f"vLLM /v1/models response did not include {model!r} "
+                f"with a max_model_len; using default "
+                f"({DEFAULT_CONTEXT_WINDOW} tokens)",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        self._vllm_cache[model] = DEFAULT_CONTEXT_WINDOW
+        return DEFAULT_CONTEXT_WINDOW
+
+    async def _load_vllm_windows(self) -> dict[str, int] | None:
+        """Fetch vLLM's served models once, as ``id → max_model_len``.
+
+        Returns ``None`` when the server is unreachable (soft-fail) so a later
+        model can retry the fetch.
+        """
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(f"{self._vllm_base_url}/models")
-                ok = resp.status_code == 200
-                if ok:
+                if resp.status_code == 200:
                     data = resp.json()
-                    models_list = data.get("data", [])
-                    for m in models_list:
-                        if m.get("id") == model:
-                            found = True
-                            ctx = m.get("max_model_len")
-                            if ctx is not None:
-                                val = int(ctx)
-                                self._vllm_cache[model] = val
-                                return val
+                    windows: dict[str, int] = {}
+                    for m in data.get("data", []):
+                        ctx = m.get("max_model_len")
+                        if ctx is not None:
+                            windows[m.get("id", "")] = int(ctx)
+                    return windows
         except (httpx.HTTPError, ValueError) as exc:
             # I-112: notice channel renders this log record — no separate
             # warnings.warn (would double-notify); log = issue-#23 trace.
             logger.warning(
-                "vLLM context window lookup failed for %r; "
+                "vLLM context window lookup failed; "
                 "falling back to default (%d tokens): %s",
-                model,
                 DEFAULT_CONTEXT_WINDOW,
                 exc,
             )
-        else:
-            if ok and not found:
-                # I-112: server is up but the model id is missing — the
-                # warnings.warn is the single signal here (no paired log),
-                # so the CLI notice channel shows it once, styled.
-                warnings.warn(
-                    f"vLLM /v1/models response did not include {model!r} "
-                    f"with a max_model_len; using default "
-                    f"({DEFAULT_CONTEXT_WINDOW} tokens)",
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-        self._vllm_cache[model] = DEFAULT_CONTEXT_WINDOW
-        return DEFAULT_CONTEXT_WINDOW
+        return None
 
     # ── Cache management ──────────────────────────────────────────────
 
@@ -325,3 +349,5 @@ class ContextWindowResolver:
         self._ollama_cache.clear()
         self._openrouter_cache.clear()
         self._vllm_cache.clear()
+        self._openrouter_windows = None
+        self._vllm_windows = None
