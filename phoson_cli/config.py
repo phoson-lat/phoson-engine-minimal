@@ -18,32 +18,51 @@ from types import MappingProxyType
 from typing import Any, Final
 from pathlib import Path
 from dataclasses import field, dataclass
-from collections.abc import Mapping
+from collections.abc import Mapping, Callable
 
 from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
-from phoson_llm.chats.grok import GrokChat
-from phoson_llm.chats.groq import GroqChat
-from phoson_llm.chats.vllm import VLLMChat
-from phoson_llm.chats.azure import AzureChat
-from phoson_llm.chats.cohere import CohereChat
-from phoson_llm.chats.gemini import GeminiChat
-from phoson_llm.chats.nvidia import NVIDIAChat
-from phoson_llm.chats.ollama import OllamaChat
-from phoson_llm.chats.openai import OpenAIChat
-from phoson_llm.chats.bedrock import BedrockChat
-from phoson_llm.chats.mistral import MistralChat
-from phoson_llm.chats.deepseek import DeepSeekChat
-from phoson_llm.chats.lmstudio import LMStudioChat
-from phoson_llm.chats.together import TogetherChat
-from phoson_llm.chats.anthropic import AnthropicChat
-from phoson_llm.chats.fireworks import FireworksChat
-from phoson_llm.chats.omniroute import OmniRouteChat
-from phoson_llm.chats.openrouter import OpenRouterChat
-from phoson_llm.chats.perplexity import PerplexityChat
-from phoson_llm.chats.github_models import GitHubModelsChat
 
 _LOG = logging.getLogger("phoson_cli.retry")
+
+#: Adapter class name → defining submodule. Importing every adapter eagerly
+#: pulled the ``openai`` and ``anthropic`` SDKs into *every* CLI process
+#: (~1 s of startup); each is now imported only when its provider is built.
+_CHAT_CLASS_MODULES: Final[dict[str, str]] = {
+    "OpenAIChat": "phoson_llm.chats.openai",
+    "AnthropicChat": "phoson_llm.chats.anthropic",
+    "OllamaChat": "phoson_llm.chats.ollama",
+    "OpenRouterChat": "phoson_llm.chats.openrouter",
+    "GitHubModelsChat": "phoson_llm.chats.github_models",
+    "NVIDIAChat": "phoson_llm.chats.nvidia",
+    "GrokChat": "phoson_llm.chats.grok",
+    "GroqChat": "phoson_llm.chats.groq",
+    "DeepSeekChat": "phoson_llm.chats.deepseek",
+    "TogetherChat": "phoson_llm.chats.together",
+    "PerplexityChat": "phoson_llm.chats.perplexity",
+    "LMStudioChat": "phoson_llm.chats.lmstudio",
+    "VLLMChat": "phoson_llm.chats.vllm",
+    "AzureChat": "phoson_llm.chats.azure",
+    "GeminiChat": "phoson_llm.chats.gemini",
+    "MistralChat": "phoson_llm.chats.mistral",
+    "BedrockChat": "phoson_llm.chats.bedrock",
+    "FireworksChat": "phoson_llm.chats.fireworks",
+    "CohereChat": "phoson_llm.chats.cohere",
+    "OmniRouteChat": "phoson_llm.chats.omniroute",
+}
+
+
+def _chat_class(name: str) -> Callable[..., BaseLLMChat]:
+    """Import and return a provider adapter class on first use.
+
+    Annotated as a generic callable (not ``type[BaseLLMChat]``) because each
+    adapter declares its own constructor signature — model, keys and base URL
+    differ per provider — so binding to the abstract base's ``__init__`` would
+    reject every real call.
+    """
+    from importlib import import_module
+
+    return getattr(import_module(_CHAT_CLASS_MODULES[name]), name)
 
 
 class PhosonConfigError(Exception):
@@ -741,6 +760,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "undo_jump",
     "toggle_permission_mode",
     "command_palette",
+    "dictate",
     "exit",
 )
 
@@ -1917,62 +1937,82 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
         if not config.openrouter_api_key:
             raise ValueError("OPENROUTER_API_KEY is required for provider=openrouter")
         if base_url:
-            return OpenRouterChat(api_key=config.openrouter_api_key, base_url=base_url)
-        return OpenRouterChat(api_key=config.openrouter_api_key)
+            return _chat_class("OpenRouterChat")(
+                api_key=config.openrouter_api_key, base_url=base_url
+            )
+        return _chat_class("OpenRouterChat")(api_key=config.openrouter_api_key)
     if provider == "openai":
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required for provider=openai")
-        return OpenAIChat(api_key=config.openai_api_key, base_url=base_url)
+        return _chat_class("OpenAIChat")(
+            api_key=config.openai_api_key, base_url=base_url
+        )
     if provider == "anthropic":
         if not config.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for provider=anthropic")
-        return AnthropicChat(api_key=config.anthropic_api_key, base_url=base_url)
+        return _chat_class("AnthropicChat")(
+            api_key=config.anthropic_api_key, base_url=base_url
+        )
     if provider == "ollama":
-        return OllamaChat(
+        return _chat_class("OllamaChat")(
             base_url=base_url or config.ollama_base_url or "http://localhost:11434"
         )
     if provider == "github":
-        return GitHubModelsChat(api_key=config.github_token, base_url=base_url)
+        return _chat_class("GitHubModelsChat")(
+            api_key=config.github_token, base_url=base_url
+        )
     if provider == "nvidia":
-        return NVIDIAChat(api_key=config.nvidia_api_key, base_url=base_url)
+        return _chat_class("NVIDIAChat")(
+            api_key=config.nvidia_api_key, base_url=base_url
+        )
     if provider in ("xai", "grok"):
-        return GrokChat(api_key=config.xai_api_key, base_url=base_url)
+        return _chat_class("GrokChat")(api_key=config.xai_api_key, base_url=base_url)
     if provider == "groq":
-        return GroqChat(api_key=config.groq_api_key, base_url=base_url)
+        return _chat_class("GroqChat")(api_key=config.groq_api_key, base_url=base_url)
     if provider == "deepseek":
-        return DeepSeekChat(api_key=config.deepseek_api_key, base_url=base_url)
+        return _chat_class("DeepSeekChat")(
+            api_key=config.deepseek_api_key, base_url=base_url
+        )
     if provider == "together":
-        return TogetherChat(api_key=config.together_api_key, base_url=base_url)
+        return _chat_class("TogetherChat")(
+            api_key=config.together_api_key, base_url=base_url
+        )
     if provider == "perplexity":
-        return PerplexityChat(api_key=config.perplexity_api_key, base_url=base_url)
+        return _chat_class("PerplexityChat")(
+            api_key=config.perplexity_api_key, base_url=base_url
+        )
     if provider == "azure":
-        return AzureChat(
+        return _chat_class("AzureChat")(
             azure_endpoint=config.azure_openai_endpoint,
             api_key=config.azure_openai_api_key,
             deployment=config.azure_openai_deployment,
         )
     if provider in ("gemini", "google"):
-        return GeminiChat(api_key=config.gemini_api_key)
+        return _chat_class("GeminiChat")(api_key=config.gemini_api_key)
     if provider == "mistral":
-        return MistralChat(api_key=config.mistral_api_key)
+        return _chat_class("MistralChat")(api_key=config.mistral_api_key)
     if provider in ("bedrock", "aws"):
-        return BedrockChat()
+        return _chat_class("BedrockChat")()
     if provider == "fireworks":
-        return FireworksChat(api_key=config.fireworks_api_key, base_url=base_url)
+        return _chat_class("FireworksChat")(
+            api_key=config.fireworks_api_key, base_url=base_url
+        )
     if provider == "cohere":
-        return CohereChat(api_key=config.cohere_api_key, base_url=base_url)
+        return _chat_class("CohereChat")(
+            api_key=config.cohere_api_key, base_url=base_url
+        )
     if provider == "omniroute":
-        return OmniRouteChat(
+        return _chat_class("OmniRouteChat")(
             api_key=config.omniroute_api_key,
             base_url=base_url or config.omniroute_base_url,
         )
     if provider == "vllm":
-        return VLLMChat(
+        return _chat_class("VLLMChat")(
             base_url=base_url or config.vllm_base_url or "http://localhost:8000/v1",
             api_key=config.vllm_api_key,
         )
     if provider == "lmstudio":
-        return LMStudioChat(
+        return _chat_class("LMStudioChat")(
             base_url=base_url or config.lmstudio_base_url or "http://localhost:1234/v1"
         )
     raise ValueError(f"Unsupported provider: {config.provider}")

@@ -117,6 +117,9 @@ class PhosonRepl:
         # or None when up to date / offline / not due yet.
         self.update_hint: str | None = None
         self._update_check_task: asyncio.Task | None = None
+        # Text queued by plugin dictation (Ctrl+O) to appear pre-filled in the
+        # next prompt; consumed by the next prompt_async.
+        self._prefill_text: str = ""
 
         # The session runtime — engine, tree, metrics, run lifecycle —
         # lives in the UI-independent controller; this REPL is its
@@ -131,6 +134,15 @@ class PhosonRepl:
             ),
         )
         self.apply_theme(resolve_runtime_theme(config, self._controller.theme_registry))
+
+    def request_prefill(self, text: str) -> None:
+        """Queue *text* for the next classic prompt buffer.
+
+        Used by plugin dictation (``Ctrl+O``) so dictated text shows up in the
+        input for the user to review, edit and submit, instead of only being
+        printed. The value is consumed by the next ``prompt_async`` call.
+        """
+        self._prefill_text = text
 
     # ── Config / controller state ─────────────────────────────────────────
 
@@ -346,9 +358,18 @@ class PhosonRepl:
         if plugin_ui is not None:
             plugin_ui.set_theme(theme)
 
-    async def set_model(self, model: str, provider: str | None = None) -> None:
-        """Switch model (and provider, when given) and rebuild the engine."""
-        await self._controller.set_model(model, provider=provider)
+    async def set_model(
+        self, model: str, provider: str | None = None, *, reuse_engine: bool = False
+    ) -> None:
+        """Switch model (and provider, when given).
+
+        ``reuse_engine`` asks the controller for the in-place fast path: keep
+        the plugin/tool/middleware layer and rebuild only the chat client when
+        the provider changed (see :meth:`SessionController.set_model`).
+        """
+        await self._controller.set_model(
+            model, provider=provider, reuse_engine=reuse_engine
+        )
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text."""
@@ -515,12 +536,16 @@ class PhosonRepl:
         while True:
             try:
                 prompt_fragments = self._prompt_fragments()
+                # Text queued by plugin dictation (Ctrl+O): shown
+                # pre-filled so the user can review/edit before sending.
+                prefill, self._prefill_text = self._prefill_text, ""
                 # Per-pass style (E4): a /theme switch mid-session must
                 # re-color the prompt on the next pass without rebuilding
                 # the session — prompt_async accepts a style override.
                 user_input = await session.prompt_async(
                     FormattedText(prompt_fragments),
                     style=Style.from_dict(build_prompt_style(self.theme)),
+                    default=prefill,
                 )
             except KeyboardInterrupt:
                 if self._controller.is_running:

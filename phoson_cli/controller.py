@@ -300,6 +300,12 @@ class SessionController:
         self._session.tree.cwd = str(Path.cwd())
         self.attachments = AttachmentManager()
         self.current_model = config.model
+        # Provider/model the *live* runtime (chat client, tool registry,
+        # plugins, middleware chain) was last built for. ``set_model`` uses
+        # these to reuse the runtime on a pure model switch instead of tearing
+        # every plugin down and reloading it (MCP subprocesses, monitors).
+        self._engine_provider = config.provider
+        self._engine_model = config.model
         self.current_task: asyncio.Task | None = None
         # Serializes user turns with autonomous monitor-wake turns (I-126)
         # so the single-flight engine is never hit by two concurrent runs.
@@ -772,6 +778,11 @@ class SessionController:
                 # No running loop (sync test/one-shot bootstrap): the
                 # tools start tasks lazily on first use.
                 pass
+
+        # Record what the runtime now reflects, so a later pure model switch
+        # can be applied in place (see ``set_model``) instead of rebuilding.
+        self._engine_provider = self.config.provider
+        self._engine_model = self.current_model
 
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
@@ -2058,24 +2069,17 @@ class SessionController:
             candidate.current_node_id = self.find_latest_node_id(loaded_tree)
             recovered = await self._repair_orphaned_run(candidate)
 
-            # Load saved metrics using the authoritative SessionMeta field names.
-            metas = await self.storage.list_meta()
-            for meta in metas:
-                if str(meta.id) == session_id:
-                    candidate.metrics.total_cost_usd = meta.total_cost
-                    # F-34: map the persisted input/output split. Legacy
-                    # sessions (only the total was stored) back-fill output
-                    # from the sum so nothing is lost — the split is only
-                    # "absent" when both halves are zero but the total is not.
-                    input_tokens = meta.total_input_tokens
-                    output_tokens = meta.total_output_tokens
-                    if input_tokens == 0 and output_tokens == 0 and meta.total_tokens:
-                        output_tokens = meta.total_tokens
-                    candidate.metrics.total_input_tokens = input_tokens
-                    candidate.metrics.total_output_tokens = output_tokens
-                    candidate.metrics.step_count = meta.step_count
-                    candidate.metrics.last_model = meta.last_model or ""
-                    break
+            # Metrics come straight from the loaded tree: its ``session_meta``
+            # record was applied by ``apply_tree_meta`` during ``storage.load``
+            # (same F-34 legacy back-fill: total_tokens → output when the
+            # input/output split is absent). Re-listing every session's meta
+            # here only to find this one made resuming O(all session bytes);
+            # the tree already holds the authoritative values.
+            candidate.metrics.total_cost_usd = loaded_tree.total_cost
+            candidate.metrics.total_input_tokens = loaded_tree.total_input_tokens
+            candidate.metrics.total_output_tokens = loaded_tree.total_output_tokens
+            candidate.metrics.step_count = loaded_tree.step_count
+            candidate.metrics.last_model = loaded_tree.last_model or ""
 
             # Prepare replay and context state before making the switch visible.
             # Any corrupt path or estimator failure therefore leaves the previous
@@ -2157,19 +2161,34 @@ class SessionController:
         If ``models.json`` defines a ``default_model`` for the new
         provider, that model is selected; otherwise the current model
         name is kept.
+
+        The plugin/tool/middleware layer is provider-independent and is kept
+        (``reuse_engine``): only the provider-specific chat client is rebuilt,
+        so switching provider no longer restarts MCP subprocesses/monitors.
         """
         self.config.provider = provider
         settings = provider_settings(load_models_file(), provider)
         default_model = settings.get("default_model")
-        await self.set_model(default_model or self.config.model)
+        await self.set_model(default_model or self.config.model, reuse_engine=True)
 
-    async def set_model(self, model: str, provider: str | None = None) -> None:
-        """Switch to a different model, rebuild the engine, refresh context window.
+    async def set_model(
+        self, model: str, provider: str | None = None, *, reuse_engine: bool = False
+    ) -> None:
+        """Switch to a different model and refresh dependent runtime state.
 
         When ``provider`` is given and differs from the active one, the
         provider is switched too (I-89): a model id that belongs to another
         provider must leave the runtime — and the persisted config — as a
         consistent ``(provider, model)`` pair.
+
+        ``reuse_engine`` requests the fast path: the tool registry, plugins and
+        middleware chain do not depend on the provider or the model name (the
+        latter rides on each request's ``ModelConfig``), so they are kept
+        instead of being torn down and reloaded — MCP subprocesses and monitors
+        keep running. When the provider actually changed, only the
+        provider-specific chat client is rebuilt. The flag is ignored (a full
+        rebuild happens) for a same-model call, and callers that *do* need a
+        rebuild (``/mcp`` toggles, setup wizard) simply omit it.
         """
         if provider is not None and normalize_provider(provider) != normalize_provider(
             self.config.provider
@@ -2179,8 +2198,61 @@ class SessionController:
         self.config.model = model
         # Sub-agent model follows the main model unless explicitly overridden.
         self.subagent_model = self.config.subagent_model or model
-        self._rebuild_engine()
+
+        same_provider = normalize_provider(self.config.provider) == normalize_provider(
+            self._engine_provider
+        )
+        can_reuse = reuse_engine and (not same_provider or model != self._engine_model)
+        if can_reuse:
+            # Provider switch: keep the plugin/tool/middleware layer, rebuild
+            # only the provider-specific chat client. Pure model switch: reuse
+            # everything (the model rides per request, not on the client).
+            self._apply_model_to_runtime(rebuild_chat=not same_provider)
+        else:
+            self._rebuild_engine()
         await self._refresh_context_window()
+
+    def _apply_model_to_runtime(self, *, rebuild_chat: bool) -> None:
+        """Propagate a (provider, model) switch into the live runtime in place.
+
+        The tool registry, the loaded plugins, the middleware chain, the
+        command catalog and the theme registry are all independent of the
+        provider and of the model *name* — rebuilding them would needlessly
+        tear down and reload every plugin (MCP subprocesses, monitors). The
+        only provider-specific runtime piece is the chat client; it is rebuilt
+        (and the old one closed) when the provider changed. The model name
+        only reaches the summarizer's round trip and the sub-agent defaults
+        injected in ``context.extra``.
+
+        ``AgentEngine`` resolves ``self.chat`` at the start of every run, so
+        rebinding the field is enough — no engine reconstruction is needed.
+        """
+        if rebuild_chat:
+            old_chat = getattr(self, "chat", None)
+            self.chat = build_chat(self.config)
+            # Release the old client's connection pool (e.g. the Anthropic SDK
+            # holds a persistent httpx.AsyncClient). Schedule on the running
+            # loop; a no-op when there is none (sync test bootstrap).
+            if old_chat is not None and hasattr(old_chat, "aclose"):
+                try:
+                    asyncio.get_running_loop().create_task(old_chat.aclose())
+                except RuntimeError:
+                    pass
+            self.engine.chat = self.chat
+            self.engine.context.extra["chat"] = self.chat
+
+        self.summarizer.provider = self.config.provider
+        self.summarizer.model = self.current_model
+        self.summarizer.chat = self.chat
+        self.summarizer.vllm_base_url = self._vllm_base_url()
+
+        extra = self.engine.context.extra
+        extra["main_model"] = self.current_model
+        extra["default_model"] = self.subagent_model
+        # The runtime now reflects this (provider, model) pair; a later
+        # same-model request (e.g. an in-place reload) falls back to a rebuild.
+        self._engine_provider = self.config.provider
+        self._engine_model = self.current_model
 
     def label_current_node(self, text: str) -> None:
         """Label the current node with text."""

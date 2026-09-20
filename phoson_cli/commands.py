@@ -161,6 +161,38 @@ class PluginCommandContext:
             return
         printer(message)
 
+    def prefill_prompt(self, text: str) -> bool:
+        """Route a prompt prefill to the active front end.
+
+        The host owns the input widget; a host that cannot place text in an
+        editable prompt simply does not implement ``insert_prompt_text`` and
+        this returns ``False`` so the plugin can fall back to a notice.
+        """
+        insert = getattr(self._host, "insert_prompt_text", None)
+        if not callable(insert):
+            return False
+        try:
+            insert(text)
+        except Exception:  # noqa: BLE001 - a plugin must never break the REPL
+            return False
+        return True
+
+    def stream_prompt_text(self, text: str) -> bool:
+        """Route a live prompt preview to the active front end.
+
+        Hosts that can repaint their prompt mid-command implement
+        ``stream_prompt_text``; the rest return ``False`` here and the
+        plugin falls back to one final :meth:`prefill_prompt`.
+        """
+        stream = getattr(self._host, "stream_prompt_text", None)
+        if not callable(stream):
+            return False
+        try:
+            stream(text)
+        except Exception:  # noqa: BLE001 - a plugin must never break the REPL
+            return False
+        return True
+
 
 #: /help sections (IMPROVEMENTS.md C4): each command spec declares the
 #: category it renders under. Commands not listed fall into "Other".
@@ -889,7 +921,9 @@ class CommandHandler:
                         "(API key / base URL) and retry — nothing was saved."
                     )
                     return
-                await self.repl.set_model(chosen, provider=target_provider)
+                await self.repl.set_model(
+                    chosen, provider=target_provider, reuse_engine=True
+                )
                 enabled = getattr(self.repl.config, "enabled_providers", None)
                 if enabled is not None:
                     self.repl.config.enabled_providers = canonicalize_enabled_providers(
@@ -910,7 +944,10 @@ class CommandHandler:
                     f"Model → {self.repl.current_model}  ·  saved"
                 )
             else:
-                await self.repl.set_model(chosen)
+                # Pure model switch within the active provider: reuse the live
+                # runtime (chat client/tools/plugins) instead of reloading every
+                # plugin — the model is carried per request, not by the client.
+                await self.repl.set_model(chosen, reuse_engine=True)
                 fields = {"model", "enabled_providers"}
                 if getattr(self.repl.config, "_provider_source", "explicit") in {
                     "env",

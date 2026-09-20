@@ -945,7 +945,7 @@ async def test_old_custom_command_host_pick_model_signature_is_supported(
     assert await CommandHandler(repl, host=OldHost()).handle(
         Command(name="/model", args="")
     )
-    repl.set_model.assert_awaited_once_with("next-model")
+    repl.set_model.assert_awaited_once_with("next-model", reuse_engine=True)
 
 
 def test_legacy_host_without_capability_satisfies_command_host_protocol() -> None:

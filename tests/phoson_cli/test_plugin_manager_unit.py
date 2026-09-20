@@ -169,8 +169,15 @@ def test_disable_then_enable_restores_path_plugin() -> None:
 
     # Re-enable: the path spec has no entry point, so it must be restored
     # from disabled_plugins (not rejected as "no installed entry point").
-    with patch("phoson_cli.plugin_manager._entrypoint_names", return_value=set()):
+    # ``save_config`` MUST be patched here too: without it this writes the
+    # developer's real ``~/.phoson/config.toml`` (plugins + disabled_plugins)
+    # and silently un-configures every plugin they had enabled.
+    with (
+        patch("phoson_cli.plugin_manager._entrypoint_names", return_value=set()),
+        patch("phoson_cli.plugin_manager.save_config") as save,
+    ):
         enable_plugin("path:/opt/my_plugin.py", config)
+    save.assert_called_once_with(config, only_fields={"plugins", "disabled_plugins"})
     assert "path:/opt/my_plugin.py" in config.plugins
     assert config.disabled_plugins == []
 

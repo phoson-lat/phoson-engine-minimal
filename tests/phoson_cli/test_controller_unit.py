@@ -593,6 +593,138 @@ async def test_set_model_rebuilds_engine_and_extras(tmp_path) -> None:
     )  # subagent model follows
 
 
+async def test_set_model_reuse_engine_applies_model_in_place(tmp_path) -> None:
+    """A pure model switch must not rebuild the runtime or reload plugins.
+
+    The chat client, tools and plugins are model-independent (the model rides
+    on each request's ``ModelConfig``), so ``reuse_engine`` updates only the
+    summarizer's model and the sub-agent defaults in ``context.extra``.
+    """
+    controller, _ = _make_controller(tmp_path)
+    controller.config.subagent_model = ""
+    engine = controller.engine
+    engine._loaded_plugins = [object()]  # a plugin that must NOT be closed
+
+    with (
+        patch.object(
+            controller._cw_resolver, "resolve", AsyncMock(return_value=128_000)
+        ),
+        patch("phoson_cli.controller.AgentEngine") as m_engine,
+        patch("phoson_cli.controller.build_chat") as m_chat,
+        patch("phoson_cli.controller.close_plugins", new=AsyncMock()) as m_close,
+    ):
+        await controller.set_model("other-model", reuse_engine=True)
+
+    m_engine.assert_not_called()
+    m_chat.assert_not_called()
+    m_close.assert_not_called()
+    assert controller.engine is engine
+    assert controller.current_model == "other-model"
+    assert controller.config.model == "other-model"
+    assert controller.summarizer.model == "other-model"
+    assert controller.engine.context.extra["main_model"] == "other-model"
+    assert controller.engine.context.extra["default_model"] == "other-model"
+
+
+async def test_set_model_reuse_engine_keeps_plugins_across_provider(tmp_path) -> None:
+    """A provider switch rebuilds only the chat client, not plugins/tools.
+
+    ``reuse_engine`` keeps the plugin/tool/middleware layer (so MCP
+    subprocesses and monitors are not restarted) and swaps in a fresh
+    provider-specific chat client; the engine is rebound in place.
+    """
+    controller, _ = _make_controller(tmp_path)
+    engine = controller.engine
+    engine._loaded_plugins = [object()]  # must NOT be closed
+    new_chat = MagicMock(aclose=AsyncMock())
+
+    with (
+        patch.object(
+            controller._cw_resolver, "resolve", AsyncMock(return_value=128_000)
+        ),
+        patch("phoson_cli.controller.build_chat", return_value=new_chat),
+        patch("phoson_cli.controller.load_models_file", return_value={}),
+        patch("phoson_cli.controller.close_plugins", new=AsyncMock()) as m_close,
+    ):
+        await controller.set_model("gpt-4o", provider="openai", reuse_engine=True)
+        await asyncio.sleep(0)  # let the scheduled old-chat close run
+
+    assert controller.config.provider == "openai"
+    assert controller.engine is engine  # plugins/tools/middlewares kept
+    m_close.assert_not_called()
+    assert controller.chat is new_chat
+    assert controller.engine.chat is new_chat
+    assert controller.engine.context.extra["chat"] is new_chat
+    assert controller.summarizer.chat is new_chat
+    assert controller.summarizer.provider == "openai"
+    assert controller.summarizer.model == "gpt-4o"
+
+
+async def test_set_provider_reuse_keeps_loaded_plugins(tmp_path) -> None:
+    """A provider switch must not tear down/reload an already-loaded plugin."""
+
+    class TrackedPlugin(Plugin):
+        def __init__(self) -> None:
+            self.cleanup_calls = 0
+
+        @property
+        def name(self) -> str:
+            return "tracked"
+
+        def cleanup(self) -> None:
+            self.cleanup_calls += 1
+
+    plugin = TrackedPlugin()
+    config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
+    sink = FakeSink()
+    new_chat = MagicMock(aclose=AsyncMock())
+    with (
+        patch("phoson_cli.controller.build_plugin_specs", return_value=[plugin]),
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
+    ):
+        controller = SessionController(config, sink)
+    assert plugin in controller.engine._loaded_plugins
+
+    with (
+        patch.object(
+            controller._cw_resolver, "resolve", AsyncMock(return_value=128_000)
+        ),
+        patch("phoson_cli.controller.build_chat", return_value=new_chat),
+        patch("phoson_cli.controller.load_models_file", return_value={}),
+    ):
+        await controller.set_provider("openai")
+        await asyncio.sleep(0)  # let the scheduled old-chat close run
+
+    assert controller.engine._loaded_plugins == [plugin]
+    assert plugin.cleanup_calls == 0
+    assert controller.chat is new_chat
+    assert controller.config.provider == "openai"
+
+
+async def test_set_model_reuse_engine_same_model_still_rebuilds(tmp_path) -> None:
+    """A same-model ``reuse_engine`` call rebuilds (e.g. ``/mcp`` reloads)."""
+    controller, _ = _make_controller(tmp_path)
+    fake_engine = SimpleNamespace(
+        context=SimpleNamespace(extra={}), tools=controller.tools
+    )
+    with (
+        patch.object(
+            controller._cw_resolver, "resolve", AsyncMock(return_value=128_000)
+        ),
+        patch(
+            "phoson_cli.controller.build_chat",
+            return_value=MagicMock(aclose=AsyncMock()),
+        ),
+        patch("phoson_cli.controller.AgentEngine", return_value=fake_engine),
+    ):
+        await controller.set_model("test-model", reuse_engine=True)
+
+    assert controller.engine is fake_engine
+
+
 async def test_set_model_refreshes_context_window(tmp_path) -> None:
     """Regression: the header's indicator must update on /model, not just
 
@@ -734,33 +866,38 @@ async def test_load_session_clears_attachments_and_recomputes_context(tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_load_session_rolls_back_when_metadata_loading_fails(tmp_path) -> None:
-    controller, sink = _make_controller(tmp_path)
-    old_node = controller.tree.append(
-        parent_id=None, message=Message(role="user", content="keep me")
-    )
-    controller.current_node_id = old_node.id
-    controller.session_metrics.total_cost_usd = 4.25
-    controller._context_tokens = 321
-    controller.attachments._pending.append(object())  # type: ignore[arg-type]
-    old_tree = controller.tree
-    old_metrics = controller.session_metrics
+async def test_load_session_reads_metrics_from_tree_not_list_meta(tmp_path) -> None:
+    """Resuming metrics come from the loaded tree, not a full re-listing.
+
+    Regression guard for the O(all-session-bytes) resume: ``load_session``
+    used to call ``storage.list_meta()`` (which parses every session file)
+    just to find the one it had already loaded. The tree's own ``session_meta``
+    record is authoritative, so ``list_meta`` must not be touched at all.
+    """
+    controller, _ = _make_controller(tmp_path)
 
     loaded = controller.tree.__class__.new(session_id="candidate-session")
     loaded.append(parent_id=None, message=Message(role="user", content="candidate"))
+    loaded.update_session_meta(
+        total_cost=2.5,
+        total_tokens=100,
+        total_input_tokens=60,
+        total_output_tokens=40,
+        step_count=3,
+        last_model="test-model",
+    )
     await controller.storage.save(loaded)
     controller.storage.list_meta = AsyncMock(side_effect=RuntimeError("meta failed"))
 
     outcome = await controller.load_session(loaded.session_id)
 
-    assert not outcome.ok
-    assert controller.tree is old_tree
-    assert controller.current_node_id == old_node.id
-    assert controller.session_metrics is old_metrics
-    assert controller.session_metrics.total_cost_usd == 4.25
-    assert controller.context_tokens == 321
-    assert len(controller.attachments) == 1
-    assert sink.session_ids[-1] == old_tree.session_id
+    assert outcome.ok
+    assert controller.session_metrics.total_cost_usd == 2.5
+    assert controller.session_metrics.total_input_tokens == 60
+    assert controller.session_metrics.total_output_tokens == 40
+    assert controller.session_metrics.step_count == 3
+    assert controller.session_metrics.last_model == "test-model"
+    controller.storage.list_meta.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -899,13 +1036,13 @@ async def test_load_preparation_keeps_previous_session_public_until_commit(
     preparation_started = asyncio.Event()
     release_preparation = asyncio.Event()
 
-    async def paused_list_meta():
+    async def paused_repair(candidate):
         preparation_started.set()
         await release_preparation.wait()
-        return []
+        return False
 
     controller.storage.load = AsyncMock(return_value=loaded)
-    controller.storage.list_meta = paused_list_meta  # type: ignore[method-assign]
+    controller._repair_orphaned_run = paused_repair  # type: ignore[method-assign]
 
     load_task = asyncio.create_task(controller.load_session(loaded.session_id))
     await preparation_started.wait()

@@ -14,7 +14,7 @@ from phoson_agent.models import (
     AgentDoneEvent,
     AgentRunResult,
 )
-from phoson_agent.sessions.models import SessionMeta, ConversationTree
+from phoson_agent.sessions.models import ConversationTree
 
 UTC = datetime.UTC
 
@@ -239,26 +239,30 @@ def test_append_partial_history_updates_node_id(repl: PhosonRepl) -> None:
 
 @pytest.mark.asyncio
 async def test_load_session_schema_mapping(repl: PhosonRepl, tmp_path) -> None:
-    """load_session maps SessionMeta fields to session_metrics correctly."""
+    """load_session maps the tree's persisted meta to session_metrics.
+
+    The loaded tree already carries the ``session_meta`` record (applied by
+    ``apply_tree_meta`` inside ``storage.load``), including the F-34 legacy
+    back-fill: a record with only ``total_tokens`` surfaces it under output.
+    """
     from phoson_agent.sessions.models import ConversationTree
+    from phoson_agent.sessions.serialization import apply_tree_meta
 
     session_id = "abc12345"
     fake_tree = ConversationTree.new(session_id=session_id)
-    now = datetime.datetime.now(UTC)
-
-    meta = SessionMeta(
-        id=session_id,
-        created_at=now,
-        updated_at=now,
-        message_count=0,
-        total_cost=1.5,
-        total_tokens=500,
-        step_count=3,
-        last_model="gpt-4",
+    apply_tree_meta(
+        fake_tree,
+        {
+            "type": "session_meta",
+            "session_id": session_id,
+            "total_cost": 1.5,
+            "total_tokens": 500,
+            "step_count": 3,
+            "last_model": "gpt-4",
+        },
     )
 
     repl.storage.load = AsyncMock(return_value=fake_tree)
-    repl.storage.list_meta = AsyncMock(return_value=[meta])
 
     # Patch print_history to avoid errors rendering empty history.
     repl.renderer.print_history = MagicMock()

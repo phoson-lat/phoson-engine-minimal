@@ -66,6 +66,10 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
     # classic roles (Ctrl+C also keeps its SIGINT handling elsewhere).
     "exit": ["c-q", "c-c"],
+    # Ctrl+O: push-to-talk dictation. It does NOT touch the existing prompt
+    # text — the transcript is inserted at the cursor (and streamed live),
+    # so it can be used repeatedly on the same message.
+    "dictate": ["c-o"],
 }
 
 #: Action → no-arg method on ``PhosonApp`` that performs it. The single
@@ -89,6 +93,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "undo_jump": "undo_jump",
     "toggle_permission_mode": "cycle_permission_mode",
     "command_palette": "open_command_palette",
+    "dictate": "handle_dictate",
     "exit": "request_exit",
 }
 
