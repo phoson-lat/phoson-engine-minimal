@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.43.0 (2026-09-20)
+
+### Feat
+
+- **stt**: add `phoson_plugin_stt`, an on-device multilingual speech-to-text
+  plugin backed by Moonshine (optional `[stt]` extra). Contributes a
+  `transcribe_audio` agent tool and a `Ctrl+O` push-to-talk dictation flow
+  whose transcript streams live into the prompt without consuming it. Adds
+  the `prefill_prompt` / `stream_prompt_text` host APIs so plugins can place
+  text in the user's editable prompt; hosts without the extra start fine.
+
+### Perf
+
+- **llm**: resolve chat adapters lazily (PEP 562). Importing a cheap submodule
+  such as `phoson_llm.schemas` no longer loads every adapter — and therefore
+  the `openai`/`anthropic` SDKs — into the process; `build_chat` imports only
+  the selected provider, and `phoson_cli.config` no longer imports them at
+  module load. Cold `phoson_cli.__main__` import: ~1.3 s / 77 MB → 0.35 s / 46 MB.
+- **cli**: reuse the runtime (plugins, tools, middleware) on model and provider
+  switches. A pure model switch is applied in place; a provider switch rebuilds
+  only the provider-specific chat client. `/model`, `/provider` and the model
+  picker use it, so switching no longer restarts MCP subprocesses or monitors.
+- **cli**: resume reads session metrics from the already-loaded tree instead of
+  re-listing — and re-parsing — every session file (O(all sessions) → O(session)).
+- **agent**: cache the whole OpenRouter/vLLM model listing in the context-window
+  resolver, so switching between served models no longer re-downloads the
+  catalog once per model.
+
+### Fix
+
+- **test**: the plugin-manager disable/enable test no longer writes the
+  developer's real `~/.phoson/config.toml` (`save_config` is now patched).
+- **types**: annotate the lazy adapter resolver as a generic callable so pyright
+  accepts each provider's constructor signature; declare the lazy names under
+  `TYPE_CHECKING` for type-checked re-exports and a clean `__all__`.
+
+### Chore
+
+- **scripts**: add standalone MCP and tool-definition measurement helpers.
+
 ## v0.42.0 (2026-09-17)
 
 ### Feat
