@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.43.2 (2026-09-20)
+
+### Fix
+
+- **agent**: refresh the summarizer's provider-derived state on a runtime
+  model/provider switch (#242). The tiktoken estimator (`openai` →
+  `o200k_base`, all others → `cl100k_base`) and the context-window resolver
+  endpoints were built once at construction, so switching into `openai` kept
+  `cl100k_base` (~10-20% token skew feeding the context meter and the
+  auto-compaction gate) and the compaction lookup kept querying the old
+  endpoint. New `SummarizationMiddleware.rebind_runtime()` and
+  `ContextWindowResolver.rebind_endpoints()`: the estimator is rebuilt only
+  when the provider actually changed, and learned overrides plus the caches
+  of untouched providers are preserved. Applies to both the reuse fast path
+  and the full rebuild, and the header resolver is repointed too.
+
+### Docs
+
+- **llm**: document that `from phoson_llm import *` defeats the lazy SDK
+  loading, with clean-subprocess and AST guards to keep it out (#243).
+
 ## v0.43.1 (2026-09-20)
 
 ### Fix
