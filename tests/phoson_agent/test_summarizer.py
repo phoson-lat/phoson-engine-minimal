@@ -418,3 +418,59 @@ def test_summarization_middleware_resolver_initialized() -> None:
 
     assert mw._resolver is not None
     assert mw._estimator is not None
+
+
+# ── rebind_runtime: provider-derived state (#242) ────────────────────
+
+
+class TestRebindRuntime:
+    """``_estimator``/``_resolver`` are built once; a provider switch must
+    refresh them without discarding unrelated caches or learned overrides."""
+
+    def test_provider_change_switches_encoding_and_repoints_resolver(self) -> None:
+        mw = SummarizationMiddleware(
+            provider="openrouter",
+            model="m",
+            ollama_base_url="http://old-ollama:11434",
+            openrouter_api_key="k1",
+            vllm_base_url="http://old-vllm:8000/v1",
+        )
+        assert mw._estimator._encoding.name == "cl100k_base"
+
+        mw.provider = "openai"
+        mw.vllm_base_url = "http://new-vllm:9999/v1"
+        mw.rebind_runtime()
+
+        assert mw._estimator._encoding.name == "o200k_base"
+        assert mw._resolver._vllm_base_url == "http://new-vllm:9999/v1"
+
+    def test_same_provider_keeps_estimator_and_resolver_identity(self) -> None:
+        mw = SummarizationMiddleware(provider="ollama", model="m")
+        estimator = mw._estimator
+        resolver = mw._resolver
+
+        mw.rebind_runtime()  # same provider, same endpoints
+
+        assert mw._estimator is estimator
+        assert mw._resolver is resolver
+
+    def test_learned_override_survives_rebind(self) -> None:
+        mw = SummarizationMiddleware(provider="vllm", model="m")
+        mw._resolver.override("vllm", "m", 8192)
+
+        mw.rebind_runtime()  # endpoints unchanged
+
+        assert mw._resolver._overrides == {"vllm/m": 8192}
+
+    def test_changed_endpoint_clears_only_that_providers_cache(self) -> None:
+        mw = SummarizationMiddleware(
+            provider="vllm", model="m", vllm_base_url="http://old:8000/v1"
+        )
+        mw._resolver._vllm_cache["m"] = 4096
+        mw._resolver._ollama_cache["other"] = 8192
+
+        mw.vllm_base_url = "http://new:9999/v1"
+        mw.rebind_runtime()
+
+        assert mw._resolver._vllm_cache == {}
+        assert mw._resolver._ollama_cache == {"other": 8192}

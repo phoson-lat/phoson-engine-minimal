@@ -104,6 +104,39 @@ class ContextWindowResolver:
         if context_window > 0:
             self._overrides[f"{provider}/{model}"] = int(context_window)
 
+    def rebind_endpoints(
+        self,
+        *,
+        ollama_base_url: str,
+        openrouter_api_key: str | None,
+        vllm_base_url: str,
+    ) -> None:
+        """Point the resolver at possibly-new provider endpoints, in place.
+
+        The resolver is built once (by the summarizer middleware and by the
+        CLI controller); a provider switch or a changed ``models.json``
+        base-url override at runtime must not leave it querying the previous
+        endpoint. Only an endpoint that actually changed has its cache
+        dropped, and every window learned via :meth:`override` is preserved —
+        an unchanged provider must not be re-fetched, nor a limit discovered
+        from a provider error forgotten.
+        """
+        normalized_ollama = ollama_base_url.rstrip("/")
+        if normalized_ollama != self._ollama_base_url:
+            self._ollama_base_url = normalized_ollama
+            self._ollama_cache.clear()
+
+        if openrouter_api_key != self._openrouter_api_key:
+            self._openrouter_api_key = openrouter_api_key
+            self._openrouter_cache.clear()
+            self._openrouter_windows = None
+
+        normalized_vllm = vllm_base_url.rstrip("/")
+        if normalized_vllm != self._vllm_base_url:
+            self._vllm_base_url = normalized_vllm
+            self._vllm_cache.clear()
+            self._vllm_windows = None
+
     async def resolve(
         self,
         provider: str,
