@@ -36,7 +36,19 @@ def is_grouped_help(entries: HelpEntries) -> bool:
 
 @runtime_checkable
 class CommandHost(Protocol):
-    """UI adapter used by :class:`~phoson_cli.commands.CommandHandler`."""
+    """UI adapter used by :class:`~phoson_cli.commands.CommandHandler`.
+
+    Optional, duck-typed capabilities that are deliberately *not* protocol
+    members (a legacy host must still satisfy ``isinstance(host, CommandHost)``):
+
+    - ``picker_unavailable(usage) -> bool`` — whether interactive pickers
+      can be shown at all.
+    - ``insert_prompt_text(text) -> None`` — place text in the user's
+      editable prompt (used by plugin dictation such as ``Ctrl+O`` so
+      dictated text can be reviewed and edited before sending). Hosts
+      without an editable prompt simply omit it; callers use ``getattr``.
+    - ``run_bash_line(command) -> None`` — run a ``!``-prefixed shell line.
+    """
 
     def print_info(self, message: str) -> None: ...
 
@@ -143,6 +155,10 @@ class RendererCommandHost:
     def print_renderable(self, renderable: object) -> None:
         """Print a Rich renderable (e.g. the colored /tree)."""
         self.repl.renderer.console.print(renderable)
+
+    def insert_prompt_text(self, text: str) -> None:
+        """Queue *text* for the next classic prompt (reviewed before sending)."""
+        self.repl.request_prefill(text)
 
     async def pick_model(
         self,

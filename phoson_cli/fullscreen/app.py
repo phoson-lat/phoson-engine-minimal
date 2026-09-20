@@ -73,7 +73,7 @@ from ..config import (
     enabled_providers_from_config,
 )
 from ..pickers import BasePicker
-from ..commands import Command, CommandHandler
+from ..commands import Command, CommandHandler, PluginCommandContext
 from .chat_pane import (
     ChatPane,
     ChatScrollbarMargin,
@@ -829,6 +829,34 @@ class PhosonApp:
         await _tick_activity_indicators_impl(self)
 
     # ── T-12: command palette + `!` bash ───────────────────────────────
+
+    def handle_dictate(self) -> None:
+        """Ctrl+O: toggle plugin-provided dictation (push-to-talk).
+
+        The dictation itself lives in a plugin (``phoson_plugin_stt``); this
+        only finds a loaded plugin exposing the duck-typed ``dictate`` entry
+        point and runs it on a background task so the app keeps repainting —
+        which is what makes the live preview visible. Unlike a slash command,
+        it never consumes the prompt: the transcript is inserted at the cursor
+        on top of whatever the user already typed.
+        """
+        self.app.create_background_task(self._dictate())
+
+    async def _dictate(self) -> None:
+        plugins = getattr(self.repl._controller.engine, "_loaded_plugins", [])
+        plugin = next(
+            (p for p in plugins if callable(getattr(p, "dictate", None))), None
+        )
+        if plugin is None:
+            self.sink.notify(
+                "warn",
+                "No dictation plugin loaded — enable phoson_plugin_stt.",
+            )
+            return
+        context = PluginCommandContext(
+            plugin_name=plugin.name, repl=self.repl, host=self._commands.host
+        )
+        await plugin.dictate(context)
 
     def open_command_palette(self) -> None:
         """Ctrl+P: open the command palette over every slash command (T-12).

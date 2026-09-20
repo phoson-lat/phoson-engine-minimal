@@ -19,6 +19,7 @@ list``, ...) are unaffected since they never call into these methods.
 
 import re
 import time
+import asyncio
 from typing import TYPE_CHECKING, cast
 
 from phoson_agent.sessions.models import SessionMeta
@@ -40,6 +41,13 @@ class FullScreenCommandHost:
 
     def __init__(self, app: "PhosonApp") -> None:
         self.app = app
+        # Length of the live preview currently sitting in the prompt buffer
+        # (see ``stream_prompt_text``); 0 when no preview is active.
+        self._preview_len = 0
+        # Periodic-repaint task kept alive while a preview is on screen: a
+        # full-screen Application only redraws on input, so without this a
+        # live preview would never appear.
+        self._preview_ticker = None
 
     def picker_unavailable(self, usage: str) -> bool:  # noqa: ARG002
         return False
@@ -80,6 +88,51 @@ class FullScreenCommandHost:
         self.app.sink.blocks.append(renderable)
         self.app.sink.dirty = True
         self.app.app.invalidate()
+
+    def insert_prompt_text(self, text: str) -> None:
+        """Insert *text* into the full-screen prompt buffer, for review.
+
+        Mirrors the clipboard paste and the rewind prefill: write into the
+        prompt TextArea's buffer, then invalidate so the frame repaints. The
+        text is appended (not replaced) so anything the user already typed is
+        preserved.
+        """
+        self.app._prompt_input.buffer.insert_text(text)
+        self.app.app.invalidate()
+
+    def stream_prompt_text(self, text: str) -> None:
+        """Replace the live prompt preview with *text* (empty clears it).
+
+        Unlike :meth:`insert_prompt_text` (append, leave alone), repeated
+        calls rewrite the *same* segment, which is what a dictation preview
+        needs: the partial transcript is re-emitted as the model revises it.
+        The host tracks how many characters it inserted, so the text that was
+        already in the prompt is never touched.
+
+        A full-screen ``Application`` only redraws on input, so a short-lived
+        ticker is kept alive while a preview is on screen (and stopped when
+        it clears) — the same mechanism the in-chat activity spinner uses.
+        """
+        buffer = self.app._prompt_input.buffer
+        if self._preview_len:
+            buffer.delete_before_cursor(count=self._preview_len)
+        if text:
+            buffer.insert_text(text)
+        self._preview_len = len(text)
+        self.app.app.invalidate()
+        if text and self._preview_ticker is None:
+            self._preview_ticker = self.app.app.create_background_task(
+                self._preview_tick()
+            )
+
+    async def _preview_tick(self) -> None:
+        """Force periodic repaints while a live preview is on screen."""
+        try:
+            while self._preview_len:
+                await asyncio.sleep(0.1)
+                self.app.app.invalidate()
+        finally:
+            self._preview_ticker = None
 
     async def pick_model(
         self,

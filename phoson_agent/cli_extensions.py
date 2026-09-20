@@ -215,6 +215,30 @@ class CliCommandContext(Protocol):
 
     def notify(self, kind: Literal["info", "warn", "error"], message: str) -> None: ...
 
+    def prefill_prompt(self, text: str) -> bool:
+        """Place *text* in the user's editable prompt buffer, when supported.
+
+        Returns ``True`` when the host put the text in its input so the user
+        can review, edit and submit it; ``False`` when the active front end
+        has no editable prompt (or the host chooses not to). Plugins must
+        treat ``False`` as "show it another way", never as an error.
+        """
+        ...
+
+    def stream_prompt_text(self, text: str) -> bool:
+        """Show a live preview in the prompt, replacing the previous preview.
+
+        Unlike :meth:`prefill_prompt` (which appends and leaves the text
+        alone), successive calls replace the *same* preview segment, so a
+        plugin can update it many times while work is in progress (e.g. a
+        dictation preview that is rewritten as the model changes its mind).
+        Calling with ``""`` removes the preview. Returns ``True`` when the
+        host supports live previews; hosts that cannot repaint their prompt
+        mid-command return ``False`` and plugins fall back to the final
+        :meth:`prefill_prompt`.
+        """
+        ...
+
 
 __all__ = [
     "Choice",
