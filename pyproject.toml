@@ -142,7 +142,12 @@ memory = [
     "qdrant-client>=1.9.0",
 ]
 mcp = ["mcp>=1.0.0,<2.0.0"]
-stt = ["moonshine-voice>=0.1.5"]
+# Moonshine ships no wheel/sdist for macOS on Intel (x86_64), but the plugin
+# degrades gracefully when the runtime is absent, so exclude only that
+# platform rather than breaking `uv sync --all-extras` (release binaries).
+stt = [
+    "moonshine-voice>=0.1.5; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+]
 ssh = ["asyncssh>=2.14.0"]
 computeruse = [
     "mss>=10.0.0",
