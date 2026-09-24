@@ -4,7 +4,7 @@ import os
 import re
 import json
 import shutil
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from pathlib import Path
 
 from .config import save_config
@@ -424,7 +424,9 @@ class _MCPSubcommands:
             return True
 
         # Bare form: interactive menu of configured servers + their tools.
-        pick = getattr(self.r, "pick_mcp", None)
+        # Typed Any: ``pick_mcp`` is an optional host capability, not part of
+        # the CommandHost protocol, so getattr would otherwise narrow to object.
+        pick: Any = getattr(self.r, "pick_mcp", None)
         if not callable(pick):
             self.r.print_error("Usage: /mcp toggle <server> [tool]")
             return True
@@ -444,7 +446,7 @@ class _MCPSubcommands:
             )
             return new_state
 
-        result = await pick(servers, on_toggle=_on_toggle)
+        result = await cast(Any, pick)(servers, on_toggle=_on_toggle)
         if result.changes:
             await self._reapply_mcp()
         return True
