@@ -161,6 +161,24 @@ is currently `disabled` re-enables it.
 The tool argument accepts either the remote name (`read_file`) or the
 local prefixed name the model sees (`mcp_filesystem_read_file`).
 
+Run `/mcp toggle` **without arguments** to open the interactive menu: every
+configured server is listed with its tools nested underneath, and
+`Enter`/`space` flips the selected server (or tool) on or off. Changes are
+persisted as you go and the engine is reloaded once when the menu closes.
+`q`/`Esc` closes it.
+
+```
+> /mcp toggle
+  MCP Servers
+  ────────────────────────────────────────────────────────────────
+  ▸ ● filesystem       [stdio]   npx -y server-filesystem /tmp
+        ✓ read_file
+        ✗ write_file
+    ○ github           [stdio]  (disabled)   npx -y server-github
+
+  ↑/↓ navigate  ·  Enter/space toggle  ·  q close
+```
+
 ### `/mcp help`
 Shows help for the MCP commands.
 
@@ -173,6 +191,7 @@ MCP (Model Context Protocol) commands:
   /mcp config <path>   Set MCP config file path
   /mcp toggle <server> Toggle a whole server on/off
   /mcp toggle <server> <tool>  Toggle one tool on/off
+  /mcp toggle          Open the interactive server/tool menu
   /mcp help            Show this help
 ```
 

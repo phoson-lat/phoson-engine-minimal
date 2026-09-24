@@ -120,6 +120,9 @@ class PhosonRepl:
         # Text queued by plugin dictation (Ctrl+O) to appear pre-filled in the
         # next prompt; consumed by the next prompt_async.
         self._prefill_text: str = ""
+        # Last terminal title we pushed (OSC 2) so a per-frame sync only writes
+        # when the session title or run state actually changes.
+        self._terminal_title: str | None = None
 
         # The session runtime — engine, tree, metrics, run lifecycle —
         # lives in the UI-independent controller; this REPL is its
@@ -297,7 +300,11 @@ class PhosonRepl:
 
     async def _run_agent(self, user_input: str):
         """Run one agent turn (delegates to the controller)."""
-        return await self._controller.run_turn(user_input)
+        self.refresh_terminal_title(working=True)
+        try:
+            return await self._controller.run_turn(user_input)
+        finally:
+            self.refresh_terminal_title(working=False)
 
     def new_session(self) -> None:
         """Start a fresh session, resetting tree and metrics."""
@@ -381,6 +388,24 @@ class PhosonRepl:
         A background LLM title must never overwrite a title the user chose.
         """
         self._controller.note_user_title()
+
+    def refresh_terminal_title(self, working: bool | None = None) -> None:
+        """Sync the terminal window title with the session + run state.
+
+        The title is the session title (falling back to ``phoson-cli``) and
+        gets a ``*`` prefix while the agent is working — e.g. ``* Refactor X``.
+        ``working`` defaults to the controller's live run state; pass it
+        explicitly from a front end that tracks its own in-flight flag.
+        Deduplicated against the last write so a per-frame caller is cheap.
+        """
+        from .terminal_title import set_title, format_title
+
+        is_working = self._controller.is_running if working is None else working
+        title = format_title(self.tree.title, is_working)
+        if title == self._terminal_title:
+            return
+        self._terminal_title = title
+        set_title(title)
 
     def undo_last_turn(self) -> tuple[bool, str]:
         """Move the cursor back to just before the last user turn."""
@@ -536,6 +561,9 @@ class PhosonRepl:
         while True:
             try:
                 prompt_fragments = self._prompt_fragments()
+                # Keep the terminal window title in sync (picks up an async
+                # LLM title or /title that landed while idle) before prompting.
+                self.refresh_terminal_title(working=False)
                 # Text queued by plugin dictation (Ctrl+O): shown
                 # pre-filled so the user can review/edit before sending.
                 prefill, self._prefill_text = self._prefill_text, ""

@@ -824,6 +824,9 @@ def _run_cli() -> None:
             print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     _apply_overrides(config, options)
+    # I-112 follow-up: honour the user's warning-notice preference (config,
+    # env or a previous `/warnings off`) for the whole run.
+    warnings_hook.set_enabled(getattr(config, "show_warnings", True))
     if options.theme:
         _prepare_cli_theme(config)
 

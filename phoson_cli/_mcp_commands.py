@@ -297,34 +297,15 @@ class _MCPSubcommands:
             ]
         return []
 
-    async def _toggle(self, rest: str) -> bool:
-        if not rest:
-            self.r.print_error("Usage: /mcp toggle <server> [tool]")
-            return True
-
-        parts = rest.split(None, 1)
-        server = parts[0]
-        tool = parts[1].strip() if len(parts) > 1 else None
-
-        prefix = "mcp"
+    def _tool_prefix(self) -> str:
+        """Local tool-name prefix configured on the MCP plugin (default "mcp")."""
         for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
             if getattr(plugin, "name", "") == "phoson-plugin-mcp":
-                prefix = str(getattr(plugin, "tool_name_prefix", "mcp"))
-                break
+                return str(getattr(plugin, "tool_name_prefix", "mcp"))
+        return "mcp"
 
-        config_file = self.repl.config.mcp_config_file
-        try:
-            target, new_state = toggle_mcp_config(
-                config_file, server, tool=tool, tool_prefix=prefix
-            )
-        except ValueError as e:
-            self.r.print_error(str(e))
-            return True
-
-        mark = "✅" if new_state else "❌"
-        state = "enabled" if new_state else "disabled"
-        self.r.print_info(f"{mark} {target} → {state}  ·  saved")
-
+    async def _reapply_mcp(self) -> None:
+        """Rebuild the engine now (or warn) after a persisted MCP change."""
         if self.repl.config.enable_mcp:
             await self.repl.set_model(self.repl.current_model)
         else:
@@ -332,6 +313,140 @@ class _MCPSubcommands:
                 "MCP is globally disabled; the change is saved but will not "
                 "apply until '/mcp enable'."
             )
+
+    def _server_views(self):
+        """Snapshot configured servers (and their tools) for the toggle picker.
+
+        The ``mcps.json`` file is authoritative for the server list and the
+        explicit ``tools`` map; the loaded MCP plugin (when present) augments
+        it with tool names discovered at runtime so enabled-but-untouched
+        tools still appear in the menu.
+        """
+        from .mcp_picker import McpToolView, McpServerView
+
+        config_file = self.repl.config.mcp_config_file
+        if not config_file.exists():
+            return []
+        try:
+            with open(config_file) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return []
+        servers_data = data.get("mcpServers")
+        if not isinstance(servers_data, dict) or not servers_data:
+            return []
+
+        prefix = self._tool_prefix()
+        runtime: dict[str, dict[str, bool]] = {}
+        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+            if getattr(plugin, "name", "") != "phoson-plugin-mcp":
+                continue
+            # Authoritative remote names, when discovery already ran.
+            for server_name in servers_data:
+                discovered = getattr(plugin, "_server_tool_lists", {}).get(server_name)
+                for tool in discovered or []:
+                    name = getattr(tool, "name", None)
+                    if name is not None:
+                        runtime.setdefault(server_name, {})[str(name)] = bool(
+                            plugin.is_tool_enabled(server_name, str(name))
+                        )
+            # Enabled tools the model currently sees (local names).
+            for tool in getattr(plugin, "tools_cache", []) or []:
+                local = getattr(tool, "name", "")
+                if not local.startswith(f"{prefix}_"):
+                    continue
+                for server_name in servers_data:
+                    safe_server = _safe_name_part(server_name)
+                    local_prefix = f"{prefix}_{safe_server}_"
+                    if not local.startswith(local_prefix):
+                        continue
+                    remote = local[len(local_prefix) :]
+                    # Skip the deferred-discovery proxy tool (`..._call`).
+                    if remote == "call":
+                        break
+                    runtime.setdefault(server_name, {}).setdefault(remote, True)
+                    break
+
+        views: list[McpServerView] = []
+        for server_name, server_cfg in servers_data.items():
+            if not isinstance(server_cfg, dict):
+                server_cfg = {}
+            transport = str(server_cfg.get("transport", "stdio"))
+            if transport in {"sse", "http", "streamable_http"}:
+                target = str(server_cfg.get("url", ""))
+            else:
+                target = " ".join(
+                    [
+                        str(server_cfg.get("command", "")),
+                        *[str(a) for a in server_cfg.get("args", [])],
+                    ]
+                ).strip()
+            tool_states: dict[str, bool] = {}
+            for name, enabled in (server_cfg.get("tools") or {}).items():
+                tool_states[str(name)] = bool(enabled)
+            for name, enabled in runtime.get(server_name, {}).items():
+                tool_states.setdefault(name, enabled)
+            views.append(
+                McpServerView(
+                    name=server_name,
+                    transport=transport,
+                    target=target,
+                    enabled=bool(server_cfg.get("enabled", True)),
+                    tools=[
+                        McpToolView(name=name, enabled=enabled)
+                        for name, enabled in sorted(tool_states.items())
+                    ],
+                )
+            )
+        return views
+
+    async def _toggle(self, rest: str) -> bool:
+        config_file = self.repl.config.mcp_config_file
+        prefix = self._tool_prefix()
+
+        # Explicit form: /mcp toggle <server> [tool] — unchanged behaviour.
+        if rest:
+            parts = rest.split(None, 1)
+            server = parts[0]
+            tool = parts[1].strip() if len(parts) > 1 else None
+            try:
+                target, new_state = toggle_mcp_config(
+                    config_file, server, tool=tool, tool_prefix=prefix
+                )
+            except ValueError as e:
+                self.r.print_error(str(e))
+                return True
+
+            mark = "✅" if new_state else "❌"
+            state = "enabled" if new_state else "disabled"
+            self.r.print_info(f"{mark} {target} → {state}  ·  saved")
+            await self._reapply_mcp()
+            return True
+
+        # Bare form: interactive menu of configured servers + their tools.
+        pick = getattr(self.r, "pick_mcp", None)
+        if not callable(pick):
+            self.r.print_error("Usage: /mcp toggle <server> [tool]")
+            return True
+
+        servers = self._server_views()
+        if not servers:
+            self.r.print_error(
+                f"No MCP servers configured in {config_file}. "
+                "Run '/mcp init' or edit the file, then retry."
+            )
+            return True
+
+        def _on_toggle(server: str, tool: str | None) -> bool | None:
+            # Let the picker surface a ValueError in its status line.
+            _target, new_state = toggle_mcp_config(
+                config_file, server, tool=tool, tool_prefix=prefix
+            )
+            return new_state
+
+        result = await pick(servers, on_toggle=_on_toggle)
+        if result.changes:
+            await self._reapply_mcp()
         return True
 
     async def _enable(self) -> bool:
@@ -388,6 +503,7 @@ class _MCPSubcommands:
             "  /mcp config <path>   Set MCP config file path",
             "  /mcp toggle <server> Toggle a whole server on/off",
             "  /mcp toggle <server> <tool>  Toggle one tool on/off",
+            "  /mcp toggle          Open the interactive server/tool menu",
             "  /mcp help            Show this help",
             "",
             f"Default config location: {self.repl.config.mcp_config_file}",

@@ -26,6 +26,7 @@ from phoson_agent.sessions.models import SessionMeta
 
 from ..theme import Theme, ThemeRegistry
 from ..models import ModelOption
+from ..mcp_picker import McpServerView, McpPickerResult
 from ..command_host import HelpEntry, HelpEntries, is_grouped_help
 from ..model_picker import ModelPickerResult
 from ..theme_picker import ThemePickerResult, build_theme_picker
@@ -235,6 +236,18 @@ class FullScreenCommandHost:
 
     async def confirm(self, prompt: str) -> bool:
         return await self.app.run_float_confirm(prompt)
+
+    async def pick_mcp(
+        self,
+        servers: list[McpServerView],
+        *,
+        on_toggle,
+    ) -> McpPickerResult:
+        """Host the MCP server/tool toggle picker as a modal Float."""
+        from ..mcp_picker import build_mcp_picker
+
+        picker = build_mcp_picker(servers, on_toggle=on_toggle, theme=self.app.theme)
+        return await self.app.run_float_picker(picker)
 
     def apply_theme(self, theme: Theme) -> None:
         """Full-screen front end: re-color the whole application (E4)."""

@@ -16,6 +16,7 @@ from phoson_agent.sessions.models import SessionMeta
 
 from .theme import Theme
 from .models import ModelOption
+from .mcp_picker import McpServerView, McpPickerResult
 from .model_picker import ModelPickerResult
 from .theme_picker import ThemePickerResult
 from .session_picker import SessionPickerResult
@@ -48,6 +49,9 @@ class CommandHost(Protocol):
       dictated text can be reviewed and edited before sending). Hosts
       without an editable prompt simply omit it; callers use ``getattr``.
     - ``run_bash_line(command) -> None`` — run a ``!``-prefixed shell line.
+    - ``pick_mcp(servers, *, on_toggle) -> McpPickerResult`` — open the
+      interactive MCP server/tool toggle picker (``/mcp toggle`` with no
+      argument). Hosts without it fall back to the textual usage line.
     """
 
     def print_info(self, message: str) -> None: ...
@@ -219,6 +223,21 @@ class RendererCommandHost:
             sessions=sessions,
             current_id=current_id,
             page_size=15,
+            theme=getattr(self.repl, "theme", None),
+        )
+
+    async def pick_mcp(
+        self,
+        servers: list[McpServerView],
+        *,
+        on_toggle,
+    ) -> McpPickerResult:
+        """Open the MCP server/tool toggle picker (classic full-screen app)."""
+        from .mcp_picker import pick_mcp
+
+        return await pick_mcp(
+            servers,
+            on_toggle=on_toggle,
             theme=getattr(self.repl, "theme", None),
         )
 

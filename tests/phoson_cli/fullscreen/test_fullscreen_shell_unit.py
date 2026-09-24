@@ -1252,6 +1252,14 @@ def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
     assert app._short_cwd(Path.cwd()) in text
 
 
+def test_header_prefixes_brand_with_asterisk(app: PhosonApp) -> None:
+    """The brand is rendered as ``* phoson`` (leading decorative marker)."""
+    from prompt_toolkit.formatted_text import to_formatted_text
+
+    plain = "".join(text for _style, text in to_formatted_text(app._get_header_text()))
+    assert plain.startswith("* phoson")
+
+
 def test_header_hides_attachment_count_when_none_pending(app: PhosonApp) -> None:
     assert "📎" not in app._get_header_text().value
 
