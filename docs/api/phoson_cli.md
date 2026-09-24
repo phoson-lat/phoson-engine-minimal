@@ -265,6 +265,7 @@ Start the REPL and type natural language or commands.
 | `/delete`         | Delete a saved session                  |
 | `/label`          | Label current node                      |
 | `/notify`         | Notify the terminal when a run finishes (`/notify <bell\|desktop\|off>`, default `off`) |
+| `/warnings`       | Show or set CLI warning notices (`/warnings <on\|off>`, default `on`) |
 | `/details`        | Toggle tool-card bodies (diffs, write summaries, bash output) |
 | `/about`          | Show the Phoson wordmark and about info |
 | `/keys`           | List key bindings and how to remap them |

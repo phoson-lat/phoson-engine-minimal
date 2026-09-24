@@ -525,6 +525,9 @@ class PhosonApp:
             key_bindings=merge_key_bindings([base_kb, float_kb]),
             full_screen=True,
             mouse_support=True,
+            # Keep the OS window title in sync with the session + run state
+            # (the session title, with a ``*`` while a turn is in flight).
+            before_render=self._sync_terminal_title,
             # I-84: floor on repaint frequency so a burst of invalidations
             # coalesces into one layout/ANSI pass. Deliberately BELOW the
             # activity tick interval (0.12 s) so a spinner tick is never
@@ -724,6 +727,18 @@ class PhosonApp:
         Body in :mod:`phoson_cli.fullscreen.turn_controller` (#187).
         """
         return _is_run_in_flight_impl(self)
+
+    def _sync_terminal_title(self, _application: object = None) -> None:
+        """Push the session/run-state title to the OS window (OSC 2).
+
+        Registered as the ``before_render`` handler so the title follows the
+        session title and the in-flight ``*`` marker for free, without adding
+        a repaint path. Deduplication lives on the repl, so a busy spinner
+        that renders many times only writes when the title actually changes.
+        """
+        refresh = getattr(self.repl, "refresh_terminal_title", None)
+        if callable(refresh):
+            refresh(self._is_run_in_flight())
 
     def _start_operation(
         self, coro: Coroutine[Any, Any, Any], kind: str

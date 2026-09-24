@@ -175,6 +175,14 @@ class PhosonConfig:
     # PHOSON_NOTIFY_ON_COMPLETION env var. TTY-gated so piped/script output
     # is never polluted.
     notify_on_completion: str = "off"
+    # ── CLI warning notices ─────────────────────────────────────────────
+    # Master switch for the I-112 warning channel: internal soft-fail
+    # warnings (context-window / model-listing fallbacks, invalid config
+    # values) surface as a styled notice. Set to ``False`` to silence them
+    # without losing Python's normal warning handling elsewhere. Toggle at
+    # runtime with ``/warnings off``; persisted via ``show_warnings`` in
+    # config.toml or the PHOSON_SHOW_WARNINGS env var.
+    show_warnings: bool = True
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
     tool_budget_tokens: int = 8000
@@ -1035,6 +1043,9 @@ def load_config() -> PhosonConfig:
             fd,
             d.notify_on_completion,
         ).lower(),
+        show_warnings=_resolve_bool(
+            "PHOSON_SHOW_WARNINGS", "show_warnings", fd, d.show_warnings
+        ),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
         mcp_config_file=Path(
             _resolve_str(
@@ -1549,6 +1560,7 @@ def save_config(
         ("loop_detect_mode", getattr(config, "loop_detect_mode", None)),
         ("llm_max_attempts", getattr(config, "llm_max_attempts", None)),
         ("notify_on_completion", getattr(config, "notify_on_completion", None)),
+        ("show_warnings", getattr(config, "show_warnings", None)),
         ("llm_titles", getattr(config, "llm_titles", None)),
         ("title_model", getattr(config, "title_model", None)),
         ("title_timeout_s", getattr(config, "title_timeout_s", None)),

@@ -226,6 +226,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/permissions",
             "/details",
             "/notify",
+            "/warnings",
             "/mcp",
             "/setup",
             "/update",
@@ -366,6 +367,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/notify",),
         "Notify the terminal when a run finishes: /notify <bell|desktop|off>",
         "_cmd_notify",
+    ),
+    CommandSpec(
+        ("/warnings",),
+        "Show or set CLI warning notices: /warnings <on|off>",
+        "_cmd_warnings",
     ),
     CommandSpec(
         ("/agents-md",),
@@ -1543,6 +1549,32 @@ class CommandHandler:
         self.repl.config.notify_on_completion = arg
         save_config(self.repl.config, only_fields={"notify_on_completion"})
         r.print_info(f"Notify on completion → {arg}  ·  saved")
+        return True
+
+    async def _cmd_warnings(self, cmd: Command) -> bool:
+        """Show or set CLI warning notices (I-112 channel)."""
+        from phoson_cli import warnings_hook
+
+        r = self._r
+        current = bool(getattr(self.repl.config, "show_warnings", True))
+        arg = cmd.args.strip().lower()
+
+        if arg in ("", "status"):
+            r.print_info(
+                f"CLI warning notices: {'on' if current else 'off'}"
+                "  ·  usage: /warnings <on|off>"
+            )
+            return True
+
+        if arg not in ("on", "off"):
+            r.print_error(f"Unknown option: {arg!r}  ·  use on or off")
+            return True
+
+        new = arg == "on"
+        self.repl.config.show_warnings = new
+        save_config(self.repl.config, only_fields={"show_warnings"})
+        warnings_hook.set_enabled(new)
+        r.print_info(f"CLI warning notices → {'on' if new else 'off'}  ·  saved")
         return True
 
     async def _cmd_agents_md(self, cmd: Command) -> bool:  # noqa: ARG002

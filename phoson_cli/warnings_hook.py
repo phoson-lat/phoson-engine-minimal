@@ -55,6 +55,24 @@ _fullscreen_printers: list[Callable[[str], None] | None] = []
 
 _installed = False
 
+#: Master switch for the notice channel. When ``False`` the hooks stay
+#: installed but emit nothing, so a user who finds the soft-fail notices
+#: noisy can silence them (``show_warnings = false`` in config.toml, the
+#: PHOSON_SHOW_WARNINGS env var, or ``/warnings off``) without also losing
+#: Python's normal warning handling elsewhere.
+_enabled = True
+
+
+def set_enabled(enabled: bool) -> None:
+    """Globally enable/disable CLI warning notices (see :data:`_enabled`)."""
+    global _enabled
+    _enabled = bool(enabled)
+
+
+def is_enabled() -> bool:
+    """Whether CLI warning notices are currently shown."""
+    return _enabled
+
 
 @dataclass
 class _InstallScope:
@@ -121,6 +139,8 @@ def _hooked_showwarning(
     ``filename``/``lineno`` are deliberately unused — that is the whole point (no
     internal paths / code lines reach the user).
     """
+    if not _enabled:
+        return
     if _fullscreen_active:
         if _fullscreen_notice_printer is not None:
             _fullscreen_notice_printer(f"{category.__name__}: {_one_line(message)}")
@@ -137,6 +157,8 @@ class _PhosonNoticeHandler(logging.Handler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
+        if not _enabled:
+            return
         if record.levelno < logging.WARNING:
             return
         if not record.name.startswith(_PHOSON_LOGGER_PREFIXES):

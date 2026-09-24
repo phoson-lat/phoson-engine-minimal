@@ -165,7 +165,8 @@ class HeaderModel:
             extras = f"{attach_part}{memory_part}{monitors_part}"
             model_provider_html = escape(model_provider, quote=True)
             app._header_cache = HTML(
-                '<style class="header"> phoson </style>'
+                '<style class="header_dim">* </style>'
+                '<style class="header">phoson </style>'
                 f"{session_html}"
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{model_provider_html}</style>'

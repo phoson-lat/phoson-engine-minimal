@@ -28,6 +28,12 @@ model for a short, specific title (`3–6` words) in the background, so the
 turn end is never blocked. The user's `/title` always wins, and a title that
 was already set for a resumed session is never rewritten.
 
+The **terminal window title** (OSC 2) mirrors the session title too: it
+starts as `phoson-cli`, switches to the session title once one exists, and is
+prefixed with `*` while the agent is working (e.g. `* Refactor auth`) so a
+backgrounded window shows what is happening at a glance. Piped/non-TTY output
+is left untouched.
+
 The call is tool-free, cold (`temperature 0.2`), reasoning-disabled
 (`think=False`, which OpenRouter maps to its per-request reasoning opt-out)
 and capped at 256 output tokens. It tries `title_model`, then
