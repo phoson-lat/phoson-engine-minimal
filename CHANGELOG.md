@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.44.0 (2026-09-24)
+
+### Feat
+
+- **cli**: add `/warnings <on|off>` plus a `show_warnings` config /
+  `PHOSON_SHOW_WARNINGS` switch that gates the warning-notice channel
+  (Python warnings and `phoson_*` log warnings routed to the CLI notice), so
+  noisy soft-fail notices can be silenced without disabling Python's normal
+  warning handling elsewhere.
+- **cli**: bare `/mcp toggle` now opens an interactive menu of the configured
+  MCP servers with their tools nested underneath — `Enter`/`space` flips a
+  whole server or a single tool, persisted immediately and reloaded once when
+  the menu closes. The list scrolls to keep the selection visible and shows a
+  visible-range indicator; `/mcp toggle <server> [tool]` is unchanged.
+- **cli**: the full-screen header renders the brand as `* phoson`.
+- **cli**: the terminal window title (OSC 2) follows the session title,
+  falling back to `phoson-cli`, and is prefixed with `*` while the agent is
+  working (e.g. `* Refactor auth`). Piped/non-TTY output is left untouched.
+
+### Fix
+
+- **cli**: type the optional `pick_mcp` host capability as `Any` so pyright
+  accepts awaiting it (it is a duck-typed capability, not part of the
+  `CommandHost` protocol).
+
+### Tests
+
+- Cover the `/warnings` switch, the MCP toggle picker (persistence plus
+  scroll-to-selection), and terminal-title formatting/sync.
+
 ## v0.43.2 (2026-09-20)
 
 ### Fix
