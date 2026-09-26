@@ -325,5 +325,42 @@ class TestMCPPluginWithoutMCP:
         assert MCPPlugin is not None
 
 
+class TestStdioChildEnvPassthrough:
+    """Regression: GUI-launching stdio MCP servers need session env vars.
+
+    The MCP SDK's default allowlist only forwards
+    HOME/LOGNAME/PATH/SHELL/TERM/USER.  Without DISPLAY/WAYLAND_DISPLAY/
+    XAUTHORITY/XDG_RUNTIME_DIR, chrome-devtools-mcp fails with
+    "Missing X server to start the headful browser".
+    """
+
+    def test_forwards_session_display_vars(self, monkeypatch):
+        from phoson_plugin_mcp._plugin import _stdio_child_env
+
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+        monkeypatch.setenv("XAUTHORITY", "/run/user/1000/.mutter-Xwaylandauth.X")
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+
+        env = _stdio_child_env({})
+
+        assert env["DISPLAY"] == ":0"
+        assert env["WAYLAND_DISPLAY"] == "wayland-0"
+        assert env["XAUTHORITY"].endswith(".X")
+        assert env["XDG_RUNTIME_DIR"] == "/run/user/1000"
+
+    def test_configured_env_wins_and_secrets_are_not_leaked(self, monkeypatch):
+        from phoson_plugin_mcp._plugin import _stdio_child_env
+
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-secret")
+
+        env = _stdio_child_env({"DISPLAY": ":9", "FOO": "bar"})
+
+        assert env["DISPLAY"] == ":9"
+        assert env["FOO"] == "bar"
+        assert "OPENROUTER_API_KEY" not in env
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
