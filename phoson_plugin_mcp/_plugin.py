@@ -2,6 +2,7 @@
 MCP Plugin implementation.
 """
 
+import os
 import re
 import sys
 import json
@@ -24,6 +25,41 @@ except ImportError:
     MCP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+# Session environment variables that a stdio MCP server's child processes
+# (browsers, GUI toolkits, X11/Wayland clients) need in order to reach the
+# user's desktop session.  The MCP SDK's default environment allowlist only
+# forwards HOME/LOGNAME/PATH/SHELL/TERM/USER, so a server that launches Chrome
+# (chrome-devtools-mcp, playwright-mcp, ...) fails with "Missing X server or
+# $DISPLAY" even though the CLI itself has a display.  Forward just these —
+# never the whole os.environ — so secrets (API keys) stay out of the child.
+_SESSION_ENV_PASSTHROUGH = (
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "XDG_SESSION_TYPE",
+    "XDG_CURRENT_DESKTOP",
+    "DESKTOP_SESSION",
+    "DBUS_SESSION_BUS_ADDRESS",
+)
+
+
+def _stdio_child_env(configured: dict[str, Any] | None) -> dict[str, str]:
+    """Environment for a stdio MCP server subprocess.
+
+    The SDK merges the result over its own safe default allowlist
+    (``{**get_default_environment(), **env}``), so adding the session
+    variables here is all that is needed for a GUI-launching server to find
+    the display, while user-supplied ``env`` entries still take precedence.
+    """
+    env: dict[str, str] = {
+        key: value for key in _SESSION_ENV_PASSTHROUGH if (value := os.environ.get(key))
+    }
+    if configured:
+        env.update({k: str(v) for k, v in configured.items()})
+    return env
 
 
 def _sanitize_tool_parameters(parameters: Any) -> dict[str, Any]:
@@ -495,7 +531,7 @@ class MCPPlugin(Plugin):
                 args = server_config.get("args", [])
                 env = server_config.get("env", {})
                 server_params = StdioServerParameters(
-                    command=command, args=args, env=env if env else None
+                    command=command, args=args, env=_stdio_child_env(env)
                 )
                 # Route the server's stderr to a per-server log file rather
                 # than the terminal (the default errlog=sys.stderr floods the
@@ -604,7 +640,7 @@ class MCPPlugin(Plugin):
         server_params = StdioServerParameters(
             command=command,
             args=args,
-            env=env if env else None,
+            env=_stdio_child_env(env),
         )
 
         async with stdio_client(server_params) as (read, write):
