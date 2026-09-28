@@ -40,5 +40,6 @@ class TestBuildSshPlugins:
     def test_default_disabled(self) -> None:
         config = PhosonConfig(provider="ollama", model="m")
         assert config.enable_ssh is False
-        assert config.ssh_known_hosts == Path("~/.ssh/known_hosts").expanduser()
+        # Bound at import time: assert the default's shape, not a live ``~``.
+        assert config.ssh_known_hosts.parts[-2:] == (".ssh", "known_hosts")
         assert config.ssh_command_timeout == 60.0
