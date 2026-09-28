@@ -1,6 +1,8 @@
 """Tests for Ctrl+T reasoning show/hide (renderer capture + REPL toggle)."""
 
 import io
+import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,6 +83,41 @@ def test_render_reasoning_panel_contains_text() -> None:
     assert "reasoning" in out
 
 
+def test_reasoning_event_is_captured_but_never_streamed() -> None:
+    """The classic REPL never renders reasoning live (spinner instead)."""
+    r = Renderer(console=Console(record=True))
+    r.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    r.on_event(AgentReasoningEvent(content="secret chain of thought"))
+
+    assert r._live is None  # no Live panel opened for reasoning
+    assert r._live_reasoning == ""  # never staged for display
+    assert r._reasoning_buf == ["secret chain of thought"]  # captured for Ctrl+T
+
+
+def test_token_after_reasoning_panel_omits_reasoning_text() -> None:
+    r = Renderer(console=Console(record=True))
+    r.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    r.on_event(AgentReasoningEvent(content="secret chain of thought"))
+    r.on_event(AgentTokenEvent(content="the answer"))
+
+    assert r._live is not None
+    out = _panel_text(r._render_live_panel())
+    assert "secret chain of thought" not in out
+    assert "the answer" in out
+    r._stop_live_streaming()
+
+
+def test_renderer_seeds_live_reasoning_from_flag() -> None:
+    """``show_reasoning=False`` starts with the live panel hidden (#249)."""
+    hidden = Renderer(console=Console(record=True), show_reasoning=False)
+    assert hidden._live_show_reasoning is False
+    hidden._live_reasoning = "secret thoughts"
+    assert "secret thoughts" not in _panel_text(hidden._render_live_panel())
+
+    shown = Renderer(console=Console(record=True), show_reasoning=True)
+    assert shown._live_show_reasoning is True
+
+
 # ── REPL: persistence + toggle ────────────────────────────────────────────────
 
 
@@ -89,6 +126,49 @@ def _make_repl(tmp_path) -> PhosonRepl:
         mock_build.return_value = MagicMock()
         config = PhosonConfig(provider="ollama", sessions_dir=tmp_path)
         return PhosonRepl(config)
+
+
+def _no_real_save(monkeypatch) -> list[tuple[object, dict]]:
+    """Capture ``save_config`` calls instead of writing ~/.phoson/config.toml."""
+    saved: list[tuple[object, dict]] = []
+    monkeypatch.setattr(
+        "phoson_cli.repl.save_config",
+        lambda config, **kwargs: saved.append((config, kwargs)),
+    )
+    return saved
+
+
+@contextlib.asynccontextmanager
+async def _inflight_run(repl: PhosonRepl):
+    """Attach a never-finishing run task to *repl*, cancelled on exit.
+
+    The task is awaited on cleanup so no dangling task leaks into the
+    event loop and perturbs later async tests.
+    """
+
+    async def _long_task() -> None:
+        await asyncio.sleep(3600)
+
+    task = asyncio.get_event_loop().create_task(_long_task())
+    repl.current_task = task
+    try:
+        yield
+    finally:
+        repl.current_task = None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+def test_repl_seeds_renderer_from_config(tmp_path) -> None:
+    """The classic front end honors ``config.show_reasoning`` (#249)."""
+    with patch("phoson_cli.controller.build_chat") as mock_build:
+        mock_build.return_value = MagicMock()
+        config = PhosonConfig(
+            provider="ollama", sessions_dir=tmp_path, show_reasoning=False
+        )
+        repl = PhosonRepl(config)
+    assert repl.renderer._live_show_reasoning is False
 
 
 def _fake_stream(events):
@@ -228,25 +308,30 @@ async def test_ctrl_t_without_reasoning_shows_info(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ctrl_t_toggles_live_view_during_run(tmp_path) -> None:
+async def test_ctrl_t_toggles_live_view_during_run(tmp_path, monkeypatch) -> None:
+    _no_real_save(monkeypatch)
     repl = _make_repl(tmp_path)
     repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
 
     # Simulate an in-flight run: a task that is not done yet.
-    async def _long_task() -> None:
-        await asyncio.sleep(3600)
-
-    import asyncio
-
-    repl.current_task = asyncio.get_event_loop().create_task(_long_task())
-    try:
+    async with _inflight_run(repl):
         repl._on_reasoning_toggle()
         assert repl.renderer._live_show_reasoning is False
         repl._on_reasoning_toggle()
         assert repl.renderer._live_show_reasoning is True
-    finally:
-        repl.current_task.cancel()
-        repl.current_task = None
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_persists_show_reasoning(tmp_path, monkeypatch) -> None:
+    """Ctrl+T during a run is a durable preference, like the full-screen TUI."""
+    saved = _no_real_save(monkeypatch)
+    repl = _make_repl(tmp_path)
+    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+
+    async with _inflight_run(repl):
+        repl._on_reasoning_toggle()
+        assert repl.config.show_reasoning is False
+        assert saved and saved[-1][1].get("only_fields") == {"show_reasoning"}
 
 
 @pytest.mark.asyncio

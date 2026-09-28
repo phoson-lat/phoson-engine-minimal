@@ -123,6 +123,16 @@ class WaitingSpinner:
         with self._lock:
             self._label = label
 
+    @property
+    def running(self) -> bool:
+        """Whether the animation thread is currently active.
+
+        Best-effort: when animation is disabled (non-capable output) there
+        is no thread, so this is ``False`` even though the label is set.
+        """
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
     def stop(self) -> None:
         """Stop animation and clear the spinner line."""
         with self._lock:
@@ -271,7 +281,10 @@ class Renderer:
     """
 
     def __init__(
-        self, console: Console | None = None, theme: Theme | None = None
+        self,
+        console: Console | None = None,
+        theme: Theme | None = None,
+        show_reasoning: bool = True,
     ) -> None:
         """Initialize the renderer.
 
@@ -279,6 +292,11 @@ class Renderer:
             console: Optional Rich Console instance. Creates default if None.
             theme: Optional :class:`Theme`. Resolved via ``load_theme()``
                 (env/config) when None.
+            show_reasoning: Initial visibility of the live "thinking"
+                section while streaming. Mirrors ``config.show_reasoning``
+                so the classic front end honors the same setting as the
+                full-screen TUI (``_live_show_reasoning``, toggled by
+                Ctrl+T).
         """
         self.console = console or Console(highlight=False)
         self.theme = theme or load_theme()
@@ -296,7 +314,10 @@ class Renderer:
         # the REPL persists it to the tree node (see take_last_reasoning).
         self._last_reasoning: str = ""
         # Live toggle: show/hide the "thinking" section while streaming.
-        self._live_show_reasoning: bool = True
+        # Seeded from ``config.show_reasoning`` so the classic front end
+        # honors the setting (the full-screen sink does the same via
+        # ``show_reasoning_default``).
+        self._live_show_reasoning: bool = show_reasoning
 
         # ── Live panel for streaming ─────────────────────────────────
         self._live: Live | None = None
@@ -341,6 +362,13 @@ class Renderer:
     def stop_waiting(self) -> None:
         """Stop and clear the waiting spinner."""
         self._spinner.stop()
+
+    def _thinking_label(self) -> str:
+        """The spinner label used while the model thinks (start/step/tool)."""
+        label = f"thinking  ·  step {self._current_step} / {self._max_steps}"
+        if self._run_cost_usd:
+            label += f"  ·  ${self._run_cost_usd:.4f}"
+        return label
 
     def start_subagent_waiting(self, tasks: list[str]) -> None:
         """Start the subagent panel animation."""
@@ -441,6 +469,7 @@ class Renderer:
         If reasoning chunks were collected, prints a summary line instead
         of replaying the raw text.
         """
+        self.stop_waiting()
         self._stop_live_streaming()
 
         # Reasoning summary — the full text is kept for Ctrl+T expansion
@@ -513,17 +542,14 @@ class Renderer:
                     self._update_live_streaming()
 
             case AgentReasoningEvent():
-                self.stop_waiting()
+                # Classic REPL: reasoning is never streamed live. The
+                # terminal is append-only and the raw text is noisy, so the
+                # "thinking" spinner stays up as the only live feedback; the
+                # text is still captured for Ctrl+T (take_last_reasoning).
                 self._reasoning_buf.append(event.content)
-                self._live_reasoning += event.content
-                self._streaming = True
                 self._reasoning_active = True
-
-                # Update Live panel with reasoning
-                if self._live is None:
-                    self._start_live_streaming()
-                else:
-                    self._update_live_streaming()
+                if self._live is None and not self._spinner.running:
+                    self.start_waiting(self._thinking_label())
 
             case AgentToolComposingEvent():
                 self._on_tool_composing(event)
