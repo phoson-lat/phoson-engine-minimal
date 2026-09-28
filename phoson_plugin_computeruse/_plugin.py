@@ -65,8 +65,8 @@ class ComputerUsePlugin(Plugin):
 
     Configuration (via ``configure`` / the plugin config dict):
 
-    - ``backend``: ``auto`` (default), ``x11``, ``wayland``, ``macos`` or
-      ``fake``.
+    - ``backend``: ``auto`` (default), ``x11``, ``wayland``, ``macos``,
+      ``windows`` or ``fake``.
     - ``require_confirmation``: when true, input tools publish destructive
       risk hints so the permission gate resolves them to ``ask`` (and fails
       closed in one-shot mode). **Default false: computer-use tools do not
