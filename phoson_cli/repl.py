@@ -35,6 +35,7 @@ from prompt_toolkit.formatted_text import FormattedText
 
 # Re-exported for backward compatibility (one-shot mode, existing tests).
 from phoson_agent import AgentEngine  # noqa: F401
+from phoson_llm.schemas import REASONING_EFFORTS
 from phoson_agent.sessions import ConversationTree  # noqa: F401
 
 from .theme import Theme, load_theme, build_prompt_style, resolve_runtime_theme
@@ -43,6 +44,7 @@ from .config import (
     PhosonConfig,
     build_chat,  # noqa: F401
     save_config,
+    enabled_providers_from_config,
 )
 from ._session import SessionMetrics  # noqa: F401
 from .commands import (
@@ -55,14 +57,22 @@ from .renderer import Renderer, ClassicSink
 from .terminal import stream_is_tty
 from .controller import SessionController
 from .formatting import format_token_indicator
+from .model_cache import ModelCache
 from .confirmation import PromptToolkitConfirmationService
 from .ui_protocols import AgentEventSink, ConfirmationService
 from .inline_picker import set_prompt_session
+from .session_cache import SessionListCache
 from .session_utils import (  # noqa: F401
     close_plugins,
     build_mcp_plugins,
     build_plugin_specs,
     build_system_prompt,
+)
+from .arg_completers import (
+    ModelArgCompleter,
+    ResumeArgCompleter,
+    StaticArgCompleter,
+    SessionsArgCompleter,
 )
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
@@ -71,6 +81,18 @@ _LOGGER = logging.getLogger("phoson_cli.repl")
 # prompt_toolkit prompt) from an explicit ``confirmation=None`` (fail
 # closed — e.g. the full-screen front end before it has its own modal).
 _DEFAULT_CONFIRMATION: Any = object()
+
+#: `/mcp <subcommand>` values, for inline argument autocomplete (see
+#: ``phoson_cli._mcp_commands._MCPSubcommands.dispatch``).
+_MCP_SUBCOMMANDS: tuple[str, ...] = (
+    "status",
+    "init",
+    "enable",
+    "disable",
+    "toggle",
+    "config",
+    "help",
+)
 
 
 class PhosonRepl:
@@ -115,6 +137,11 @@ class PhosonRepl:
         # (phoson_cli.inline_picker): they need a prompt-capable stdin but
         # no alternate screen, so a TTY is the only requirement.
         self.picker_capable = stream_is_tty(sys.stdin)
+        # Inline argument autocomplete (same pattern as the full-screen TUI):
+        # the model/session lists are fetched in the background so typing
+        # `/model ` or `/resume ` never blocks on a network round trip.
+        self._model_cache = ModelCache()
+        self._session_cache = SessionListCache()
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
         self._expanded_reasoning: set[str] = set()
@@ -547,15 +574,35 @@ class PhosonRepl:
         def _handle_ctrl_t(event: object) -> None:  # noqa: ARG001
             self._on_reasoning_toggle()
 
+        @key_bindings.add("c-e")
+        def _handle_ctrl_e(event: object) -> None:  # noqa: ARG001
+            self._cycle_reasoning_effort()
+
         session = PromptSession(
             history=FileHistory(str(history_path)),
             style=Style.from_dict(build_prompt_style(self.theme)),
-            # Slash commands plus @file mentions (E3) — the same two
-            # completers the full-screen app uses, so both front ends
-            # behave identically.
+            # Slash commands, inline argument autocomplete (the same
+            # completers the full-screen app wires, so both front ends
+            # behave identically) and @file mentions (E3).
             completer=merge_completers(
                 [
                     SlashCompleter(lambda: self._controller.command_catalog),
+                    ModelArgCompleter(self._model_cache),
+                    StaticArgCompleter(
+                        ("/reasoning-effort ", "/effort "),
+                        [*REASONING_EFFORTS, "off"],
+                    ),
+                    StaticArgCompleter(
+                        ("/provider ",),
+                        lambda: enabled_providers_from_config(self.config),
+                    ),
+                    StaticArgCompleter(
+                        ("/theme ",),
+                        lambda: list(self.theme_registry.valid_names()),
+                    ),
+                    StaticArgCompleter(("/mcp ",), _MCP_SUBCOMMANDS),
+                    SessionsArgCompleter(self._session_cache),
+                    ResumeArgCompleter(self._session_cache),
                     PathCompleter(),
                 ]
             ),
@@ -566,6 +613,12 @@ class PhosonRepl:
         # Let the inline pickers reuse this session (the one the @file menu
         # already drives) instead of spawning a second PromptSession.
         set_prompt_session(session)
+        # Prefetch the model/session lists for inline autocomplete without
+        # delaying the first prompt (same as the full-screen front end).
+        asyncio.create_task(self._model_cache.refresh(self.config))
+        asyncio.create_task(
+            self._session_cache.refresh(self.storage, cwd=str(Path.cwd()))
+        )
         command_handler = CommandHandler(self)
 
         while True:
@@ -616,6 +669,27 @@ class PhosonRepl:
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
     # ── Reasoning (Ctrl+T) ─────────────────────────────────────────────────
+
+    def _cycle_reasoning_effort(self) -> None:
+        """Ctrl+E handler: cycle reasoning effort off → low → … → max.
+
+        Mirrors the full-screen TUI (``fullscreen/state_cycles.py``): the
+        level is persisted and applies from the next turn.
+        """
+        if self._controller.is_running:
+            self.renderer.print_warn("Wait for the current operation to finish.")
+            return
+        current = self.config.reasoning_effort
+        if current not in REASONING_EFFORTS:
+            current = None  # "off"
+        levels = (*REASONING_EFFORTS, None)
+        next_effort = levels[(levels.index(current) + 1) % len(levels)]
+        self.config.reasoning_effort = next_effort
+        save_config(self.config, only_fields={"reasoning_effort"})
+        self.renderer.print_info(
+            f"Reasoning effort → {next_effort or 'off'}"
+            "  ·  applies from the next turn (explicit: /reasoning-effort)"
+        )
 
     def _on_reasoning_toggle(self) -> None:
         """Ctrl+T handler.
