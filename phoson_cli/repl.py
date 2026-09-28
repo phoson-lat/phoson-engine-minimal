@@ -57,6 +57,7 @@ from .controller import SessionController
 from .formatting import format_token_indicator
 from .confirmation import PromptToolkitConfirmationService
 from .ui_protocols import AgentEventSink, ConfirmationService
+from .inline_picker import set_prompt_session
 from .session_utils import (  # noqa: F401
     close_plugins,
     build_mcp_plugins,
@@ -453,6 +454,7 @@ class PhosonRepl:
 
     async def shutdown(self) -> None:
         """Release chat client and plugins (called on exit)."""
+        set_prompt_session(None)
         task = self._update_check_task
         if task is not None and not task.done():
             task.cancel()
@@ -561,6 +563,9 @@ class PhosonRepl:
             reserve_space_for_menu=6,
             key_bindings=key_bindings,
         )
+        # Let the inline pickers reuse this session (the one the @file menu
+        # already drives) instead of spawning a second PromptSession.
+        set_prompt_session(session)
         command_handler = CommandHandler(self)
 
         while True:
