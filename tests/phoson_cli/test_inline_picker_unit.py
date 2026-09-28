@@ -1,79 +1,97 @@
-"""Tests for the inline (numbered-list) pickers used by the classic REPL.
+"""Tests for the inline (completion-menu) pickers used by the classic REPL.
 
 The classic REPL is line-oriented; ``/model``, ``/provider``, ``/theme`` and
-``/sessions pick`` print a numbered list and read a selection with the REPL's
-own prompt. These tests cover the numbering/resolution and each picker's
-result mapping (the interactive prompt itself is mocked).
+``/sessions pick`` present a prompt_toolkit completion menu instead of a
+full-screen ``Application``. These tests cover the completer's filtering and
+each picker's result mapping (the interactive prompt itself is mocked).
 """
 
 import datetime
 
 import pytest
+from prompt_toolkit.document import Document
 
-from phoson_cli.theme import load_theme
 from phoson_cli.models import ModelOption
-from phoson_cli.inline_picker import InlineOption, _resolve, pick_inline
+from phoson_cli.inline_picker import InlineOption, pick_inline, _OptionCompleter
 from phoson_agent.sessions.models import SessionMeta
 
-# ── Resolution ───────────────────────────────────────────────────────────────
+# ── Completer ────────────────────────────────────────────────────────────────
 
 
-def test_resolve_by_number() -> None:
+def _completion_texts(options, query, *, current=None):
+    completer = _OptionCompleter(options, current=current)
+    document = Document(text=query, cursor_position=len(query))
+    return [c.text for c in completer.get_completions(document, None)]
+
+
+def test_completer_returns_all_options_for_empty_query() -> None:
     options = [InlineOption("a", "Alpha"), InlineOption("b", "Beta")]
-    assert _resolve("1", options) == "a"
-    assert _resolve("2", options) == "b"
-    assert _resolve("0", options) is None
-    assert _resolve("9", options) is None
+    assert _completion_texts(options, "") == ["a", "b"]
 
 
-def test_resolve_by_value_and_display() -> None:
-    options = [InlineOption("a", "Alpha"), InlineOption("b", "Beta")]
-    assert _resolve("a", options) == "a"
-    assert _resolve("Alpha", options) == "a"
-
-
-def test_resolve_fuzzy_and_empty() -> None:
+def test_completer_filters_fuzzy_subsequence() -> None:
     options = [
-        InlineOption("openai/gpt-4o", "GPT-4o"),
         InlineOption("anthropic/claude", "Claude"),
+        InlineOption("openai/gpt-4o", "GPT-4o"),
     ]
-    assert _resolve("gpt", options) == "openai/gpt-4o"
-    assert _resolve("", options) is None
-    assert _resolve("zzz", options) is None
+    assert _completion_texts(options, "gpt") == ["openai/gpt-4o"]
+    assert _completion_texts(options, "g4o") == ["openai/gpt-4o"]
+
+
+def test_completer_no_match_yields_nothing() -> None:
+    options = [InlineOption("a", "Alpha")]
+    assert _completion_texts(options, "zzz") == []
+
+
+def test_completer_marks_the_current_value() -> None:
+    options = [InlineOption("a", "Alpha"), InlineOption("b", "Beta")]
+    completer = _OptionCompleter(options, current="b")
+    document = Document(text="", cursor_position=0)
+    displays = [c.display_text for c in completer.get_completions(document, None)]
+    assert displays[0] == "  Alpha"
+    assert displays[1] == "▶ Beta"
 
 
 # ── pick_inline ──────────────────────────────────────────────────────────────
 
 
-def _fake_read(line: str):
-    async def _read(message, theme):
-        return line
+class _FakeBuffer:
+    def __init__(self, state: dict) -> None:
+        self._state = state
 
-    return _read
-
-
-@pytest.mark.asyncio
-async def test_pick_inline_prints_list_and_returns_choice(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("phoson_cli.inline_picker._read_line", _fake_read("2"))
-    options = [InlineOption("a", "Alpha"), InlineOption("b", "Beta")]
-
-    assert await pick_inline("model", options) == "b"
-
-    out = capsys.readouterr().out
-    assert "Select model:" in out
-    assert "1. Alpha" in out
-    assert "2. Beta" in out
+    def start_completion(self, select_first: bool = False) -> None:
+        self._state["started"] = select_first
 
 
-@pytest.mark.asyncio
-async def test_pick_inline_marks_the_current_value(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("phoson_cli.inline_picker._read_line", _fake_read(""))
-    options = [InlineOption("a", "Alpha"), InlineOption("b", "Beta")]
+class _FakeSession:
+    """Minimal stand-in for PromptSession (attributes + prompt_async)."""
 
-    await pick_inline("model", options, current="b")
+    def __init__(self, result: str, state: dict, **kwargs) -> None:
+        self._result = result
+        self._state = state
+        self.completer = kwargs.get("completer")
+        self.key_bindings = kwargs.get("key_bindings")
+        self.bottom_toolbar = kwargs.get("bottom_toolbar")
+        self.style = kwargs.get("style")
+        self.reserve_space_for_menu = kwargs.get("reserve_space_for_menu")
+        self.default_buffer = _FakeBuffer(state)
 
-    out = capsys.readouterr().out
-    assert "▶  2. Beta" in out
+    async def prompt_async(self, message, pre_run=None):
+        self._state["used"] = self
+        if pre_run is not None:
+            pre_run()
+        return self._result
+
+
+def _patch_session(monkeypatch, result: str) -> dict:
+    """Replace PromptSession with a fake that returns *result* immediately."""
+    state: dict = {}
+
+    def factory(**kwargs):
+        return _FakeSession(result, state, **kwargs)
+
+    monkeypatch.setattr("phoson_cli.inline_picker.PromptSession", factory)
+    return state
 
 
 @pytest.mark.asyncio
@@ -82,52 +100,68 @@ async def test_pick_inline_empty_options_returns_none() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pick_inline_returns_selected_value_and_shows_menu(monkeypatch) -> None:
+    state = _patch_session(monkeypatch, "openai/gpt-4o")
+    options = [InlineOption("openai/gpt-4o", "GPT-4o"), InlineOption("x", "X")]
+
+    assert await pick_inline("model", options) == "openai/gpt-4o"
+    assert state["started"] is True  # menu shown before the first keystroke
+
+
+@pytest.mark.asyncio
 async def test_pick_inline_cancel_returns_none(monkeypatch) -> None:
-    monkeypatch.setattr("phoson_cli.inline_picker._read_line", _fake_read(""))
+    _patch_session(monkeypatch, "")
     assert await pick_inline("model", [InlineOption("a", "Alpha")]) is None
 
 
 @pytest.mark.asyncio
-async def test_pick_inline_prints_notice(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("phoson_cli.inline_picker._read_line", _fake_read(""))
-    await pick_inline("model", [InlineOption("a", "Alpha")], notice="⚠ provider down")
-    assert "⚠ provider down" in capsys.readouterr().out
+async def test_pick_inline_unmatched_text_returns_none(monkeypatch) -> None:
+    _patch_session(monkeypatch, "not-an-option")
+    assert await pick_inline("model", [InlineOption("a", "Alpha")]) is None
 
 
 @pytest.mark.asyncio
-async def test_read_line_reuses_the_registered_session(monkeypatch) -> None:
+async def test_pick_inline_resolves_by_display(monkeypatch) -> None:
+    _patch_session(monkeypatch, "Alpha")
+    assert await pick_inline("model", [InlineOption("a", "Alpha")]) == "a"
+
+
+@pytest.mark.asyncio
+async def test_pick_inline_resolves_partial_text_to_best_match(monkeypatch) -> None:
+    """A partially-typed value resolves to its best fuzzy match."""
+    _patch_session(monkeypatch, "gpt")
+    options = [
+        InlineOption("openai/gpt-4o", "GPT-4o"),
+        InlineOption("anthropic/claude", "Claude"),
+    ]
+    assert await pick_inline("model", options) == "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_pick_inline_reuses_the_registered_session(monkeypatch) -> None:
+    """The picker reuses the REPL's session and restores its prompt config."""
     from phoson_cli import inline_picker
 
-    state: dict = {}
-
-    class FakeSession:
-        def __init__(self) -> None:
-            self.completer = "C"
-            self.complete_while_typing = True
-            self.key_bindings = "K"
-            self.bottom_toolbar = "T"
-            self.style = "S"
-            self.reserve_space_for_menu = 6
-
-        async def prompt_async(self, message):
-            state["used"] = self
-            return "1"
-
-    fake = FakeSession()
+    state = _patch_session(monkeypatch, "a")  # fallback factory (unused here)
+    fake = _FakeSession("a", state)
+    fake.completer = "ORIGINAL_COMPLETER"
+    fake.key_bindings = "ORIGINAL_KB"
+    fake.bottom_toolbar = "ORIGINAL_TOOLBAR"
+    fake.style = "ORIGINAL_STYLE"
+    fake.reserve_space_for_menu = 6
     inline_picker.set_prompt_session(fake)
     try:
-        line = await inline_picker._read_line("model # ", load_theme())
+        result = await pick_inline("model", [InlineOption("a", "Alpha")])
     finally:
         inline_picker.set_prompt_session(None)
 
-    assert line == "1"
+    assert result == "a"
     assert state["used"] is fake  # reused the REPL session, not a new one
     # The prompt config is restored so the REPL prompt is unaffected.
-    assert fake.completer == "C"
-    assert fake.complete_while_typing is True
-    assert fake.key_bindings == "K"
-    assert fake.bottom_toolbar == "T"
-    assert fake.style == "S"
+    assert fake.completer == "ORIGINAL_COMPLETER"
+    assert fake.key_bindings == "ORIGINAL_KB"
+    assert fake.bottom_toolbar == "ORIGINAL_TOOLBAR"
+    assert fake.style == "ORIGINAL_STYLE"
     assert fake.reserve_space_for_menu == 6
 
 
