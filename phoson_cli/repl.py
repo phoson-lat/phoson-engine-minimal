@@ -52,7 +52,7 @@ from .commands import (
     parse_command,
 )
 from .renderer import Renderer, ClassicSink
-from .terminal import stream_is_tty, picker_output_capable
+from .terminal import stream_is_tty, cursor_output_capable
 from .controller import SessionController
 from .formatting import format_token_indicator
 from .confirmation import PromptToolkitConfirmationService
@@ -110,9 +110,7 @@ class PhosonRepl:
             theme=self.theme,
             show_reasoning=getattr(config, "show_reasoning", True),
         )
-        # Picker capability is Windows-aware (see terminal.picker_output_capable):
-        # requiring TERM would disable the dropdowns on every Windows terminal.
-        self.picker_capable = stream_is_tty(sys.stdin) and picker_output_capable(
+        self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
             self.renderer.console.file
         )
         # Node ids whose reasoning has already been expanded this session

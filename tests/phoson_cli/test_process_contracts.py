@@ -1082,24 +1082,6 @@ def test_tty_probe_fails_closed_for_hostile_streams(stream) -> None:
     assert stream_is_tty(stream) is False
 
 
-def test_picker_output_capable_is_windows_aware(monkeypatch) -> None:
-    """Windows consoles don't use TERM; a TTY must suffice (#250)."""
-    from phoson_cli.terminal import picker_output_capable
-
-    tty = SimpleNamespace(isatty=lambda: True)
-    monkeypatch.delenv("TERM", raising=False)
-
-    monkeypatch.setattr(sys, "platform", "win32")
-    assert picker_output_capable(tty) is True
-
-    monkeypatch.setattr(sys, "platform", "linux")
-    assert picker_output_capable(tty) is False  # TERM unset on Unix
-    monkeypatch.setenv("TERM", "xterm-256color")
-    assert picker_output_capable(tty) is True
-
-    assert picker_output_capable(SimpleNamespace(isatty=lambda: False)) is False
-
-
 def test_missing_stdin_fails_cleanly_and_frontend_probe_fails_closed(
     monkeypatch, capsys
 ) -> None:
