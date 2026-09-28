@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.45.1 (2026-09-27)
+
+### Fix
+
+- **test**: the suite no longer overwrites the developer's real
+  `~/.phoson/config.toml` on Windows. `$HOME` is now authoritative for `~`
+  expansion and every test runs against its own throwaway home, so the
+  `monkeypatch.setenv("HOME", ...)` isolation works on every platform.
+- **ci**: run the config/persistence tests on `windows-latest`, so the
+  Windows `$HOME`/`$USERPROFILE` regression cannot slip back in.
+
 ## v0.45.0 (2026-09-27)
 
 ### Feat
