@@ -106,6 +106,27 @@ jobs:
           tests/phoson_cli/test_model_persistence_unit.py
           -q
 
+  # Computer Use on Windows (#251): exercises the real GDI BitBlt capture and
+  # SendInput input path. The Wayland suite skips itself off Linux; the rest of
+  # the computeruse tests run everywhere.
+  computeruse-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev --extra computeruse-windows --locked
+
+      - name: Run Computer Use tests
+        run: uv run pytest tests/phoson_plugin_computeruse/ -q
+
   typecheck:
     runs-on: ubuntu-latest
     steps:

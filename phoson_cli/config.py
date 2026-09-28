@@ -207,7 +207,8 @@ class PhosonConfig:
     # Official Computer Use plugin (#223): screenshot + mouse/keyboard control
     # of the local desktop. Off by default — it operates the *real* desktop and
     # needs optional capture/input dependencies (the `[computeruse]` extra).
-    # `computeruse_backend` is one of "auto", "x11", "macos", "fake".
+    # `computeruse_backend` is one of "auto", "x11", "wayland", "macos",
+    # "windows", "fake".
     enable_computeruse: bool = False
     computeruse_backend: str = "auto"
     # When true, computer-use input tools publish destructive risk hints so the

@@ -8,6 +8,7 @@ The signatures asserted here were captured from a live GNOME 49 session via
 ``gdbus introspect`` — see the plugin plan.
 """
 
+import sys
 import pathlib
 
 import pytest
@@ -17,6 +18,12 @@ from phoson_plugin_computeruse.geometry import Region
 from phoson_plugin_computeruse.backends.base import ComputerUseError
 from phoson_plugin_computeruse.backends.dbus import DBusError, DBusTransport
 from phoson_plugin_computeruse.backends.fake import _png
+
+#: The Wayland backend is Linux-only; the portal file URI it parses does not
+#: resolve on other platforms.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="GNOME Wayland backend runs only on Linux"
+)
 
 
 class FakeTransport(DBusTransport):

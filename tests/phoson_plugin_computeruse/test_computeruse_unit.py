@@ -20,7 +20,7 @@ from phoson_plugin_computeruse import (
     ComputerUsePlugin,
     fit_within,
 )
-from phoson_plugin_computeruse.backends import FakeBackend
+from phoson_plugin_computeruse.backends import FakeBackend, factory
 from phoson_plugin_computeruse.backends.base import ComputerUseError
 from phoson_plugin_computeruse.backends.factory import detect_backend
 
@@ -268,6 +268,7 @@ def test_plugin_metadata():
 
 
 def test_auto_uses_wayland_backend_on_gnome(monkeypatch):
+    monkeypatch.setattr(factory.sys, "platform", "linux")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("DISPLAY", ":0")  # XWayland is present too
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
@@ -276,6 +277,7 @@ def test_auto_uses_wayland_backend_on_gnome(monkeypatch):
 
 
 def test_auto_detects_wayland_from_session_type_on_gnome(monkeypatch):
+    monkeypatch.setattr(factory.sys, "platform", "linux")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
@@ -284,6 +286,7 @@ def test_auto_detects_wayland_from_session_type_on_gnome(monkeypatch):
 
 
 def test_auto_refuses_wayland_on_non_gnome(monkeypatch):
+    monkeypatch.setattr(factory.sys, "platform", "linux")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
