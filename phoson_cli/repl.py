@@ -42,6 +42,7 @@ from ._views import print_banner, render_tree_ascii
 from .config import (
     PhosonConfig,
     build_chat,  # noqa: F401
+    save_config,
 )
 from ._session import SessionMetrics  # noqa: F401
 from .commands import (
@@ -105,7 +106,10 @@ class PhosonRepl:
         # loaded plugins. Start with a safe built-in tier, then resolve the
         # configured theme against its per-session registry below.
         self.theme: Theme = getattr(config, "_startup_theme", None) or load_theme()
-        self.renderer = Renderer(theme=self.theme)
+        self.renderer = Renderer(
+            theme=self.theme,
+            show_reasoning=getattr(config, "show_reasoning", True),
+        )
         self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
             self.renderer.console.file
         )
@@ -616,7 +620,13 @@ class PhosonRepl:
         most once per REPL session — the terminal is append-only).
         """
         if self._controller.is_running:
-            self.renderer.toggle_live_reasoning()
+            new_state = self.renderer.toggle_live_reasoning()
+            # Persist the choice like the full-screen front end does
+            # (state_cycles.toggle_reasoning): Ctrl+T is a durable
+            # show_reasoning preference, not just a per-run toggle.
+            if getattr(self.config, "show_reasoning", True) != new_state:
+                self.config.show_reasoning = new_state
+                save_config(self.config, only_fields={"show_reasoning"})
             return
 
         cursor: str | None = self.current_node_id
