@@ -239,6 +239,19 @@ def test_waiting_spinner_emits_nothing_for_dumb_or_no_color(monkeypatch) -> None
         assert stream.getvalue() == ""
 
 
+def test_waiting_spinner_is_enabled_on_a_windows_tty(monkeypatch) -> None:
+    """A Windows TTY with TERM unset still animates (it used to stay silent)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("CLICOLOR", raising=False)
+    stream = _Stream(tty=True)
+
+    spinner = WaitingSpinner(Console(file=stream, force_terminal=True))
+
+    assert spinner._enabled is True
+
+
 @pytest.mark.parametrize(
     ("term", "tty", "no_color"),
     [
@@ -251,6 +264,10 @@ def test_waiting_spinner_emits_nothing_for_dumb_or_no_color(monkeypatch) -> None
 def test_subagent_live_is_disabled_but_static_event_remains(
     monkeypatch, term, tty, no_color
 ) -> None:
+    # This parametrization describes the POSIX ``TERM`` contract; pin the
+    # platform so it stays deterministic on Windows too (where a TTY alone
+    # is enough — see ``test_animation_capable_is_windows_aware``).
+    monkeypatch.setattr(sys, "platform", "linux")
     if term is None:
         monkeypatch.delenv("TERM", raising=False)
     else:
@@ -1080,6 +1097,31 @@ def test_tty_probe_fails_closed_for_hostile_streams(stream) -> None:
     from phoson_cli.terminal import stream_is_tty
 
     assert stream_is_tty(stream) is False
+
+
+def test_animation_capable_is_windows_aware(monkeypatch) -> None:
+    """Windows terminals don't set TERM; a TTY must still animate."""
+    from phoson_cli.terminal import animation_capable
+
+    tty = SimpleNamespace(isatty=lambda: True)
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("CLICOLOR", raising=False)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert animation_capable(tty) is True
+    assert animation_capable(tty, theme_name="no-color") is False
+
+    monkeypatch.setenv("TERM", "dumb")  # explicit opt-out is honored
+    assert animation_capable(tty) is False
+    monkeypatch.delenv("TERM", raising=False)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert animation_capable(tty) is False  # TERM unset on POSIX
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert animation_capable(tty) is True
+
+    assert animation_capable(SimpleNamespace(isatty=lambda: False)) is False
 
 
 def test_missing_stdin_fails_cleanly_and_frontend_probe_fails_closed(
