@@ -11,6 +11,7 @@ from rich.console import Console
 from phoson_agent.models import (
     RunStep,
     AgentStartEvent,
+    AgentTokenEvent,
     AgentStepDoneEvent,
     AgentToolDoneEvent,
     AgentReasoningEvent,
@@ -543,6 +544,28 @@ def test_renderer_tool_done_compact_error() -> None:
     output = cap.get()
     assert "✗" in output
     assert "Permission denied" in output
+
+
+def test_live_content_does_not_accumulate_across_steps() -> None:
+    """Each step's streamed text is shown once; the next panel starts fresh.
+
+    Regression: ``_live_content`` was only reset on ``AgentStartEvent``, so a
+    multi-step run re-rendered every prior step's text each time a tool call
+    opened a new Live panel (``msg_1`` → ``msg_1msg_2`` → ...).
+    """
+    renderer, _ = _renderer_with_capture()
+
+    renderer.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    renderer.on_event(AgentTokenEvent(content="msg_1"))
+    assert renderer._live_content == "msg_1"
+
+    renderer.on_event(
+        AgentToolStartEvent(tool_name="bash", args={"command": "ls"}, tool_call_id="t1")
+    )
+    assert renderer._live_content == ""  # step boundary: buffer dropped
+
+    renderer.on_event(AgentTokenEvent(content="msg_2"))
+    assert renderer._live_content == "msg_2"  # not "msg_1msg_2"
 
 
 # ── Reasoning buffering ────────────────────────────────────────────────────────

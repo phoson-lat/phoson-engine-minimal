@@ -421,10 +421,15 @@ class Renderer:
 
     def _stop_live_streaming(self) -> None:
         """Stop the Live panel and render final Markdown."""
-        if self._live is None:
-            return
-        self._live.stop()
-        self._live = None
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        # The panel is non-transient, so its last frame stays on screen.
+        # Drop the buffers: a later step's panel must start fresh instead of
+        # re-rendering every token streamed so far (which duplicated the
+        # assistant text once per step).
+        self._live_content = ""
+        self._live_reasoning = ""
 
     def _render_live_panel(self) -> Group:
         """Render the current stream: a label, then thinking/answer blocks."""
