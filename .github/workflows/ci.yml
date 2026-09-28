@@ -74,6 +74,38 @@ jobs:
       - name: Run tests
         run: uv run pytest -q || [ $? -eq 5 ]
 
+  # The config/persistence tests isolate themselves via $HOME, which Windows'
+  # `expanduser` ignores (it uses $USERPROFILE), so on Windows they used to
+  # overwrite the runner's real ~/.phoson/config.toml while still passing.
+  # tests/conftest.py now guards that; this job runs the files that would fail
+  # without the guard, so the regression cannot slip back in. It is a curated
+  # subset on purpose: the rest of the suite still has pre-existing Windows
+  # failures (prompt_toolkit TUI, process groups, symlinks, POSIX chmod).
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Setup Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      - name: Run config/isolation tests
+        run: >
+          uv run pytest
+          tests/phoson_cli/test_config_unit.py
+          tests/phoson_cli/test_plugin_config_unit.py
+          tests/phoson_cli/test_provider_persistence_unit.py
+          tests/phoson_cli/test_model_provider_persistence_unit.py
+          tests/phoson_cli/test_model_persistence_unit.py
+          -q
+
   typecheck:
     runs-on: ubuntu-latest
     steps:
