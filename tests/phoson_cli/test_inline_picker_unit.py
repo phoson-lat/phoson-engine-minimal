@@ -63,21 +63,34 @@ class _FakeBuffer:
         self._state["started"] = select_first
 
 
+class _FakeSession:
+    """Minimal stand-in for PromptSession (attributes + prompt_async)."""
+
+    def __init__(self, result: str, state: dict, **kwargs) -> None:
+        self._result = result
+        self._state = state
+        self.completer = kwargs.get("completer")
+        self.key_bindings = kwargs.get("key_bindings")
+        self.bottom_toolbar = kwargs.get("bottom_toolbar")
+        self.style = kwargs.get("style")
+        self.reserve_space_for_menu = kwargs.get("reserve_space_for_menu")
+        self.default_buffer = _FakeBuffer(state)
+
+    async def prompt_async(self, message, pre_run=None):
+        self._state["used"] = self
+        if pre_run is not None:
+            pre_run()
+        return self._result
+
+
 def _patch_session(monkeypatch, result: str) -> dict:
     """Replace PromptSession with a fake that returns *result* immediately."""
     state: dict = {}
 
-    class FakeSession:
-        def __init__(self, **kwargs) -> None:
-            self.kwargs = kwargs
-            self.default_buffer = _FakeBuffer(state)
+    def factory(**kwargs):
+        return _FakeSession(result, state, **kwargs)
 
-        async def prompt_async(self, message, pre_run=None):
-            if pre_run is not None:
-                pre_run()
-            return result
-
-    monkeypatch.setattr("phoson_cli.inline_picker.PromptSession", FakeSession)
+    monkeypatch.setattr("phoson_cli.inline_picker.PromptSession", factory)
     return state
 
 
@@ -122,6 +135,34 @@ async def test_pick_inline_resolves_partial_text_to_best_match(monkeypatch) -> N
         InlineOption("anthropic/claude", "Claude"),
     ]
     assert await pick_inline("model", options) == "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_pick_inline_reuses_the_registered_session(monkeypatch) -> None:
+    """The picker reuses the REPL's session and restores its prompt config."""
+    from phoson_cli import inline_picker
+
+    state = _patch_session(monkeypatch, "a")  # fallback factory (unused here)
+    fake = _FakeSession("a", state)
+    fake.completer = "ORIGINAL_COMPLETER"
+    fake.key_bindings = "ORIGINAL_KB"
+    fake.bottom_toolbar = "ORIGINAL_TOOLBAR"
+    fake.style = "ORIGINAL_STYLE"
+    fake.reserve_space_for_menu = 6
+    inline_picker.set_prompt_session(fake)
+    try:
+        result = await pick_inline("model", [InlineOption("a", "Alpha")])
+    finally:
+        inline_picker.set_prompt_session(None)
+
+    assert result == "a"
+    assert state["used"] is fake  # reused the REPL session, not a new one
+    # The prompt config is restored so the REPL prompt is unaffected.
+    assert fake.completer == "ORIGINAL_COMPLETER"
+    assert fake.key_bindings == "ORIGINAL_KB"
+    assert fake.bottom_toolbar == "ORIGINAL_TOOLBAR"
+    assert fake.style == "ORIGINAL_STYLE"
+    assert fake.reserve_space_for_menu == 6
 
 
 # ── Picker result mapping ────────────────────────────────────────────────────

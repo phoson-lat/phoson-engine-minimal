@@ -10,6 +10,12 @@ instead of asking the user to type a value by hand.
 
 Rows are fuzzy-filtered as you type; ``↑``/``↓`` navigate, ``Enter``
 confirms the highlighted row and ``Esc`` cancels.
+
+The picker reuses the REPL's live ``PromptSession`` (see
+:func:`set_prompt_session`) rather than creating a second one: a nested
+``PromptSession`` is fragile on Windows, where the console input/output is
+already claimed by the session that drives the prompt (the same one the
+``@file`` menu uses).
 """
 
 from dataclasses import dataclass
@@ -22,12 +28,26 @@ from prompt_toolkit.key_binding import KeyBindings
 from .fuzzy import fuzzy_score
 from .theme import Theme, load_theme, build_prompt_style
 
-__all__ = ["InlineOption", "pick_inline"]
+__all__ = ["InlineOption", "pick_inline", "set_prompt_session"]
 
 #: How many rows the completion menu shows at once (it scrolls beyond this).
 _MENU_ROWS = 8
 
 _HINT = "  type to filter  ·  ↑/↓ select  ·  Enter confirm  ·  Esc cancel"
+
+#: The classic REPL's live prompt session, reused so the dropdown runs on
+#: the console input/output the ``@file`` menu already drives.
+_prompt_session: PromptSession | None = None
+
+
+def set_prompt_session(session: PromptSession | None) -> None:
+    """Register (or clear) the classic REPL's prompt session for reuse.
+
+    Pass the session created in ``PhosonRepl.run`` while the REPL is
+    running, and ``None`` when it exits.
+    """
+    global _prompt_session
+    _prompt_session = session
 
 
 @dataclass(frozen=True)
@@ -67,6 +87,67 @@ class _OptionCompleter(Completer):
             )
 
 
+def _picker_key_bindings() -> KeyBindings:
+    """Enter confirms the best row; Esc cancels."""
+    key_bindings = KeyBindings()
+
+    @key_bindings.add("enter")
+    def _accept(event) -> None:
+        buffer = event.current_buffer
+        state = buffer.complete_state
+        if state is not None:
+            completion = state.current_completion
+            # ``complete_while_typing`` shows the menu without selecting a
+            # row, so fall back to the first (best-scoring) completion.
+            if completion is None and state.completions:
+                completion = state.completions[0]
+            if completion is not None:
+                buffer.apply_completion(completion)
+        buffer.validate_and_handle()
+
+    @key_bindings.add("escape")
+    def _cancel(event) -> None:
+        event.app.exit(result="")
+
+    return key_bindings
+
+
+async def _run_prompt(
+    session: PromptSession,
+    title: str,
+    completer: Completer,
+    key_bindings: KeyBindings,
+    style: Style,
+) -> str:
+    """Drive *session* as the picker, restoring its prompt config after."""
+    saved = (
+        session.completer,
+        session.key_bindings,
+        session.bottom_toolbar,
+        session.style,
+        session.reserve_space_for_menu,
+    )
+    session.completer = completer
+    session.key_bindings = key_bindings
+    session.bottom_toolbar = _HINT
+    session.style = style
+    session.reserve_space_for_menu = _MENU_ROWS
+    try:
+        return await session.prompt_async(
+            f"{title} › ",
+            # Show the menu (first row highlighted) before any keystroke.
+            pre_run=lambda: session.default_buffer.start_completion(select_first=True),
+        )
+    finally:
+        (
+            session.completer,
+            session.key_bindings,
+            session.bottom_toolbar,
+            session.style,
+            session.reserve_space_for_menu,
+        ) = saved
+
+
 async def pick_inline(
     title: str,
     options: list[InlineOption],
@@ -95,41 +176,15 @@ async def pick_inline(
         print(notice)
 
     active_theme = theme or load_theme()
-    key_bindings = KeyBindings()
+    completer = _OptionCompleter(options, current)
+    key_bindings = _picker_key_bindings()
+    style = Style.from_dict(build_prompt_style(active_theme))
 
-    @key_bindings.add("enter")
-    def _accept(event) -> None:
-        """Confirm the highlighted row (or the best matching one)."""
-        buffer = event.current_buffer
-        state = buffer.complete_state
-        if state is not None:
-            completion = state.current_completion
-            # ``complete_while_typing`` shows the menu without selecting a
-            # row, so fall back to the first (best-scoring) completion.
-            if completion is None and state.completions:
-                completion = state.completions[0]
-            if completion is not None:
-                buffer.apply_completion(completion)
-        buffer.validate_and_handle()
-
-    @key_bindings.add("escape")
-    def _cancel(event) -> None:
-        event.app.exit(result="")
-
-    session: PromptSession[str] = PromptSession(
-        completer=_OptionCompleter(options, current),
-        complete_while_typing=True,
-        reserve_space_for_menu=_MENU_ROWS,
-        key_bindings=key_bindings,
-        style=Style.from_dict(build_prompt_style(active_theme)),
-        bottom_toolbar=_HINT,
-    )
+    session = _prompt_session
+    if session is None:
+        session = PromptSession(complete_while_typing=True)
     try:
-        text = await session.prompt_async(
-            f"{title} › ",
-            # Show the menu (first row highlighted) before any keystroke.
-            pre_run=lambda: session.default_buffer.start_completion(select_first=True),
-        )
+        text = await _run_prompt(session, title, completer, key_bindings, style)
     except (EOFError, KeyboardInterrupt):
         return None
 
