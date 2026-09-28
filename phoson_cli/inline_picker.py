@@ -2,24 +2,27 @@
 
 The classic REPL is line-oriented: the full-screen ``Application`` pickers
 (``model_picker``, ``provider_picker``, ``theme_picker``, ``session_picker``)
-need an alternate-screen capable terminal. This module prints a numbered
-list and reads a selection with the REPL's own prompt — the same plain
-prompt that drives the REPL — so a bare ``/model``, ``/provider``,
-``/theme`` or ``/sessions pick`` always offers a picker, on any terminal.
+need an alternate-screen capable terminal. This module provides a
+prompt_toolkit *completion-menu* picker that works anywhere the prompt
+works — the same mechanism as ``@file`` mentions — so a bare ``/model``,
+``/provider``, ``/theme`` or ``/sessions pick`` always presents a dropdown
+instead of asking the user to type a value by hand.
 
-Why not a completion menu: a prompt_toolkit completion menu (the ``@file``
-mechanism) did not render reliably inside the REPL's loop (notably on
-Windows), and a nested ``PromptSession`` never appeared at all. A numbered
-list over the existing prompt is the robust common denominator.
+Rows are fuzzy-filtered as you type; ``↑``/``↓`` navigate, ``Enter``
+confirms the highlighted row and ``Esc`` cancels.
 
 The picker reuses the REPL's live ``PromptSession`` (see
-:func:`set_prompt_session`) rather than creating a second one.
+:func:`set_prompt_session`) rather than creating a second one: a nested
+``PromptSession`` is fragile on Windows, where the console input/output is
+already claimed by the session that drives the prompt (the same one the
+``@file`` menu uses).
 """
 
 from dataclasses import dataclass
 
 from prompt_toolkit.styles import Style
 from prompt_toolkit.shortcuts import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 
 from .fuzzy import fuzzy_score
@@ -27,12 +30,12 @@ from .theme import Theme, load_theme, build_prompt_style
 
 __all__ = ["InlineOption", "pick_inline", "set_prompt_session"]
 
-#: The classic REPL's live prompt session, reused for the selection prompt.
-_prompt_session: PromptSession | None = None
+#: How many rows the completion menu shows at once (it scrolls beyond this).
+_MENU_ROWS = 6
 
-#: No key bindings for the selection line (the REPL's Ctrl+T etc. must not
-#: fire while the picker is on screen).
-_NO_KEYS = KeyBindings()
+#: The classic REPL's live prompt session, reused so the dropdown runs on
+#: the console input/output the ``@file`` menu already drives.
+_prompt_session: PromptSession | None = None
 
 
 def set_prompt_session(session: PromptSession | None) -> None:
@@ -54,71 +57,95 @@ class InlineOption:
     meta: str = ""
 
 
-def _print_options(
-    title: str, options: list[InlineOption], current: str | None
-) -> None:
-    """Print the numbered list of options."""
-    print(f"\nSelect {title}:")
-    for index, option in enumerate(options, 1):
-        marker = "▶" if option.value == current else " "
-        meta = f"   {option.meta}" if option.meta else ""
-        print(f"  {marker} {index:>2}. {option.display}{meta}")
+class _OptionCompleter(Completer):
+    """Offer the picker's options as a fuzzy-filtered completion menu."""
+
+    def __init__(self, options: list[InlineOption], current: str | None) -> None:
+        self._options = options
+        self._current = current
+
+    def get_completions(self, document, complete_event):
+        query = document.text_before_cursor.strip()
+        scored: list[tuple[int, InlineOption]] = []
+        for option in self._options:
+            haystack = f"{option.value} {option.display} {option.meta}"
+            score = fuzzy_score(query, haystack)
+            if score is None:
+                continue
+            scored.append((score, option))
+        scored.sort(key=lambda item: (-item[0], item[1].value.lower()))
+
+        for _score, option in scored:
+            marker = "▶ " if option.value == self._current else "  "
+            yield Completion(
+                option.value,
+                start_position=-len(document.text_before_cursor),
+                display=marker + option.display,
+                display_meta=option.meta,
+            )
 
 
-async def _read_line(message: str, theme: Theme) -> str:
-    """Read one line, reusing the REPL's session (or a fresh one)."""
-    session = _prompt_session
-    if session is None:
-        return await PromptSession().prompt_async(message)
+def _picker_key_bindings() -> KeyBindings:
+    """Enter confirms the best row; Esc cancels."""
+    key_bindings = KeyBindings()
 
+    @key_bindings.add("enter")
+    def _accept(event) -> None:
+        buffer = event.current_buffer
+        state = buffer.complete_state
+        if state is not None:
+            completion = state.current_completion
+            # ``complete_while_typing`` shows the menu without selecting a
+            # row, so fall back to the first (best-scoring) completion.
+            if completion is None and state.completions:
+                completion = state.completions[0]
+            if completion is not None:
+                buffer.apply_completion(completion)
+        buffer.validate_and_handle()
+
+    @key_bindings.add("escape")
+    def _cancel(event) -> None:
+        event.app.exit(result="")
+
+    return key_bindings
+
+
+async def _run_prompt(
+    session: PromptSession,
+    title: str,
+    completer: Completer,
+    key_bindings: KeyBindings,
+    style: Style,
+) -> str:
+    """Drive *session* as the picker, restoring its prompt config after.
+
+    No ``bottom_toolbar``: the main prompt (whose ``@file`` menu works on
+    every terminal) has none either, and adding one is the one structural
+    difference that could disturb the menu layout.
+    """
     saved = (
         session.completer,
-        session.complete_while_typing,
         session.key_bindings,
-        session.bottom_toolbar,
         session.style,
         session.reserve_space_for_menu,
     )
-    session.completer = None
-    session.complete_while_typing = False
-    session.key_bindings = _NO_KEYS
-    session.bottom_toolbar = None
-    session.style = Style.from_dict(build_prompt_style(theme))
-    session.reserve_space_for_menu = 0
+    session.completer = completer
+    session.key_bindings = key_bindings
+    session.style = style
+    session.reserve_space_for_menu = _MENU_ROWS
     try:
-        return await session.prompt_async(message)
+        return await session.prompt_async(
+            f"{title} › ",
+            # Show the menu (first row highlighted) before any keystroke.
+            pre_run=lambda: session.default_buffer.start_completion(select_first=True),
+        )
     finally:
         (
             session.completer,
-            session.complete_while_typing,
             session.key_bindings,
-            session.bottom_toolbar,
             session.style,
             session.reserve_space_for_menu,
         ) = saved
-
-
-def _resolve(text: str, options: list[InlineOption]) -> str | None:
-    """Map a typed line to an option value (number, exact, or fuzzy best)."""
-    text = text.strip()
-    if not text:
-        return None
-    if text.isdigit():
-        index = int(text) - 1
-        return options[index].value if 0 <= index < len(options) else None
-    for option in options:
-        if option.value == text or option.display == text:
-            return option.value
-
-    scored: list[tuple[int, InlineOption]] = []
-    for option in options:
-        score = fuzzy_score(text, f"{option.value} {option.display} {option.meta}")
-        if score is not None:
-            scored.append((score, option))
-    if scored:
-        scored.sort(key=lambda item: (-item[0], item[1].value.lower()))
-        return scored[0][1].value
-    return None
 
 
 async def pick_inline(
@@ -129,29 +156,53 @@ async def pick_inline(
     theme: Theme | None = None,
     notice: str | None = None,
 ) -> str | None:
-    """Print a numbered list and return the chosen value.
+    """Show an inline completion-menu picker and return the chosen value.
 
     Args:
-        title: Short label (e.g. ``"model"``) used in the list header.
-        options: The selectable rows, in their natural order.
-        current: Value to mark as active (``▶``).
+        title: Short label shown before the prompt (e.g. ``"model"``).
+        options: The selectable rows, in their natural (unfiltered) order.
+        current: Value to mark as active (``▶``) and to sort first.
         theme: Active theme; resolved via ``load_theme()`` when ``None``.
-        notice: Optional line printed above the list (e.g. providers whose
+        notice: Optional line printed above the prompt (e.g. providers whose
             live listing failed).
 
     Returns:
         The chosen option's ``value``, or ``None`` when the list is empty or
-        the user cancels (empty line / ``Ctrl+C`` / ``Ctrl+D``).
+        the user cancels (``Esc`` / ``Ctrl+C`` / ``Ctrl+D``).
     """
     if not options:
         return None
     if notice:
         print(notice)
 
-    _print_options(title, options, current)
-    message = f"{title} # [1-{len(options)}] (Enter to cancel): "
+    active_theme = theme or load_theme()
+    completer = _OptionCompleter(options, current)
+    key_bindings = _picker_key_bindings()
+    style = Style.from_dict(build_prompt_style(active_theme))
+
+    session = _prompt_session
+    if session is None:
+        session = PromptSession(complete_while_typing=True)
     try:
-        text = await _read_line(message, theme or load_theme())
+        text = await _run_prompt(session, title, completer, key_bindings, style)
     except (EOFError, KeyboardInterrupt):
         return None
-    return _resolve(text, options)
+
+    text = text.strip()
+    if not text:
+        return None
+    for option in options:
+        if option.value == text or option.display == text:
+            return option.value
+
+    # Fallback for a partially-typed value whose completion had not landed
+    # yet: resolve to the best fuzzy match (e.g. "gpt" -> "openai/gpt-4o").
+    scored: list[tuple[int, InlineOption]] = []
+    for option in options:
+        score = fuzzy_score(text, f"{option.value} {option.display} {option.meta}")
+        if score is not None:
+            scored.append((score, option))
+    if scored:
+        scored.sort(key=lambda item: (-item[0], item[1].value.lower()))
+        return scored[0][1].value
+    return None
