@@ -597,7 +597,7 @@ class PhosonRepl:
                         ("/theme ",),
                         lambda: list(self.theme_registry.valid_names()),
                     ),
-                    StaticArgCompleter(("/mcp ",), _MCP_SUBCOMMANDS),
+                    StaticArgCompleter(("/mcp ",), list(_MCP_SUBCOMMANDS)),
                     SessionsArgCompleter(self._session_cache),
                     ResumeArgCompleter(self._session_cache),
                     PathCompleter(),
