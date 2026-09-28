@@ -4,6 +4,7 @@ from typing import TypedDict
 from dataclasses import dataclass
 from collections.abc import Callable
 
+from .fuzzy import fuzzy_score as _fuzzy_score
 from .theme import Theme
 from .pickers import BasePicker, picker_style
 from .model_selector import ModelOption
@@ -56,37 +57,22 @@ def _format_meta(model: ModelOption) -> str:
     return " · ".join(parts)
 
 
+def _model_meta(model: ModelOption, *, multi: bool) -> str:
+    """One-line meta for the inline picker row (provider · pricing · ctx)."""
+    parts: list[str] = []
+    if multi and model.provider:
+        parts.append(model.provider)
+    if model.pricing:
+        parts.append(model.pricing)
+    context = _format_context_length(model.context_length)
+    if context != "—":
+        parts.append(f"ctx {context}")
+    if model.description:
+        parts.append(model.description)
+    return " · ".join(parts)
+
+
 # ─── Fuzzy search ────────────────────────────────────────────────────────────
-
-
-def _fuzzy_score(query: str, text: str) -> int | None:
-    if not query:
-        return 0
-
-    query = query.lower()
-    text = text.lower()
-
-    pos = -1
-    score = 0
-    consecutive_bonus = 0
-
-    for char in query:
-        next_pos = text.find(char, pos + 1)
-        if next_pos == -1:
-            return None
-
-        score += 1
-        if next_pos == pos + 1:
-            consecutive_bonus += 3
-        else:
-            consecutive_bonus += max(0, 2 - (next_pos - pos - 1))
-
-        if next_pos == 0 or text[next_pos - 1] in "-_/ .":
-            score += 4
-
-        pos = next_pos
-
-    return score + consecutive_bonus - max(0, len(text) - len(query)) // 12
 
 
 def _filter_models(models: list[ModelOption], query: str) -> list[ModelOption]:
@@ -230,23 +216,44 @@ async def pick_model(
     current_provider: str = "",
     unavailable: list[tuple[str, str]] | None = None,
 ) -> ModelPickerResult:
-    """Show an interactive picker over ``models`` with fuzzy search.
+    """Show an inline picker over ``models`` with fuzzy search.
 
-    ``current_provider`` (when set) switches the picker into the unified
-    multi-provider layout (I-113): rows show ``id (provider)`` and the
-    current *(model, provider)* pair is marked.
+    The classic REPL is line-oriented, so the dropdown is a prompt_toolkit
+    completion menu (:mod:`.inline_picker`) rather than a full-screen
+    ``Application`` — it works on any terminal the prompt works on.
+    ``build_model_picker`` / ``build_unified_model_picker`` stay for the
+    TUI's Float host.
+
+    ``current_provider`` (when set) switches to the unified multi-provider
+    layout (I-113): rows show ``id (provider)`` and the current
+    *(model, provider)* pair is marked.
     """
     if not models:
         return ModelPickerResult(cancelled=True)
-    picker = build_model_picker(
-        models,
-        current_model,
-        page_size,
-        theme,
-        current_provider=current_provider,
-        unavailable=unavailable,
+
+    from .inline_picker import InlineOption, pick_inline
+
+    multi = bool(current_provider)
+    options = [
+        InlineOption(
+            value=model.id,
+            display=f"{model.id} ({model.provider})" if multi else model.id,
+            meta=_model_meta(model, multi=multi),
+        )
+        for model in models
+    ]
+    notice = None
+    if unavailable:
+        notice = "\n".join(
+            f"  ⚠ {provider} — unavailable: {error}" for provider, error in unavailable
+        )
+    chosen = await pick_inline(
+        "model", options, current=current_model, theme=theme, notice=notice
     )
-    return await picker.run()
+    if chosen is None:
+        return ModelPickerResult(cancelled=True)
+    provider = next((m.provider for m in models if m.id == chosen), None)
+    return ModelPickerResult(model_id=chosen, provider=provider)
 
 
 def build_unified_model_picker(

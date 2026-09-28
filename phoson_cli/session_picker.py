@@ -107,10 +107,37 @@ async def pick_session(
     page_size: int = 15,
     theme: "Theme | None" = None,
 ) -> SessionPickerResult:
-    """Show an interactive session picker. Returns the selected session_id or None."""
+    """Prompt for a session via an inline completion menu (classic REPL).
+
+    Line-oriented (works on any terminal the prompt works on). Selection
+    only — the multi-delete flow (``d`` / ``X``) lives in the full-screen
+    :func:`build_session_picker` (TUI Float) and in ``/delete``.
+    """
     if not sessions:
         return SessionPickerResult(cancelled=True)
-    return await build_session_picker(sessions, current_id, page_size, theme).run()
+
+    from .inline_picker import InlineOption, pick_inline
+
+    options = []
+    for session in sessions:
+        title = getattr(session, "title", None) or "(untitled)"
+        updated = session.updated_at.strftime("%m-%d %H:%M")
+        cost = (
+            f"${session.total_cost:.4f}"
+            if getattr(session, "total_cost", None)
+            else "—"
+        )
+        options.append(
+            InlineOption(
+                value=str(session.id),
+                display=f"{title}  [{str(session.id)[:8]}]",
+                meta=f"{updated} · {session.message_count} msgs · {cost}",
+            )
+        )
+    chosen = await pick_inline("session", options, current=str(current_id), theme=theme)
+    if chosen is None:
+        return SessionPickerResult(cancelled=True)
+    return SessionPickerResult(session_id=chosen)
 
 
 def build_session_picker(
