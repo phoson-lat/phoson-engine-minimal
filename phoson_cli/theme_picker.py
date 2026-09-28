@@ -239,13 +239,22 @@ async def pick_theme(
     registry: ThemeRegistry | None = None,
     detected_name: str | None = None,
 ) -> ThemePickerResult:
-    """Run the theme picker as its own full-screen application (classic)."""
-    return await build_theme_picker(
-        current_name,
-        theme=theme,
-        registry=registry,
-        detected_name=detected_name,
-    ).run()
+    """Prompt for a theme via an inline completion menu (classic REPL).
+
+    Line-oriented (works on any terminal the prompt works on); the
+    full-screen :func:`build_theme_picker` stays for the TUI's Float host.
+    """
+    from .inline_picker import InlineOption, pick_inline
+
+    active_registry = registry or default_theme_registry()
+    options = [
+        InlineOption(value=name, display=name, meta=description)
+        for name, description in active_registry.rows()
+    ]
+    chosen = await pick_inline("theme", options, current=current_name, theme=theme)
+    if chosen is None:
+        return ThemePickerResult(cancelled=True)
+    return ThemePickerResult(theme_name=chosen)
 
 
 __all__ = [

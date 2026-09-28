@@ -51,7 +51,7 @@ from .commands import (
     parse_command,
 )
 from .renderer import Renderer, ClassicSink
-from .terminal import stream_is_tty, cursor_output_capable
+from .terminal import stream_is_tty
 from .controller import SessionController
 from .formatting import format_token_indicator
 from .confirmation import PromptToolkitConfirmationService
@@ -106,9 +106,10 @@ class PhosonRepl:
         # configured theme against its per-session registry below.
         self.theme: Theme = getattr(config, "_startup_theme", None) or load_theme()
         self.renderer = Renderer(theme=self.theme)
-        self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
-            self.renderer.console.file
-        )
+        # The classic REPL's pickers are inline completion menus
+        # (phoson_cli.inline_picker): they need a prompt-capable stdin but
+        # no alternate screen, so a TTY is the only requirement.
+        self.picker_capable = stream_is_tty(sys.stdin)
         # Node ids whose reasoning has already been expanded this session
         # (the terminal is append-only, so a node's reasoning prints once).
         self._expanded_reasoning: set[str] = set()

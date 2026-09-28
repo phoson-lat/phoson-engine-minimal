@@ -60,10 +60,26 @@ async def pick_provider(
     current_provider: str,
     theme: "Theme | None" = None,
 ) -> ProviderPickerResult:
-    """Prompt the user for a provider via a full-screen picker."""
+    """Prompt the user for a provider via an inline completion menu.
+
+    Line-oriented (works on any terminal the prompt works on); the
+    full-screen :func:`build_provider_picker` stays for the TUI's Float host.
+    """
     if not providers:
         return ProviderPickerResult(cancelled=True)
-    return await build_provider_picker(providers, current_provider, theme).run()
+
+    from .inline_picker import InlineOption, pick_inline
+
+    options = [
+        InlineOption(value=provider, display=provider_label(provider), meta=provider)
+        for provider in providers
+    ]
+    chosen = await pick_inline(
+        "provider", options, current=current_provider, theme=theme
+    )
+    if chosen is None:
+        return ProviderPickerResult(cancelled=True)
+    return ProviderPickerResult(provider=chosen)
 
 
 def build_provider_picker(
