@@ -99,11 +99,17 @@ async def pick_inline(
 
     @key_bindings.add("enter")
     def _accept(event) -> None:
-        """Confirm the highlighted row (or the typed text)."""
+        """Confirm the highlighted row (or the best matching one)."""
         buffer = event.current_buffer
         state = buffer.complete_state
-        if state is not None and state.current_completion is not None:
-            buffer.apply_completion(state.current_completion)
+        if state is not None:
+            completion = state.current_completion
+            # ``complete_while_typing`` shows the menu without selecting a
+            # row, so fall back to the first (best-scoring) completion.
+            if completion is None and state.completions:
+                completion = state.completions[0]
+            if completion is not None:
+                buffer.apply_completion(completion)
         buffer.validate_and_handle()
 
     @key_bindings.add("escape")
@@ -131,9 +137,17 @@ async def pick_inline(
     if not text:
         return None
     for option in options:
-        if option.value == text:
+        if option.value == text or option.display == text:
             return option.value
+
+    # Fallback for a partially-typed value whose completion had not landed
+    # yet: resolve to the best fuzzy match (e.g. "gpt" -> "openai/gpt-4o").
+    scored: list[tuple[int, InlineOption]] = []
     for option in options:
-        if option.display == text:
-            return option.value
+        score = fuzzy_score(text, f"{option.value} {option.display} {option.meta}")
+        if score is not None:
+            scored.append((score, option))
+    if scored:
+        scored.sort(key=lambda item: (-item[0], item[1].value.lower()))
+        return scored[0][1].value
     return None

@@ -113,6 +113,17 @@ async def test_pick_inline_resolves_by_display(monkeypatch) -> None:
     assert await pick_inline("model", [InlineOption("a", "Alpha")]) == "a"
 
 
+@pytest.mark.asyncio
+async def test_pick_inline_resolves_partial_text_to_best_match(monkeypatch) -> None:
+    """A partially-typed value resolves to its best fuzzy match."""
+    _patch_session(monkeypatch, "gpt")
+    options = [
+        InlineOption("openai/gpt-4o", "GPT-4o"),
+        InlineOption("anthropic/claude", "Claude"),
+    ]
+    assert await pick_inline("model", options) == "openai/gpt-4o"
+
+
 # ── Picker result mapping ────────────────────────────────────────────────────
 
 
