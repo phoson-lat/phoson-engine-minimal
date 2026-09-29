@@ -1,6 +1,6 @@
 [project]
 name = "phoson-engine-minimal"
-version = "0.44.1"
+version = "0.46.0"
 description = "Minimal Python runtime for the Phoson autonomous-agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -72,7 +72,7 @@ line-ending = "auto"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.44.1"
+version = "0.46.0"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
@@ -157,6 +157,9 @@ computeruse = [
 # macOS only: the marker keeps `uv sync --all-extras` from trying to build
 # pyobjc on Linux runners (it shells out to /usr/bin/sw_vers and fails).
 computeruse-macos = ["pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'"]
+# Windows: the backend is pure ctypes (GDI BitBlt + SendInput); Pillow is only
+# needed to encode screenshots to PNG.
+computeruse-windows = ["Pillow>=10.0.0"]
 # GNOME Wayland: a persistent session-bus connection is required (the
 # compositor destroys a session when its creating client disconnects, so the
 # one-shot `gdbus` transport cannot hold one).

@@ -45,6 +45,8 @@ fail closed in one-shot mode. See `docs/cli/permissions.md`.
 uv sync --extra computeruse          # mss + Pillow + python-xlib
 # macOS
 uv sync --extra computeruse-macos    # pyobjc-framework-Quartz
+# Windows
+uv sync --extra computeruse-windows  # Pillow (capture/input are ctypes)
 ```
 
 Enable it in `~/.phoson/config.toml`:
@@ -52,7 +54,7 @@ Enable it in `~/.phoson/config.toml`:
 ```toml
 [defaults]
 enable_computeruse = true
-computeruse_backend = "auto"   # auto | x11 | macos | fake
+computeruse_backend = "auto"   # auto | x11 | wayland | macos | windows | fake
 ```
 
 Or with env vars: `PHOSON_ENABLE_COMPUTERUSE=true`,
@@ -77,7 +79,7 @@ The `fake` backend performs no real input and is meant for dry runs and tests.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `backend` | `auto` | `auto`/`x11`/`wayland`/`macos`/`fake`. |
+| `backend` | `auto` | `auto`/`x11`/`wayland`/`macos`/`windows`/`fake`. |
 | `max_long_edge` | `1568` | Long-edge cap for screenshots sent to the model. |
 | `max_pixels` | `1150000` | Total pixel budget for a screenshot. |
 | `action_delay` | `0.4` | Seconds to wait after an input action (UI settle). |
@@ -98,6 +100,7 @@ them itself (needs Pillow) so the model's view and the coordinate space match.
 | **GNOME Wayland** | **Supported**: capture via the xdg Screenshot portal, input via Mutter's D-Bus API; `Start()` shows the remote-control indicator. |
 | Other Wayland (wlroots/KDE) | **Not yet.** Needs the xdg RemoteDesktop portal + libei path. |
 | macOS | Beta: Quartz + `screencapture`; needs **Screen Recording** and **Accessibility** grants. |
+| **Windows 10/11** | **Supported**: GDI `BitBlt` capture + `SendInput` input, no admin. **Primary monitor only.** |
 
 ### Wayland (GNOME)
 
@@ -132,8 +135,26 @@ Two caveats: `Start()` raises GNOME's remote-control indicator (and requires the
 session to allow it), and only GNOME is supported — other compositors would
 need the portal + libei path.
 
-Typing maps keysyms on X11/Wayland and unicode strings on macOS; composed/IME
-input is not supported in v1.
+### Windows
+
+Capture uses GDI `BitBlt` and input uses `SendInput` (both via `ctypes`); no
+admin rights and no service. **Computer Use is scoped to the primary monitor**:
+screenshots and input coordinates cover only the primary display, and
+`SendInput` is mapped onto it (no `MOUSEEVENTF_VIRTUALDESK`), so the model never
+deals with multi-monitor offsets.
+
+Two hard limits of any userspace automation are worth knowing:
+
+- **UIPI**: a non-elevated process cannot inject input into an elevated window.
+  `SendInput` then refuses and the tool returns an error.
+- **Secure Desktop / lock screen**: UAC consent prompts, Ctrl+Alt+Del and a
+  locked session cannot be driven.
+
+Pillow is the only extra dependency (`computeruse-windows`); it encodes the
+captured surface to PNG.
+
+Typing maps keysyms on X11/Wayland and unicode strings on macOS/Windows
+(`SendInput` `KEYEVENTF_UNICODE`); composed/IME input is not supported in v1.
 
 ## Design notes
 

@@ -81,15 +81,7 @@ from .chat_pane import (
 from .clipboard import (
     paste_image_from_clipboard,
 )
-from .completer import (
-    PathCompleter,
-    SlashCompleter,
-    ModelArgCompleter,
-    ResumeArgCompleter,
-    StaticArgCompleter,
-    SessionsArgCompleter,
-)
-from .model_cache import ModelCache
+from ..model_cache import ModelCache
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
 from .header_model import HeaderModel
@@ -106,7 +98,15 @@ from .state_cycles import (
 from .state_cycles import (
     cycle_reasoning_effort as _cycle_reasoning_effort_impl,
 )
-from .session_cache import SessionListCache
+from ..session_cache import SessionListCache
+from ..arg_completers import (
+    PathCompleter,
+    SlashCompleter,
+    ModelArgCompleter,
+    ResumeArgCompleter,
+    StaticArgCompleter,
+    SessionsArgCompleter,
+)
 from .turn_controller import (
     submit as _submit_impl,
 )

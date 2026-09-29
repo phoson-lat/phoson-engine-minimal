@@ -1350,7 +1350,7 @@ wheels = [
 
 [[package]]
 name = "phoson-engine-minimal"
-version = "0.44.1"
+version = "0.46.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -1378,6 +1378,9 @@ computeruse-macos = [
 ]
 computeruse-wayland = [
     { name = "jeepney" },
+]
+computeruse-windows = [
+    { name = "pillow" },
 ]
 gemini = [
     { name = "google-genai" },
@@ -1433,6 +1436,7 @@ requires-dist = [
     { name = "mss", marker = "extra == 'computeruse'", specifier = ">=10.0.0" },
     { name = "openai", specifier = ">=2.32.0" },
     { name = "pillow", marker = "extra == 'computeruse'", specifier = ">=10.0.0" },
+    { name = "pillow", marker = "extra == 'computeruse-windows'", specifier = ">=10.0.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.51" },
     { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' and extra == 'computeruse-macos'", specifier = ">=10.0" },
     { name = "python-xlib", marker = "extra == 'computeruse'", specifier = ">=0.33" },
@@ -1441,7 +1445,7 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0" },
     { name = "tiktoken", specifier = ">=0.9.0" },
 ]
-provides-extras = ["gemini", "mistral", "aws", "checkpoint", "memory", "mcp", "stt", "ssh", "computeruse", "computeruse-macos", "computeruse-wayland"]
+provides-extras = ["gemini", "mistral", "aws", "checkpoint", "memory", "mcp", "stt", "ssh", "computeruse", "computeruse-macos", "computeruse-windows", "computeruse-wayland"]
 
 [package.metadata.requires-dev]
 dev = [

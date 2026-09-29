@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 import pytest
 
@@ -7,8 +6,14 @@ from phoson_cli.config import PhosonConfig, load_config
 
 
 def test_history_file_defaults_to_shared_repl_path() -> None:
-    """A2: the full-screen and classic front ends share this history file."""
-    assert PhosonConfig().history_file == Path("~/.phoson/history.txt").expanduser()
+    """A2: the full-screen and classic front ends share this history file.
+
+    The default is bound at import time, so compare its *shape* rather than
+    expanding ``~`` live (the suite redirects ``$HOME`` per test).
+    """
+    history_file = PhosonConfig().history_file
+    assert history_file.parent.name == ".phoson"
+    assert history_file.name == "history.txt"
 
 
 def test_history_file_override_is_not_serialized_or_loaded(

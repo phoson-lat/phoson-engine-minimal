@@ -23,6 +23,49 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   natively; hosts without it degrade to `select`/`form` composition, and
   non-interactive hosts return `unavailable` without reading stdin.
 
+## v0.46.0 (2026-09-28)
+
+### Feat
+
+- **computeruse**: add Windows backend (GDI capture + SendInput)
+
+## v0.45.1 (2026-09-27)
+
+### Fix
+
+- **test**: the suite no longer overwrites the developer's real
+  `~/.phoson/config.toml` on Windows. `$HOME` is now authoritative for `~`
+  expansion and every test runs against its own throwaway home, so the
+  `monkeypatch.setenv("HOME", ...)` isolation works on every platform.
+- **ci**: run the config/persistence tests on `windows-latest`, so the
+  Windows `$HOME`/`$USERPROFILE` regression cannot slip back in.
+
+## v0.45.0 (2026-09-27)
+
+### Feat
+
+- **cli**: the classic REPL (`--classic`) now offers inline argument
+  autocomplete in its own prompt — typing `/model `, `/provider `,
+  `/theme `, `/reasoning-effort `, `/sessions load `, `/resume ` or
+  `/mcp ` shows a fuzzy dropdown (the same mechanism as `@file` mentions,
+  which works on every terminal). The model/session lists are prefetched
+  in the background so typing never blocks on a network round trip.
+- **cli**: `Ctrl+E` in the classic REPL cycles the reasoning effort
+  (off → low → medium → high → xhigh → max), persisted and applied from
+  the next turn — mirroring the full-screen TUI.
+
+### Fix
+
+- **cli**: the classic REPL no longer streams reasoning text live; it
+  keeps the `thinking` spinner as the only live feedback and still
+  captures the text for `Ctrl+T` expansion (#249).
+- **cli**: the classic REPL no longer re-prints the assistant text
+  cumulatively across steps (`msg_1`, `msg_1+msg_2`, …) — each step's
+  streamed text is shown exactly once.
+- **cli**: the waiting spinner (and the subagent animation) now run on
+  Windows terminals, where `TERM` is unset and the capability probe used
+  to disable them.
+
 ## v0.44.1 (2026-09-26)
 
 ### Fix

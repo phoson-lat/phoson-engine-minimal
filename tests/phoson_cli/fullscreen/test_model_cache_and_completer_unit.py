@@ -11,9 +11,9 @@ import pytest
 from prompt_toolkit.document import Document
 
 from phoson_cli.config import PhosonConfig
+from phoson_cli.model_cache import ModelCache
+from phoson_cli.arg_completers import ModelArgCompleter
 from phoson_cli.model_selector import ModelOption, ProviderListing
-from phoson_cli.fullscreen.completer import ModelArgCompleter
-from phoson_cli.fullscreen.model_cache import ModelCache
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_refresh_populates_model_ids() -> None:
         ),
     ]
     with patch(
-        "phoson_cli.fullscreen.model_cache.list_models_for_providers",
+        "phoson_cli.model_cache.list_models_for_providers",
         return_value=listings,
     ):
         await cache.refresh(PhosonConfig(provider="openai"))
@@ -58,7 +58,7 @@ async def test_refresh_keeps_previous_list_on_failure() -> None:
     async def _boom(config, providers):
         raise RuntimeError("network down")
 
-    with patch("phoson_cli.fullscreen.model_cache.list_models_for_providers", _boom):
+    with patch("phoson_cli.model_cache.list_models_for_providers", _boom):
         await cache.refresh(PhosonConfig(provider="openai"))
 
     assert cache.model_ids == ["openai/gpt-4o"]  # unchanged, not cleared

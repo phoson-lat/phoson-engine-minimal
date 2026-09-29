@@ -2,7 +2,6 @@
 
 import asyncio
 import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -58,7 +57,11 @@ def test_repl_history_path_falls_back_for_legacy_config(tmp_path) -> None:
 
     del repl.config.history_file
 
-    assert repl._history_path() == Path("~/.phoson/history.txt").expanduser()
+    # The fallback is bound at import time; assert its shape, not a live ``~``
+    # (the suite redirects ``$HOME`` per test).
+    history = repl._history_path()
+    assert history.parent.name == ".phoson"
+    assert history.name == "history.txt"
 
 
 def test_repl_new_session_is_synchronous_and_immediate(repl: PhosonRepl) -> None:

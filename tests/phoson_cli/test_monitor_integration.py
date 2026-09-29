@@ -133,7 +133,9 @@ class TestConfig:
     def test_default_disabled(self) -> None:
         config = PhosonConfig()
         assert config.enable_monitors is False
-        assert config.monitors_data_dir == Path("~/.phoson/monitors/").expanduser()
+        # Bound at import time: assert the default's shape, not a live ``~``.
+        assert config.monitors_data_dir.name == "monitors"
+        assert config.monitors_data_dir.parent.name == ".phoson"
         assert build_monitor_plugins(config) == []
 
     def test_env_override(self, tmp_path, monkeypatch) -> None:

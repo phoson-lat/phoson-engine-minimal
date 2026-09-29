@@ -19,7 +19,8 @@ def detect_backend(
     """Return a backend instance.
 
     Args:
-        name: ``"auto"`` (default), ``"x11"``, ``"macos"`` or ``"fake"``.
+        name: ``"auto"`` (default), ``"x11"``, ``"wayland"``, ``"macos"``,
+            ``"windows"`` or ``"fake"``.
         screen_size: dimensions for the ``"fake"`` backend (tests/dry runs).
     """
     requested = (name or "auto").strip().lower()
@@ -45,12 +46,22 @@ def detect_backend(
 
         return WaylandBackend()
 
+    if requested == "windows":
+        from .windows import WindowsBackend
+
+        return WindowsBackend()
+
     if requested != "auto":
         raise ComputerUseError(
-            f"Unknown backend {name!r}; use auto/x11/wayland/macos/fake"
+            f"Unknown backend {name!r}; use auto/x11/wayland/macos/windows/fake"
         )
 
     # ── auto ─────────────────────────────────────────────────────────────
+    if sys.platform == "win32":
+        from .windows import WindowsBackend
+
+        return WindowsBackend()
+
     if sys.platform == "darwin":
         from .macos import MacOSBackend
 
