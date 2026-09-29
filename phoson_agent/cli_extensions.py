@@ -154,6 +154,49 @@ class FormField:
 
 
 @dataclass(frozen=True)
+class QuestionOption:
+    """One selectable option presented by :class:`Question`."""
+
+    id: str
+    label: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class Question:
+    """A single multiple-choice question in a batch of :meth:`PluginUiService.ask`.
+
+    ``id`` is the stable key under which the answer is returned; ``header`` is a
+    short label (kept brief so hosts can render it as a chip/column).  When
+    ``multi_select`` is true the user may pick more than one ``options`` entry.
+    ``allow_other`` offers a free-text fallback ("Other"), enabling answers that
+    are not among the supplied ``options``.
+    """
+
+    id: str
+    header: str
+    question: str
+    options: tuple[QuestionOption, ...]
+    multi_select: bool = False
+    allow_other: bool = True
+
+
+@dataclass(frozen=True)
+class QuestionsResult:
+    """Result of :meth:`PluginUiService.ask`.
+
+    ``selections`` maps each question ``id`` to the option id(s) the user picked
+    (a one-tuple for single-select).  ``other_text`` carries free-text answers
+    supplied through the "Other" fallback, keyed by question ``id``.  A question
+    the user skipped is simply absent from both mappings.
+    """
+
+    status: Literal["submitted", "cancelled", "unavailable"]
+    selections: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    other_text: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class InteractionResult:
     """Result of a plugin interaction, including safe non-UI degradation."""
 
@@ -191,6 +234,10 @@ class PluginUiService(Protocol):
     async def form(
         self, *, title: str, fields: Sequence[FormField]
     ) -> InteractionResult: ...
+
+    async def ask(
+        self, *, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult: ...
 
 
 @runtime_checkable
@@ -251,6 +298,9 @@ __all__ = [
     "NoticeBlock",
     "PluginUiService",
     "ProgressBlock",
+    "Question",
+    "QuestionOption",
+    "QuestionsResult",
     "ThemeExtension",
     "TodoItem",
     "TodoListBlock",

@@ -11,12 +11,14 @@ from rich.console import Group, Console
 from phoson_agent import (
     Choice,
     UiBlock,
+    Question,
     FormField,
     NoticeBlock,
     KeyValueBlock,
     ProgressBlock,
     TodoListBlock,
     PluginUiService,
+    QuestionsResult,
     InteractionResult,
 )
 
@@ -119,6 +121,9 @@ class NonInteractivePluginUiService(PluginUiService):
     async def form(self, *, title: str, fields: list[FormField]) -> InteractionResult:
         return InteractionResult(status="unavailable")
 
+    async def ask(self, *, title: str, questions: list[Question]) -> QuestionsResult:
+        return QuestionsResult(status="unavailable")
+
 
 class SinkPluginUiService(PluginUiService):
     """Block publisher shared by interactive sinks; prompts are host-specific."""
@@ -200,3 +205,10 @@ class SinkPluginUiService(PluginUiService):
             if values is None
             else InteractionResult(status="submitted", values=values)
         )
+
+    async def ask(self, *, title: str, questions: list[Question]) -> QuestionsResult:
+        ask_plugin = getattr(self._confirmation, "ask_questions_plugin", None)
+        if ask_plugin is None:
+            return QuestionsResult(status="unavailable")
+        result = await ask_plugin(title, questions)
+        return result if result is not None else QuestionsResult(status="cancelled")

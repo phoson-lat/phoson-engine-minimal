@@ -44,7 +44,7 @@ from prompt_toolkit.key_binding.key_bindings import (
     merge_key_bindings,
 )
 
-from phoson_agent import Choice, FormField
+from phoson_agent import Choice, Question, FormField, QuestionsResult
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from .. import warnings_hook
@@ -921,6 +921,12 @@ class PhosonApp:
     ) -> dict[str, str] | None:
         """Collect a small plugin form in a modal, never exposing widgets to plugins."""
         return await self._floats.run_float_form(title, fields)
+
+    async def run_float_questions(
+        self, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult | None:
+        """Ask a batch of plugin questions in a single modal Float."""
+        return await self._floats.run_float_questions(title, questions)
 
     def _open_float(
         self, float_: Float, kb: KeyBindings, focus_target: FocusableElement

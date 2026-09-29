@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **plugins**: add the bundled `phoson_plugin_questions` plugin and its
+  `questions` tool — an `AskUserQuestion`-style primitive that asks the user one
+  to four multiple-choice questions in a single interaction (short `header`,
+  two to four `options` with descriptions, optional `multiSelect`, and an
+  "Other" free-text fallback). Opt-in via `enable_questions` /
+  `PHOSON_ENABLE_QUESTIONS` (`questions_title` / `PHOSON_QUESTIONS_TITLE`).
+- **agent**: extend the UI-neutral plugin contract (`phoson_agent`) with
+  `Question`, `QuestionOption`, `QuestionsResult` and a
+  `PluginUiService.ask()` method, so hosts can render a whole question batch in
+  one card. The classic REPL and the full-screen front end implement `ask`
+  natively; hosts without it degrade to `select`/`form` composition, and
+  non-interactive hosts return `unavailable` without reading stdin.
+
 ## v0.44.1 (2026-09-26)
 
 ### Fix

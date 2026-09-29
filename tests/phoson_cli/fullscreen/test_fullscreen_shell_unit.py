@@ -17,7 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 from rich.text import Text
 
-from phoson_agent import AgentDoneEvent, AgentStartEvent, AgentReasoningEvent
+from phoson_agent import (
+    Question,
+    AgentDoneEvent,
+    QuestionOption,
+    AgentStartEvent,
+    AgentReasoningEvent,
+)
 from phoson_cli.config import PhosonConfig
 from phoson_llm.schemas import Message, TextBlock
 from phoson_agent.models import AgentRunResult
@@ -1072,6 +1078,88 @@ async def test_run_float_confirm_resolves_no_on_ctrl_c(app: PhosonApp) -> None:
 
     assert fired is True  # the confirm Float's own c-c binding, not the base exit
     assert await task is False
+
+
+def _questions_batch() -> list[Question]:
+    return [
+        Question(
+            id="db",
+            header="DB",
+            question="Which database?",
+            options=(
+                QuestionOption("pg", "Postgres", "sql"),
+                QuestionOption("lite", "SQLite", "file"),
+            ),
+        ),
+        Question(
+            id="feat",
+            header="Feat",
+            question="Which features?",
+            options=(
+                QuestionOption("auth", "Auth", "login"),
+                QuestionOption("cache", "Cache", "speed"),
+            ),
+            multi_select=True,
+        ),
+    ]
+
+
+async def test_run_float_questions_collects_single_and_multi(app: PhosonApp) -> None:
+    task = asyncio.ensure_future(app.run_float_questions("Setup", _questions_batch()))
+    await asyncio.sleep(0)
+    assert app._active_float is not None
+
+    _trigger_if_enabled(app, "enter")  # Q1: pick the first option, advance
+    _trigger_if_enabled(app, " ")  # Q2: toggle Auth
+    _trigger_if_enabled(app, "down")  # Q2: move to Cache
+    _trigger_if_enabled(app, " ")  # Q2: toggle Cache
+    _trigger_if_enabled(app, "enter")  # Q2: commit + submit
+
+    result = await task
+    assert result is not None and result.status == "submitted"
+    assert result.selections == {"db": ("pg",), "feat": ("auth", "cache")}
+    assert app._active_float is None
+
+
+async def test_run_float_questions_cancels_on_escape(app: PhosonApp) -> None:
+    task = asyncio.ensure_future(app.run_float_questions("Setup", _questions_batch()))
+    await asyncio.sleep(0)
+
+    assert _trigger_if_enabled(app, "escape") is True
+
+    assert await task is None
+    assert app._active_float is None
+
+
+async def test_run_float_questions_back_navigation_and_skip(app: PhosonApp) -> None:
+    task = asyncio.ensure_future(app.run_float_questions("Setup", _questions_batch()))
+    await asyncio.sleep(0)
+
+    _trigger_if_enabled(app, "enter")  # Q1: pick Postgres, advance to Q2
+    _trigger_if_enabled(app, " ")  # Q2: toggle Auth
+    _trigger_if_enabled(app, "left")  # back to Q1
+    _trigger_if_enabled(app, "down")  # Q1: move to SQLite
+    _trigger_if_enabled(app, "enter")  # Q1: re-pick SQLite, advance to Q2
+    _trigger_if_enabled(app, "s")  # Q2: skip, submit
+
+    result = await task
+    assert result is not None
+    assert result.selections == {"db": ("lite",)}
+    assert "feat" not in result.selections
+
+
+async def test_run_float_questions_picks_by_number_and_submits(app: PhosonApp) -> None:
+    task = asyncio.ensure_future(app.run_float_questions("Setup", _questions_batch()))
+    await asyncio.sleep(0)
+
+    _trigger_if_enabled(app, "2")  # Q1: pick SQLite directly, advance to Q2
+    _trigger_if_enabled(app, "1")  # Q2 multi: toggle Auth
+    _trigger_if_enabled(app, "2")  # Q2 multi: toggle Cache
+    _trigger_if_enabled(app, "f2")  # submit immediately
+
+    result = await task
+    assert result is not None
+    assert result.selections == {"db": ("lite",), "feat": ("auth", "cache")}
 
 
 async def test_concurrent_float_confirmations_are_serialized(app: PhosonApp) -> None:

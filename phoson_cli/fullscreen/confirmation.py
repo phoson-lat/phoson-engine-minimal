@@ -13,7 +13,7 @@ mid-confirmation can't leave the tool call hanging forever.
 from typing import TYPE_CHECKING, Any
 from collections.abc import Callable, Sequence, Coroutine
 
-from phoson_agent import Choice, FormField
+from phoson_agent import Choice, Question, FormField, QuestionsResult
 
 if TYPE_CHECKING:
     from .app import PhosonApp
@@ -51,6 +51,11 @@ class FullScreenConfirmationService:
         self, title: str, fields: Sequence[FormField]
     ) -> dict[str, str] | None:
         return await self.app.run_float_form(title, fields)
+
+    async def ask_questions_plugin(
+        self, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult | None:
+        return await self.app.run_float_questions(title, questions)
 
 
 __all__ = ["FullScreenConfirmationService"]

@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence, Coroutine
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from phoson_agent import Choice, FormField
+from phoson_agent import Choice, Question, FormField, QuestionsResult
 
 
 class PromptToolkitConfirmationService:
@@ -95,3 +95,85 @@ class PromptToolkitConfirmationService:
         except (EOFError, KeyboardInterrupt, ValueError):
             return None
         return values
+
+    async def ask_questions_plugin(
+        self, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult | None:
+        """Ask a batch of multiple-choice questions sequentially (classic REPL).
+
+        EOF/Ctrl+C cancels the whole batch (returns ``None``). A blank answer or
+        ``s`` skips a question; ``b`` goes back to the previous one; a leading
+        ``0`` selects the free-text "Other" fallback when
+        :attr:`Question.allow_other` is set.
+        """
+        if not questions:
+            return QuestionsResult(status="submitted")
+        session: PromptSession[str] = PromptSession()
+        selections: dict[str, tuple[str, ...]] = {}
+        other_text: dict[str, str] = {}
+        position = 0
+        try:
+            with patch_stdout():
+                while 0 <= position < len(questions):
+                    question = questions[position]
+                    blocks: list[str] = []
+                    if position == 0 and title:
+                        blocks.append(title)
+                    blocks.append(
+                        f"[{question.header}] ({position + 1}/{len(questions)})"
+                    )
+                    blocks.append(question.question)
+                    blocks.extend(
+                        f"  {rank}. {option.label}"
+                        + (f" — {option.description}" if option.description else "")
+                        for rank, option in enumerate(question.options, start=1)
+                    )
+                    if question.allow_other:
+                        blocks.append("  0. Other (write your own)")
+                    hint = (
+                        " (one or more, comma-separated)"
+                        if question.multi_select
+                        else ""
+                    )
+                    nav = " · s skip" + (" · b back" if position > 0 else "")
+                    answer = await session.prompt_async(
+                        "\n".join(blocks) + f"\nSelect{hint}{nav} [Esc to cancel]: "
+                    )
+                    raw = answer.strip()
+                    if raw.lower() == "b" and position > 0:
+                        position -= 1
+                        continue
+                    selections.pop(question.id, None)
+                    other_text.pop(question.id, None)
+                    if not raw or raw.lower() == "s":
+                        position += 1
+                        continue
+                    chosen: list[str] = []
+                    for pick in (part.strip() for part in raw.split(",")):
+                        if not pick:
+                            continue
+                        if pick == "0" and question.allow_other:
+                            text = await session.prompt_async(
+                                f"{question.header} — Other: "
+                            )
+                            text = text.strip()
+                            if text:
+                                other_text[question.id] = text
+                            continue
+                        try:
+                            number = int(pick)
+                        except ValueError:
+                            return None
+                        if not 1 <= number <= len(question.options):
+                            return None
+                        chosen.append(question.options[number - 1].id)
+                        if not question.multi_select:
+                            break
+                    if chosen:
+                        selections[question.id] = tuple(chosen)
+                    position += 1
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return QuestionsResult(
+            status="submitted", selections=selections, other_text=other_text
+        )

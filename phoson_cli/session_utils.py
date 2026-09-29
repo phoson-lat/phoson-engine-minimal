@@ -387,6 +387,7 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *build_computeruse_plugins(config),
         *build_otel_plugins(config),
         *build_swarm_plugins(config),
+        *build_questions_plugins(config),
     ]
 
 
@@ -620,6 +621,40 @@ def build_swarm_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plu
     except Exception as exc:
         warnings.warn(
             f"Failed to initialise swarm plugin: {exc}", UserWarning, stacklevel=2
+        )
+        return []
+
+
+def build_questions_plugins(
+    config: PhosonConfig,
+) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the official Questions plugin specs.
+
+    Returns an empty list when the questions tool is disabled (the default:
+    ``enable_questions`` is opt-in). Mirrors :func:`build_swarm_plugins`:
+    returns a *pre-configured, fresh* instance and falls back to the path-based
+    loader during local development.
+    """
+    if not config.enable_questions:
+        return []
+
+    questions_config = {"title": config.questions_title}
+
+    try:
+        from phoson_plugin_questions import QuestionsPlugin
+
+        instance = QuestionsPlugin()
+        instance.configure(questions_config)
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_questions", questions_config, "questions disabled"
+        )
+    except Exception as exc:
+        warnings.warn(
+            f"Failed to initialise Questions plugin: {exc}",
+            UserWarning,
+            stacklevel=2,
         )
         return []
 
