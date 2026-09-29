@@ -233,6 +233,13 @@ class PhosonConfig:
     swarm_max_tokens_per_agent: int = 4096
     swarm_max_tokens_total: int = 32768
     swarm_default_topology: str = "star"
+    # Official Questions plugin (#<pending>): an AskUserQuestion-style tool that
+    # lets the agent ask the user one to four multiple-choice questions in one
+    # interaction, with an "Other" free-text fallback. Opt-in because it adds a
+    # tool to every turn's schema; harmless (returns "unavailable") in
+    # non-interactive hosts.
+    enable_questions: bool = False
+    questions_title: str = "Questions"
     # LLM permission guardian (#227 phase 3): an opt-in classifier that
     # reviews ``ask``-level tool calls before a human is bothered. Off by
     # default — it costs one extra model call per ambiguous action. The
@@ -1141,6 +1148,12 @@ def load_config() -> PhosonConfig:
             fd,
             d.swarm_default_topology,
         ),
+        enable_questions=_resolve_bool(
+            "PHOSON_ENABLE_QUESTIONS", "enable_questions", fd, d.enable_questions
+        ),
+        questions_title=_resolve_str(
+            "PHOSON_QUESTIONS_TITLE", "questions_title", fd, d.questions_title
+        ),
         otel_file_path=Path(
             _resolve_str(
                 "PHOSON_OTEL_TRACE_FILE",
@@ -1588,6 +1601,8 @@ def save_config(
             "swarm_default_topology",
             getattr(config, "swarm_default_topology", None),
         ),
+        ("enable_questions", getattr(config, "enable_questions", None)),
+        ("questions_title", getattr(config, "questions_title", None)),
         ("plugins", getattr(config, "plugins", None)),
         ("disabled_plugins", getattr(config, "disabled_plugins", None)),
         ("compact_mode", getattr(config, "compact_mode", None)),

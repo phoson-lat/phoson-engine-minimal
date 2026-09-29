@@ -8,10 +8,13 @@ from rich.console import Console
 
 from phoson_agent import (
     Choice,
+    Question,
     TodoItem,
     FormField,
     ProgressBlock,
     TodoListBlock,
+    QuestionOption,
+    QuestionsResult,
     InteractionResult,
 )
 from phoson_cli.theme import DARK
@@ -119,3 +122,50 @@ def test_classic_sink_forwards_plugin_blocks_to_renderer() -> None:
 
     sink.publish_plugin_block("job", block)
     assert "Classic 1/1" in renderer.console.file.getvalue()
+
+
+def _sample_question() -> Question:
+    return Question(
+        id="db",
+        header="DB",
+        question="Which database?",
+        options=(
+            QuestionOption("pg", "Postgres", "sql"),
+            QuestionOption("lite", "SQLite", "file"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_ask_delegates_to_host_when_available() -> None:
+    expected = QuestionsResult(status="submitted", selections={"db": ("pg",)})
+    confirmation = type(
+        "Host", (), {"ask_questions_plugin": AsyncMock(return_value=expected)}
+    )()
+    ui = SinkPluginUiService(FullScreenSink(lambda: None, DARK), DARK, confirmation)
+
+    result = await ui.ask(title="Setup", questions=[_sample_question()])
+
+    assert result == expected
+    confirmation.ask_questions_plugin.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ask_cancelled_and_unavailable_paths() -> None:
+    cancelling = type(
+        "Host", (), {"ask_questions_plugin": AsyncMock(return_value=None)}
+    )()
+    ui = SinkPluginUiService(FullScreenSink(lambda: None, DARK), DARK, cancelling)
+    result = await ui.ask(title="t", questions=[_sample_question()])
+    assert result.status == "cancelled"
+
+    plain = SinkPluginUiService(FullScreenSink(lambda: None, DARK), DARK, object())
+    result = await plain.ask(title="t", questions=[_sample_question()])
+    assert result.status == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_non_interactive_ask_returns_unavailable() -> None:
+    ui = NonInteractivePluginUiService(DARK)
+    result = await ui.ask(title="Setup", questions=[_sample_question()])
+    assert result == QuestionsResult(status="unavailable")

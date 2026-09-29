@@ -35,6 +35,7 @@ packages = [
     "phoson_plugin_computeruse",
     "phoson_plugin_swarm",
     "phoson_plugin_stt",
+    "phoson_plugin_questions",
 ]
 
 [project.scripts]
@@ -97,6 +98,7 @@ include = [
     "phoson_plugin_computeruse",
     "phoson_plugin_swarm",
     "phoson_plugin_stt",
+    "phoson_plugin_questions",
 ]
 exclude = ["**/__pycache__", "**/node_modules"]
 reportMissingImports = true

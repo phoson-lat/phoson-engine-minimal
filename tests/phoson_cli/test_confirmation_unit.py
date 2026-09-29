@@ -4,6 +4,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from phoson_agent import Question, QuestionOption
 from phoson_cli.confirmation import PromptToolkitConfirmationService
 from phoson_cli.ui_protocols import ConfirmationService
 from phoson_cli.fullscreen.confirmation import FullScreenConfirmationService
@@ -145,6 +146,80 @@ def test_controller_without_confirmation_injects_none(tmp_path) -> None:
     with patch("phoson_cli.controller.build_chat", return_value=MagicMock()):
         controller = SessionController(config, _Sink())
     assert controller.engine.context.extra["bash_confirmation"] is None
+
+
+def _session_with_answers(answers):
+    """A PromptSession whose prompt_async pops one answer per call."""
+    session = MagicMock()
+    session.prompt_async = AsyncMock(side_effect=list(answers))
+    return session
+
+
+def _question(multi_select: bool = False, id: str = "db") -> Question:
+    return Question(
+        id=id,
+        header="DB",
+        question="Which database?",
+        options=(
+            QuestionOption("pg", "Postgres", "sql"),
+            QuestionOption("lite", "SQLite", "file"),
+        ),
+        multi_select=multi_select,
+    )
+
+
+@pytest.mark.asyncio
+async def test_classic_ask_single_select() -> None:
+    with patch(
+        "phoson_cli.confirmation.PromptSession",
+        return_value=_session_with_answers(["1"]),
+    ):
+        result = await PromptToolkitConfirmationService().ask_questions_plugin(
+            "Setup", [_question()]
+        )
+    assert result.status == "submitted"
+    assert result.selections == {"db": ("pg",)}
+
+
+@pytest.mark.asyncio
+async def test_classic_ask_multi_select_and_other_text() -> None:
+    with patch(
+        "phoson_cli.confirmation.PromptSession",
+        return_value=_session_with_answers(["1,2", "0", "my own answer"]),
+    ):
+        multi = await PromptToolkitConfirmationService().ask_questions_plugin(
+            "Setup", [_question(multi_select=True)]
+        )
+        other = await PromptToolkitConfirmationService().ask_questions_plugin(
+            "Setup", [_question()]
+        )
+    assert multi.selections == {"db": ("pg", "lite")}
+    assert other.other_text == {"db": "my own answer"}
+
+
+@pytest.mark.asyncio
+async def test_classic_ask_cancels_on_eof() -> None:
+    session = MagicMock()
+    session.prompt_async = AsyncMock(side_effect=EOFError)
+    with patch("phoson_cli.confirmation.PromptSession", return_value=session):
+        result = await PromptToolkitConfirmationService().ask_questions_plugin(
+            "Setup", [_question()]
+        )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_classic_ask_back_navigation_and_skip() -> None:
+    two = [_question(), _question(multi_select=True, id="feat")]
+    with patch(
+        "phoson_cli.confirmation.PromptSession",
+        return_value=_session_with_answers(["1", "b", "2", "s"]),
+    ):
+        result = await PromptToolkitConfirmationService().ask_questions_plugin(
+            "Setup", two
+        )
+    assert result is not None
+    assert result.selections == {"db": ("lite",)}
 
 
 # ── Pure formatters (phase 2A) ───────────────────────────────────────────────

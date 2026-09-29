@@ -18,7 +18,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.containers import Float, HSplit, Window
 from prompt_toolkit.key_binding.key_bindings import KeyBindings
 
-from phoson_agent import Choice, FormField
+from phoson_agent import Choice, Question, FormField, QuestionsResult
 
 from ..pickers import BasePicker
 
@@ -399,6 +399,282 @@ class FloatsController:
             content=Frame(body, title=title), left=4, right=4, top=4, bottom=4
         )
         self.open_float(float_, kb, areas[0] if areas else validation_window)
+        try:
+            return await result_future
+        finally:
+            self.close_float(float_)
+
+    async def run_float_questions(
+        self, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult | None:
+        async with self._lock:
+            return await self._run_float_questions(title, questions)
+
+    async def _run_float_questions(
+        self, title: str, questions: Sequence[Question]
+    ) -> QuestionsResult | None:
+        """Ask a batch of multiple-choice questions in one modal Float.
+
+        One question is shown at a time inside a single Float (a wizard):
+        ↑/↓ moves the option cursor, ←/→ (or Tab/Shift+Tab) switches between
+        questions, digits ``1``–``4`` pick an option directly (``0`` = Other),
+        Space toggles a multi-select option, Enter commits/advances (submitting
+        on the last question), ``s`` skips the current question and ``F2``
+        submits at any point. A trailing "Other" row opens a free-text field.
+        Esc cancels the whole batch.
+        """
+        if not questions:
+            return QuestionsResult(status="submitted")
+
+        result_future: asyncio.Future[QuestionsResult | None] = (
+            asyncio.get_running_loop().create_future()
+        )
+        picks: dict[str, list[str]] = {}
+        other: dict[str, str] = {}
+        index = 0
+        cursor = 0
+        cursors = [0] * len(questions)
+        mode = {"value": "select"}
+        kb = KeyBindings()
+        other_area = TextArea(height=1, multiline=False)
+
+        def question() -> Question:
+            return questions[index]
+
+        def row_count() -> int:
+            return len(question().options) + (1 if question().allow_other else 0)
+
+        def resolve(value: QuestionsResult | None) -> None:
+            if not result_future.done():
+                result_future.set_result(value)
+
+        def submit() -> None:
+            resolve(
+                QuestionsResult(
+                    status="submitted",
+                    selections={qid: tuple(v) for qid, v in picks.items()},
+                    other_text=dict(other),
+                )
+            )
+
+        def advance() -> None:
+            nonlocal index, cursor
+            cursors[index] = cursor
+            index += 1
+            if index >= len(questions):
+                submit()
+                return
+            cursor = cursors[index]
+            self.app.app.invalidate()
+
+        def commit() -> None:
+            q = question()
+            if cursor < len(q.options) and not q.multi_select:
+                picks[q.id] = [q.options[cursor].id]
+            # Multi-select: Space already toggled; Enter just commits/advances.
+            advance()
+
+        def skip() -> None:
+            q = question()
+            picks.pop(q.id, None)
+            other.pop(q.id, None)
+            advance()
+
+        def move(delta: int) -> None:
+            if mode["value"] == "other_text":
+                return
+            nonlocal cursor
+            cursor = (cursor + delta) % row_count()
+            self.app.app.invalidate()
+
+        def switch_question(delta: int) -> None:
+            nonlocal index, cursor
+            if mode["value"] == "other_text":
+                if delta < 0:
+                    other_area.buffer.cursor_left()
+                else:
+                    other_area.buffer.cursor_right()
+                self.app.app.invalidate()
+                return
+            target = index + delta
+            if not 0 <= target < len(questions):
+                return
+            cursors[index] = cursor
+            index = target
+            cursor = cursors[index]
+            self.app.app.invalidate()
+
+        def start_other() -> None:
+            mode["value"] = "other_text"
+            self.app.app.layout.focus(other_area)
+            self.app.app.invalidate()
+
+        def back() -> None:
+            mode["value"] = "select"
+            self.app.app.layout.focus(content_window)
+            self.app.app.invalidate()
+
+        def submit_other() -> None:
+            text = other_area.text.strip()
+            if text:
+                other[question().id] = text
+            other_area.text = ""
+            mode["value"] = "select"
+            self.app.app.layout.focus(content_window)
+            advance()
+
+        def on_enter() -> None:
+            if mode["value"] == "other_text":
+                submit_other()
+                return
+            q = question()
+            if q.allow_other and cursor == len(q.options):
+                start_other()
+                return
+            commit()
+
+        def toggle_option(position: int) -> None:
+            q = question()
+            if position >= len(q.options):
+                return
+            option = q.options[position]
+            bucket = picks.setdefault(q.id, [])
+            if option.id in bucket:
+                bucket.remove(option.id)
+            else:
+                bucket.append(option.id)
+
+        def on_space() -> None:
+            if mode["value"] == "other_text":
+                other_area.buffer.insert_text(" ")
+                return
+            q = question()
+            if q.multi_select and cursor < len(q.options):
+                toggle_option(cursor)
+                self.app.app.invalidate()
+
+        def on_digit(number: int) -> None:
+            if mode["value"] == "other_text":
+                other_area.buffer.insert_text(str(number))
+                return
+            nonlocal cursor
+            q = question()
+            if number == 0:
+                if q.allow_other:
+                    cursor = len(q.options)
+                    start_other()
+                return
+            if 1 <= number <= len(q.options):
+                cursor = number - 1
+                if q.multi_select:
+                    toggle_option(number - 1)
+                    self.app.app.invalidate()
+                else:
+                    picks[q.id] = [q.options[number - 1].id]
+                    advance()
+
+        def on_escape() -> None:
+            if mode["value"] == "other_text":
+                back()
+            else:
+                resolve(None)
+
+        def on_skip() -> None:
+            if mode["value"] == "other_text":
+                other_area.buffer.insert_text("s")
+                return
+            skip()
+
+        kb.add("up")(lambda event: move(-1))  # noqa: ARG005
+        kb.add("down")(lambda event: move(1))  # noqa: ARG005
+        kb.add("c-p")(lambda event: move(-1))  # noqa: ARG005
+        kb.add("c-n")(lambda event: move(1))  # noqa: ARG005
+        kb.add("left")(lambda event: switch_question(-1))  # noqa: ARG005
+        kb.add("right")(lambda event: switch_question(1))  # noqa: ARG005
+        kb.add("tab")(lambda event: switch_question(1))  # noqa: ARG005
+        kb.add("s-tab")(lambda event: switch_question(-1))  # noqa: ARG005
+        kb.add("space")(lambda event: on_space())  # noqa: ARG005
+        kb.add("s")(lambda event: on_skip())  # noqa: ARG005
+        kb.add("f2")(lambda event: submit())  # noqa: ARG005
+        kb.add("enter")(lambda event: on_enter())  # noqa: ARG005
+        kb.add("escape")(lambda event: on_escape())  # noqa: ARG005
+        kb.add("c-c")(lambda event: resolve(None))  # noqa: ARG005
+        for number in range(10):
+            kb.add(str(number))(
+                lambda event, _n=number: on_digit(_n)  # noqa: ARG005
+            )
+
+        def breadcrumb() -> list[tuple[str, str]]:
+            parts = []
+            for position, item in enumerate(questions):
+                answered = item.id in picks or item.id in other
+                marker = "▸" if position == index else ("✓" if answered else "·")
+                parts.append(f"{marker}{item.header}")
+            return [("class:header", "  " + "  ".join(parts) + "\n")]
+
+        def content() -> list[tuple[str, str]]:
+            q = question()
+            lines: list[tuple[str, str]] = [
+                ("class:title", f"  {title}\n"),
+                (
+                    "class:header",
+                    f"  Question {index + 1}/{len(questions)} · {q.header}\n",
+                ),
+                *breadcrumb(),
+                ("", f"  {q.question}\n\n"),
+            ]
+            selected_ids = picks.get(q.id, [])
+            for position, option in enumerate(q.options):
+                marker = "▸" if position == cursor else " "
+                if q.multi_select:
+                    box = "[x]" if option.id in selected_ids else "[ ]"
+                else:
+                    box = "(•)" if option.id in selected_ids else "( )"
+                detail = f" — {option.description}" if option.description else ""
+                style = "class:row.selected" if position == cursor else "class:row"
+                lines.append((style, f"  {marker} {box} {option.label}{detail}\n"))
+            if q.allow_other:
+                position = len(q.options)
+                marker = "▸" if position == cursor else " "
+                existing = other.get(q.id, "")
+                suffix = f": {existing}" if existing else ":"
+                style = "class:row.selected" if position == cursor else "class:row"
+                lines.append((style, f"  {marker} ( ) Other{suffix}\n"))
+            if mode["value"] == "other_text":
+                lines.append(
+                    ("class:footer", "  type answer · Enter confirm · Esc back\n")
+                )
+            else:
+                toggle = "Space toggle · " if q.multi_select else ""
+                lines.append(
+                    (
+                        "class:footer",
+                        "  ↑/↓ option · ←/→ question · 1-4 pick · 0 other\n",
+                    )
+                )
+                lines.append(
+                    (
+                        "class:footer",
+                        f"  Enter next · {toggle}s skip · F2 submit · Esc cancel\n",
+                    )
+                )
+            return lines
+
+        content_window = Window(
+            content=FormattedTextControl(content, focusable=True),
+            always_hide_cursor=True,
+        )
+        widgets: list[Any] = [content_window]
+        if any(q.allow_other for q in questions):
+            widgets.append(
+                Window(content=FormattedTextControl("  Other: \n"), height=1)
+            )
+            widgets.append(other_area)
+        body = HSplit(widgets)
+        float_ = Float(
+            content=Frame(body, title=title), left=4, right=4, top=4, bottom=4
+        )
+        self.open_float(float_, kb, content_window)
         try:
             return await result_future
         finally:
