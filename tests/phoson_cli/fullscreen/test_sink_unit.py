@@ -411,6 +411,68 @@ def test_flush_line_is_a_noop_when_idle() -> None:
     assert ticks == []
 
 
+def test_flush_line_releases_pending_tool_calls_when_turn_ends() -> None:
+    """A cancelled tool never gets its done event: flush_line must drop the
+    start-args/bookkeeping so the start block is not pinned forever, while
+    the visible start line stays in the transcript as partial progress."""
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="read_file", args={"path": "x.txt"}, tool_call_id="read-1"
+        )
+    )
+    assert sink._pending_tool_calls  # in-flight bookkeeping exists
+    start_block = sink.blocks[0]
+
+    sink.flush_line()
+
+    assert sink.current_turn is None
+    assert sink._pending_tool_calls == {}
+    # The start line is a real block (partial-progress record), not dropped.
+    assert start_block in sink.blocks
+
+
+def test_flush_line_releases_pending_tool_calls_when_turn_already_ended() -> None:
+    """An error event clears ``current_turn`` before flush_line runs; the
+    early return must still release the pending calls it left behind."""
+    sink, ticks = _make_sink()
+    block = object()
+    sink._pending_tool_calls["orphan"] = ({"path": "x"}, block, DARK)
+    assert sink.current_turn is None
+
+    sink.flush_line()
+
+    assert sink._pending_tool_calls == {}
+    assert ticks == []  # nothing visible changed: no needless repaint
+
+
+def test_clear_transcript_bookkeeping_keeps_live_turn_and_pending_calls() -> None:
+    """Ctrl+L bookkeeping release drops only *finished* state.
+
+    The active turn and its in-flight tool calls must survive: a stream may
+    be running when the user clears the transcript.
+    """
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(
+        AgentToolStartEvent(
+            tool_name="read_file", args={"path": "x.txt"}, tool_call_id="read-1"
+        )
+    )
+    sink.publish_plugin_block("todo", object())
+    finished = object()
+    sink._tool_calls.append((object(), {}, finished, DARK))  # type: ignore[arg-type]
+
+    sink.clear_transcript_bookkeeping()
+
+    assert sink._plugin_blocks == {}
+    assert sink._tool_calls == []
+    # Live turn state is untouched.
+    assert sink.current_turn is not None
+    assert "read-1" in sink._pending_tool_calls
+
+
 def test_tool_start_and_done_replace_the_live_card_header() -> None:
     """A completed tool must replace its live start line, never duplicate it."""
     sink, _ = _make_sink()

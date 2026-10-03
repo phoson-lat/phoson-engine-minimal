@@ -26,7 +26,8 @@ from collections.abc import Callable, Awaitable
 
 import httpx
 
-PACKAGE = "phoson-engine-minimal"
+from phoson_cli._version import PACKAGE, get_current_version
+
 PYPI_JSON_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 CHECK_TIMEOUT = 10.0
 
@@ -51,26 +52,6 @@ LAST_UPDATE_CHECK = "last_update_check"
 
 
 # ── Versions ──────────────────────────────────────────────────────────────────
-
-
-def get_current_version() -> str:
-    """Version of the installed distribution, or ``"dev"`` from source.
-
-    The standalone binary (issue #93) does not ship package metadata, so
-    the version is injected at build time (``phoson_cli._FROZEN_VERSION``);
-    :func:`~phoson_cli._frozen.frozen_version` prefers that when present.
-    """
-    from importlib.metadata import PackageNotFoundError, version
-
-    from phoson_cli._frozen import is_frozen, frozen_version
-
-    try:
-        current = version(PACKAGE)
-    except PackageNotFoundError:
-        current = "dev"
-    if is_frozen():
-        return frozen_version(current)
-    return current
 
 
 def _version_key(version: str) -> tuple:

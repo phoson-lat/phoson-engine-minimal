@@ -16,7 +16,6 @@ from pathlib import Path
 from dataclasses import dataclass
 
 from phoson_cli import warnings_hook
-from phoson_cli.repl import PhosonRepl
 from phoson_cli.trace import TraceWriter, trace_enabled
 from phoson_cli.config import (
     PhosonConfig,
@@ -26,10 +25,53 @@ from phoson_cli.config import (
     load_config,
     has_configured_provider,
 )
-from phoson_cli.updater import get_current_version, perform_self_update
+from phoson_cli._version import get_current_version
 from phoson_cli.terminal import stream_is_tty, cursor_output_capable
-from phoson_cli.installer import run_install_wizard
-from phoson_cli.fullscreen.app import PhosonApp
+
+# Heavy front ends, the setup wizard and the updater are imported lazily so
+# that ``import phoson_cli.__main__`` — and the ``--help``/``--version`` fast
+# paths — never drag in prompt_toolkit/rich. The functions below stay real
+# module globals (so tests can monkeypatch them); ``__getattr__`` (PEP 562)
+# supplies the lazily-imported classes on first attribute access.
+
+
+def perform_self_update(*args, **kwargs):
+    """Coroutine factory for the self-update flow (updater imported lazily)."""
+    from phoson_cli.updater import perform_self_update as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def run_install_wizard(*args, **kwargs):
+    """Coroutine factory for the setup wizard (installer imported lazily)."""
+    from phoson_cli.installer import run_install_wizard as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def __getattr__(name: str):
+    """Lazily resolve the front-end classes (PEP 562)."""
+    if name == "PhosonRepl":
+        from phoson_cli.repl import PhosonRepl
+
+        return PhosonRepl
+    if name == "PhosonApp":
+        from phoson_cli.fullscreen.app import PhosonApp
+
+        return PhosonApp
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _resolve(name: str):
+    """Return a lazily-imported class, honouring monkeypatched globals.
+
+    ``__getattr__`` provides the real class on first access; a test that
+    monkeypatches the name onto this module takes precedence. Reading through
+    ``getattr`` (rather than importing into a local) is what keeps those
+    monkeypatch targets effective inside :func:`_run_cli`.
+    """
+    return getattr(sys.modules[__name__], name)
+
 
 _USAGE = """\
 phoson-cli [options] [task]
@@ -892,7 +934,7 @@ def _run_cli() -> None:
                 "and stdout must be capable TTYs with TERM set.",
                 file=sys.stderr,
             )
-        repl = PhosonRepl(config)
+        repl = _resolve("PhosonRepl")(config)
         if options.theme and getattr(config, "_cli_theme_deferred", False):
             try:
                 _validate_runtime_cli_theme(config, repl.theme_registry)
@@ -923,7 +965,7 @@ def _run_cli() -> None:
         return
 
     try:
-        app = PhosonApp(config)
+        app = _resolve("PhosonApp")(config)
     except PhosonKeyBindingsError as exc:
         # A [keys] section that survived load-time validation but still
         # collides (e.g. two actions remapped onto one sequence): fail
