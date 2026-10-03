@@ -371,27 +371,6 @@ class FullScreenSink:
         del self.blocks[idx]
         self._error_notice_idx = None
 
-    def status_text(self) -> str:
-        """Short status string for the header bar.
-
-        T-2: the idle state returns an empty string, not "Online" — the
-        permission-mode chip already shows the app's state at idle, and
-        "Online" is IM vocabulary, not work-surface vocabulary. Live
-        activity (streaming / running a tool / subagents) still shows.
-        """
-        turn = self.current_turn
-        if turn is None:
-            return ""
-        if turn.subagent_tasks:
-            return "Running subagents"
-        if turn.composing_tool:
-            return "Composing tool"
-        if turn.running_tool:
-            return "Running tool"
-        if turn.content or turn.reasoning:
-            return "Streaming"
-        return f"thinking · step {turn.current_step}/{turn.max_steps}"
-
     # ── Transient in-chat activity indicator ──────────────────────────────
 
     def begin_activity(self) -> None:

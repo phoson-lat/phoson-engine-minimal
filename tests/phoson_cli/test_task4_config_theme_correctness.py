@@ -581,15 +581,29 @@ def test_fullscreen_header_escapes_every_dynamic_html_value(
 ) -> None:
     app = _build_app(tmp_path)
     dangerous = "A&B <tag> \"quoted\" 'single'"
-    app.repl.current_model = dangerous
-    app.repl.config.provider = dangerous
     app.repl.update_hint = dangerous
+    app.repl._controller._session_started = True
+    app.repl.tree.title = dangerous
     monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: Path("/tmp/A&B <tag>")))
     monkeypatch.setattr(app.repl._controller, "monitor_status", lambda: dangerous)
-    monkeypatch.setattr(app.sink, "status_text", lambda: dangerous)
     app._header_cache_key = None
 
     plain = to_plain_text(app._get_header_text())
+
+    assert dangerous in plain
+    assert "A&B <tag>" in plain
+
+
+def test_fullscreen_footer_escapes_model_and_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The model moved to the footer; it is still HTML-escaped there."""
+    app = _build_app(tmp_path)
+    dangerous = "A&B <tag> \"quoted\" 'single'"
+    app.repl.current_model = dangerous
+    app.repl.config.provider = dangerous
+
+    plain = to_plain_text(app._get_footer_text())
 
     assert dangerous in plain
     assert "A&B <tag>" in plain

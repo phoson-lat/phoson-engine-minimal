@@ -187,20 +187,27 @@ def test_spinner_tick_cadence_stays_smooth() -> None:
 
 
 def test_header_html_is_cached_until_an_input_changes(app: PhosonApp) -> None:
-    """I-84: the header string is only rebuilt when one of its inputs
-    (cost/tokens/status/model/...) changes — repainting for a spinner
-    glyph must not reformat or re-stat the header on every frame."""
+    """I-84: the header string is only rebuilt when a *durable* input changes.
+
+    Repainting for a spinner glyph or a live-turn status must not reformat or
+    re-stat the header on every frame — the header now carries no transient
+    state at all, so a running turn leaves the cache untouched.
+    """
     from phoson_agent import AgentStartEvent
 
     first = app._get_header_text()
     second = app._get_header_text()
     assert first is second  # unchanged inputs → same cached object
 
-    # A live turn changes the status text → rebuild.
+    # A live turn has no header inputs any more → the cache is untouched.
     app.sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=4))
+    assert app._get_header_text() is first
+
+    # A durable input (cost) does change the header → rebuild.
+    app.repl.session_metrics.total_cost_usd = 0.5
     third = app._get_header_text()
     assert third is not first
-    assert "thinking" in str(third.value)
+    assert "$0.5000" in str(third.value)
 
     # No change again → cached.
     assert app._get_header_text() is third
@@ -462,27 +469,32 @@ async def test_paste_image_is_allowed_during_a_turn(
         await app._run_task
 
 
-def test_header_shows_live_status_while_a_run_is_in_flight(app: PhosonApp) -> None:
-    """A4 (extra): the header already shows the live status
-    ("Streaming" / "Running tool") while a turn is in flight, so it is
-    obvious at a glance that the app is working and not frozen."""
+def test_header_has_no_transient_status_while_a_run_is_in_flight(
+    app: PhosonApp,
+) -> None:
+    """The header stays stable during a turn: no streaming/tool/step status.
+
+    Live activity is shown exclusively by the in-chat activity line (and the
+    model lives in the footer), so the header carries no transient state.
+    """
     from phoson_cli.fullscreen.sink import CurrentTurn
 
     app.sink.current_turn = CurrentTurn(model="m", max_steps=10)
-    # T-2: idle shows no "Online" — and neither does an empty in-flight
-    # turn, which shows the thinking step instead.
-    assert "Online" not in app._get_header_text().value
-    assert "thinking" in app._get_header_text().value
+    header = app._get_header_text().value
+    assert "Online" not in header
+    assert "thinking" not in header
+    assert "Streaming" not in header
 
     app.sink.current_turn.content = "partial"
-    assert "Streaming" in app._get_header_text().value
+    assert "Streaming" not in app._get_header_text().value
 
     app.sink.current_turn.running_tool = True
-    assert "Running tool" in app._get_header_text().value
+    assert "Running tool" not in app._get_header_text().value
+
+    app.sink.current_turn.composing_tool = "write_file"
+    assert "Composing tool" not in app._get_header_text().value
 
     app.sink.current_turn = None
-    # T-2: idle has no status word at all (the permission chip shows state).
-    assert "Online" not in app._get_header_text().value
     assert "Streaming" not in app._get_header_text().value
 
 
@@ -1111,8 +1123,9 @@ def test_render_chat_shows_empty_state_on_startup(app: PhosonApp) -> None:
     """T-1: the chat pane is seeded with a one-line empty-state hint, not
     the 17-line ASCII banner (which is now available via /about). The
     provider/model/session/command-hint lines are NOT part of it — that
-    info lives in the header instead (see
-    ``test_header_shows_provider_model_and_session``), not duplicated in
+    info lives in the header/footer instead (see
+    ``test_header_shows_cwd_and_token_cost`` and
+    ``test_footer_pairs_model_with_contextual_hints``), not duplicated in
     the scrollback.
     """
     text = app._render_chat().value
@@ -1467,7 +1480,7 @@ async def test_delayed_ctrl_v_cannot_cross_session_or_outlive_exit(
     assert "[image" not in app._prompt_input.text
 
 
-def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
+def test_header_shows_cwd_and_token_cost(app: PhosonApp) -> None:
     app.repl._context_window = 128_000
     app.repl._context_tokens = 12_400
     app.repl.session_metrics.total_cost_usd = 0.0123
@@ -1475,9 +1488,10 @@ def test_header_shows_model_provider_cwd_and_token_cost(app: PhosonApp) -> None:
     text = app._get_header_text().value
 
     assert "12.4K/128K" in text
-    assert f"{app.repl.current_model} ({app.repl.config.provider})" in text
     assert "$0.0123" in text
     assert app._short_cwd(Path.cwd()) in text
+    # The model/provider moved out of the header (now in the footer).
+    assert f"{app.repl.current_model} ({app.repl.config.provider})" not in text
 
 
 def test_header_prefixes_brand_with_asterisk(app: PhosonApp) -> None:
@@ -1539,35 +1553,37 @@ def test_header_truncates_long_session_title(app: PhosonApp) -> None:
     assert "…" in header
 
 
-def test_footer_is_contextual_and_never_truncates(app: PhosonApp) -> None:
-    """T-9: the footer shows at most three state-dependent hints.
+def test_footer_pairs_model_with_contextual_hints(app: PhosonApp) -> None:
+    """T-9: model on the left, at most three state-dependent hints on the right.
 
-    Idle vs running vs picker each get their own short line, and none of
-    them is long enough to truncate at 80 columns (the old 8-shortcut
-    cheatsheet was). Stable runtime facts belong to the header and are
-    never duplicated below.
+    Idle vs running vs picker each get their own short hint; the model moved
+    here from the header, while session identity stays in the header.
     """
     app.repl._controller._session_started = True
     header = app._get_header_text().value
-
-    assert app.repl.config.provider in header
-    assert app.repl.current_model in header
     # Session identity lives in the header (title + short id)...
     assert app.repl.tree.session_id[:8] in header
-    # ...and is therefore not duplicated in the footer hints.
-    assert app.repl.config.provider not in _FOOTER_HINT_IDLE
-    assert app.repl.current_model not in _FOOTER_HINT_IDLE
+    # ...the model/provider now lives in the footer, not the header.
+    assert app.repl.current_model not in header
+    assert app.repl.config.provider not in header
     for hint in (_FOOTER_HINT_IDLE, _FOOTER_HINT_RUNNING, _FOOTER_HINT_PICKER):
         assert len(hint) <= 50  # comfortably inside 80 columns
 
-    # Idle (default): the send/newline/commands hints.
+    # Idle (default): the model plus the send/newline/commands hints.
     footer = app._get_footer_text().value
+    assert app.repl.current_model in footer
+    assert app.repl.config.provider in footer
     assert "enter send" in footer
     assert "ctrl+j" in footer
     assert "/ commands" in footer
     # The old cheatsheet is gone from the footer.
     assert "Shift+Drag" not in footer
     assert "PgUp" not in footer
+
+    # A pending queue surfaces an `N queued` marker (set directly: the
+    # composer-queue feature owns populating `_pending_turns`).
+    app._pending_turns = ["x"]  # type: ignore[attr-defined]
+    assert "1 queued" in app._get_footer_text().value
 
 
 def test_footer_running_state_shows_cancel_hint(app: PhosonApp) -> None:
@@ -2092,7 +2108,6 @@ async def test_autonomous_wake_is_registered_as_app_operation(
     await wake_started.wait()
     assert app._is_run_in_flight()
     assert app._run_task is not None
-    assert "Background wake" in app._get_header_text().value
     assert "esc cancel" in app._get_footer_text().value
 
     # Local toggles stay live mid-turn: Ctrl+E changes effort immediately.

@@ -8,7 +8,6 @@ in-chat activity line. These tests pin that contract:
 - composing sets the label and shows ``⚙ {verb}…`` on the activity line;
 - the label is cleared the moment the real ``AgentToolStartEvent`` card
   lands, so there is never a duplicate "composing" line + start card;
-- the header status reads ``Composing tool`` during that window;
 - a composing-only turn (no text yet) still animates the activity frame
   instead of sitting frozen;
 - unknown tool names fall back to the de-underscored name via ``tool_verb``.
@@ -64,23 +63,6 @@ def test_composing_clears_when_tool_start_card_lands() -> None:
     assert sink.activity_text() != "📖 reading file…"
     text = render_chat(sink, width=80)
     assert text.count("reading file") == 1  # only the start card, once
-
-
-def test_composing_header_status_is_composing_tool() -> None:
-    sink = _make_sink()
-    _start_turn(sink)
-    assert sink.status_text() == "thinking · step 0/5"
-    sink.on_event(
-        AgentToolComposingEvent(index=0, tool_name="bash", args_chunk='{"command":')
-    )
-    assert sink.status_text() == "Composing tool"
-    # Start returns it to the running-tool status.
-    sink.on_event(
-        AgentToolStartEvent(
-            index=0, tool_call_id="b1", tool_name="bash", args={"command": "ls"}
-        )
-    )
-    assert sink.status_text() == "Running tool"
 
 
 def test_composing_beats_streaming_when_text_already_started() -> None:

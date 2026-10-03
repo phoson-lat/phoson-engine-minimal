@@ -43,6 +43,22 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
     run-safe-command, refused-command, restricted-palette and mid-turn paste
     coverage.
 
+### Changed
+
+- **cli**: full-screen header/footer split reworked. The header no longer
+  shows the agent's live status (`Streaming`, `Composing tool`,
+  `Running tool`, `Running subagents`, `thinking · step n/m`) nor the app
+  operation statuses (`Running bash`, `Background wake`, `Saving session`);
+  live activity is shown exclusively by the transient in-chat activity line,
+  so the header is stable during a turn and carries only durable session
+  facts. The `PhosonApp._operation_status` and `FullScreenSink.status_text`
+  helpers are removed as dead code.
+- **cli**: the active **model/provider moved from the header to the footer**
+  (left edge), paired with the contextual key hints (right edge) via a
+  computed run of spaces; on a terminal too narrow for both it degrades to a
+  left-aligned `·`-separated line. The footer also surfaces an `· N queued`
+  marker when messages are waiting.
+
 ### Fix
 
 - **cli**: the full-screen chat no longer sometimes renders *all* text

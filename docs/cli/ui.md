@@ -37,6 +37,18 @@ applicable — the line vanishes when the turn settles.
 While idle, press `Esc` twice to **rewind** the conversation to an
 earlier message (see [rewind.md](rewind.md)).
 
+## Header and footer
+
+The header (top line) carries only durable session facts — `* phoson · title
+(id) · cwd · tokens/cost · permission mode · reasoning effort` — and **no
+transient state**, so it stays stable while a turn runs. The live agent
+activity (`Streaming…`, `Composing tool…`, `Running tool…`, `Thinking Ns`)
+is shown exclusively by the transient in-chat activity line described above.
+
+The footer (bottom line) shows the active **model/provider on the left** and
+the contextual key hints on the right; on a terminal too narrow for both it
+degrades to a single left-aligned, `·`-separated line.
+
 ## Session titles
 
 A new session is named automatically. A cheap heuristic (first line of the

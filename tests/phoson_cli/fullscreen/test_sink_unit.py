@@ -230,7 +230,9 @@ def test_start_token_done_builds_streaming_panel_then_finalizes() -> None:
     sink.on_event(AgentTokenEvent(content="Hello "))
     sink.on_event(AgentTokenEvent(content="world"))
     assert sink.current_turn.content == "Hello world"
-    assert "Streaming" == sink.status_text()
+    # The live phase is shown on the in-chat activity line only; the header
+    # no longer carries a status string.
+    assert "Streaming…" == sink.activity_text()
 
     result = AgentRunResult(
         final_content="Hello world", history=[], input_messages=[], steps=[_run_step()]
