@@ -106,6 +106,126 @@ def test_unwrapped_osc8_is_torn_apart_by_ansi_without_the_fix() -> None:
     assert "id=" in visible_text or "phoson.lat" in visible_text
 
 
+def test_osc8_close_on_trailing_whitespace_is_anchored() -> None:
+    """A link ending the line must not leave an open OSC 8 dangling.
+
+    Rich pads the line to the console width with *unstyled* spaces, so the
+    close lands on a trailing-space column that prompt_toolkit never renders
+    (issue #1651) — the terminal then underlines everything that follows.
+    ``osc8_passthrough`` replaces that first padding space with a FIGURE
+    SPACE, which counts as a rendered cell.
+    """
+    raw = _rich_osc8("[our site](https://phoson.lat)")
+    # Sanity: Rich emitted the close before the trailing padding.
+    assert "\x1b]8;;\x1b\\ " in raw
+
+    wrapped = osc8_passthrough(raw)
+
+    # The anchor sits right after the (wrapped) close, before the padding.
+    assert "\x1b]8;;\x1b\\\x02\u2007" in wrapped
+    # Replace, don't insert: the first line keeps its padded width, so no
+    # extra column is introduced (only the two \x01/\x02 markers grow it).
+    line = wrapped.split("\n")[0]
+    assert line.count("\u2007") == 1
+    assert len(line) == len(raw.split("\n")[0]) + 4  # 2 OSC 8 x 2 markers
+
+
+def test_osc8_close_before_real_text_is_untouched() -> None:
+    """A close followed by real content keeps its normal position."""
+    raw = _rich_osc8("See [our site](https://phoson.lat) now.")
+    wrapped = osc8_passthrough(raw)
+    # The close is followed by a space then real text: no anchor needed.
+    assert "\u2007" not in wrapped
+
+
+def _osc8_counts_through_prompt_toolkit(wrapped: str) -> tuple[int, int]:
+    """Parse *wrapped* with ANSI(), draw one row through the real ptk screen
+
+    differ, and return ``(opens, closes)`` actually written to the terminal.
+    """
+    from prompt_toolkit.styles import Style
+    from prompt_toolkit.renderer import (
+        _output_screen_diff,
+        _StyleStringToAttrsCache,
+        _StyleStringHasStyleCache,
+    )
+    from prompt_toolkit.output.vt100 import Vt100_Output
+    from prompt_toolkit.layout.screen import Char, Screen
+    from prompt_toolkit.formatted_text import ANSI, to_formatted_text
+    from prompt_toolkit.data_structures import Size, Point
+    from prompt_toolkit.output.color_depth import ColorDepth
+    from prompt_toolkit.styles.style_transformation import DummyStyleTransformation
+
+    screen = Screen()
+    screen.height = 1
+    x = 0
+    for style, text, *_ in to_formatted_text(ANSI(wrapped)):
+        if "[ZeroWidthEscape]" in style:
+            screen.zero_width_escapes[0][x] += text
+            continue
+        for ch in text:
+            if ch == "\n":
+                continue
+            screen.data_buffer[0][x] = Char(char=ch, style=style)
+            x += 1
+
+    style = Style.from_dict({})
+    attrs = _StyleStringToAttrsCache(
+        style.get_attrs_for_style_str, DummyStyleTransformation()
+    )
+    has_style = _StyleStringHasStyleCache(attrs)
+    out_buf = io.StringIO()
+    output = Vt100_Output(
+        out_buf, lambda: Size(columns=40, rows=10), term="xterm-256color"
+    )
+    _output_screen_diff(
+        None,
+        output,
+        screen,
+        Point(0, 0),
+        ColorDepth.DEPTH_8_BIT,
+        Screen(),
+        None,
+        True,
+        True,
+        attrs,
+        has_style,
+        Size(columns=40, rows=10),
+        40,
+    )
+    output.flush()
+    out = out_buf.getvalue()
+    total = out.count("\x1b]8;")
+    closes = out.count("\x1b]8;;\x1b\\")
+    return total - closes, closes
+
+
+def test_osc8_close_is_rendered_at_end_of_line() -> None:
+    """End-to-end against the real prompt_toolkit screen differ.
+
+    Reproduces prompt_toolkit #1651 with a Markdown link that ends a line:
+    the OSC 8 close sits on trailing padding, so without the anchor the open
+    is written but the close is dropped (unbalanced -> the terminal underlines
+    everything after). With the fix the pair is balanced.
+    """
+    raw = _rich_osc8("[our site](https://phoson.lat)")
+
+    # Control: the old passthrough (wrap only, no anchor) leaks the open.
+
+    from phoson_cli.hyperlinks import _OSC8_RE
+
+    old_wrapped = _OSC8_RE.sub(lambda m: "\x01" + m.group(0) + "\x02", raw)
+    old_opens, old_closes = _osc8_counts_through_prompt_toolkit(old_wrapped)
+    assert old_opens == 1 and old_closes == 0, (
+        "control case no longer reproduces ptk #1651: "
+        f"opens={old_opens} closes={old_closes}"
+    )
+
+    # With the fix, open and close are both rendered.
+    opens, closes = _osc8_counts_through_prompt_toolkit(osc8_passthrough(raw))
+    assert opens == closes == 1
+
+
 def test_render_chat_applies_osc8_passthrough_to_cached_blocks() -> None:
     """The full-screen bridge (BlockAnsiCache.get_or_render) must apply
 

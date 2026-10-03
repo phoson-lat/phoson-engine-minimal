@@ -29,3 +29,13 @@ the same convention as the `Shift+Drag` text-selection bypass above:
 it's the *terminal* that intercepts the gesture, not the app, so it
 isn't affected by `mouse_support=True` capturing the rest of the mouse
 for the scroll wheel).
+
+One caveat about the full-screen front end: OSC 8 sequences are carried
+through prompt_toolkit as zero-width escapes, and prompt_toolkit does not
+repaint a zero-width escape whose column is unstyled trailing whitespace
+(issue #1651). A link ending a line used to leave its OSC 8 *close*
+unwritten, so the terminal kept the hyperlink open and underlined
+everything that followed — the "all text is underlined" glitch.
+`phoson_cli.hyperlinks.osc8_passthrough` now anchors such a close onto a
+figure space (`U+2007`, visually blank) so the sequence stays balanced.
+This is an internal rendering detail; it needs no action from the user.

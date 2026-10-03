@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fix
+
+- **cli**: the full-screen chat no longer sometimes renders *all* text
+  underlined. A Markdown link that ended a line left an **open OSC 8
+  hyperlink** dangling in the terminal (which is drawn as an underline),
+  so every cell after it — chat body, header, footer — stayed underlined
+  until a close happened to be emitted.
+  - *Root cause.* Rich pads each rendered line with unstyled spaces, so a
+    trailing link's OSC 8 **close** lands on a padding-space column.
+    prompt_toolkit writes zero-width escapes only for columns it actually
+    repaints, and its `get_max_column_index` deliberately ignores unstyled
+    trailing whitespace — so the close was never written while the *open*
+    (on the rendered link text) was, leaving the hyperlink active
+    (prompt_toolkit issue #1651, "zero-width-escapes at the end of a line
+    are not rendered"). SGR reset does not close an OSC 8 hyperlink,
+    which is why the underline bled into unrelated widgets.
+  - *Fix.* `phoson_cli/hyperlinks.osc8_passthrough` now anchors a close
+    that would land on Rich's trailing padding: the first padding space is
+    replaced (not inserted, so the padded width is unchanged) by a FIGURE
+    SPACE (`U+2007`, width 1, visually blank). prompt_toolkit counts it as
+    a real cell, so the close's column is visited and the sequence stays
+    balanced. `U+00A0` is intentionally avoided — prompt_toolkit rewrites
+    it to a plain space with `class:nbsp` ("will be underlined"), which
+    would defeat the fix.
+  - Tests: `tests/phoson_cli/test_hyperlinks_unit.py` (+3 — the anchor is
+    applied only when the close trails the line, is left untouched when
+    real text follows, and an end-to-end case through prompt_toolkit's
+    real screen differ asserts the OSC 8 open/close pair is balanced, with
+    a control showing the old wrap-only passthrough leaking the open).
+
 ## v0.47.0 (2026-09-28)
 
 ### Feat
