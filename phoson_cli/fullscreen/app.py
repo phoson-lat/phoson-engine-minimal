@@ -559,6 +559,9 @@ class PhosonApp:
                 "header_dim": self.theme.pt_muted,
                 "separator": self.theme.pt_muted_deep,
                 "footer": self.theme.pt_muted_deep,
+                # The active model/provider moved to the footer; give it a
+                # touch more contrast than the trailing key hints.
+                "footer_model": self.theme.pt_muted,
                 "prompt_text": self.theme.prompt_input,
                 # The composer's rounded Frame (T-4) and the picker Floats
                 # share the ``frame``/``frame.border``/``frame.label``
@@ -879,20 +882,6 @@ class PhosonApp:
         """Prevent repeated cancellation from interrupting required session saves."""
         if self._operation is not None:
             self._operation.persistence_required = True
-
-    def _operation_status(self) -> str:
-        """Short header status for app work without an active agent event."""
-        if not self._is_run_in_flight():
-            return ""
-        if self._operation is not None and self._operation.persistence_required:
-            return "Saving session"
-        if self._operation is not None:
-            return {
-                "bash": "Running bash",
-                "palette": "Running command",
-                "wake": "Background wake",
-            }.get(self._operation.kind, "Working")
-        return "Working"
 
     def _cancel_operation(self, *, exit_when_done: bool = False) -> str:
         """Cancel the outer app operation, or defer exit through persistence."""

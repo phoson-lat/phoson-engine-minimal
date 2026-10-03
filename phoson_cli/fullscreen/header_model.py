@@ -17,6 +17,7 @@ are untouched.
 """
 
 import time
+import shutil
 from html import escape
 from pathlib import Path
 
@@ -28,7 +29,9 @@ from ..formatting import format_token_indicator
 
 _AGENTS_MD_CACHE_SECONDS = 5.0
 _FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
-_FOOTER_HINT_RUNNING = "esc cancel"
+# While a turn runs the composer is still live: Enter queues the draft and
+# run-safe commands (and Ctrl+P) remain available — see `turn_controller`.
+_FOOTER_HINT_RUNNING = "esc cancel  ·  enter queue  ·  ctrl+p commands"
 _FOOTER_HINT_PICKER = "enter  ·  esc"
 
 
@@ -52,11 +55,13 @@ class HeaderModel:
     # ── Header ─────────────────────────────────────────────────────────────
 
     def get_header_text(self) -> HTML:
-        """Compact runtime header: brand · title (id) · model · cwd · usage · status.
+        """Compact runtime header: brand · title (id) · cwd · usage · flags.
 
-        The header is the single location for session facts in the
-        full-screen UI. The lower line deliberately contains only keyboard
-        hints, so no model/provider/cost/token/cwd value is repeated.
+        The header holds durable session facts only (identity, cwd,
+        tokens/cost, permission mode, reasoning effort). The **model/provider
+        lives in the footer** (next to the key hints), and live activity
+        status is shown exclusively by the in-chat activity line — the header
+        carries no transient state, so it stays stable during a turn.
 
         I-84: the HTML string is cached and only rebuilt when one of its
         inputs changes — repainting the chat for a spinner glyph must not
@@ -65,7 +70,6 @@ class HeaderModel:
         app = self.app
         repl = app.repl
         cost = repl.session_metrics.total_cost_usd
-        model_provider = f"{repl.current_model} ({repl.config.provider})"
         cwd = short_cwd(Path.cwd())
         # Session identity (title + short id): the header is the single
         # location for session facts, so the auto/LLM title and the session
@@ -119,15 +123,6 @@ class HeaderModel:
         # the single source of truth for the check result in both
         # front ends (the TUI starts it in ``run_async``).
         update_part = f" | {repl.update_hint}" if repl.update_hint else ""
-        status = app.sink.status_text() or app._operation_status()
-        # T-2: the idle status is empty (no "Online"); only show the
-        # separator when there is actually a live status to display.
-        status_part = (
-            f'<style class="header_dim"> | </style>'
-            f'<style class="header_dim">{escape(status, quote=True)}</style>'
-            if status
-            else ""
-        )
         # Permission-mode chip (T-6): always visible; the accent word for
         # the *ask* state (confirmations are coming), dim for auto.
         perm_mode = self.permission_mode()
@@ -148,7 +143,6 @@ class HeaderModel:
         )
 
         key = (
-            model_provider,
             cwd,
             session_part,
             token_cost,
@@ -156,20 +150,16 @@ class HeaderModel:
             memory_part,
             monitors_part,
             update_part,
-            status,
             perm_mode,
             effort or "",  # None (off) and "" hash identically for cache-key purposes
         )
         if app._header_cache_key != key:
             app._header_cache_key = key
             extras = f"{attach_part}{memory_part}{monitors_part}"
-            model_provider_html = escape(model_provider, quote=True)
             app._header_cache = HTML(
                 '<style class="header_dim">* </style>'
                 '<style class="header">phoson </style>'
                 f"{session_html}"
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{model_provider_html}</style>'
                 '<style class="header_dim"> | </style>'
                 f'<style class="header_dim">{escape(cwd, quote=True)}</style>'
                 '<style class="header_dim"> | </style>'
@@ -177,7 +167,6 @@ class HeaderModel:
                 f"{mode_part}"
                 f"{effort_part}"
                 f'<style class="header_dim">{escape(extras, quote=True)}</style>'
-                f"{status_part}"
                 f'<style class="header_dim">{escape(update_part, quote=True)}</style>'
             )
         return app._header_cache
@@ -204,13 +193,17 @@ class HeaderModel:
     # ── Footer ─────────────────────────────────────────────────────────────
 
     def get_footer_text(self) -> HTML:
-        """Contextual footer: at most three hints for the current state.
+        """Model + queue on the left, contextual key hints on the right.
 
-        Replaces the fixed 8-shortcut cheatsheet (T-9), which truncated at
-        80 columns. The hints are deliberately short so the line survives
-        narrow terminals; the full key map is ``/keys``, and the
-        Shift+Drag text-selection note lives in
-        ``docs/cli/mouse-and-links.md`` (and /keys).
+        The model moved here from the header: the header holds only durable
+        session facts, while the footer pairs the active model/provider with
+        the at-most-three state-dependent hints (T-9). The two are pushed to
+        opposite edges with a computed run of spaces, so the model never
+        displaces the hints on a normal-width terminal.
+
+        On a terminal too narrow for both, the separator falls back to a dim
+        ``·`` and the window clips the tail — never wraps the footer into the
+        chat (the key map is always available via ``/keys``).
         """
         app = self.app
         if app._active_float is not None:
@@ -219,7 +212,36 @@ class HeaderModel:
             hint = _FOOTER_HINT_RUNNING
         else:
             hint = _FOOTER_HINT_IDLE
-        return HTML(f'<style class="footer">{hint}</style>')
+
+        repl = app.repl
+        left = f"{repl.current_model} ({repl.config.provider})"
+        # Queued-message indicator: messages typed during a turn are sent in
+        # order as each turn settles (`turn_controller.enqueue_turn`). Kept in
+        # the footer now that the header has no transient state.
+        queued = len(getattr(app, "_pending_turns", ()))
+        if queued:
+            left = f"{left} · {queued} queued"
+
+        gap = self._footer_width() - len(left) - len(hint) - 1
+        spacer = " " * gap if gap >= 1 else "  ·  "
+        return HTML(
+            f'<style class="footer_model">{escape(left, quote=True)}</style>'
+            f'<style class="footer">{spacer}{escape(hint, quote=True)}</style>'
+        )
+
+    def _footer_width(self) -> int:
+        """Terminal width for footer edge-alignment, best effort.
+
+        Prefers prompt_toolkit's own output size (what actually renders the
+        line); falls back to the OS terminal size for detached/test hosts.
+        """
+        output = getattr(getattr(self.app, "app", None), "output", None)
+        if output is not None:
+            try:
+                return output.get_size().columns
+            except Exception:  # noqa: BLE001 - best-effort layout hint only
+                pass
+        return shutil.get_terminal_size((80, 24)).columns
 
     # ── Cached lookups ─────────────────────────────────────────────────────
 
