@@ -757,6 +757,47 @@ def test_ctrl_l_clears_transcript(app: PhosonApp) -> None:
     assert app._chat_scroll_top == 0
 
 
+def test_ctrl_l_releases_derived_caches_and_stale_bookkeeping(app: PhosonApp) -> None:
+    """Ctrl+L must not leave the deleted transcript pinned in memory.
+
+    The per-block ANSI/FormattedText caches key on block identity and hold a
+    strong reference to each block; the sink's finished bookkeeping (plugin
+    blocks, remembered ``/details`` cards) does too. Both must be released
+    with the transcript.
+    """
+    block = Text("old transcript")
+    app.sink.blocks.append(block)
+    app._block_ansi_cache.get_or_render(block, 80)
+    app._block_ft_cache.get_or_render(block, 80)
+    assert app._block_ansi_cache._entries
+    assert app._block_ft_cache._entries
+    app.sink.publish_plugin_block("todo", Text("todo"))
+    app.sink._tool_calls.append((object(), {}, Text("card"), app.theme))  # type: ignore[arg-type]
+
+    _trigger(app, "c-l")
+
+    assert app.sink.blocks == []
+    assert app._block_ansi_cache._entries == {}
+    assert app._block_ft_cache._entries == {}
+    assert app.sink._plugin_blocks == {}
+    assert app.sink._tool_calls == []
+
+
+def test_ctrl_l_preserves_active_stream_state(app: PhosonApp) -> None:
+    """Ctrl+L may be pressed mid-run: the live turn and its in-flight tool
+    calls must survive (only finished bookkeeping is released)."""
+    from phoson_cli.fullscreen.sink import CurrentTurn
+
+    app.sink.current_turn = CurrentTurn(model="m", content="streaming")
+    app.sink._pending_tool_calls["call"] = ({}, object(), app.theme)
+
+    _trigger(app, "c-l")
+
+    assert app.sink.current_turn is not None
+    assert app.sink.current_turn.content == "streaming"
+    assert "call" in app.sink._pending_tool_calls
+
+
 def test_theme_after_clear_does_not_crash_on_stale_banner(app: PhosonApp) -> None:
     """/theme must not raise after /clear.
 

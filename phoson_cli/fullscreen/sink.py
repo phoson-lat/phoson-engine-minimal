@@ -732,6 +732,11 @@ class FullScreenSink:
         ``capture_partial_reasoning`` to read.
         """
         self.cancel_stream_throttle()
+        # The turn is over (terminal event or cancellation): any tool call
+        # that never delivered its done event is unrecoverable, so release
+        # its bookkeeping before the early return — a turn already cleared
+        # by ``AgentErrorEvent`` must not pin those blocks forever.
+        self._release_pending_tool_calls()
         turn = self.current_turn
         if turn is None:
             return
@@ -740,6 +745,18 @@ class FullScreenSink:
         self._finalize_reasoning(turn)
         self.current_turn = None
         self._touch()
+
+    def _release_pending_tool_calls(self) -> None:
+        """Forget in-flight tool-call bookkeeping once the turn is over.
+
+        ``_pending_tool_calls`` holds the start args and transcript block of
+        each regular tool call so its done event can replace the live start
+        line in place. A call that is cancelled before its done event leaves
+        that entry behind, pinning a block that can never be replaced. The
+        visible start line stays in the transcript as the partial-progress
+        record; only the bookkeeping is dropped.
+        """
+        self._pending_tool_calls.clear()
 
     def capture_partial_reasoning(self) -> None:
         if self.current_turn is not None:
@@ -805,6 +822,22 @@ class FullScreenSink:
         """Drop collapsed-line and node-identity records on transcript reset."""
         self._reasoning_blocks.clear()
         self._expanded_reasoning_nodes.clear()
+
+    def clear_transcript_bookkeeping(self) -> None:
+        """Drop finished bookkeeping that pins a cleared transcript in memory.
+
+        Ctrl+L empties ``blocks`` while a turn may still be streaming, so
+        the active turn (``current_turn``), its in-flight tool calls
+        (``_pending_tool_calls``) and the stream throttle are deliberately
+        left intact. What is released here is the *finished* state that
+        would otherwise keep the deleted blocks alive for the rest of the
+        session: the published plugin blocks and the remembered
+        ``/details`` tool cards. Reasoning records are dropped by
+        :meth:`clear_reasoning_state` and the error-notice index by
+        :meth:`drop_error_notice`.
+        """
+        self._plugin_blocks.clear()
+        self._tool_calls.clear()
 
     def protect_persistence(self) -> None:
         """Mark the current app operation's remaining save as required."""

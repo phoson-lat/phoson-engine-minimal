@@ -18,6 +18,7 @@ Uses tiktoken for token estimation. Important caveats:
 import json
 import logging
 from typing import TYPE_CHECKING
+from functools import cached_property
 from dataclasses import field, dataclass
 from collections.abc import AsyncIterator
 
@@ -119,8 +120,17 @@ class TokenEstimator:
         Args:
             provider: The LLM provider name (openai, anthropic, openrouter, ollama).
         """
-        enc_name = _ENCODINGS.get(provider, "cl100k_base")
-        self._encoding = tiktoken.get_encoding(enc_name)
+        self._encoding_name = _ENCODINGS.get(provider, "cl100k_base")
+
+    @cached_property
+    def _encoding(self) -> tiktoken.Encoding:
+        """Load the BPE tables only when a token estimate is first needed.
+
+        Constructing a session must not decode a large tokenizer table (or
+        download a missing one) before the first frame. tiktoken also caches
+        encodings globally, so subsequent estimators reuse the same table.
+        """
+        return tiktoken.get_encoding(self._encoding_name)
 
     def count_text(self, text: str) -> int:
         """Count tokens in a raw string."""

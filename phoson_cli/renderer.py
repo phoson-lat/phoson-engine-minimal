@@ -22,7 +22,6 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 from rich.console import Group, Console
-from rich.markdown import Markdown
 
 from phoson_agent import (
     AgentEvent,
@@ -497,6 +496,11 @@ class Renderer:
         content = "".join(self._token_buf).strip()
         self._token_buf.clear()
         if content and not self._stream_had_tokens:
+            # Lazy import: the fallback Markdown render is only reached when a
+            # turn produced tokens that were never streamed, so keep
+            # rich.markdown (and markdown_it) out of the module import graph.
+            from rich.markdown import Markdown
+
             self.console.print(Rule(style=self.theme.muted_deep))
             self.console.print(
                 Markdown(

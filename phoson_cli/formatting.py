@@ -24,7 +24,6 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.style import Style
 from rich.console import Group, RenderableType
-from rich.markdown import Markdown
 
 from phoson_agent import (
     Plugin,
@@ -140,6 +139,13 @@ def render_streaming_panel(
             answer_render = Text(content, style=theme.text)
         else:
             try:
+                # Lazy import: rich.markdown (and its markdown_it dependency)
+                # is only needed for the full Markdown render, not for the
+                # plain-text streaming fast path above. Keeping it out of the
+                # module import graph lets front ends that never freeze a turn
+                # (e.g. a full-screen app import) skip it entirely.
+                from rich.markdown import Markdown
+
                 # "none" (Markdown's default) emits no ANSI color at all for
                 # plain paragraph text, so inside the full-screen app it falls
                 # through to prompt_toolkit's own default foreground (a muted
@@ -1001,6 +1007,11 @@ def render_history(
                     items.append(render_user_turn("\n".join(text_parts), theme, at=at))
 
         elif role == "assistant":
+            # Lazy import: only assistant turns need the Markdown renderer, so
+            # keep rich.markdown (and markdown_it) out of the module import
+            # graph for front ends that never render a conversation history.
+            from rich.markdown import Markdown
+
             stamp = _stamp(idx)
             if stamp is not None:
                 items.append(Text("  " + stamp.plain, style=theme.muted_deep))

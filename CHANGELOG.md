@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Changed
+
+- **cli**: reduce empty-session startup work with lazy front-end, setup,
+  updater and Markdown imports, and defer tokenizer BPE-table initialization
+  until the first token estimate. Help/version paths no longer load the TUI
+  stack; version lookup is shared through an import-light helper.
+  - Local warm-cache benchmark (median of seven fresh processes): TUI
+    imports + construction decrease from 660 ms to 406 ms, with peak RSS
+    decreasing from 87.4 MiB to 45.8 MiB. These are empty-session measurements,
+    not first-paint timings or sustained conversation-memory savings;
+    tokenizer and Markdown costs are paid when those features are first used.
+  - Add `scripts/bench_cli_startup.py` for offline comparisons against `HEAD`
+    and document measurement scope and remaining work in
+    `docs/cli/performance.md`.
+  - Tests: clean-subprocess guards for lazy CLI/Markdown imports and
+    tokenizer initialization/reuse/retry coverage.
+
+### Fix
+
+- **cli**: `Ctrl+L` now releases per-block render caches and finished
+  tool/plugin bookkeeping that retained the cleared transcript. Active
+  streaming text and pending tool calls are preserved. Turn termination
+  releases pending tool-call bookkeeping even when an error already cleared
+  the current turn, preventing cancelled calls from retaining their arguments
+  and transcript blocks indefinitely. Add fullscreen regression coverage for
+  cache cleanup, cancelled calls and clearing during an active turn.
+
 ## v0.48.0 (2026-10-02)
 
 ### Feat

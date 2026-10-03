@@ -16,15 +16,34 @@ from ..config import save_config
 
 
 def clear_transcript(app: Any) -> None:
-    """Ctrl+L: drop the transcript and its ANSI cache."""
+    """Ctrl+L: drop the transcript, its derived caches and stale bookkeeping.
+
+    The active turn is deliberately preserved: Ctrl+L may be pressed while
+    a run is streaming, and the in-flight text/reasoning lives on
+    ``current_turn`` (plus the throttled repaint state), not in ``blocks``.
+    What is released is everything derived from the *deleted* transcript —
+    the per-block ANSI/FormattedText caches and the sink's finished
+    bookkeeping (published plugin blocks, remembered ``/details`` cards) —
+    so those blocks are not pinned in memory for the rest of the session.
+    """
     app.sink.blocks.clear()
     app.sink.clear_reasoning_state()
+    # Finished bookkeeping still references the blocks just dropped; release
+    # it (pending in-flight tool calls belong to the live turn and are freed
+    # when the turn ends, see FullScreenSink.flush_line).
+    app.sink.clear_transcript_bookkeeping()
     app.repl._expanded_reasoning.clear()
     # The banner is dropped with the transcript (unlike rewind, which
     # re-seeds it): forget the reference so a later apply_theme doesn't
     # look for an object that no longer exists in the pane.
     app._banner_block = None
     app.sink.drop_error_notice()
+    # Derived per-block caches key on block identity and hold a strong
+    # reference to each block: without this, the cleared transcript would
+    # stay alive in the ANSI/FormattedText caches (the docstring's "ANSI
+    # cache" — rewind's reset_transcript does the same).
+    app._block_ansi_cache.clear(0)
+    app._block_ft_cache.clear(0)
     app.sink.dirty = True
     app._auto_scroll = True
     app._chat_scroll_top = 0
