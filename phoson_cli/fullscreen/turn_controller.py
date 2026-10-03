@@ -14,7 +14,7 @@ import logging
 from typing import Any
 from pathlib import Path
 
-from ..commands import Command, parse_command
+from ..commands import Command, parse_command, is_run_safe_command
 
 _PERF_LOGGER = logging.getLogger("phoson_cli.fullscreen.perf")
 
@@ -28,25 +28,25 @@ SUBAGENT_TICK_SECONDS = 0.12
 def submit(app: Any) -> None:
     """Handle Enter on the input line: dispatch a command or an agent turn.
 
-    While a turn is already in flight the input is *kept* (not cleared)
-    and the user is told why nothing happened — otherwise pressing Enter
-    looks like the app froze (IMPROVEMENTS.md A4). The header already
-    shows the live status ("Streaming" / "Running tool") so the user can
-    see the turn is still going.
+    While a turn is already in flight the composer stays usable:
+    - a **run-safe** slash command (local UI/config or read-only info, see
+      :func:`phoson_cli.commands.is_run_safe_command`) runs immediately, side
+      by side with the turn, through the concurrent-operation path;
+    - any other slash command and ``!`` bash lines are refused with a notice
+      and the draft is *kept* (they compete with the running turn);
+    - a **plain message is queued** and sent automatically when the current
+      turn settles, so the user can line up several messages without waiting.
+
+    The idle path is unchanged. The custom submit path bypasses the buffer's
+    ``accept_handler`` (which normally persists history), so history is
+    written explicitly (IMPROVEMENTS.md A2).
     """
     text = app._prompt_input.text
     if not text.strip():
         return
     if app._is_run_in_flight():
-        app.sink.notify(
-            "warn",
-            "A turn is already running — press Esc to cancel it first. "
-            "Your text is kept.",
-        )
+        _submit_while_running(app, text)
         return
-    # Persist to the input history. The custom submit path bypasses the
-    # buffer's ``accept_handler`` (which normally does this), so it must
-    # be spelled out (IMPROVEMENTS.md A2).
     app._prompt_input.buffer.append_to_history()
     app._prompt_input.text = ""
     app._auto_scroll = True
@@ -56,6 +56,46 @@ def submit(app: Any) -> None:
         app._start_operation(app._run_bash_line(text[1:].strip()), "bash")
         return
     app._start_operation(app._dispatch(text), "input")
+
+
+def _submit_while_running(app: Any, text: str) -> None:
+    """Enter during an in-flight turn: run-safe command, refuse, or queue."""
+    cmd = parse_command(text)
+    if cmd is not None:
+        if is_run_safe_command(cmd.name):
+            app._prompt_input.buffer.append_to_history()
+            app._prompt_input.text = ""
+            app._auto_scroll = True
+            app._start_concurrent_operation(app._run_command(cmd), "command")
+            return
+        app.sink.notify(
+            "warn",
+            f"{cmd.name} is not available while a turn is running — "
+            "press Esc to cancel it first. Your text is kept.",
+        )
+        return
+    if text.startswith("!") and text[1:].strip():
+        app.sink.notify(
+            "warn",
+            "Shell commands cannot run while a turn is running — "
+            "press Esc to cancel it first. Your text is kept.",
+        )
+        return
+    app._prompt_input.buffer.append_to_history()
+    app._prompt_input.text = ""
+    app._auto_scroll = True
+    enqueue_turn(app, text)
+
+
+def enqueue_turn(app: Any, text: str) -> None:
+    """Queue a message to send when the current turn settles."""
+    app._pending_turns.append(text)
+    app.sink.notify(
+        "info",
+        f"Queued message #{len(app._pending_turns)} — it will send when the "
+        "current turn finishes.",
+    )
+    app.app.invalidate()
 
 
 def is_run_in_flight(app: Any) -> bool:

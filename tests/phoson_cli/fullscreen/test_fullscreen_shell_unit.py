@@ -265,35 +265,47 @@ async def test_submit_preserves_multiline_agent_text(app: PhosonApp) -> None:
     run.assert_awaited_once_with(snippet)
 
 
-async def test_submit_ignores_input_while_a_run_is_in_flight(app: PhosonApp) -> None:
+async def test_submit_queues_and_sends_input_while_a_run_is_in_flight(
+    app: PhosonApp,
+) -> None:
+    """A message typed mid-turn is queued and sent when the turn settles."""
     started = asyncio.Event()
     release = asyncio.Event()
+    seen: list[str] = []
 
     async def slow_run_agent(text: str) -> None:
-        started.set()
-        await release.wait()
+        seen.append(text)
+        if len(seen) == 1:
+            started.set()
+            await release.wait()
 
     with patch.object(app.repl, "_run_agent", new=slow_run_agent):
         app._prompt_input.text = "first"
         _trigger(app, "enter")
         await started.wait()
 
-        # A second Enter while the first turn is still in flight must be a no-op.
         app._prompt_input.text = "second"
         _trigger(app, "enter")
         await asyncio.sleep(0)
-        assert app._prompt_input.text == "second"  # not cleared — submit was a no-op
+        # Moved out of the composer into the queue (cleared for the next draft).
+        assert app._prompt_input.text == ""
+        assert list(app._pending_turns) == ["second"]
 
         release.set()
         await app._run_task
+        # Let the done-callback dequeue and start the queued turn.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert seen == ["first", "second"]
+    assert list(app._pending_turns) == []
 
 
-async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -> None:
-    """A4: Enter during a run must not be silent — keep the text and warn.
+async def test_submit_while_run_in_flight_queues_and_notifies(app: PhosonApp) -> None:
+    """Enter during a run is not silent: the message is queued and announced.
 
-    The user's draft is preserved (not cleared) and a warn notice explains
-    that a turn is already running, so a no-op Enter no longer looks like a
-    frozen app.
+    The draft leaves the composer (so the user can type the next one) and an
+    info notice explains it will send when the turn finishes.
     """
     started = asyncio.Event()
     release = asyncio.Event()
@@ -307,16 +319,144 @@ async def test_submit_while_run_in_flight_keeps_text_and_warns(app: PhosonApp) -
         _trigger(app, "enter")
         await started.wait()
 
-        blocks_before = len(app.sink.blocks)
         app._prompt_input.text = "my draft"
         _trigger(app, "enter")
         await asyncio.sleep(0)
 
-        # The draft survives the rejected submit.
-        assert app._prompt_input.text == "my draft"
-        # A warn notice was appended to the transcript.
-        assert len(app.sink.blocks) == blocks_before + 1
-        assert "already running" in app._render_chat().value
+        assert app._prompt_input.text == ""
+        assert list(app._pending_turns) == ["my draft"]
+        assert "Queued message #1" in app._render_chat().value
+
+        # The queued turn must not fire a real agent call on teardown.
+        app._pending_turns.clear()
+        release.set()
+        await app._run_task
+
+
+async def test_run_safe_command_executes_concurrently_with_a_turn(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """/help (a run-safe command) runs mid-turn without touching the turn."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    ran: list[str] = []
+
+    async def slow_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    async def fake_command(cmd) -> None:
+        ran.append(cmd.name)
+
+    monkeypatch.setattr(app, "_run_command", fake_command)
+
+    with patch.object(app.repl, "_run_agent", new=slow_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+
+        app._prompt_input.text = "/help"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert ran == ["/help"]
+        assert app._prompt_input.text == ""
+        assert app._is_run_in_flight()  # the turn is still running, untouched
+
+        release.set()
+        await app._run_task
+
+
+async def test_unsafe_command_mid_turn_is_refused_and_keeps_text(
+    app: PhosonApp,
+) -> None:
+    """A turn-competing command is refused mid-turn; the draft is preserved."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with patch.object(app.repl, "_run_agent", new=slow_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+
+        app._prompt_input.text = "/new"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+
+        assert app._prompt_input.text == "/new"  # kept, not queued
+        assert list(app._pending_turns) == []
+        assert "not available while a turn is running" in app._render_chat().value
+
+        release.set()
+        await app._run_task
+
+
+async def test_cancel_returns_queued_messages_to_the_composer(
+    app: PhosonApp,
+) -> None:
+    """Esc/cancel must not silently drop queued messages."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    with patch.object(app.repl, "_run_agent", new=slow_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+
+        app._prompt_input.text = "second"
+        _trigger(app, "enter")
+        await asyncio.sleep(0)
+        assert list(app._pending_turns) == ["second"]
+
+        app._cancel_operation()
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert list(app._pending_turns) == []
+    assert app._prompt_input.text == "second"
+
+
+async def test_paste_image_is_allowed_during_a_turn(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """Ctrl+V runs the clipboard read concurrently with the turn."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    pasted = asyncio.Event()
+
+    async def slow_agent(text: str) -> None:
+        started.set()
+        await release.wait()
+
+    async def fake_paste(target_app) -> None:
+        pasted.set()
+
+    monkeypatch.setattr(
+        "phoson_cli.fullscreen.app.paste_image_from_clipboard", fake_paste
+    )
+
+    with patch.object(app.repl, "_run_agent", new=slow_agent):
+        app._prompt_input.text = "first"
+        _trigger(app, "enter")
+        await started.wait()
+        task_before = app._run_task
+
+        _trigger(app, "c-v")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert pasted.is_set()
+        assert app._run_task is task_before  # concurrent, not the run task
+        assert app._is_run_in_flight()
 
         release.set()
         await app._run_task
@@ -1911,9 +2051,13 @@ async def test_palette_dispatched_command_remains_single_flight(
     assert app._is_run_in_flight()
     assert "esc cancel" in app._get_footer_text().value
 
+    # A draft submitted mid-command is queued (and cleared from the composer),
+    # then dropped here so the teardown does not start a real agent turn.
     app._prompt_input.text = "draft"
     _trigger(app, "enter")
-    assert app._prompt_input.text == "draft"
+    assert app._prompt_input.text == ""
+    assert list(app._pending_turns) == ["draft"]
+    app._pending_turns.clear()
 
     command_release.set()
     task = app._run_task
@@ -1951,12 +2095,18 @@ async def test_autonomous_wake_is_registered_as_app_operation(
     assert "Background wake" in app._get_header_text().value
     assert "esc cancel" in app._get_footer_text().value
 
+    # Local toggles stay live mid-turn: Ctrl+E changes effort immediately.
     before_effort = app.repl.config.reasoning_effort
     _trigger(app, "c-e")
-    assert app.repl.config.reasoning_effort == before_effort
+    assert app.repl.config.reasoning_effort != before_effort
+
+    # A draft submitted mid-wake is queued; drop it before teardown so the
+    # released wake does not auto-start a real agent turn.
     app._prompt_input.text = "draft"
     _trigger(app, "enter")
-    assert app._prompt_input.text == "draft"
+    assert app._prompt_input.text == ""
+    assert list(app._pending_turns) == ["draft"]
+    app._pending_turns.clear()
 
     wake_release.set()
     await tick
@@ -2204,16 +2354,46 @@ def test_transcript_reset_clears_reasoning_expansion_records(app: PhosonApp) -> 
     assert app.sink._reasoning_blocks == []
 
 
-async def test_t12_ctrl_p_is_a_noop_while_a_run_is_in_flight(app: PhosonApp) -> None:
+async def test_t12_ctrl_p_lists_only_run_safe_commands_mid_turn(
+    app: PhosonApp, monkeypatch
+) -> None:
+    """Ctrl+P during a turn opens a palette limited to run-safe commands.
+
+    Unsafe commands (session/model/turn-competing) are filtered out, so the
+    palette can never offer an action that would then be refused.
+    """
+    from phoson_cli import palette_picker
+    from phoson_cli.commands import CommandSpec, CommandCatalog
+    from phoson_cli.palette_picker import PalettePickerResult
+
+    app.repl._controller.command_catalog = CommandCatalog(
+        specs=(
+            CommandSpec(("/help",), "help", "_cmd_help"),  # run-safe
+            CommandSpec(("/new",), "new session", "_cmd_new"),  # unsafe
+        ),
+        plugin_commands={},
+    )
+    captured: list = []
+    real_build = palette_picker.build_command_palette
+
+    def capture_build(entries, theme=None):
+        captured.extend(entries)
+        return real_build(entries, theme=theme)
+
+    monkeypatch.setattr(palette_picker, "build_command_palette", capture_build)
+
+    async def cancelled_picker(picker):
+        return PalettePickerResult(cancelled=True)
+
+    monkeypatch.setattr(app, "run_float_picker", cancelled_picker)
+
     app._run_task = MagicMock()
     app._run_task.done.return_value = False
-    app.sink.blocks.clear()
     try:
         _trigger(app, "c-p")
         await asyncio.sleep(0)
-        # The warn notification landed; no palette was opened (no float).
-        assert app._active_float is None
-        assert app.sink.blocks, "expected a warning notice"
+        await asyncio.sleep(0)
+        assert {entry.name for entry in captured} == {"/help"}
     finally:
         app._run_task = None
 

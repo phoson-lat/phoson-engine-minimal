@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import Any, cast
 from pathlib import Path
+from collections import deque
 from dataclasses import dataclass
 from collections.abc import Callable, Sequence, Coroutine
 
@@ -292,6 +293,16 @@ class PhosonApp:
         self._chat_pane = ChatPane(self)
         self._run_task: asyncio.Task | None = None
         self._operation: _AppOperation | None = None
+        # Messages typed and submitted while a turn was in flight, sent in
+        # order as each turn settles (see `_dequeue_next_turn`). Cleared back
+        # into the composer when the turn is cancelled or fails, so a queued
+        # message is never silently lost.
+        self._pending_turns: deque[str] = deque()
+        # Set by `_cancel_operation` before it cancels the authoritative task.
+        # Needed because `run_turn` swallows ``CancelledError`` (the stream is
+        # cancelled but the turn task still completes "normally"), so
+        # ``task.cancelled()`` alone cannot tell a cancel from a clean finish.
+        self._cancel_requested = False
         # Double-Esc rewind (IMPROVEMENTS.md G1): monotonic timestamp of the
         # last idle Esc press, and the stack of pre-rewind cursors that
         # ``undo_jump`` (Ctrl+Z) pops to restore the previous point. The
@@ -751,10 +762,67 @@ class PhosonApp:
         wrapped = cast(Coroutine[Any, Any, None], self._execute_operation(coro, result))
         task = self.app.create_background_task(wrapped)
         self._run_task = task
+        self._cancel_requested = False
         self._operation = _AppOperation(task=task, kind=kind, result=result)
         task.add_done_callback(self._finish_operation)
         self.app.invalidate()
         return task
+
+    def _start_concurrent_operation(
+        self, coro: Coroutine[Any, Any, Any], kind: str
+    ) -> asyncio.Task:
+        """Run a local UI/config operation alongside an in-flight agent turn.
+
+        Unlike :meth:`_start_operation`, this never becomes the authoritative
+        ``_run_task``: it is not what Esc cancels (that stops the *turn*), it
+        does not block on the turn, and the turn does not block it. It backs
+        everything that stays available mid-run — run-safe slash commands
+        (:func:`phoson_cli.commands.is_run_safe_command`), the command palette
+        and the clipboard paste. ``kind`` is accepted for symmetry with
+        :meth:`_start_operation` and future diagnostics; failures are reported
+        in the transcript instead of reaching prompt_toolkit.
+        """
+
+        async def _runner() -> None:
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - UI boundary captures all
+                self.sink.notify("error", f"Operation failed: {exc}")
+            finally:
+                self.app.invalidate()
+
+        return self.app.create_background_task(_runner())
+
+    def _dequeue_next_turn(self) -> None:
+        """Send the oldest queued message as the next turn, if any."""
+        if not self._pending_turns:
+            return
+        text = self._pending_turns.popleft()
+        self._start_operation(self._dispatch(text), "input")
+
+    def _restore_pending_turns(self, reason: str) -> None:
+        """Return queued messages to the composer so nothing is lost.
+
+        Called when the turn was cancelled or failed: the queue will not be
+        drained automatically, and dropping it silently would lose the user's
+        text. The composer is prepended so any text typed meanwhile survives.
+        """
+        if not self._pending_turns:
+            return
+        pending = list(self._pending_turns)
+        self._pending_turns.clear()
+        joined = "\n\n".join(pending)
+        existing = self._prompt_input.text
+        self._prompt_input.text = (
+            f"{joined}\n\n{existing}" if existing.strip() else joined
+        )
+        self.sink.notify(
+            "info",
+            f"{len(pending)} queued message(s) returned to the composer ({reason}).",
+        )
+        self.app.invalidate()
 
     async def _execute_operation(
         self, coro: Coroutine[Any, Any, Any], result: _OperationResult
@@ -774,6 +842,10 @@ class PhosonApp:
         if operation is None or operation.task is not task:
             return
         exit_when_done = operation.exit_when_done
+        was_cancelled = (
+            self._cancel_requested or task.cancelled() or operation.result.cancelled
+        )
+        self._cancel_requested = False
         self._operation = None
         self.app.invalidate()
         result = operation.result
@@ -784,15 +856,24 @@ class PhosonApp:
                 else f"Operation failed: {result.error}"
             )
             self.sink.notify("error", message)
+            self._restore_pending_turns("the turn failed")
             return
         if exit_when_done:
-            if task.cancelled() or result.cancelled:
+            if was_cancelled:
                 self.sink.notify(
                     "error",
                     "Session save was cancelled; the application remains open.",
                 )
             else:
                 self.app.exit()
+            return
+        if was_cancelled:
+            # Esc / Ctrl+C: keep the queued text by handing it back, rather
+            # than starting a new turn the user just asked to stop.
+            self._restore_pending_turns("the turn was cancelled")
+            return
+        # The turn settled cleanly: send the next queued message, if any.
+        self._dequeue_next_turn()
 
     def _protect_operation_persistence(self) -> None:
         """Prevent repeated cancellation from interrupting required session saves."""
@@ -826,6 +907,7 @@ class PhosonApp:
         # Also interrupt the stream consumer immediately when it exists. The
         # outer task remains authoritative and is cancelled below, covering
         # preparation/commands/bash before the controller creates that child.
+        self._cancel_requested = True
         self.repl.cancel_current()
         task.cancel()
         return "cancelled"
@@ -1044,8 +1126,19 @@ class PhosonApp:
         _handle_ctrl_d_impl(self)
 
     def paste_image(self) -> None:
-        """Ctrl+V: paste an image from the clipboard, or fall back to text."""
-        self._start_operation(paste_image_from_clipboard(self), "clipboard")
+        """Ctrl+V: paste an image from the clipboard, or fall back to text.
+
+        Works during a turn too: the clipboard read runs concurrently and the
+        resulting attachment/placeholder belongs to the *next* message. When
+        idle it stays an authoritative operation so Esc can cancel a slow
+        clipboard read.
+        """
+        if self._is_run_in_flight():
+            self._start_concurrent_operation(
+                paste_image_from_clipboard(self), "clipboard"
+            )
+        else:
+            self._start_operation(paste_image_from_clipboard(self), "clipboard")
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
