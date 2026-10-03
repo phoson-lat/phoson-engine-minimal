@@ -8,6 +8,41 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Feat
+
+- **cli**: the full-screen composer stays usable while an agent turn is
+  running. Previously `submit` refused *everything* mid-run — including
+  local UI/config commands and clipboard paste — so the only option was to
+  cancel the turn.
+  - *Run-safe commands now run concurrently with the turn*: `/theme`,
+    `/warnings`, `/notify`, `/details`, `/keys`, `/help`, `/permissions`,
+    `/reasoning-effort`, `/attach`, plus read-only info (`/status`, `/about`,
+    `/env`, `/cost`, `/tokens`, `/steps`, `/tree`, `/agents-md`,
+    `/skills`). See `phoson_cli.commands.RUN_SAFE_COMMANDS` /
+    `is_run_safe_command` — anything not listed (session/model-mutating or
+    turn-competing commands, and every plugin command by default) is refused
+    with a notice and the draft is kept.
+  - *Plain messages are queued*: Enter during a turn moves the draft into a
+    FIFO queue, clears the composer so the next one can be written, and the
+    queued message is sent automatically when the current turn settles, with
+    a notice confirming the queue. If the turn is cancelled or fails, queued
+    messages are handed back to the composer instead of being lost.
+  - *Clipboard paste (Ctrl+V) works mid-turn*: the clipboard read runs
+    concurrently and the attachment/placeholder belongs to the next message.
+  - *The command palette (Ctrl+P) opens mid-turn*, restricted to the run-safe
+    commands, so it never offers an action that would then be refused.
+  - *Shift+Tab (permission mode) and Ctrl+E (reasoning effort) are live
+    mid-turn*: the policy change is pushed into the running turn's gate and
+    effort applies from the next turn.
+  - A new `PhosonApp._start_concurrent_operation` hosts these: unlike the
+    authoritative `_run_task`, it is not what Esc cancels and neither blocks
+    nor is blocked by the turn. `_cancel_requested` distinguishes an explicit
+    cancel from a clean finish, because `run_turn` swallows `CancelledError`.
+  - Tests: `tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py`
+    updated for the new submit semantics and extended with queue/cancel,
+    run-safe-command, refused-command, restricted-palette and mid-turn paste
+    coverage.
+
 ### Fix
 
 - **cli**: the full-screen chat no longer sometimes renders *all* text

@@ -20,20 +20,23 @@ class PaletteController:
         The palette is a modal Float (like the model/theme pickers), so it
         can be opened from a calm screen and its confirm dispatches the
         chosen command through the normal ``/command`` path.
+
+        While a turn is in flight the palette still opens, but it lists only
+        the run-safe commands (:func:`phoson_cli.commands.is_run_safe_command`)
+        and hosts itself on the concurrent-operation path — the turn keeps
+        streaming behind the Float and is never cancelled by opening it.
         """
         app = self._app
         if app._active_float is not None:
             return  # a picker/confirmation is already open
-        if app._is_run_in_flight():
-            app.sink.notify(
-                "warn",
-                "A turn is already running — press Esc to cancel it first.",
-            )
-            return
         if app._palette_open:
             return  # a palette is already scheduled/animating open
         app._palette_open = True
-        if app._start_operation(self._run(), "palette") is None:
+        coro = self._run()
+        if app._is_run_in_flight():
+            app._start_concurrent_operation(coro, "palette")
+            return
+        if app._start_operation(coro, "palette") is None:
             app._palette_open = False
 
     async def _run(self) -> None:
@@ -53,7 +56,7 @@ class PaletteController:
             app._palette_open = False
 
     async def _run_inner(self) -> None:
-        from ..commands import Command
+        from ..commands import Command, is_run_safe_command
         from ..palette_picker import (
             PaletteEntry,
             PalettePickerResult,
@@ -61,9 +64,14 @@ class PaletteController:
         )
 
         app = self._app
+        running = app._is_run_in_flight()
         catalog = app.repl._controller.command_catalog
         entries: list[PaletteEntry] = []
         for spec in catalog.specs:
+            # Mid-turn the palette is a shortcut to the *available* actions,
+            # so it never offers a command that could not be dispatched.
+            if running and not any(is_run_safe_command(n) for n in spec.names):
+                continue
             display = " · ".join(spec.names) if len(spec.names) > 1 else spec.primary
             entries.append(
                 PaletteEntry(
@@ -73,7 +81,12 @@ class PaletteController:
                 )
             )
         if not entries:
-            app.sink.notify("info", "No commands available.")
+            app.sink.notify(
+                "info",
+                "No commands are available while a turn is running."
+                if running
+                else "No commands available.",
+            )
             return
         picker = build_command_palette(entries, theme=app.theme)
         result = await app.run_float_picker(picker)

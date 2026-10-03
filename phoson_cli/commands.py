@@ -397,6 +397,52 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
 )
 
 
+#: Slash commands that stay available while an agent turn is in flight.
+#:
+#: They are local UI/config actions or read-only info: none of them creates,
+#: loads, compacts or deletes a session, switches the model/provider, or
+#: otherwise competes with the running turn for the controller. Anything not
+#: listed here — including every plugin command, which is unknown by default —
+#: is refused mid-run, and a plain message is queued instead.
+RUN_SAFE_COMMANDS: Final[frozenset[str]] = frozenset(
+    {
+        # Local UI / config
+        "/theme",
+        "/warnings",
+        "/notify",
+        "/details",
+        "/tool-cards",
+        "/keys",
+        "/help",
+        "/permissions",
+        "/perms",
+        "/reasoning-effort",
+        "/effort",
+        "/attach",
+        "/attachments",
+        # Read-only info
+        "/status",
+        "/about",
+        "/env",
+        "/cost",
+        "/tokens",
+        "/steps",
+        "/tree",
+        "/agents-md",
+        "/skills",
+    }
+)
+
+
+def is_run_safe_command(name: str) -> bool:
+    """Whether the slash command ``name`` may run while a turn is in flight.
+
+    ``name`` is matched verbatim, so every alias of a safe command must be
+    listed in :data:`RUN_SAFE_COMMANDS` too.
+    """
+    return name in RUN_SAFE_COMMANDS
+
+
 def build_command_catalog(
     plugins: Sequence[Plugin], *, version: int = 0
 ) -> CommandCatalog:

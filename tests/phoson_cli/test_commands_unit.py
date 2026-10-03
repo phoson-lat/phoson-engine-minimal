@@ -177,3 +177,48 @@ async def test_branch_command_reports_unknown() -> None:
 
     assert kept is True
     assert handler.repl.renderer.errors == ["Unknown command: /branch"]
+
+
+def test_run_safe_commands_are_real_commands() -> None:
+    """Every run-safe command name must exist in the catalog (aliases too)."""
+    from phoson_cli.commands import RUN_SAFE_COMMANDS
+
+    assert RUN_SAFE_COMMANDS <= COMMANDS
+
+
+def test_is_run_safe_command_classifies_side_effects() -> None:
+    """Local UI/read-only commands are safe; session/model ones are not."""
+    from phoson_cli.commands import is_run_safe_command
+
+    for name in (
+        "/theme",
+        "/warnings",
+        "/keys",
+        "/help",
+        "/status",
+        "/cost",
+        "/tree",
+        "/reasoning-effort",
+        "/effort",  # alias
+    ):
+        assert is_run_safe_command(name), name
+
+    for name in (
+        "/new",
+        "/clear",
+        "/resume",
+        "/delete",
+        "/compact",
+        "/undo",
+        "/model",
+        "/provider",
+        "/subagent-model",
+        "/exit",
+        "/mcp",
+        "/setup",
+        "/update",
+    ):
+        assert not is_run_safe_command(name), name
+
+    # Unknown / plugin commands default to unsafe.
+    assert not is_run_safe_command("/some-plugin-command")

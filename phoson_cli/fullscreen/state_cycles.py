@@ -84,9 +84,9 @@ def cycle_permission_mode(app: Any) -> None:
     wins over auto. The header chip refreshes immediately and the change is
     pushed into the live gate (no restart needed).
     """
-    if app._is_run_in_flight():
-        app.sink.notify("warn", "Wait for the current operation to finish.")
-        return
+    # Deliberately allowed mid-turn: this is a local policy toggle, pushed
+    # into the live gate (below) so it governs the running turn's *future*
+    # tool calls. It never interferes with the turn's own task.
 
     from ..permissions_store import (
         LEVEL_ASK,
@@ -130,9 +130,8 @@ def cycle_reasoning_effort(app: Any) -> None:
     """Ctrl+E: cycle the reasoning effort off → low → medium → high →
     xhigh → max (wraps to off).
     """
-    if app._is_run_in_flight():
-        app.sink.notify("warn", "Wait for the current operation to finish.")
-        return
+    # Deliberately allowed mid-turn: effort applies from the next turn, so it
+    # cannot affect the run already in flight.
     current = app.repl.config.reasoning_effort
     if current not in REASONING_EFFORTS:
         current = None  # "off"

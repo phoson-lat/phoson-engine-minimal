@@ -7,9 +7,27 @@ experience; it offers a persistent scrollable chat pane, multiline input
 `/model`/`/provider`/`/sessions` pickers and bash confirmation as
 overlay floats. The multiline composer wraps long pasted lines, takes
 only the height it needs (up to five lines), and scrolls internally
-after that cap. If a turn is already running, `Enter` keeps the draft and
-shows a warning; press `Esc` to cancel the active turn before sending
-it.
+after that cap.
+
+The composer stays usable **while a turn is running**:
+
+- `Enter` with a plain message **queues** it (the draft leaves the composer
+  so the next one can be written) and it is sent automatically when the
+  current turn settles; a notice in the transcript confirms the queue. If the
+  turn is cancelled (`Esc`) or fails, the queued messages are returned to the
+  composer instead of being lost.
+- **Run-safe slash commands run immediately, side by side with the turn**:
+  local UI/config (`/theme`, `/warnings`, `/notify`, `/details`, `/keys`,
+  `/help`, `/permissions`, `/reasoning-effort`, `/attach`) and read-only info
+  (`/status`, `/about`, `/env`, `/cost`, `/tokens`, `/steps`, `/tree`,
+  `/agents-md`, `/skills`). Any other slash command — and `!` shell lines —
+  are refused with a notice and the draft is kept, because they compete with
+  the running turn.
+- `Ctrl+V` (clipboard paste), `Ctrl+P` (command palette, restricted to the
+  run-safe commands), `Shift+Tab` (permission mode) and `Ctrl+E` (reasoning
+  effort) are all live mid-turn.
+
+`Esc` still cancels the active turn.
 
 While a run is in flight the chat shows a transient animated activity
 line: `Thinking…` with rotating phrases, then `Composing tool…` while
