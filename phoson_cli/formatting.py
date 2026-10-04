@@ -442,6 +442,8 @@ def render_user_turn(
     both front ends share — so sinks keep calling a single function and never
     special-case monitor wakes themselves.
     """
+    if text.lstrip().startswith(_PEER_WAKE_HEADER):
+        return render_peer_wake_turn(text, theme, at=at)
     if text.lstrip().startswith(_WAKE_HEADERS):
         return render_monitor_wake_turn(text, theme, at=at)
     return Group(_HighlightedBlock(_user_line(text, theme, at), theme.badge_user))
@@ -459,6 +461,15 @@ _MONITOR_WAKE_HEADER: Final = "[MONITOR EVENTS]"
 # Background-jobs wakes carry their own banner (#217) but share the styling.
 _BGJOB_WAKE_HEADER: Final = "[BACKGROUND JOB EVENTS]"
 _WAKE_HEADERS: Final = (_MONITOR_WAKE_HEADER, _BGJOB_WAKE_HEADER)
+# Named-peer messages (phoson_plugin_peers): rendered as message cards.
+_PEER_WAKE_HEADER: Final = "[PEER MESSAGES]"
+_PEER_MESSAGE_OPEN_RE = re.compile(r"^>>> (request|message|reply) from (\S+)")
+_PEER_MESSAGE_CLOSE: Final = "<<<"
+_PEER_KIND_LABEL: Final = {
+    "request": "asks you",
+    "message": "says",
+    "reply": "replied",
+}
 # ``[name] kind=command fired_at=...`` / ``[name] state=completed ...`` — the
 # per-event header line, read here only to recover the monitor name(s).
 _MONITOR_EVENT_HEADER_RE = re.compile(r"^\[([A-Za-z0-9._-]+)\]\s+\w+=")
@@ -502,6 +513,69 @@ def render_monitor_wake_turn(
     if at is not None:
         line.append(f" at {format_day_time(at)}", style=theme.muted_deep)
     return Group(line)
+
+
+def _parse_peer_messages(text: str) -> list[tuple[str, str, str]]:
+    """Recover ``(kind, sender, body)`` triples from a peer wake payload."""
+    messages: list[tuple[str, str, str]] = []
+    current: tuple[str, str] | None = None
+    body: list[str] = []
+    for line in text.split("\n"):
+        match = _PEER_MESSAGE_OPEN_RE.match(line)
+        if current is None and match:
+            current = (match.group(1), match.group(2))
+            body = []
+        elif current is not None and line == _PEER_MESSAGE_CLOSE:
+            messages.append((current[0], current[1], "\n".join(body).strip()))
+            current = None
+        elif current is not None:
+            body.append(line)
+    return messages
+
+
+#: Characters of a peer message shown in the recipient's transcript.
+_PEER_PREVIEW_CHARS: Final = 60
+
+
+def _peer_preview(body: str, limit: int = _PEER_PREVIEW_CHARS) -> str:
+    """First ``limit`` chars of a message on one line, with ``…`` if cut."""
+    flat = " ".join(body.split())
+    if len(flat) <= limit:
+        return flat
+    cut = flat[:limit].rstrip()
+    space = cut.rfind(" ")
+    if space >= limit // 2:  # prefer cutting on a word boundary
+        cut = cut[:space]
+    return cut.rstrip(" ,.;:") + "…"
+
+
+def render_peer_wake_turn(
+    text: str, theme: Theme, at: "datetime.datetime | None" = None
+) -> Group:
+    """Render incoming peer messages as one compact line per message.
+
+    ``📨 @frontend-agent asks you · 14:32: Pásame la doc de la…`` — who
+    wrote and a short preview. The full text (and its routing instructions)
+    is the model's prompt and stays out of the transcript.
+    """
+    items: list[RenderableType] = []
+    for kind, sender, body in _parse_peer_messages(text):
+        line = Text()
+        line.append("📨 ", style=f"bold {theme.accent}".strip())
+        line.append(f"@{sender}", style=f"bold {theme.accent}".strip())
+        line.append(f" {_PEER_KIND_LABEL.get(kind, kind)}", style=theme.muted)
+        if at is not None:
+            line.append(f" · {format_day_time(at)}", style=theme.muted_deep)
+        preview = _peer_preview(body)
+        if preview:
+            line.append(": ", style=theme.muted)
+            line.append(preview)
+        line.no_wrap = True
+        line.overflow = "ellipsis"
+        items.append(line)
+    if not items:  # unparseable payload: fall back to the compact notice
+        return render_monitor_wake_turn(text, theme, at=at)
+    return Group(*items)
 
 
 def render_notice(kind: str, message: str, theme: Theme) -> Text:

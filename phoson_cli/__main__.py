@@ -7,6 +7,7 @@ Manual parsing is deliberate: typer/click would add a dependency against
 the "minimal" philosophy.
 """
 
+import os
 import sys
 import shutil
 import asyncio
@@ -93,6 +94,9 @@ Options:
   --max-turns <n>      Override max_iterations for this run
   --session <id>       Resume a saved session by id (prefix match works)
   --resume <id>        Alias for --session
+  --name <agent>       Run as a named agent other windows can message
+                       (peer_ask / peer_send, /peers, /tell)
+  --team <team>        Peer team for --name (default: "default")
   --trace              One-shot only: emit a JSON line per agent event
                        (tool calls, steps, final/error) to stderr
   --classic            Use the classic line-by-line REPL
@@ -124,6 +128,8 @@ class CliOptions:
     theme: str | None = None
     max_turns: int | None = None
     session: str | None = None
+    peer_name: str | None = None
+    peer_team: str | None = None
     trace: bool = False
     task: str | None = None
     plugin_args: list[str] | None = None
@@ -211,6 +217,8 @@ def parse_args(argv: list[str]) -> CliOptions:
             "--max-turns",
             "--session",
             "--resume",
+            "--name",
+            "--team",
         }:
             value = _take_value(argv, i, arg)
             i += 1
@@ -222,6 +230,18 @@ def parse_args(argv: list[str]) -> CliOptions:
                 options.theme = value.strip().lower()
                 if not options.theme:
                     _fail("option --theme requires a non-empty value")
+            elif arg in {"--name", "--team"}:
+                from phoson_plugin_peers.storage import PeerError, normalize_name
+
+                what = "agent name" if arg == "--name" else "team name"
+                try:
+                    normalized = normalize_name(value, what)
+                except PeerError as exc:
+                    _fail(f"option {arg}: {exc}")
+                if arg == "--name":
+                    options.peer_name = normalized
+                else:
+                    options.peer_team = normalized
             elif arg in {"--session", "--resume"}:
                 options.session = value.strip()
                 if not options.session:
@@ -302,6 +322,30 @@ def _apply_overrides(config: PhosonConfig, options: CliOptions) -> None:
         config.cli_theme = options.theme
     if options.max_turns is not None:
         config.max_iterations = options.max_turns
+    if options.peer_name:
+        config.peer_name = options.peer_name
+    if options.peer_team:
+        config.peer_team = options.peer_team
+
+
+def _check_peer_name_free(config: PhosonConfig) -> None:
+    """Exit with a clear error when ``--name`` is held by a live window."""
+    from phoson_plugin_peers.storage import PeerError, PeerStore
+
+    try:
+        store = PeerStore(config.peers_data_dir, config.peer_team or "default")
+        current = store.live(config.peer_name)
+    except (OSError, PeerError) as exc:
+        print(f"Error: cannot use --name {config.peer_name!r}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if current is not None and current.pid != os.getpid():
+        print(
+            f"Error: agent name {config.peer_name!r} is already in use on team "
+            f"{store.team!r} (pid {current.pid}, {current.cwd or 'unknown cwd'}). "
+            "Pick another --name.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 class _CliThemeError(ValueError):
@@ -866,6 +910,8 @@ def _run_cli() -> None:
             print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     _apply_overrides(config, options)
+    if options.peer_name and options.task is None:
+        _check_peer_name_free(config)
     # I-112 follow-up: honour the user's warning-notice preference (config,
     # env or a previous `/warnings off`) for the whole run.
     warnings_hook.set_enabled(getattr(config, "show_warnings", True))

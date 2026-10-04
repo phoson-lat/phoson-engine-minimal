@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Added
+
+- **peers**: named agents across CLI windows (`phoson_plugin_peers`).
+  `phoson-cli --name <agent> [--team <team>]` makes a window a named agent
+  that others can message with `peer_ask` (request + wait for the answer),
+  `peer_send` (fire-and-forget) and `peer_list`, plus `/peers` and
+  `/tell <agent> <text>`. Incoming messages wake the recipient, render as
+  `📨 <sender> asks you` cards in its window, and the final answer of that
+  turn is sent back automatically as the reply. Maildir-style
+  one-file-per-message transport under `~/.phoson/peers/<team>/` with read
+  receipts, heartbeat presence, a `peers_max_hops` loop guard and deadlock
+  detection. New host hook: plugins may implement `on_turn_end(outcome)`.
+
 ## v0.48.1 (2026-10-03)
 
 ### Changed
