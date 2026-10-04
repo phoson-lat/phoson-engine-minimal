@@ -186,7 +186,7 @@ async def test_perform_self_update_up_to_date(monkeypatch) -> None:
 
     summary = await perform_self_update(assume_yes=True)
 
-    assert "You're up to date (0.4.0)" in summary
+    assert "You're up to date (v0.4.0)" in summary
     run_upgrade.assert_not_awaited()
 
 
@@ -242,10 +242,14 @@ async def test_perform_self_update_success(monkeypatch) -> None:
         updater, "run_upgrade_command", AsyncMock(return_value=(0, "ok"))
     )
 
-    summary = await perform_self_update(assume_yes=False)
+    monkeypatch.setattr(
+        updater, "get_installed_version", AsyncMock(return_value="0.4.0")
+    )
+    notify = MagicMock()
+    summary = await perform_self_update(assume_yes=False, notify=notify)
 
-    assert "Running: uv tool upgrade" in summary
-    assert "✅ Updated to 0.4.0" in summary
+    notify.assert_any_call("info", "Installing update · 0.3.0 → 0.4.0")
+    assert "Updated to v0.4.0" in summary
     assert "restart the CLI" in summary
 
 
@@ -283,7 +287,7 @@ def test_self_update_flag_uses_shared_flow(monkeypatch, capsys) -> None:
 
     calls = []
 
-    async def fake_update(assume_yes: bool = False) -> str:
+    async def fake_update(assume_yes: bool = False, **kwargs) -> str:
         calls.append(assume_yes)
         return "You're up to date (0.4.0)."
 
@@ -299,8 +303,8 @@ def test_self_update_flag_exits_nonzero_on_failure(monkeypatch, capsys) -> None:
 
     import phoson_cli.__main__ as main_module
 
-    async def fake_update(assume_yes: bool = False) -> str:
-        return "Update failed (exit 1): boom"
+    async def fake_update(assume_yes: bool = False, **kwargs) -> str:
+        return updater.UpdateResult("Update failed (exit 1): boom", "error", 1)
 
     monkeypatch.setattr(main_module, "perform_self_update", fake_update)
     with _pytest.raises(SystemExit) as exc_info:

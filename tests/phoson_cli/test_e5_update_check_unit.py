@@ -198,9 +198,10 @@ async def test_check_skips_network_when_not_due(tmp_path, monkeypatch) -> None:
     latest = AsyncMock(return_value="9.9.9")
     monkeypatch.setattr(updater, "get_latest_version", latest)
 
+    monkeypatch.setattr(updater, "get_current_version", lambda: "0.12.4")
     result = await check_for_startup_update(path, now=T_NOW)
 
-    assert result is None
+    assert result == "9.9.9"
     latest.assert_not_awaited()
     # Cache untouched.
     assert json.loads(path.read_text(encoding="utf-8"))["checked_at"] == T_NOW - 10

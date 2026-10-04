@@ -594,12 +594,23 @@ Plugins can register additional slash commands (see
   animated activity line (`Thinking… → Composing tool… →
   Running tool…`) → [docs/cli/ui.md](docs/cli/ui.md)
 
-**Self-update:** at launch the CLI checks PyPI in the background (at most
-once every 24 h). When a newer release exists it shows a dim one-line
-hint — `⬆ v0.x.y available — /update` — in the TUI header (full-screen)
-or the prompt line (classic). It never blocks first paint, input, or a
-run; one-shot mode is untouched. `/update` or `--self-update` install
-it.
+**Self-update:** at launch the CLI checks PyPI in the background, caching
+successful checks for 24 h (failed checks retry on the next launch). When a
+newer release exists it shows a dim one-line hint —
+`⬆ v0.x.y available — /update` — in the TUI header (full-screen) or the
+prompt line (classic). The cached hint stays visible until you update.
+It never blocks first paint, input, or a run; one-shot mode is untouched.
+`/update` or `--self-update` ask before installing, show compact colored
+status messages, and verify the installed version before reporting success.
+Restart the CLI afterward. Package-manager constraints and custom indexes
+are respected; the installed version can differ from PyPI's latest.
+
+`uvx` reuses cached versions: explicitly request the latest with
+`uvx --from phoson-engine-minimal@latest phoson-cli`. Source checkouts and
+standalone binaries receive manual update instructions. Cancelling an
+installation stops the installer (including its process group on POSIX),
+but does **not** roll back changes already made. If interrupted, rerun the
+suggested package-manager command to repair the installation.
 
 ---
 
