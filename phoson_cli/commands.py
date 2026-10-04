@@ -1882,9 +1882,19 @@ class CommandHandler:
 
     async def _cmd_update(self, cmd: Command) -> bool:  # noqa: ARG002
         """Check PyPI and install the latest CLI release (asks first)."""
-        summary = await perform_self_update(assume_yes=False, confirm=self.host.confirm)
-        for line in summary.splitlines():
-            self._r.print_info(line)
+
+        def notify(level: str, message: str) -> None:
+            printer = {
+                "info": self.host.print_info,
+                "warn": self.host.print_warn,
+                "error": self.host.print_error,
+            }[level]
+            printer(message)
+
+        summary = await perform_self_update(
+            assume_yes=False, confirm=self.host.confirm, notify=notify
+        )
+        notify(getattr(summary, "level", "info"), str(summary))
         return True
 
 

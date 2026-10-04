@@ -573,10 +573,33 @@ def _run_plugin_command(
 
 def self_update() -> None:
     """Upgrade phoson-cli to the latest version (with confirmation)."""
-    summary = asyncio.run(perform_self_update(assume_yes=False))
-    print(summary)
-    if "Update failed" in summary:
-        sys.exit(1)
+    from rich.text import Text
+    from rich.console import Console
+
+    from phoson_cli.updater import print_update_result
+
+    console = Console(highlight=False)
+    status = console.status("Installing update…", spinner="dots")
+
+    def notify(level: str, message: str) -> None:
+        if level == "info" and message.startswith("Installing update"):
+            if console.is_terminal:
+                status.update(Text(message, style="cyan"))
+                status.start()
+                return
+        status.stop()
+        console.print(Text(message, style="dim" if level == "info" else "yellow"))
+
+    try:
+        summary = asyncio.run(perform_self_update(assume_yes=False, notify=notify))
+    except KeyboardInterrupt:
+        console.print(Text("Update interrupted.", style="yellow"))
+        sys.exit(130)
+    finally:
+        status.stop()
+    print_update_result(console, summary)
+    if code := getattr(summary, "exit_code", 0):
+        sys.exit(code)
 
 
 def uninstall() -> None:
