@@ -196,6 +196,14 @@ class PhosonConfig:
     # bgjobs_data_dir.
     enable_bgjobs: bool = False
     bgjobs_data_dir: Path = Path("~/.phoson/bgjobs/").expanduser()
+    # Named peer agents: ``--name <agent>`` (or ``peer_name``) makes this CLI
+    # window a named agent on ``peer_team`` that other windows can message
+    # (peer_ask / peer_send). Empty name = feature off. State is shared under
+    # peers_data_dir; peers_max_hops bounds agent-to-agent forwarding.
+    peer_name: str = ""
+    peer_team: str = "default"
+    peers_data_dir: Path = Path("~/.phoson/peers/").expanduser()
+    peers_max_hops: int = 4
     # Official SSH plugin (#169): run commands and move files on remote hosts
     # over SSH. Off by default — it can mutate remote infrastructure and the
     # `asyncssh` transport ships as the optional `[ssh]` extra. Host aliases
@@ -1085,6 +1093,16 @@ def load_config() -> PhosonConfig:
                 str(d.bgjobs_data_dir),
             )
         ).expanduser(),
+        peer_name=_resolve_str("PHOSON_PEER_NAME", "peer_name", fd, d.peer_name),
+        peer_team=_resolve_str("PHOSON_PEER_TEAM", "peer_team", fd, d.peer_team),
+        peers_data_dir=Path(
+            _resolve_str(
+                "PHOSON_PEERS_DIR", "peers_data_dir", fd, str(d.peers_data_dir)
+            )
+        ).expanduser(),
+        peers_max_hops=_resolve_int(
+            "PHOSON_PEERS_MAX_HOPS", "peers_max_hops", fd, d.peers_max_hops
+        ),
         enable_ssh=_resolve_bool("PHOSON_ENABLE_SSH", "enable_ssh", fd, d.enable_ssh),
         ssh_known_hosts=Path(
             _resolve_str(
@@ -1316,6 +1334,7 @@ def validate_config(config: PhosonConfig) -> None:
         "swarm_max_agents",
         "swarm_max_tokens_per_agent",
         "swarm_max_tokens_total",
+        "peers_max_hops",
         "compact_min_keep_messages",
         "offload_max_chars",
     )

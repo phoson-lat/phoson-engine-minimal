@@ -87,6 +87,7 @@ from .session_utils import (
     close_plugins,
     vllm_base_url,
     drain_all_wakes,
+    notify_turn_end,
     build_summarizer,
     build_middlewares,
     find_wake_plugins,
@@ -1125,7 +1126,11 @@ class SessionController:
             },
         )
 
-    _WAKE_TITLE_PREFIXES = ("[MONITOR EVENTS]", "[BACKGROUND JOB EVENTS]")
+    _WAKE_TITLE_PREFIXES = (
+        "[MONITOR EVENTS]",
+        "[BACKGROUND JOB EVENTS]",
+        "[PEER MESSAGES]",
+    )
 
     def note_user_title(self) -> None:
         """Mark the session title as user-set (``/title``).
@@ -1310,6 +1315,7 @@ class SessionController:
             owner = asyncio.current_task()
             self._turn_owner_task = owner
             self._turn_in_progress = True
+            outcome: RunOutcome = RunOutcome(status="error")
             try:
                 # Fold wakes that arrived while the user was composing into
                 # this message; autonomous wakes only run while idle.
@@ -1326,12 +1332,15 @@ class SessionController:
                         "info",
                         f"{len(wake_events)} wake(s) delivered with your message.",
                     )
-                return await self._execute_turn(
+                outcome = await self._execute_turn(
                     user_input, wake_events, "user", wake_header=wake_header
                 )
+                return outcome
             except asyncio.CancelledError:
-                return RunOutcome(status="cancelled")
+                outcome = RunOutcome(status="cancelled")
+                return outcome
             finally:
+                self._notify_turn_end(outcome)
                 self._turn_in_progress = False
                 if self._turn_owner_task is owner:
                     self._turn_owner_task = None
@@ -1502,7 +1511,11 @@ class SessionController:
         ``__init__`` runs before the loop in the classic REPL, where
         tasks cannot be created yet).
         """
-        if not (self.config.enable_monitors or self.config.enable_bgjobs):
+        if not (
+            self.config.enable_monitors
+            or self.config.enable_bgjobs
+            or getattr(self.config, "peer_name", "")
+        ):
             return
         if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
             return
@@ -1583,14 +1596,11 @@ class SessionController:
 
     async def _run_wake_turn(self, plugins: list[Plugin]) -> None:
         """Drain and execute one autonomous wake while holding the turn lock."""
-        self.sink.notify(
-            "info",
-            "Background wake(s) received — waking the agent.",
-        )
         async with self._turn_lock:
             owner = asyncio.current_task()
             self._turn_owner_task = owner
             self._turn_in_progress = True
+            outcome: RunOutcome | None = None
             try:
                 wake_batches = await drain_all_wakes(
                     plugins, self._session.tree.session_id
@@ -1600,14 +1610,29 @@ class SessionController:
                 ]
                 if not wake_events:
                     return  # a user turn consumed them in the meantime
+                self.sink.notify(
+                    "info",
+                    "Message(s) from other agents — waking the agent."
+                    if all(hasattr(plugin, "agent_name") for plugin, _ in wake_batches)
+                    else "Background wake(s) received — waking the agent.",
+                )
                 wake_header = _render_wake_batches(wake_batches)
-                await self._execute_turn(
+                outcome = await self._execute_turn(
                     "", wake_events, source="monitor", wake_header=wake_header
                 )
             finally:
+                # Always close the turn for plugins (a no-op drain still
+                # resets their per-turn state, e.g. the peers presence).
+                self._notify_turn_end(outcome or RunOutcome(status="cancelled"))
                 self._turn_in_progress = False
                 if self._turn_owner_task is owner:
                     self._turn_owner_task = None
+
+    def _notify_turn_end(self, outcome: RunOutcome) -> None:
+        """Tell plugins a turn ended (peers: auto-reply with its answer)."""
+        plugins = list(getattr(self.engine, "_loaded_plugins", []))
+        for notice in notify_turn_end(plugins, outcome):
+            self.sink.notify("info", notice)
 
     def monitor_status(self) -> str | None:
         """Short status string for active background providers, or ``None``.

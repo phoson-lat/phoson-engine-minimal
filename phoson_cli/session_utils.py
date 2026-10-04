@@ -383,12 +383,71 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
         *build_mcp_plugins(config),
         *build_monitor_plugins(config),
         *build_bgjobs_plugins(config),
+        *build_peers_plugins(config),
         *build_ssh_plugins(config),
         *build_computeruse_plugins(config),
         *build_otel_plugins(config),
         *build_swarm_plugins(config),
         *build_questions_plugins(config),
     ]
+
+
+def build_peers_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the named-peers plugin (``--name``) as a configured instance.
+
+    Returns an empty list unless this window has a peer name. A name that is
+    invalid or already taken by a live window degrades to a warning (the CLI
+    still starts, just without peer messaging) instead of a crash.
+    """
+    name = (getattr(config, "peer_name", "") or "").strip()
+    if not name:
+        return []
+    peers_config = {
+        "name": name,
+        "team": getattr(config, "peer_team", "") or "default",
+        "data_dir": str(config.peers_data_dir),
+        "max_hops": config.peers_max_hops,
+    }
+    try:
+        from phoson_plugin_peers import PeersPlugin
+
+        instance = PeersPlugin()
+        instance.configure(peers_config)
+        instance.initialize()  # claim the name now: fail early and clearly
+        return [instance]
+    except ImportError:
+        return _in_tree_fallback_spec(
+            "phoson_plugin_peers", peers_config, "peer messaging disabled"
+        )
+    except Exception as exc:
+        warnings.warn(f"Peer messaging disabled: {exc}", UserWarning, stacklevel=2)
+        return []
+
+
+def notify_turn_end(plugins: list[Plugin], outcome: Any) -> list[str]:
+    """Fan a finished turn's outcome out to plugins with ``on_turn_end``.
+
+    Duck-typed host hook (the peers plugin uses it to send the turn's final
+    answer back to the agents whose requests the turn processed). A hook may
+    return a list of short notices for the host to display. Failures are
+    logged and swallowed: a plugin must never break the turn's end.
+    """
+    notices: list[str] = []
+    for plugin in plugins:
+        hook = getattr(plugin, "on_turn_end", None)
+        if not callable(hook):
+            continue
+        try:
+            returned = hook(outcome)
+            if isinstance(returned, (list, tuple)):
+                notices.extend(str(n) for n in returned if n)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Plugin %r on_turn_end failed",
+                getattr(plugin, "name", "?"),
+                exc_info=True,
+            )
+    return notices
 
 
 def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:

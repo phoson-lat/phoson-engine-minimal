@@ -74,6 +74,7 @@ for pkg in (
     "phoson_plugin_checkpoint",
     "phoson_plugin_mcp",
     "phoson_plugin_memory",
+    "phoson_plugin_peers",
 ):
     HIDDEN_IMPORTS.extend(collect_submodules(pkg))
 
