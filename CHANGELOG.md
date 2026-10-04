@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.49.1 (2026-10-04)
+
+### Fixed
+
+- **cli**: harden self-update with PEP 440 version ordering, validated PyPI
+  responses, controlled subprocess launch errors, bounded output capture,
+  and cleanup on timeout or cancellation (including child process groups on
+  POSIX). Cancellation stops the installer but cannot roll back changes.
+- **cli**: verify installed metadata in a fresh interpreter before reporting
+  upgrade success. Distinguish unchanged, constrained and unverified installs;
+  use explicit exit statuses instead of parsing messages.
+- **cli**: preserve cached update hints across launches until the running
+  version catches up, and correct `uvx` guidance to explicitly request latest.
+
+### Changed
+
+- **cli**: compact, colored Rich self-update messages and an interactive
+  installation spinner. REPL/TUI progress uses existing themed notices;
+  short diagnostics and recovery instructions appear only on failure.
+- **tests**: add 37 self-update regression tests covering process cleanup,
+  verification, version ordering, cached hints and output integration.
+
 ## v0.49.0 (2026-10-04)
 
 ### Added
