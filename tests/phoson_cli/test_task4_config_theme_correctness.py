@@ -39,6 +39,7 @@ def test_secret_persistence_map_covers_every_supported_secret() -> None:
         "xai_api_key": "XAI_API_KEY",
         "groq_api_key": "GROQ_API_KEY",
         "deepseek_api_key": "DEEPSEEK_API_KEY",
+        "alibaba_api_key": "DASHSCOPE_API_KEY",
         "together_api_key": "TOGETHER_API_KEY",
         "perplexity_api_key": "PERPLEXITY_API_KEY",
         "azure_openai_api_key": "AZURE_OPENAI_API_KEY",

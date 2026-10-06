@@ -71,6 +71,7 @@ PROVIDER_ALIASES: dict[str, str] = {
     "google": "gemini",
     "aws": "bedrock",
     "grok": "xai",
+    "dashscope": "alibaba",
 }
 
 #: Canonical provider names the CLI can serve (mirrors ``build_chat``).
@@ -86,6 +87,7 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "grok",
         "groq",
         "deepseek",
+        "alibaba",
         "together",
         "perplexity",
         "azure",

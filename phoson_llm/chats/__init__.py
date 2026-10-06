@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from phoson_llm.chats.nvidia import NVIDIAChat
     from phoson_llm.chats.ollama import OllamaChat
     from phoson_llm.chats.openai import OpenAIChat
+    from phoson_llm.chats.alibaba import AlibabaChat
     from phoson_llm.chats.bedrock import BedrockChat
     from phoson_llm.chats.mistral import MistralChat
     from phoson_llm.chats.deepseek import DeepSeekChat
@@ -51,6 +52,7 @@ __all__ = [
     "GrokChat",
     "GroqChat",
     "DeepSeekChat",
+    "AlibabaChat",
     "TogetherChat",
     "PerplexityChat",
     "LMStudioChat",
@@ -77,6 +79,7 @@ _MODULES: dict[str, str] = {
     "GrokChat": ".grok",
     "GroqChat": ".groq",
     "DeepSeekChat": ".deepseek",
+    "AlibabaChat": ".alibaba",
     "TogetherChat": ".together",
     "PerplexityChat": ".perplexity",
     "LMStudioChat": ".lmstudio",

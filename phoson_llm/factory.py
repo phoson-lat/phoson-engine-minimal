@@ -26,6 +26,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "grok": (".chats.grok", "GrokChat"),
     "groq": (".chats.groq", "GroqChat"),
     "deepseek": (".chats.deepseek", "DeepSeekChat"),
+    "alibaba": (".chats.alibaba", "AlibabaChat"),
     "together": (".chats.together", "TogetherChat"),
     "perplexity": (".chats.perplexity", "PerplexityChat"),
     "lmstudio": (".chats.lmstudio", "LMStudioChat"),

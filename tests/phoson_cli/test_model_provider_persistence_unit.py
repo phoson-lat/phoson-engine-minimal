@@ -69,6 +69,9 @@ def test_model_provider_for_normalizes_aliases() -> None:
     assert model_provider_for("openai/gpt-4o", "Google") == "openai"
     assert normalize_provider("AWS") == "bedrock"
     assert normalize_provider("Grok") == "xai"
+    assert normalize_provider("DashScope") == "alibaba"
+    # NOTE: "qwen" is intentionally NOT a provider alias — "qwen/..." is a
+    # model-id prefix (e.g. OpenRouter routes) and must not switch providers.
 
 
 # ── SessionController.set_model(model, provider=...) ─────────────────────────

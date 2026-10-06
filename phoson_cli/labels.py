@@ -20,6 +20,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "grok": "Grok (X.AI)",
     "groq": "Groq",
     "deepseek": "DeepSeek",
+    "alibaba": "Alibaba Cloud",
     "together": "Together AI",
     "perplexity": "Perplexity",
     "lmstudio": "LM Studio",

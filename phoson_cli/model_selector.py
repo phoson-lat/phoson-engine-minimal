@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 import httpx
 
-from .config import PhosonConfig
+from .config import PhosonConfig, _models_provider_base_url
 from .models import (
     KNOWN_PROVIDERS,
     ModelOption,
@@ -85,6 +85,8 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_groq_models(config)
     if provider == "deepseek":
         return await _list_deepseek_models(config)
+    if provider == "alibaba":
+        return await _list_alibaba_models(config)
     if provider == "together":
         return await _list_together_models(config)
     if provider == "mistral":
@@ -351,6 +353,31 @@ async def _list_groq_models(config: PhosonConfig) -> list[ModelOption]:
         raise ModelListingError(f"Failed to fetch Groq models: {exc}") from exc
     options = [
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="groq")
+        for item in data.get("data", [])
+        if item.get("id")
+    ]
+    return _prioritize_current(options, config.model)
+
+
+async def _list_alibaba_models(config: PhosonConfig) -> list[ModelOption]:
+    from phoson_llm.chats.alibaba import ALIBABA_BASE_URL
+
+    api_key = getattr(config, "alibaba_api_key", None)
+    if not api_key:
+        return [ModelOption(id=config.model, label=config.model, provider="alibaba")]
+    base_url = _models_provider_base_url(config, "alibaba") or ALIBABA_BASE_URL
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ModelListingError(f"Failed to fetch Alibaba models: {exc}") from exc
+    options = [
+        ModelOption(id=item["id"], label=item["id"], provider="alibaba")
         for item in data.get("data", [])
         if item.get("id")
     ]
