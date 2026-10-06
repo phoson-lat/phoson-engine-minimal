@@ -732,6 +732,10 @@ def build_wizard_prompt_style(theme: Theme) -> dict[str, str]:
             "wizard.label": f"{theme.prompt_arrow} bold",
             "wizard.default": theme.prompt_tokens,
             "wizard.input": theme.prompt_model,
+            # High-visibility cursor: accent color + bold. No ``reverse`` and no
+            # ``bg:`` anywhere, so the prompt keeps the terminal's own
+            # (transparent) background.
+            "cursor": f"{theme.pt_accent} bold",
         },
         theme,
     )

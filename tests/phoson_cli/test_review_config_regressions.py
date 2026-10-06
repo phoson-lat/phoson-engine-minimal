@@ -138,6 +138,7 @@ async def test_setup_accepts_transient_provider_and_saves_only_selected_pair(
             "10",
             "y",
             "light",
+            "",  # plugins: keep the current selection
             "y",
         ]
     )

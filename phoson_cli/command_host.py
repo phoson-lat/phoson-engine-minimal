@@ -248,8 +248,13 @@ class RendererCommandHost:
 
     async def run_setup(self) -> None:
         from phoson_cli import commands as commands_mod
+        from phoson_cli.installer import SetupCancelled
 
-        self.repl.config = await commands_mod.run_install_wizard(self.repl.config)
+        try:
+            self.repl.config = await commands_mod.run_install_wizard(self.repl.config)
+        except SetupCancelled:
+            self.print_info("Setup cancelled — configuration unchanged.")
+            return
         await self.repl.set_model(self.repl.config.model)
         self.print_info("Setup completed.")
 
