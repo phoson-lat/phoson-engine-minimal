@@ -226,7 +226,7 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 | Category | Providers |
 |----------|-----------|
 | Native adapters | **OpenAI** (tool use, reasoning effort), **Anthropic** (thinking, tool use, prompt caching), **Google Gemini**, **Mistral**, **Azure OpenAI**, **AWS Bedrock** |
-| OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
+| OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Alibaba (DashScope)**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
 
 All of them are available via the `build_chat()` factory, e.g. `build_chat("openrouter")`, and expose the same `stream()` event contract.
 
@@ -381,6 +381,7 @@ MISTRAL_API_KEY=
 GROQ_API_KEY=
 XAI_API_KEY=
 DEEPSEEK_API_KEY=
+DASHSCOPE_API_KEY=
 TOGETHER_API_KEY=
 PERPLEXITY_API_KEY=
 NVIDIA_API_KEY=

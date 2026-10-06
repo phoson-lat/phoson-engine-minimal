@@ -97,6 +97,7 @@ Many providers use the OpenAI API format. Phoson provides dedicated classes for 
 | `GrokChat` | xAI Grok | `XAI_API_KEY` |
 | `GroqChat` | Groq | `GROQ_API_KEY` |
 | `DeepSeekChat` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `AlibabaChat` | Alibaba Cloud (DashScope) | `DASHSCOPE_API_KEY` |
 | `TogetherChat` | Together AI | `TOGETHER_API_KEY` |
 | `PerplexityChat` | Perplexity | `PERPLEXITY_API_KEY` |
 | `FireworksChat` | Fireworks AI | `FIREWORKS_API_KEY` |

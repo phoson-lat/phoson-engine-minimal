@@ -137,6 +137,7 @@ class SetupWizard:
             "xai",
             "groq",
             "deepseek",
+            "alibaba",
             "together",
             "perplexity",
             "lmstudio",
@@ -256,6 +257,12 @@ class SetupWizard:
                 "DeepSeek API key",
                 config.deepseek_api_key,
                 field_name="deepseek_api_key",
+            )
+        if "alibaba" in self.enabled_providers:
+            config.alibaba_api_key = await self._secret_prompt(
+                "Alibaba Cloud (DashScope) API key",
+                config.alibaba_api_key,
+                field_name="alibaba_api_key",
             )
         if "together" in self.enabled_providers:
             config.together_api_key = await self._secret_prompt(
@@ -461,6 +468,7 @@ class SetupWizard:
         table.add_row("xAI / Grok", self._mask_secret(config.xai_api_key))
         table.add_row("Groq", self._mask_secret(config.groq_api_key))
         table.add_row("DeepSeek", self._mask_secret(config.deepseek_api_key))
+        table.add_row("Alibaba Cloud", self._mask_secret(config.alibaba_api_key))
         table.add_row("Together AI", self._mask_secret(config.together_api_key))
         table.add_row("Perplexity", self._mask_secret(config.perplexity_api_key))
         table.add_row("LM Studio", config.lmstudio_base_url or "—")
@@ -689,6 +697,8 @@ class SetupWizard:
             enabled.append("groq")
         if config.deepseek_api_key or config.provider == "deepseek":
             enabled.append("deepseek")
+        if config.alibaba_api_key or config.provider == "alibaba":
+            enabled.append("alibaba")
         if config.together_api_key or config.provider == "together":
             enabled.append("together")
         if config.perplexity_api_key or config.provider == "perplexity":

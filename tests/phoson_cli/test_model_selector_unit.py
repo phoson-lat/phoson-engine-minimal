@@ -191,3 +191,49 @@ def test_openrouter_agentic_index_parsing_is_defensive() -> None:
     assert _openrouter_agentic_index({"benchmarks": None}) is None
     assert _openrouter_agentic_index({"benchmarks": "x"}) is None
     assert _openrouter_agentic_index({}) is None
+
+
+@pytest.mark.asyncio
+async def test_list_alibaba_models_prioritizes_current(monkeypatch) -> None:
+    # Pre-import so `openai` (pulled in by the lazy import inside the lister)
+    # is loaded before httpx.AsyncClient is monkeypatched.
+    import phoson_llm.chats.alibaba  # noqa: F401
+    from phoson_cli.model_selector import _list_alibaba_models
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": [
+                    {"id": "qwen-max"},
+                    {"id": "qwen-plus"},
+                    {"id": "qwen-turbo"},
+                ]
+            }
+
+    class DummyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def get(self, *args, **kwargs):
+            return DummyResponse()
+
+    monkeypatch.setattr(
+        "phoson_cli.model_selector.httpx.AsyncClient", lambda timeout: DummyClient()
+    )
+    monkeypatch.setattr(
+        "phoson_cli.model_selector._models_provider_base_url",
+        lambda config, provider: None,
+    )
+
+    config = SimpleNamespace(provider="alibaba", model="qwen-plus", alibaba_api_key="k")
+
+    models = await _list_alibaba_models(config)
+
+    assert models[0].id == "qwen-plus"
+    assert all(m.provider == "alibaba" for m in models)

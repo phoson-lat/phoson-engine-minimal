@@ -63,6 +63,22 @@ PRICES: dict[str, PriceEntry] = {
     # ── DeepSeek ──────────────────────────────────────────────────────────────
     "deepseek/deepseek-chat": PriceEntry(input=0.27, output=1.10),
     "deepseek/deepseek-reasoner": PriceEntry(input=0.55, output=2.19),
+    # ── Alibaba Cloud (DashScope / Model Studio) ───────────────────────────────
+    # International (Singapore) pay-as-you-go list prices; the adapter's default
+    # base URL is the international endpoint. Tiered models use the first tier
+    # (0–32K/256K context). Verified Oct 2026.
+    "alibaba/qwen3.8-max": PriceEntry(input=2.00, output=6.00),
+    "alibaba/qwen3.7-max": PriceEntry(input=2.50, output=7.50),
+    "alibaba/qwen3-max": PriceEntry(input=1.20, output=6.00),
+    "alibaba/qwen-max": PriceEntry(input=1.60, output=6.40),
+    "alibaba/qwen3.7-plus": PriceEntry(input=0.40, output=1.60),
+    "alibaba/qwen3.5-plus": PriceEntry(input=0.40, output=2.40),
+    "alibaba/qwen-plus": PriceEntry(input=0.40, output=1.20),
+    "alibaba/qwen3.8-flash": PriceEntry(input=0.15, output=0.47),
+    "alibaba/qwen3.7-flash": PriceEntry(input=0.030, output=0.130),
+    "alibaba/qwen-flash": PriceEntry(input=0.05, output=0.40),
+    "alibaba/qwen-turbo": PriceEntry(input=0.05, output=0.20),
+    "alibaba/qwq-plus": PriceEntry(input=0.80, output=2.40),
     # ── Groq ──────────────────────────────────────────────────────────────────
     "groq/llama-3.3-70b": PriceEntry(input=0.59, output=0.79),
     # ── Together AI ───────────────────────────────────────────────────────────
@@ -95,6 +111,14 @@ _ALIASES: dict[str, str] = {
     "google/gemini-2.5-pro-preview": "google/gemini-2.5-pro",
     "google/gemini-2.5-flash-preview": "google/gemini-2.5-flash",
     "google/gemini-3-flash-preview": "google/gemini-3-flash",
+    "alibaba/qwen-max-latest": "alibaba/qwen-max",
+    "alibaba/qwen-plus-latest": "alibaba/qwen-plus",
+    "alibaba/qwen3.8-max-0902": "alibaba/qwen3.8-max",
+    "alibaba/qwen3.7-max-2026-06-08": "alibaba/qwen3.7-max",
+    "alibaba/qwen3.7-plus-2026-05-26": "alibaba/qwen3.7-plus",
+    "alibaba/qwen3-max-2026-01-23": "alibaba/qwen3-max",
+    "alibaba/qwen-flash-2025-07-28": "alibaba/qwen-flash",
+    "alibaba/qwen3.7-flash-2026-07-15": "alibaba/qwen3.7-flash",
 }
 
 

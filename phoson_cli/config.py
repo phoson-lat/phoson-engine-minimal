@@ -38,6 +38,7 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
     "GrokChat": "phoson_llm.chats.grok",
     "GroqChat": "phoson_llm.chats.groq",
     "DeepSeekChat": "phoson_llm.chats.deepseek",
+    "AlibabaChat": "phoson_llm.chats.alibaba",
     "TogetherChat": "phoson_llm.chats.together",
     "PerplexityChat": "phoson_llm.chats.perplexity",
     "LMStudioChat": "phoson_llm.chats.lmstudio",
@@ -117,6 +118,7 @@ class PhosonConfig:
     xai_api_key: str | None = None
     groq_api_key: str | None = None
     deepseek_api_key: str | None = None
+    alibaba_api_key: str | None = None
     together_api_key: str | None = None
     perplexity_api_key: str | None = None
     azure_openai_endpoint: str | None = None
@@ -547,11 +549,13 @@ def _resolve_effort_profile(
 
 _PROVIDER_ALIASES: Final[dict[str, str]] = {
     "aws": "bedrock",
+    "dashscope": "alibaba",
     "google": "gemini",
     "grok": "xai",
 }
 _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
     {
+        "alibaba",
         "anthropic",
         "azure",
         "bedrock",
@@ -963,6 +967,9 @@ def load_config() -> PhosonConfig:
         ),
         deepseek_api_key=_resolve_optional_str(
             "DEEPSEEK_API_KEY", "deepseek_api_key", fd, d.deepseek_api_key
+        ),
+        alibaba_api_key=_resolve_optional_str(
+            "DASHSCOPE_API_KEY", "alibaba_api_key", fd, d.alibaba_api_key
         ),
         together_api_key=_resolve_optional_str(
             "TOGETHER_API_KEY", "together_api_key", fd, d.together_api_key
@@ -1418,6 +1425,7 @@ _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
     "xai_api_key": "XAI_API_KEY",
     "groq_api_key": "GROQ_API_KEY",
     "deepseek_api_key": "DEEPSEEK_API_KEY",
+    "alibaba_api_key": "DASHSCOPE_API_KEY",
     "together_api_key": "TOGETHER_API_KEY",
     "perplexity_api_key": "PERPLEXITY_API_KEY",
     "azure_openai_api_key": "AZURE_OPENAI_API_KEY",
@@ -1568,6 +1576,7 @@ def save_config(
         ("xai_api_key", getattr(config, "xai_api_key", None)),
         ("groq_api_key", getattr(config, "groq_api_key", None)),
         ("deepseek_api_key", getattr(config, "deepseek_api_key", None)),
+        ("alibaba_api_key", getattr(config, "alibaba_api_key", None)),
         ("together_api_key", getattr(config, "together_api_key", None)),
         ("perplexity_api_key", getattr(config, "perplexity_api_key", None)),
         ("azure_openai_endpoint", getattr(config, "azure_openai_endpoint", None)),
@@ -1871,6 +1880,8 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("groq")
     if getattr(config, "deepseek_api_key", None):
         providers.append("deepseek")
+    if getattr(config, "alibaba_api_key", None):
+        providers.append("alibaba")
     if getattr(config, "together_api_key", None):
         providers.append("together")
     if getattr(config, "perplexity_api_key", None):
@@ -2019,6 +2030,10 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
     if provider == "deepseek":
         return _chat_class("DeepSeekChat")(
             api_key=config.deepseek_api_key, base_url=base_url
+        )
+    if provider == "alibaba":
+        return _chat_class("AlibabaChat")(
+            api_key=config.alibaba_api_key, base_url=base_url
         )
     if provider == "together":
         return _chat_class("TogetherChat")(

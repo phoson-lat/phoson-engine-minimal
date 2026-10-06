@@ -63,3 +63,27 @@ def test_calculate_cost_resolves_gemini_3_flash_preview_alias() -> None:
 
     assert cost_known is True
     assert cost_usd == pytest.approx(0.00201, abs=1e-9)
+
+
+def test_calculate_cost_alibaba_unprefixed_model_with_provider() -> None:
+    cost_usd, cost_known = calculate_cost(
+        model="qwen-plus",
+        provider="alibaba",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+    )
+
+    assert cost_known is True
+    assert cost_usd == pytest.approx(1.60, abs=1e-9)
+
+
+def test_calculate_cost_resolves_alibaba_dated_snapshot_alias() -> None:
+    cost_usd, cost_known = calculate_cost(
+        model="qwen3.7-plus-2026-05-26",
+        provider="alibaba",
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+    )
+
+    assert cost_known is True
+    assert cost_usd == pytest.approx(2.00, abs=1e-9)
