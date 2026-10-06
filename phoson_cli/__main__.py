@@ -50,6 +50,13 @@ def run_install_wizard(*args, **kwargs):
     return _impl(*args, **kwargs)
 
 
+def setup_cancelled_type():
+    """Lazily import the wizard's cancellation exception type."""
+    from phoson_cli.installer import SetupCancelled as _impl
+
+    return _impl
+
+
 def __getattr__(name: str):
     """Lazily resolve the front-end classes (PEP 562)."""
     if name == "PhosonRepl":
@@ -905,6 +912,9 @@ def _run_cli() -> None:
         except PhosonConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+        except (setup_cancelled_type(), KeyboardInterrupt):
+            # 130 = 128 + SIGINT, the conventional exit code for ^C.
+            sys.exit(130)
         return
 
     trace_writer = TraceWriter() if options.trace or trace_enabled() else None
@@ -975,6 +985,8 @@ def _run_cli() -> None:
         except PhosonConfigError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
+        except (setup_cancelled_type(), KeyboardInterrupt):
+            sys.exit(130)
         _apply_overrides(config, options)
         if options.theme:
             _prepare_cli_theme(config)

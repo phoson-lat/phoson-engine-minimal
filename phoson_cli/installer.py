@@ -1,17 +1,25 @@
 from pathlib import Path
+from contextlib import contextmanager
 from dataclasses import replace
+from collections.abc import Iterator
 
 from rich import box
+from rich.live import Live
 from rich.rule import Rule
 from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 from rich.console import Console
+from rich.spinner import Spinner
 from prompt_toolkit.styles import Style
 from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 
 from phoson_cli.theme import load_theme, build_wizard_prompt_style
-from phoson_cli.labels import PROVIDER_LABELS
+from phoson_cli.labels import (
+    PLUGIN_LABELS,
+    PROVIDER_LABELS,
+    PLUGIN_REQUIRED_EXTRAS,
+)
 
 from .config import (
     PhosonConfig,
@@ -23,6 +31,16 @@ from ._frozen import asset_path
 from .model_selector import list_available_models
 
 _PHOS_ART = asset_path("phos-ascii.txt").read_text(encoding="utf-8").rstrip("\n")
+
+#: Total wizard sections, for the "step N/5 · title" header rules.
+_WIZARD_STEPS = 5
+
+
+class SetupCancelled(RuntimeError):
+    """The user aborted the setup wizard (Ctrl+C / Ctrl+D).
+
+    Nothing has been saved; the configuration is unchanged.
+    """
 
 
 class SetupWizard:
@@ -58,60 +76,138 @@ class SetupWizard:
         Steps through banner, provider selection, credentials, defaults, and
         runtime options. Offers to save when complete.
 
+        Ctrl+C and Ctrl+D abort the wizard cleanly: a friendly notice is
+        printed, nothing is saved, and :class:`SetupCancelled` is raised so
+        callers (CLI entry point, ``/setup`` host) can react.
+
         Returns:
             The configured :class:`~phoson_cli.config.PhosonConfig` (saved or
             unsaved, depending on the user's choice).
+
+        Raises:
+            SetupCancelled: The user aborted with Ctrl+C or Ctrl+D.
         """
         self._print_banner()
         self._print_intro()
-        await self._pick_enabled_providers()
-        updated = replace(self.config)
-        updated.enabled_providers = list(self.enabled_providers)
-        updated = await self._configure_providers(updated)
-        updated = await self._configure_defaults(updated)
-        updated = await self._configure_runtime(updated)
-        validate_config(updated)
-        self._print_summary(updated)
-        if await self._confirm("Save this configuration?", default=True):
-            path = save_config(
-                updated, explicit_secret_fields=self._explicit_secret_fields
-            )
+        try:
+            await self._pick_enabled_providers()
+            updated = replace(self.config)
+            updated.enabled_providers = list(self.enabled_providers)
+            updated = await self._configure_providers(updated)
+            updated = await self._configure_defaults(updated)
+            updated = await self._configure_runtime(updated)
+            updated = await self._pick_plugins(updated)
+            validate_config(updated)
+            self._print_summary(updated)
+            if await self._confirm("Save this configuration?", default=True):
+                with self._spinner("Saving configuration…"):
+                    path = save_config(
+                        updated, explicit_secret_fields=self._explicit_secret_fields
+                    )
+                self.console.print(
+                    Panel.fit(
+                        f"Saved configuration to [bold]{path}[/bold]",
+                        border_style=self.theme.ok,
+                    )
+                )
+            else:
+                self.console.print(
+                    Panel.fit("Configuration not saved.", border_style=self.theme.warn)
+                )
+            self.config = updated
+            return self.config
+        except (KeyboardInterrupt, EOFError) as exc:
+            # prompt_toolkit raises KeyboardInterrupt on Ctrl+C and EOFError
+            # on Ctrl+D; the mutations so far only touched the ``updated``
+            # copy, so the wizard's original config is still intact.
+            self.console.print()
             self.console.print(
                 Panel.fit(
-                    f"Saved configuration to [bold]{path}[/bold]",
-                    border_style=self.theme.ok,
+                    "Setup cancelled — nothing was saved. Run "
+                    "[bold]phoson-cli --setup[/bold] to try again.",
+                    border_style=self.theme.warn,
                 )
             )
-        else:
-            self.console.print(
-                Panel.fit("Configuration not saved.", border_style=self.theme.warn)
-            )
-        self.config = updated
-        return self.config
+            raise SetupCancelled("setup aborted by user") from exc
 
     def _print_banner(self) -> None:
-        """Render the ASCII art banner and wizard title."""
+        """Render the ASCII art banner with an animated typewriter tagline."""
         art = Text(_PHOS_ART, style=self.theme.art)
-        subtitle = Text()
-        subtitle.append("phoson setup wizard\n", style=f"bold {self.theme.accent}")
-        subtitle.append(
-            "configure multiple providers, defaults, and secrets",
+        self.console.print()
+        self.console.print(
+            Panel(
+                art,
+                title=Text("phoson setup wizard", style=f"bold {self.theme.accent}"),
+                border_style=self.theme.accent_soft,
+                box=box.ROUNDED,
+                padding=(0, 2),
+            )
+        )
+        self._typewriter(
+            "configure providers, credentials, plugins, and secrets",
             style=self.theme.muted,
         )
         self.console.print()
-        self.console.print(
-            Panel.fit(art, border_style=self.theme.accent_soft, box=box.SQUARE)
-        )
-        self.console.print(subtitle)
         self.console.print(Rule(style=self.theme.accent_soft))
+
+    def _typewriter(self, text: str, *, style: str, delay: float = 0.012) -> None:
+        """Reveal ``text`` character by character (instant off-TTY)."""
+        if not text:
+            return
+        if not self.console.is_terminal:
+            self.console.print(Text(text, style=style))
+            return
+        from time import sleep
+
+        self.console.print(Text(text[0], style=style), end="")
+        for char in text[1:]:
+            sleep(delay)
+            self.console.print(Text(char, style=style), end="")
+        self.console.print()
+
+    def _section(self, step: int, title: str, subtitle: str | None = None) -> None:
+        """Print a numbered section header rule with an optional hint."""
+        label = Text(
+            f" step {step}/{_WIZARD_STEPS} · {title} ",
+            style=f"bold {self.theme.accent}",
+        )
+        self.console.print()
+        self.console.print(Rule(label, style=self.theme.accent_soft))
+        if subtitle:
+            self.console.print(Text(subtitle, style=self.theme.muted))
+            self.console.print()
+
+    @contextmanager
+    def _spinner(self, label: str) -> Iterator[None]:
+        """Terminal spinner using the shared braille frames.
+
+        A context manager; off-TTY the label is printed without animation.
+        """
+        from .animations import SPINNER_FRAMES
+
+        text = Text(label, style=self.theme.muted)
+        if not self.console.is_terminal:
+            self.console.print(text)
+            yield
+            return
+        spinner = Spinner("dots", text=text, style=self.theme.accent, speed=0.6)
+        spinner.frames = list(SPINNER_FRAMES)
+        with Live(
+            spinner,
+            console=self.console,
+            refresh_per_second=12.5,
+            transient=True,
+        ):
+            yield
 
     def _print_intro(self) -> None:
         """Print the introductory welcome panel."""
         welcome = (
             "[bold]Welcome[/bold] — this wizard lets you enable one or more "
             "providers,\n"
-            "store API credentials, and choose default models for the main agent\n"
-            "and sub-agents."
+            "store API credentials, choose default models for the main agent\n"
+            "and sub-agents, and toggle the optional plugins that extend the\n"
+            "CLI with background jobs, MCP servers, and more."
         )
         self.console.print(
             Panel(
@@ -153,10 +249,12 @@ class SetupWizard:
         selected = set(self.enabled_providers)
 
         while True:
-            self.console.print()
-            self.console.print(
-                Text("Enable providers", style=f"bold {self.theme.accent}")
+            self._section(
+                1,
+                "Providers",
+                "Type numbers to toggle (e.g. 1 3), Enter to continue.",
             )
+            body = Text()
             for idx, provider in enumerate(providers, start=1):
                 marker = "[x]" if provider in selected else "[ ]"
                 state_style = (
@@ -165,13 +263,18 @@ class SetupWizard:
                 line = Text(f"  {idx}. ")
                 line.append(f"{marker} ", style=state_style)
                 line.append(PROVIDER_LABELS[provider], style=self.theme.text)
-                self.console.print(line)
+                body.append(line)
+                body.append("\n")
+            body.rstrip()
             self.console.print(
-                Text(
-                    "\nType numbers to toggle (e.g. 1 3), Enter to continue.",
-                    style=self.theme.muted,
+                Panel(
+                    body,
+                    border_style=self.theme.accent_soft,
+                    box=box.ROUNDED,
+                    padding=(0, 1),
                 )
             )
+            self.console.print()
             raw = (await self._prompt_text("providers", default="")).strip()
             if not raw:
                 if selected:
@@ -200,10 +303,7 @@ class SetupWizard:
         Returns:
             The updated configuration.
         """
-        self.console.print()
-        self.console.print(
-            Text("Provider credentials", style=f"bold {self.theme.accent}")
-        )
+        self._section(2, "Provider credentials")
 
         if "openrouter" in self.enabled_providers:
             config.openrouter_api_key = await self._secret_prompt(
@@ -361,16 +461,14 @@ class SetupWizard:
         Returns:
             The updated configuration.
         """
-        self.console.print()
-        self.console.print(
-            Text("Default runtime selection", style=f"bold {self.theme.accent}")
-        )
+        self._section(3, "Default runtime selection")
 
         default_provider = await self._choose_default_provider(config.provider)
         config.provider = default_provider
         config.mark_provider_explicit()
 
-        models = await list_available_models(config)
+        with self._spinner("Fetching available models…"):
+            models = await list_available_models(config)
         suggested = [option.id for option in models[:8]]
 
         if suggested:
@@ -399,8 +497,7 @@ class SetupWizard:
         Returns:
             The updated configuration.
         """
-        self.console.print()
-        self.console.print(Text("Runtime options", style=f"bold {self.theme.accent}"))
+        self._section(4, "Runtime options")
         config.sessions_dir = Path(
             await self._prompt_text("Sessions directory", str(config.sessions_dir))
         ).expanduser()
@@ -417,6 +514,102 @@ class SetupWizard:
         self.theme = load_theme(config.theme)
         self.session.style = Style.from_dict(build_wizard_prompt_style(self.theme))
         return config
+
+    async def _pick_plugins(self, config: PhosonConfig) -> PhosonConfig:
+        """Interactively toggle which bundled plugins are enabled.
+
+        Follows the same numbered-toggle pattern as provider selection.
+        Specs the wizard doesn't know about (``path:…``, inline tables with
+        per-plugin config, community plugins) are preserved untouched, and
+        a warning is shown when a selected plugin's optional extra is not
+        importable in the current environment.
+
+        Args:
+            config: Configuration object to mutate.
+
+        Returns:
+            The updated configuration.
+        """
+        specs = list(PLUGIN_LABELS)
+        selected = {
+            spec for spec in config.plugins if isinstance(spec, str) and spec in specs
+        }
+        preserved = [
+            spec
+            for spec in config.plugins
+            if not (isinstance(spec, str) and spec in specs)
+        ]
+
+        while True:
+            self._section(
+                5,
+                "Optional plugins",
+                "Type numbers to toggle (e.g. 1 3), Enter to continue.",
+            )
+            body = Text()
+            for idx, spec in enumerate(specs, start=1):
+                name, description = PLUGIN_LABELS[spec]
+                marker = "[x]" if spec in selected else "[ ]"
+                state_style = self.theme.ok if spec in selected else self.theme.muted
+                line = Text(f"  {idx}. ")
+                line.append(f"{marker} ", style=state_style)
+                line.append(name, style=self.theme.text)
+                line.append(f" — {description}", style=self.theme.muted)
+                body.append(line)
+                body.append("\n")
+            body.rstrip()
+            self.console.print(
+                Panel(
+                    body,
+                    border_style=self.theme.accent_soft,
+                    box=box.ROUNDED,
+                    padding=(0, 1),
+                )
+            )
+            self.console.print()
+            raw = (await self._prompt_text("plugins", default="")).strip()
+            if not raw:
+                break
+            for token in raw.replace(",", " ").split():
+                if token.isdigit() and 1 <= int(token) <= len(specs):
+                    spec = specs[int(token) - 1]
+                    if spec in selected:
+                        selected.remove(spec)
+                    else:
+                        selected.add(spec)
+                else:
+                    self.console.print(
+                        Text(
+                            f"Ignoring invalid selection {token!r}.",
+                            style=f"bold {self.theme.err}",
+                        )
+                    )
+
+        config.plugins = preserved + [spec for spec in specs if spec in selected]
+        self._warn_missing_plugin_extras(selected)
+        return config
+
+    def _warn_missing_plugin_extras(self, selected: set[str]) -> None:
+        """Warn when a selected plugin's optional dependency is not importable."""
+        from importlib.util import find_spec
+
+        missing: list[str] = []
+        for spec in selected:
+            requirement = PLUGIN_REQUIRED_EXTRAS.get(spec)
+            if requirement is None:
+                continue
+            module, extra = requirement
+            if find_spec(module) is None:
+                missing.append(extra)
+        if not missing:
+            return
+        flags = " ".join(f"--extra {extra}" for extra in sorted(set(missing)))
+        self.console.print(
+            Text(
+                f"Some selected plugins need optional dependencies:\n  uv sync {flags}",
+                style=self.theme.warn,
+            )
+        )
 
     async def _pick_theme(self) -> str:
         """Ask which color theme to save (E4).
@@ -485,6 +678,13 @@ class SetupWizard:
         table.add_row("Cohere", self._mask_secret(config.cohere_api_key))
         table.add_row("OmniRoute", config.omniroute_base_url or "—")
         table.add_row("OmniRoute key", self._mask_secret(config.omniroute_api_key))
+        plugin_names = [
+            PLUGIN_LABELS[spec][0]
+            if isinstance(spec, str) and spec in PLUGIN_LABELS
+            else (spec if isinstance(spec, str) else str(spec))
+            for spec in config.plugins
+        ]
+        table.add_row("Plugins", ", ".join(plugin_names) or "—")
         table.add_row("Sessions dir", str(config.sessions_dir))
         table.add_row("Max iterations", str(config.max_iterations))
         table.add_row("Safe mode", "on" if config.safe_mode else "off")
@@ -547,6 +747,10 @@ class SetupWizard:
                 ("class:wizard.input", "> "),
             ],
             complete_style=CompleteStyle.COLUMN,
+            # ``is_password`` is *stateful* on PromptSession: a previous
+            # secret prompt leaves it ``True`` and passing nothing (None)
+            # does not reset it, so plain prompts must opt out explicitly.
+            is_password=False,
         )
         return result.strip() or (default or "")
 
@@ -729,5 +933,11 @@ class SetupWizard:
 
 
 async def run_install_wizard(config: PhosonConfig | None = None) -> PhosonConfig:
+    """Run the interactive wizard.
+
+    Raises:
+        SetupCancelled: The user aborted with Ctrl+C or Ctrl+D; the passed
+            (or default) configuration is left untouched.
+    """
     wizard = SetupWizard(config=config)
     return await wizard.run()
