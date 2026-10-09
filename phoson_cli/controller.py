@@ -86,6 +86,7 @@ from .session_utils import (
     build_offload,
     close_plugins,
     vllm_base_url,
+    _git_env_block,
     drain_all_wakes,
     build_summarizer,
     build_middlewares,
@@ -93,7 +94,6 @@ from .session_utils import (
     has_pending_wakes,
     build_plugin_specs,
     build_system_prompt,
-    _git_env_block,
     engine_prompt_tools,
     engine_visible_tools,
 )

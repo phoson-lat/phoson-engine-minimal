@@ -10,10 +10,13 @@ import sys
 import types
 import logging
 import warnings
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from pathlib import Path
 from datetime import UTC, datetime
 from collections.abc import Iterable
+
+if TYPE_CHECKING:  # solo para las anotaciones de `_kill_quietly`
+    import subprocess
 
 from phoson_agent import Plugin
 from phoson_agent.middleware import (
