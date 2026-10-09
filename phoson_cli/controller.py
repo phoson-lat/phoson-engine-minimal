@@ -93,6 +93,7 @@ from .session_utils import (
     has_pending_wakes,
     build_plugin_specs,
     build_system_prompt,
+    _git_env_block,
     engine_prompt_tools,
     engine_visible_tools,
 )
@@ -1412,6 +1413,10 @@ class SessionController:
                 model=self.current_model,
                 system=build_system_prompt(
                     engine_prompt_tools(self.engine),
+                    # The git `# Environment` block shells out to git: resolve
+                    # it OFF the event loop so a slow/hung repo cannot stall
+                    # the token stream (Windows: cold git spawn is 100s of ms).
+                    env_block=await asyncio.to_thread(_git_env_block, Path.cwd()),
                 ),
                 reasoning_effort=reasoning_effort,
                 # Stable per-conversation key: OpenRouter uses it for sticky

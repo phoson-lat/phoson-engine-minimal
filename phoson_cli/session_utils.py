@@ -88,6 +88,59 @@ _GIT_STATUS_MAX_LINES = 30
 #: the prompt must never hang on a slow/locked repo.
 _GIT_TIMEOUT_SECONDS = 3
 
+#: Binary behind the Environment lookups. Module level so tests can point it
+#: at a stub that misbehaves (hangs, forks, ignores SIGTERM…).
+_GIT_BIN = "git"
+
+#: TTL for the ``_git_env_block`` cache. The block itself is prompt-cache
+#: friendly (it only changes when the repo changes), but *reading* it is not:
+#: a cold ``git`` spawn on Windows is hundreds of ms, and this is called both
+#: from ``build_system_prompt`` (every turn) and ``estimate_active_path``
+#: (every context-meter refresh). Keyed by cwd.
+_GIT_ENV_TTL_SECONDS = 5.0
+_git_env_cache: dict[str, tuple[float, str]] = {}
+
+
+def _kill_quietly(proc: "subprocess.Popen[str]") -> None:
+    """Kill *proc* **and its descendants**, never blocking the caller.
+
+    ``Popen.kill()`` only reaches the direct child. On Windows ``git`` (and
+    every ``python`` from a uv venv) is a shim chain: the launcher spawns the
+    real binary, so killing the launcher leaves the real process alive *with
+    our pipes still open* — and any later ``communicate()`` would then block
+    forever waiting for a pipe EOF that never comes. We therefore ask the OS
+    for the whole tree and drop our end of the pipes regardless.
+    """
+    import subprocess
+
+    if sys.platform == "win32":
+        try:
+            # DEVNULL everywhere → this call has no pipes to block on, so it
+            # cannot reproduce the very hang it is here to prevent.
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+        except Exception:  # noqa: BLE001 — best effort, never fatal
+            pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001 — already gone
+        pass
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        proc.wait(timeout=1)
+    except Exception:  # noqa: BLE001 — orphaned: reaped by the OS
+        pass
+
 
 def _git_output(args: list[str], cwd: Path) -> str | None:
     """Run a git command in ``cwd``; return stdout or None when unusable.
@@ -95,25 +148,40 @@ def _git_output(args: list[str], cwd: Path) -> str | None:
     Returns None (rather than raising) when git is missing, the command
     fails — e.g. "not a git repository" — or times out, so the prompt
     builder degrades to *no* environment block instead of crashing a run.
+
+    Deliberately **not** ``subprocess.run(timeout=…)``: on timeout that helper
+    kills only the direct child and then calls ``communicate()`` *without a
+    timeout* to collect the partial output (CPython ``subprocess.run``), which
+    blocks forever when a descendant of the killed shim keeps the pipe open —
+    exactly what git on Windows does. This runs inside the event loop of every
+    front end, so it must be bounded no matter what git does.
     """
     import subprocess
 
+    kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     try:
-        result = subprocess.run(
-            ["git", *args],
+        proc = subprocess.Popen(
+            [_GIT_BIN, *args],
             cwd=cwd,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
+            **kwargs,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return None
-    if result.returncode != 0:
+    try:
+        out, _ = proc.communicate(timeout=_GIT_TIMEOUT_SECONDS)
+    except Exception:  # noqa: BLE001 — TimeoutExpired, EINTR, EPIPE…
+        _kill_quietly(proc)
         return None
-    return result.stdout
+    return out if proc.returncode == 0 else None
 
 
-def _git_env_block(cwd: Path) -> str:
+def _git_env_block(cwd: Path, force: bool = False) -> str:
     """The ``# Environment`` section: git branch + a capped status snapshot.
 
     Returns "" when ``cwd`` is not a git work tree (git fails there), so
@@ -122,21 +190,39 @@ def _git_env_block(cwd: Path) -> str:
     and changes only when the repo changes — unlike a clock, it never
     churns between idle turns (F-25 / #180). Both are read-only and capped
     so a dirty repo cannot bloat the prompt.
+
+    Cached for :data:`_GIT_ENV_TTL_SECONDS` per cwd: ``build_system_prompt``
+    runs on every turn *and* on every ``estimate_active_path`` refresh, and
+    two git spawns per call are pure overhead on Windows. ``force=True``
+    bypasses the cache (freshness-sensitive callers, tests).
     """
+    import time
+
+    key = str(cwd)
+    now = time.monotonic()
+    if not force:
+        cached = _git_env_cache.get(key)
+        if cached is not None and (now - cached[0]) < _GIT_ENV_TTL_SECONDS:
+            return cached[1]
+
     branch_out = _git_output(["branch", "--show-current"], cwd)
     if branch_out is None:
-        return ""
-    branch = branch_out.strip() or "(detached HEAD or no branch)"
-    status_out = _git_output(["status", "--short"], cwd) or ""
-    status_lines = status_out.splitlines()
-    if not status_lines:
-        status = "(clean)"
+        block = ""
     else:
-        shown = status_lines[:_GIT_STATUS_MAX_LINES]
-        status = "\n".join(f"  {line}" for line in shown)
-        if len(status_lines) > _GIT_STATUS_MAX_LINES:
-            status += f"\n  … (+{len(status_lines) - _GIT_STATUS_MAX_LINES} more)"
-    return f"\n\n# Environment\n- git branch: {branch}\n- git status:\n{status}"
+        branch = branch_out.strip() or "(detached HEAD or no branch)"
+        status_out = _git_output(["status", "--short"], cwd) or ""
+        status_lines = status_out.splitlines()
+        if not status_lines:
+            status = "(clean)"
+        else:
+            shown = status_lines[:_GIT_STATUS_MAX_LINES]
+            status = "\n".join(f"  {line}" for line in shown)
+            if len(status_lines) > _GIT_STATUS_MAX_LINES:
+                status += f"\n  … (+{len(status_lines) - _GIT_STATUS_MAX_LINES} more)"
+        block = f"\n\n# Environment\n- git branch: {branch}\n- git status:\n{status}"
+
+    _git_env_cache[key] = (now, block)
+    return block
 
 
 def _tool_usage_block(tool_names: set[str]) -> str:
@@ -237,6 +323,8 @@ def build_system_prompt(
     tools: list,
     agents_md_max_tokens: int | None = None,
     skills_max_tokens: int | None = None,
+    *,
+    env_block: str | None = None,
 ) -> str:
     """Build the system prompt for the loaded tools.
 
@@ -256,6 +344,11 @@ def build_system_prompt(
     discovered skill, only when the ``skill`` tool is in ``tools`` — so the
     model knows what it can load on demand without paying for the bodies.
     Shared by the REPL and the one-shot mode.
+
+    ``env_block`` lets a caller that can afford to (an ``asyncio`` front end,
+    via ``asyncio.to_thread``) resolve the git ``# Environment`` section
+    **off the event loop** and hand it in; when omitted it is resolved here,
+    synchronously and bounded by :data:`_GIT_TIMEOUT_SECONDS`.
     """
     has_mcp = any(t.name.startswith("mcp_") for t in tools)
     mcp_note = " MCP tools (names prefixed 'mcp_') are also available."
@@ -306,7 +399,8 @@ def build_system_prompt(
     # tool/capability so sub-agents and one-shot are not told to call a
     # tool they do not have.
     tool_usage_block = _tool_usage_block(tool_names)
-    env_block = _git_env_block(cwd)
+    if env_block is None:
+        env_block = _git_env_block(cwd)
     # Safety is always relevant whenever the agent can touch the shell or
     # the network; keep it off for tool sets that can do neither.
     safety_block = _SAFETY_BLOCK if {"bash", "web_fetch"} & tool_names else ""
