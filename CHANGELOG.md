@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.50.0 (2026-10-09)
+
+### Feat
+
+- **cli**: modernize setup wizard with plugin selection and animations
+- **providers**: add Alibaba Cloud (DashScope) adapter
+
+### Fix
+
+- **engine**: git must never hang the event loop (Windows)
+
 ## v0.49.1 (2026-10-04)
 
 ### Fixed
