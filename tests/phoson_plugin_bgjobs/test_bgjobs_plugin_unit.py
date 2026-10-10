@@ -6,7 +6,9 @@ tests are deterministic without a fake clock.
 """
 
 import os
+import sys
 import asyncio
+import subprocess
 from typing import Any
 from pathlib import Path
 
@@ -220,12 +222,21 @@ class TestCrossPlatformLiveness:
     def test_pid_alive_for_dead_pid(self) -> None:
         assert _pid_alive(999_999_999) is False
 
-    def test_process_group_alive_for_current_process(self) -> None:
-        # On Windows the job's pgid equals its pid; on POSIX use this
-        # process's *real* process group id. The test process is usually not
-        # its own group leader, so ``os.getpid()`` is not a valid pgid there.
-        pgid = os.getpid() if os.name == "nt" else os.getpgrp()
-        assert _process_group_alive(pgid) is True
+    def test_process_group_alive_for_running_child(self) -> None:
+        # A real child in its own session (what ``run_bg_job`` launches) must
+        # read as alive. Using a child avoids probing this test process's own
+        # group, whose pgid is not its pid on POSIX.
+        new_session = os.name != "nt"
+        spawn_kw: dict[str, Any] = {"start_new_session": True} if new_session else {}
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], **spawn_kw
+        )
+        try:
+            pgid = os.getpgid(proc.pid) if new_session else proc.pid
+            assert _process_group_alive(pgid) is True
+        finally:
+            proc.kill()
+            proc.wait()
 
     def test_non_posix_branch_probes_pid_not_killpg(self, monkeypatch) -> None:
         # Force the non-POSIX branch and stub the Win32 probe so the test
