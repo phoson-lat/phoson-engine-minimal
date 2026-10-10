@@ -20,6 +20,7 @@ from openai import AsyncOpenAI, APIStatusError, APIConnectionError
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
     map_error_code,
+    scrub_surrogates,
     normalize_stop_reason,
     is_context_length_error,
 )
@@ -463,7 +464,11 @@ def _build_request_kwargs(
     if extra_kwargs:
         kwargs.update(extra_kwargs)
 
-    return kwargs
+    # Scrub any lone surrogate (e.g. from tool/subprocess output decoded with
+    # ``surrogateescape``) before the SDK serializes the body with
+    # ``ensure_ascii=False`` + ``.encode("utf-8")``. A single stray surrogate
+    # otherwise aborts the whole turn with ``UnicodeEncodeError`` (#270).
+    return scrub_surrogates(kwargs)
 
 
 # ─── Streaming loop ─────────────────────────────────────────────────────────

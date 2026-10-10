@@ -1,6 +1,7 @@
 import re
 import base64
 import logging
+from typing import Any
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -361,3 +362,48 @@ def map_error_code(status_code: int) -> str:
         503: "overloaded",
         529: "overloaded",
     }.get(status_code, "unknown")
+
+
+# ─── lone-surrogate scrubbing (#270) ─────────────────────────────────────────
+#
+# ``bytes.decode(errors="surrogateescape")`` maps invalid UTF-8 bytes to the
+# lone surrogates ``U+DC80``–``U+DCFF``. Such code points are *not* valid
+# UTF-8: when a payload carrying one is serialized with
+# ``json.dumps(..., ensure_ascii=False).encode("utf-8")`` (what the OpenAI SDK
+# does), the encode raises ``UnicodeEncodeError: ... surrogates not allowed``
+# and the whole turn dies. Tool output, subprocess logs and raw file reads are
+# the usual source, and once the text is in the message history every
+# subsequent turn keeps crashing until it is scrubbed.
+
+
+def scrub_surrogates(value: Any) -> Any:
+    """Recursively replace lone surrogates so the value is UTF-8 encodable.
+
+    Walks ``str``/``dict``/``list``/``tuple`` and rewrites any text that is
+    not valid UTF-8 to its lossy ``errors="replace"`` form (each lone
+    surrogate becomes ``U+FFFD``). Valid strings are returned unchanged via a
+    single ``encode`` fast path, so the common case is cheap. Non-string,
+    non-container scalars (int, float, bool, None, ...) pass through as-is.
+
+    Args:
+        value: Any JSON-ish value.
+
+    Returns:
+        A value of the same shape with lone surrogates removed from all text.
+    """
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        return {scrub_surrogates(k): scrub_surrogates(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub_surrogates(v) for v in value]
+    return value
+
+
+def _scrub_text(text: str) -> str:
+    """Return ``text`` without lone surrogates (identity when already clean)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+    return text

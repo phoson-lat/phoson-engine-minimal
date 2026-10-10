@@ -211,6 +211,51 @@ class TestBuildRequestKwargs:
             }
         ]
 
+    def test_lone_surrogate_in_messages_is_scrubbed_before_serialization(self):
+        """#270: a lone surrogate in the message list must not kill the turn.
+
+        The OpenAI SDK serializes the request with
+        ``json.dumps(..., ensure_ascii=False).encode("utf-8")``; a lone
+        surrogate in any message text used to raise ``UnicodeEncodeError:
+        surrogates not allowed``.
+        """
+        surrogate = "\udc8f"
+        cfg = ModelConfig(
+            model="deepseek/deepseek-v4.1-flash",
+            system=f"system {surrogate}",
+        )
+        messages = [
+            Message(role="user", content=f"pasted output {surrogate}"),
+            Message(
+                role="assistant",
+                content=[
+                    TextBlock(text=f"reasoning {surrogate}"),
+                    ToolUseBlock(
+                        tool_call_id="call_1",
+                        tool_name="bash",
+                        args={"command": f"cat {surrogate}"},
+                    ),
+                ],
+            ),
+        ]
+        tools = [
+            ToolDefinition(
+                name="bash",
+                description=f"run {surrogate}",
+                parameters={"type": "object", "title": f"x{surrogate}"},
+            )
+        ]
+
+        kwargs = _build_request_kwargs(
+            config=cfg, messages=messages, tools=tools, max_tokens_key="max_tokens"
+        )
+
+        # This is exactly what the SDK does internally — it must not raise.
+        encoded = json.dumps(kwargs, ensure_ascii=False).encode("utf-8")
+        assert surrogate.encode("utf-8", "surrogatepass") not in encoded
+        # The surrogate is replaced (U+FFFD), not dropped entirely.
+        assert "\udc8f" not in json.dumps(kwargs)
+
 
 # ── _convert_messages ────────────────────────────────────────────────────────
 

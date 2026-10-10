@@ -1,12 +1,14 @@
 """Unit tests for phoson_llm.utils."""
 
 import os
+import json
 import base64
 
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
     guess_mime,
     map_error_code,
+    scrub_surrogates,
     load_file_as_base64,
     extract_context_window,
     is_context_length_error,
@@ -223,3 +225,50 @@ class TestExtractContextWindow:
     def test_no_number_returns_none(self):
         assert extract_context_window("prompt is too long") is None
         assert extract_context_window("") is None
+
+
+class TestScrubSurrogates:
+    """#270: lone surrogates must not survive into a serialized payload."""
+
+    #: A lone low surrogate, exactly what ``bytes.decode(errors=
+    #: "surrogateescape")`` yields for an invalid UTF-8 byte.
+    BAD = "before-\udc8f-after"
+
+    @staticmethod
+    def _encodable(text: str) -> bytes:
+        return json.dumps(text, ensure_ascii=False).encode("utf-8")
+
+    def test_plain_string_is_untouched(self):
+        assert scrub_surrogates("hello world") == "hello world"
+
+    def test_string_with_surrogate_becomes_encodable(self):
+        cleaned = scrub_surrogates(self.BAD)
+        assert "\udc8f" not in cleaned
+        assert cleaned.startswith("before-") and cleaned.endswith("-after")
+        # Would have raised UnicodeEncodeError before the fix.
+        self._encodable(cleaned)
+
+    def test_nested_structures_are_scrubbed(self):
+        payload = {
+            "messages": [
+                {"role": "tool", "content": self.BAD},
+                {"role": "user", "content": ["ok", {"deep": self.BAD}]},
+            ],
+            "n": 3,
+            "flag": True,
+            "missing": None,
+        }
+        cleaned = scrub_surrogates(payload)
+        # The whole thing must now serialize to UTF-8 bytes.
+        json.dumps(cleaned, ensure_ascii=False).encode("utf-8")
+        assert "\udc8f" not in json.dumps(cleaned)
+        # Non-string scalars pass through unchanged.
+        assert cleaned["n"] == 3 and cleaned["flag"] is True
+        assert cleaned["missing"] is None
+
+    def test_tuple_becomes_list(self):
+        assert scrub_surrogates(("a", self.BAD)) == ["a", scrub_surrogates(self.BAD)]
+
+    def test_valid_text_identity_fast_path(self):
+        text = "emoji ok: \U0001f600 accents: ñá"
+        assert scrub_surrogates(text) == text
