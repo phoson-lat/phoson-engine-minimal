@@ -74,10 +74,69 @@ def _read_output_tail(log_path: str, max_chars: int) -> str:
     return data.decode(errors="replace")
 
 
+def _pid_alive(pid: int) -> bool:
+    """True when process ``pid`` is still running (best effort, cross-OS).
+
+    The two platforms need very different primitives:
+
+    - POSIX: ``os.kill(pid, 0)`` probes the process without delivering a
+      signal. ``ProcessLookupError`` means it is gone; ``PermissionError``
+      means it exists but belongs to another user.
+    - Windows: ``os.kill(pid, 0)`` is **not** a probe — any signal other
+      than ``CTRL_C_EVENT``/``CTRL_BREAK_EVENT`` is passed to
+      ``TerminateProcess`` and would *kill* the process. Query the kernel
+      through ``OpenProcess`` + ``GetExitCodeProcess`` instead.
+    """
+    if not pid:
+        return False
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but belongs to another user: it is alive.
+        return True
+    except OSError:
+        return False
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows liveness probe via the Win32 API (no ``os.kill`` side effect)."""
+    import ctypes
+
+    # PROCESS_QUERY_LIMITED_INFORMATION (Vista+) is enough to read the exit
+    # code and works for processes owned by other users too, unlike the
+    # heavier PROCESS_QUERY_INFORMATION.
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+    if not handle:
+        return False
+    try:
+        exit_code = ctypes.c_ulong()
+        if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return exit_code.value == still_active
+        return False
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _process_group_alive(pgid: int | None) -> bool:
-    """True when the process group ``pgid`` still has at least one member."""
+    """True when the process group ``pgid`` still has at least one member.
+
+    POSIX has real process groups (``os.killpg``); Windows does not, so the
+    job's ``pgid`` is its child pid there (see ``_run_bg_job``) and we probe
+    that pid instead. ``os.killpg`` is POSIX-only — calling it blindly raised
+    ``AttributeError`` and killed ``ensure_started`` at startup (#269).
+    """
     if not pgid:
         return False
+    if os.name == "nt" or not hasattr(os, "killpg"):
+        return _pid_alive(pgid)
     try:
         os.killpg(pgid, 0)
         return True
@@ -493,10 +552,17 @@ class BgJobsPlugin(Plugin):
         except OSError as exc:
             return f"Error: failed to start process: {exc}"
 
-        try:
-            pgid = os.getpgid(proc.pid) if new_session else proc.pid
-        except (ProcessLookupError, OSError):
-            pgid = proc.pid
+        # ``os.getpgid`` is POSIX-only. On Windows the child is not its own
+        # session leader, so the pid *is* the group handle we track (and
+        # ``_pid_alive`` probes it). The ``hasattr`` guard keeps the code
+        # robust on any platform where the symbol is missing — an unguarded
+        # call raised ``AttributeError`` and killed ``run_bg_job`` (#269).
+        pgid = proc.pid
+        if new_session and hasattr(os, "getpgid"):
+            try:
+                pgid = os.getpgid(proc.pid)
+            except (ProcessLookupError, OSError, AttributeError):
+                pgid = proc.pid
 
         job = JobDef(
             job_id=job_id,
@@ -709,7 +775,7 @@ class BgJobsPlugin(Plugin):
 
     def _kill_process_sync(self, job: JobDef, proc: asyncio.subprocess.Process) -> None:
         try:
-            if job.pgid and os.name != "nt":
+            if job.pgid and os.name != "nt" and hasattr(os, "killpg"):
                 os.killpg(job.pgid, signal.SIGKILL)
             else:
                 proc.kill()
