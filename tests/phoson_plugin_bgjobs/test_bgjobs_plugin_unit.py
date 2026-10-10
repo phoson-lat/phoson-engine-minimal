@@ -221,9 +221,11 @@ class TestCrossPlatformLiveness:
         assert _pid_alive(999_999_999) is False
 
     def test_process_group_alive_for_current_process(self) -> None:
-        # The job's pgid equals its pid on Windows and is in the same group
-        # as this process on POSIX — both resolve to "alive".
-        assert _process_group_alive(os.getpid()) is True
+        # On Windows the job's pgid equals its pid; on POSIX use this
+        # process's *real* process group id. The test process is usually not
+        # its own group leader, so ``os.getpid()`` is not a valid pgid there.
+        pgid = os.getpid() if os.name == "nt" else os.getpgrp()
+        assert _process_group_alive(pgid) is True
 
     def test_non_posix_branch_probes_pid_not_killpg(self, monkeypatch) -> None:
         # Force the non-POSIX branch and stub the Win32 probe so the test
