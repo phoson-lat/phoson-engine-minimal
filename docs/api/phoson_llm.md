@@ -198,6 +198,21 @@ omitted (the model can run `date` when it needs the exact wall clock).
 - **OpenAI** (`OpenAIChat`): automatic caching is provider-side; the shared
   loop parses `prompt_tokens_details` into `cache_read` / `cache_write` and
   `calculate_cost` prices them when the model entry has cache rates.
+- **Alibaba Cloud** (`AlibabaChat`): Model Studio's *explicit* cache, applied
+  automatically for the models that document it (Qwen Max / Plus / Flash /
+  Coder / VL, plus some DeepSeek/Kimi/GLM ids — see `supports_explicit_cache`);
+  unsupported models such as `qwen-turbo` stay on the implicit path. The shared
+  OpenAI-compatible loop tags the stable prefix (the system prompt — Model
+  Studio counts the tool definitions as part of it for caching) and the last
+  message with `cache_control: {"type": "ephemeral"}` content parts, so the
+  cached prefix advances each turn. This is mutually exclusive with Model
+  Studio's implicit cache; a request with markers is billed at the explicit
+  rates (write ≈ 1.25x input, read ≈ 0.10x input — the `qwen3.8-*` family is the
+  exception, with a lower per-model hit rate). Usage reports
+  `prompt_tokens_details.cache_creation_input_tokens` (write) and
+  `cached_tokens` (read), priced via the `alibaba/*` price-table entries. The
+  explicit cache only takes effect once a cached block reaches 1024 tokens, so
+  short prompts stay on the implicit path.
 
 ### Metrics
 

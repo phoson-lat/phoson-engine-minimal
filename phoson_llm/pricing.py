@@ -67,18 +67,46 @@ PRICES: dict[str, PriceEntry] = {
     # International (Singapore) pay-as-you-go list prices; the adapter's default
     # base URL is the international endpoint. Tiered models use the first tier
     # (0–32K/256K context). Verified Oct 2026.
-    "alibaba/qwen3.8-max": PriceEntry(input=2.00, output=6.00),
-    "alibaba/qwen3.7-max": PriceEntry(input=2.50, output=7.50),
-    "alibaba/qwen3-max": PriceEntry(input=1.20, output=6.00),
-    "alibaba/qwen-max": PriceEntry(input=1.60, output=6.40),
-    "alibaba/qwen3.7-plus": PriceEntry(input=0.40, output=1.60),
-    "alibaba/qwen3.5-plus": PriceEntry(input=0.40, output=2.40),
-    "alibaba/qwen-plus": PriceEntry(input=0.40, output=1.20),
-    "alibaba/qwen3.8-flash": PriceEntry(input=0.15, output=0.47),
-    "alibaba/qwen3.7-flash": PriceEntry(input=0.030, output=0.130),
-    "alibaba/qwen-flash": PriceEntry(input=0.05, output=0.40),
-    "alibaba/qwen-turbo": PriceEntry(input=0.05, output=0.20),
-    "alibaba/qwq-plus": PriceEntry(input=0.80, output=2.40),
+    # Explicit cache: creation = 1.25x input, read = 0.10x input (context cache).
+    # Exception: qwen3.8-max / qwen3.8-flash (and qwen3.8-2.4t-a95b) do NOT bill
+    # the hit at 10%; their true explicit-cache rates from the model pages
+    # (Singapore / international) are used below.
+    "alibaba/qwen3.8-max": PriceEntry(
+        input=2.00, output=6.00, cache_write=2.50, cache_read=0.17
+    ),
+    "alibaba/qwen3.7-max": PriceEntry(
+        input=2.50, output=7.50, cache_write=3.125, cache_read=0.25
+    ),
+    "alibaba/qwen3-max": PriceEntry(
+        input=1.20, output=6.00, cache_write=1.50, cache_read=0.12
+    ),
+    "alibaba/qwen-max": PriceEntry(
+        input=1.60, output=6.40, cache_write=2.00, cache_read=0.16
+    ),
+    "alibaba/qwen3.7-plus": PriceEntry(
+        input=0.40, output=1.60, cache_write=0.50, cache_read=0.04
+    ),
+    "alibaba/qwen3.5-plus": PriceEntry(
+        input=0.40, output=2.40, cache_write=0.50, cache_read=0.04
+    ),
+    "alibaba/qwen-plus": PriceEntry(
+        input=0.40, output=1.20, cache_write=0.50, cache_read=0.04
+    ),
+    "alibaba/qwen3.8-flash": PriceEntry(
+        input=0.15, output=0.47, cache_write=0.20, cache_read=0.016
+    ),
+    "alibaba/qwen3.7-flash": PriceEntry(
+        input=0.030, output=0.130, cache_write=0.0375, cache_read=0.003
+    ),
+    "alibaba/qwen-flash": PriceEntry(
+        input=0.05, output=0.40, cache_write=0.0625, cache_read=0.005
+    ),
+    "alibaba/qwen-turbo": PriceEntry(
+        input=0.05, output=0.20, cache_write=0.0625, cache_read=0.005
+    ),
+    "alibaba/qwq-plus": PriceEntry(
+        input=0.80, output=2.40, cache_write=1.00, cache_read=0.08
+    ),
     # ── Groq ──────────────────────────────────────────────────────────────────
     "groq/llama-3.3-70b": PriceEntry(input=0.59, output=0.79),
     # ── Together AI ───────────────────────────────────────────────────────────

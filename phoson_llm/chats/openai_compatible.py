@@ -26,6 +26,11 @@ class OpenAICompatibleChat(BaseLLMChat):
         cost_calculator: Optional cost callback. ``None`` = unknown cost.
         extra_kwargs: Extra kwargs for ``chat.completions.create``.
         provider_name: Human-readable name for ``repr()``.
+        prompt_caching: Opt-in explicit prompt caching. When True the shared
+            loop marks the stable prefix (system + tool definitions) and the
+            last message with ``cache_control`` content parts. Only enable it
+            for endpoints that document the field (Alibaba Model Studio);
+            other OpenAI-compatible backends may reject it.
     """
 
     def __init__(
@@ -39,12 +44,14 @@ class OpenAICompatibleChat(BaseLLMChat):
         cost_calculator: "CostCalculator | None" = None,
         extra_kwargs: dict[str, Any] | None = None,
         provider_name: str | None = None,
+        prompt_caching: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._max_tokens_key = max_tokens_key
         self._cost_calculator = cost_calculator
         self._extra_kwargs = extra_kwargs
         self._provider_name = provider_name or "OpenAICompatible"
+        self._prompt_caching = prompt_caching
 
         resolved_key = api_key or os.environ.get(api_key_env) or ""
         self._client = AsyncOpenAI(
@@ -55,6 +62,16 @@ class OpenAICompatibleChat(BaseLLMChat):
 
     def __repr__(self) -> str:
         return f"{self._provider_name}Chat(base_url={self._base_url!r})"
+
+    def _cache_enabled(self, model: str) -> bool:  # noqa: ARG002
+        """Whether explicit prompt-cache markers apply to this request.
+
+        Defaults to the static ``prompt_caching`` flag passed to the
+        constructor. Adapters whose cache support depends on the model
+        (Alibaba Model Studio, where only some Qwen models document the
+        ``cache_control`` field) override this to gate per request.
+        """
+        return self._prompt_caching
 
     async def stream(
         self,
@@ -69,6 +86,7 @@ class OpenAICompatibleChat(BaseLLMChat):
             "tools": tools,
             "max_tokens_key": self._max_tokens_key,
             "extra_kwargs": self._extra_kwargs,
+            "cache": self._cache_enabled(config.model),
         }
         if self._cost_calculator is not None:
             kwargs["cost_calculator"] = self._cost_calculator

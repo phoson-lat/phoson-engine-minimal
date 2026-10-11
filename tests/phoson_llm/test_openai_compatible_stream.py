@@ -354,14 +354,20 @@ async def test_cost_calculator_is_invoked_with_token_counts() -> None:
         )
     )
 
+    # The cost calculator receives the *net* (uncached) input so cached tokens
+    # are not billed twice: OpenAI-compatible usage folds the cache part into
+    # ``prompt_tokens``, and ``calculate_cost`` prices ``input_tokens`` at the
+    # full rate on top of the cache rates.
     assert seen == {
         "model": "gpt-4o-mini",
-        "input": 11,
+        "input": 8,  # 11 gross prompt_tokens - 3 cached
         "output": 22,
         "cache_read": 3,
         "cache_write": 0,
     }
     usage = next(e for e in events if isinstance(e, UsageEvent))
+    # ``usage.input`` keeps the gross count for display/metrics.
+    assert usage.usage.input == 11
     assert usage.cost_usd == 0.123
     assert usage.cost_known is True
     assert usage.usage.cache_read == 3
