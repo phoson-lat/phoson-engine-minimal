@@ -1133,6 +1133,13 @@ class SessionController:
         "[PEER MESSAGES]",
     )
 
+    #: Banner que la compactación inyecta como mensaje `user` (ver
+    #: ``_compact_history`` / ``summarizer``). No es texto del usuario: se
+    #: **omite** (a diferencia de los wake prefixes, que cortan la búsqueda)
+    #: porque en un historial compactado los turnos reales vienen detrás, y sin
+    #: esto la sesión acababa titulada como "[Conversation summary …]".
+    _TITLE_MARKER_PREFIXES = ("[Conversation summary",)
+
     def note_user_title(self) -> None:
         """Mark the session title as user-set (``/title``).
 
@@ -1149,6 +1156,10 @@ class SessionController:
         turns, which make poor titles — and returns ``None`` at the first
         such message so a command-only or wake-only session stays untitled
         rather than getting named after a system banner.
+
+        Compaction markers (see ``_TITLE_MARKER_PREFIXES``) are *skipped*
+        instead of aborting: a rebuilt history starts with the summary banner,
+        and the real turns it kept come right after it.
         """
         for node in self.tree.nodes.values():
             msg = node.message
@@ -1164,10 +1175,11 @@ class SessionController:
             ).strip()
             if not text:
                 continue
-            if text.startswith("/") or text.lstrip().startswith(
-                self._WAKE_TITLE_PREFIXES
-            ):
+            stripped = text.lstrip()
+            if text.startswith("/") or stripped.startswith(self._WAKE_TITLE_PREFIXES):
                 return None
+            if stripped.startswith(self._TITLE_MARKER_PREFIXES):
+                continue
             return text
         return None
 
@@ -1179,11 +1191,20 @@ class SessionController:
         optional LLM title (see :meth:`_schedule_llm_title`) is generated in
         the background. Only fires when the session has no title yet; the
         user's explicit ``/title`` always wins.
+
+        A stored title that is itself a compaction banner (sessions saved
+        before the marker filter existed) is repaired: it is replaced by the
+        first real user turn, or cleared when the history holds none.
         """
-        if self.tree.title:
+        current = (self.tree.title or "").strip()
+        if current and not current.lstrip().startswith(self._TITLE_MARKER_PREFIXES):
             return
         text = self._first_user_text()
         if not text:
+            if current:
+                # Nada de donde titular (historial reducido al banner): mejor
+                # sin título — la UI cae a su propio fallback — que con basura.
+                self.tree.title = None
             return
         first_line = text.splitlines()[0].strip()
         title = first_line[:57] + "…" if len(first_line) > 60 else first_line
