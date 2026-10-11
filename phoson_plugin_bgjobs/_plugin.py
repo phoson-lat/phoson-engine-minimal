@@ -20,15 +20,15 @@ Design (issue #217), mirroring ``phoson_plugin_monitor``:
   (``ensure_started``/``drain_pending_wakes``/``pending_wakes``).
 
 Security note: launching a job is a tool call the model makes, so it passes
-the host's permission gate with the exact command visible. Because the job is
-detached (``start_new_session``) it keeps running after the run ends; treat
-``run_bg_job`` as approved shell access until ``stop_bg_job``.
+the host's permission gate with the exact command visible. The job outlives
+the run that started it — on POSIX it owns a session (``session_kwargs``),
+on Windows nothing detaches it and it survives only because nothing kills it
+— so treat ``run_bg_job`` as approved shell access until ``stop_bg_job``.
 """
 
 import os
 import re
 import time
-import signal
 import asyncio
 import logging
 import contextlib
@@ -44,6 +44,12 @@ from phoson_agent import (
     CliCommandContext,
     CliCommandInvocation,
     tool,
+)
+from phoson_agent.procutil import (
+    session_kwargs,
+    process_group_of,
+    kill_process_group,
+    process_group_alive,
 )
 
 from .storage import JobDef, JobStore, WakeEvent, WakeQueue
@@ -74,79 +80,10 @@ def _read_output_tail(log_path: str, max_chars: int) -> str:
     return data.decode(errors="replace")
 
 
-def _pid_alive(pid: int) -> bool:
-    """True when process ``pid`` is still running (best effort, cross-OS).
-
-    The two platforms need very different primitives:
-
-    - POSIX: ``os.kill(pid, 0)`` probes the process without delivering a
-      signal. ``ProcessLookupError`` means it is gone; ``PermissionError``
-      means it exists but belongs to another user.
-    - Windows: ``os.kill(pid, 0)`` is **not** a probe — any signal other
-      than ``CTRL_C_EVENT``/``CTRL_BREAK_EVENT`` is passed to
-      ``TerminateProcess`` and would *kill* the process. Query the kernel
-      through ``OpenProcess`` + ``GetExitCodeProcess`` instead.
-    """
-    if not pid:
-        return False
-    if os.name == "nt":
-        return _pid_alive_windows(pid)
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # The process exists but belongs to another user: it is alive.
-        return True
-    except OSError:
-        return False
-
-
-def _pid_alive_windows(pid: int) -> bool:
-    """Windows liveness probe via the Win32 API (no ``os.kill`` side effect)."""
-    import ctypes
-
-    # PROCESS_QUERY_LIMITED_INFORMATION (Vista+) is enough to read the exit
-    # code and works for processes owned by other users too, unlike the
-    # heavier PROCESS_QUERY_INFORMATION.
-    process_query_limited_information = 0x1000
-    still_active = 259
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-    handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
-    if not handle:
-        return False
-    try:
-        exit_code = ctypes.c_ulong()
-        if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return exit_code.value == still_active
-        return False
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _process_group_alive(pgid: int | None) -> bool:
-    """True when the process group ``pgid`` still has at least one member.
-
-    POSIX has real process groups (``os.killpg``); Windows does not, so the
-    job's ``pgid`` is its child pid there (see ``_run_bg_job``) and we probe
-    that pid instead. ``os.killpg`` is POSIX-only — calling it blindly raised
-    ``AttributeError`` and killed ``ensure_started`` at startup (#269).
-    """
-    if not pgid:
-        return False
-    if os.name == "nt" or not hasattr(os, "killpg"):
-        return _pid_alive(pgid)
-    try:
-        os.killpg(pgid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # The group exists but belongs to another user: it is alive.
-        return True
-    except OSError:
-        return False
+# Liveness probes, process groups and tree termination live in
+# ``phoson_agent.procutil``: they are the two places where POSIX and Windows
+# need genuinely different primitives (``os.kill(pid, 0)`` is a probe on one
+# and a kill on the other), so the plugin does not carry its own copy.
 
 
 def render_wake_message(events: list[WakeEvent]) -> str:
@@ -267,9 +204,12 @@ class BgJobsPlugin(Plugin):
     async def aclose(self) -> None:
         """Cancel reaper/poller tasks without persisting a state change.
 
-        Running jobs are **not** killed: they are detached by design and
-        survive the host. On the next start, ``ensure_started()`` reconciles
-        them (alive -> ``orphaned`` poller, dead -> ``orphaned``).
+        Running jobs are **not** killed: outliving the host is the point of
+        the plugin, so they must not be tied to this process's lifetime — on
+        POSIX they were started in their own session (``session_kwargs``) and
+        on Windows nothing links their lifetime to ours. On the next start,
+        ``ensure_started()`` reconciles them (alive -> ``orphaned`` poller,
+        dead -> ``orphaned``).
         """
         tasks = [t for t in self._tasks.values() if not t.done()]
         for task in tasks:
@@ -317,7 +257,7 @@ class BgJobsPlugin(Plugin):
                 continue
             if task is not None:
                 self._tasks.pop(job.job_id, None)
-            if _process_group_alive(job.pgid):
+            if process_group_alive(job.pgid):
                 self._spawn_task(job.job_id, self._poll_orphan(job))
             else:
                 await self._mark_orphaned(job, alive=False)
@@ -434,8 +374,10 @@ class BgJobsPlugin(Plugin):
         ) -> str:
             """Start a shell command as a background job and return immediately.
 
-            The job runs detached (its own process group) and keeps running
-            after this run ends. When it finishes, a wake with its exit code,
+            The job outlives this run (its own session on POSIX; on Windows
+            nothing ties it to this process, since there are no process
+            groups) and keeps running after this run ends. When it finishes,
+            a wake with its exit code,
             an output tail and the duration is delivered to this session, so
             you can act on the result without polling.
 
@@ -460,7 +402,7 @@ class BgJobsPlugin(Plugin):
 
         @tool
         async def stop_bg_job(job_id: str) -> str:
-            """Stop a running background job (kills its whole process group).
+            """Stop a running background job (kills its whole process tree).
 
             The completion wake is still delivered, with state ``stopped``.
             """
@@ -541,9 +483,8 @@ class BgJobsPlugin(Plugin):
             "stderr": asyncio.subprocess.STDOUT,
             "cwd": resolved_cwd,
             "env": child_env,
+            **session_kwargs(new_session=new_session),
         }
-        if new_session:
-            spawn_kw["start_new_session"] = True
 
         try:
             with open(log_path, "wb") as log_fh:
@@ -552,17 +493,15 @@ class BgJobsPlugin(Plugin):
         except OSError as exc:
             return f"Error: failed to start process: {exc}"
 
-        # ``os.getpgid`` is POSIX-only. On Windows the child is not its own
-        # session leader, so the pid *is* the group handle we track (and
-        # ``_pid_alive`` probes it). The ``hasattr`` guard keeps the code
-        # robust on any platform where the symbol is missing — an unguarded
-        # call raised ``AttributeError`` and killed ``run_bg_job`` (#269).
-        pgid = proc.pid
-        if new_session and hasattr(os, "getpgid"):
-            try:
-                pgid = os.getpgid(proc.pid)
-            except (ProcessLookupError, OSError, AttributeError):
-                pgid = proc.pid
+        # The handle we track is the child's process group where the platform
+        # has one and the child was actually detached into it. Windows has no
+        # process groups, so the pid is the handle there (``taskkill /T`` takes
+        # the tree). An *undetached* child is never the group's owner either:
+        # its group is the caller's own, and signalling that would reach the
+        # host (the test runner included) — so no group is recorded.
+        pgid = process_group_of(proc.pid) if new_session else None
+        if pgid is None and os.name == "nt":
+            pgid = proc.pid
 
         job = JobDef(
             job_id=job_id,
@@ -586,7 +525,7 @@ class BgJobsPlugin(Plugin):
         self._spawn_task(job_id, self._reap(job_id, proc))
         return (
             f"Background job {job_id} started (name={job_name!r}, pid={proc.pid}). "
-            f"It runs detached; you will be woken with its exit code and output "
+            f"It outlives this turn; you will be woken with its exit code and output "
             f"when it finishes. Inspect it with list_bg_jobs, stop it with "
             f"stop_bg_job({job_id!r})."
         )
@@ -629,7 +568,7 @@ class BgJobsPlugin(Plugin):
         if task is not None:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        return f"Job {job_id!r} stopped (process group killed)."
+        return f"Job {job_id!r} stopped (process tree killed)."
 
     async def _wait_bg_jobs(self, job_ids: list | None, timeout_seconds: int) -> str:
         self.initialize()
@@ -707,7 +646,7 @@ class BgJobsPlugin(Plugin):
 
     async def _poll_orphan(self, job: JobDef) -> None:
         """Poll a job inherited from a previous process until it is gone."""
-        while _process_group_alive(job.pgid):
+        while process_group_alive(job.pgid):
             await asyncio.sleep(2.0)
         await self._mark_orphaned(job, alive=False)
 
@@ -774,14 +713,20 @@ class BgJobsPlugin(Plugin):
             self._kill_process_sync(job, proc)
 
     def _kill_process_sync(self, job: JobDef, proc: asyncio.subprocess.Process) -> None:
-        try:
-            if job.pgid and os.name != "nt" and hasattr(os, "killpg"):
-                os.killpg(job.pgid, signal.SIGKILL)
-            else:
-                proc.kill()
-        except (ProcessLookupError, PermissionError, OSError):
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
+        """Kill the job's whole tree, then reap the direct child as a fallback.
+
+        The group kill is what stops the grandchildren a shell child would
+        otherwise leave behind; on Windows it becomes ``taskkill /T /F`` (the
+        "group" tracked there is the child pid), because ``proc.kill()`` on
+        its own only terminates the immediate child. A job with no recorded
+        group (an entry written before the plugin kept one) is killed through
+        its direct child only: resolving a group from an arbitrary pid could
+        land on *our* group.
+        """
+        if job.pgid:
+            kill_process_group(job.pgid)
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
 
     async def _kill_process(
         self, job_id: str, proc: asyncio.subprocess.Process

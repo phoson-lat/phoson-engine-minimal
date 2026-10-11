@@ -171,6 +171,36 @@ def test_ensure_session_title_never_overwrites_existing(tmp_path) -> None:
     assert controller._title_is_auto is False
 
 
+def test_ensure_session_title_skips_compaction_banner(tmp_path) -> None:
+    """Un historial compactado empieza con el banner de resumen: el turno real
+    que viene detrás es el que debe titular la sesión."""
+    controller, _sink = _make_controller(tmp_path)
+    _add_user(controller, "[Conversation summary up to this point: we discussed X]")
+    _add_user(controller, "Now add the retry logic")
+    controller._ensure_session_title()
+    assert controller.tree.title == "Now add the retry logic"
+    assert controller._title_is_auto is True
+
+
+def test_ensure_session_title_repairs_banner_title(tmp_path) -> None:
+    """Sesiones guardadas antes del filtro (título == banner) se re-titulan."""
+    controller, _sink = _make_controller(tmp_path)
+    controller.tree.title = "[Conversation summary up to this point: old stuff]"
+    _add_user(controller, "Investigate the flaky test")
+    controller._ensure_session_title()
+    assert controller.tree.title == "Investigate the flaky test"
+
+
+def test_ensure_session_title_clears_banner_title_without_user_text(tmp_path) -> None:
+    """Si el historial solo conserva banners no hay de dónde titular: sin título
+    (la UI usa su propio fallback) antes que mostrar el banner."""
+    controller, _sink = _make_controller(tmp_path)
+    controller.tree.title = "[Conversation summary]: everything was summarized"
+    _add_user(controller, "[Conversation summary up to this point: newer]")
+    controller._ensure_session_title()
+    assert controller.tree.title is None
+
+
 # ── LLM generation ───────────────────────────────────────────────────────────
 
 

@@ -113,20 +113,26 @@ def _kill_quietly(proc: "subprocess.Popen[str]") -> None:
     our pipes still open* — and any later ``communicate()`` would then block
     forever waiting for a pipe EOF that never comes. We therefore ask the OS
     for the whole tree and drop our end of the pipes regardless.
+
+    Nothing here waits on a stream the killed child owns: the tree kill runs with
+    ``DEVNULL`` on all three descriptors (inside ``kill_process_tree``), so it
+    cannot reproduce the very hang it exists to prevent.
     """
-    import subprocess
+    from phoson_agent.procutil import kill_process_tree
 
     if sys.platform == "win32":
         try:
-            # DEVNULL everywhere → this call has no pipes to block on, so it
-            # cannot reproduce the very hang it is here to prevent.
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
+            # ``taskkill`` names its target by number, so it must not be aimed
+            # at a pid that is already gone: the number is then free to have
+            # been recycled onto an unrelated process — and ``/T /F`` takes its
+            # whole tree with it, or bugchecks the box if it is a critical
+            # system image. ``kill_process_tree`` applies exactly those gates
+            # (live, and not a critical image) before it runs the same command.
+            #
+            # Not the POSIX branch of ``kill_process_tree``: ``git`` here is not
+            # a session leader, so signalling "its" group would signal ours.
+            if proc.poll() is None:
+                kill_process_tree(proc.pid)
         except Exception:  # noqa: BLE001 — best effort, never fatal
             pass
     try:

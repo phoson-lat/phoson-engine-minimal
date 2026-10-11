@@ -12,12 +12,11 @@ through engine context injection (``bash_confirmation``):
   is refused with an actionable message instead of hanging or running.
 """
 
-import os
-import signal
 import asyncio
 from typing import Annotated
 
 from phoson_agent.tool import tool
+from phoson_agent.procutil import session_kwargs, kill_process_tree
 
 from ._timeouts import sanitize_timeout
 from ..ui_protocols import ConfirmationService
@@ -80,14 +79,27 @@ async def _terminate_process_group(
     proc: asyncio.subprocess.Process,
     stream_tasks: tuple[asyncio.Task, asyncio.Task],
 ) -> None:
-    """Kill the isolated process group, reap the shell, and clean pipe readers."""
+    """Kill the isolated process group, reap the shell, and clean pipe readers.
+
+    ``kill_process_tree`` picks the platform primitive (``SIGKILL`` to the
+    group on POSIX, ``taskkill /T /F`` on Windows) and never raises; the
+    direct-child ``proc.kill()`` afterwards is the belt-and-braces for the
+    case where the tree kill could not run at all.
+
+    The tree kill is skipped once the child has been reaped
+    (``proc.returncode is not None``): ``kill_process_tree`` kills *by pid*,
+    and a pid whose process is gone may already have been recycled onto an
+    unrelated one — on Windows that is the ``taskkill /T /F`` bluescreen path.
+    Nothing is lost on POSIX, where ``os.getpgid`` on a dead pid raises anyway,
+    and ``proc.kill()`` below keeps working because it goes through the open
+    process handle rather than the number.
+    """
+    if proc.returncode is None:
+        kill_process_tree(proc.pid)
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        proc.kill()
+    except ProcessLookupError:
+        pass
     try:
         await proc.wait()
     finally:
@@ -143,7 +155,7 @@ async def _run_bash(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            **session_kwargs(),
         )
     except OSError as exc:
         return f"Failed to spawn shell: {exc}"
