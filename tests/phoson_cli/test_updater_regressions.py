@@ -36,6 +36,7 @@ from phoson_cli.updater import (
     get_installed_version,
     check_for_startup_update,
 )
+from phoson_agent.procutil import pid_alive
 
 POSIX = os.name == "posix"
 
@@ -212,8 +213,7 @@ async def test_cancellation_kills_and_reaps_direct_child(monkeypatch) -> None:
 
     proc = captured["proc"]
     assert proc.returncode is not None  # reaped, no live child left behind
-    with pytest.raises(ProcessLookupError):
-        os.kill(proc.pid, 0)
+    assert pid_alive(proc.pid) is False
 
 
 @pytest.mark.skipif(not POSIX, reason="POSIX process-group cleanup only")
@@ -269,8 +269,7 @@ async def test_run_upgrade_command_timeout_kills_child(monkeypatch) -> None:
     assert "timed out" in output
     proc = captured["proc"]
     assert proc.returncode is not None
-    with pytest.raises(ProcessLookupError):
-        os.kill(proc.pid, 0)
+    assert pid_alive(proc.pid) is False
 
 
 # ── Fresh-interpreter verification ───────────────────────────────────────────

@@ -8,12 +8,15 @@ Verify that:
   user declines.
 """
 
+import os
 import sys
 import asyncio
 import importlib
 from pathlib import Path
 
 import pytest
+
+from phoson_agent.procutil import pid_alive
 
 # Note: ``phoson_cli.tools.bash`` is shadowed in the ``tools`` package by the
 # ``AgentTool`` of the same name (re-exported from ``__init__.py``). To reach
@@ -228,12 +231,28 @@ async def test_bash_huge_output_does_not_hang_and_is_capped() -> None:
     assert len(out.encode("utf-8", errors="replace")) <= max_len
 
 
+def _orphan_holding_pipes() -> str:
+    """A command whose *child* keeps the inherited pipes open for ~30s.
+
+    The point of the test is that killing the shell must also take down the
+    descendant that holds stdout, otherwise the cleanup never finishes and the
+    tool never reports the timeout. Spelled per platform because the shell
+    differs (``cmd.exe`` on Windows, ``/bin/sh`` elsewhere) and ``sh`` does not
+    exist on Windows: there the child is spawned with the interpreter itself.
+    """
+    if os.name == "nt":
+        return (
+            f'"{sys.executable}" -c "import subprocess, sys, time; '
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            'time.sleep(30)"'
+        )
+    return "sh -c 'sleep 30 & sleep 30'"
+
+
 @pytest.mark.asyncio
 async def test_bash_timeout_kills_process_group_with_orphaned_children() -> None:
     """Timeout kills the process group even if children keep pipes open."""
-    # Background subprocess that would hold stdout open for 30s
-    cmd = "sh -c 'sleep 30 & sleep 30'"
-    out = await _run_bash(cmd, timeout=0.3)
+    out = await _run_bash(_orphan_holding_pipes(), timeout=0.3)
     assert "timed out" in out.lower()
 
 
@@ -241,10 +260,13 @@ async def test_bash_timeout_kills_process_group_with_orphaned_children() -> None
 async def test_bash_cancellation_kills_and_reaps_process_group(tmp_path) -> None:
     """Cancelling the tool must not leave its harmless child sleeper alive."""
     child_pid_file = tmp_path / "child.pid"
+    # ``sys.executable`` is used *inside* the ``-c`` program rather than
+    # interpolated into it: writing the path as a literal produced
+    # ``'C:\Users\...'``, and Python read ``\U`` as a truncated unicode escape
+    # (a Windows-only ``SyntaxError``, so the command never started).
     command = (
-        f'{sys.executable} -c "import os, pathlib, subprocess; '
-        f"p = subprocess.Popen(['{sys.executable}', '-c', "
-        "'import time; time.sleep(30)']); "
+        f'"{sys.executable}" -c "import os, pathlib, subprocess, sys; '
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
         f"pathlib.Path(r'{child_pid_file}').write_text("
         "f'{os.getpid()} {p.pid}'); p.wait()\""
     )
@@ -260,12 +282,15 @@ async def test_bash_cancellation_kills_and_reaps_process_group(tmp_path) -> None
     with pytest.raises(asyncio.CancelledError):
         await task
 
+    # ``pid_alive`` is the cross-platform probe (Win32 ``OpenProcess`` on
+    # Windows, ``os.kill(pid, 0)`` on POSIX): a ``/proc``-based check would be
+    # vacuously true here on Windows and this assertion would prove nothing.
     for _ in range(100):
-        if not _process_is_running(parent_pid) and not _process_is_running(child_pid):
+        if not pid_alive(parent_pid) and not pid_alive(child_pid):
             break
         await asyncio.sleep(0.01)
-    assert not _process_is_running(parent_pid), "cancelled bash parent is still running"
-    assert not _process_is_running(child_pid), "cancelled bash child is still running"
+    assert not pid_alive(parent_pid), "cancelled bash parent is still running"
+    assert not pid_alive(child_pid), "cancelled bash child is still running"
 
 
 @pytest.mark.parametrize("method", ["exists", "read_text"])

@@ -58,7 +58,11 @@ class JobDef:
             can resume the same conversation tree. Empty when unbound.
         state: One of ``JOB_STATES``.
         pid: Child pid, when known.
-        pgid: Child process-group id (``start_new_session``), when known.
+        pgid: Id to kill the job's tree by, when known: the child's own process
+            group on POSIX (it is detached with ``start_new_session``), the
+            child pid on Windows, which has no process groups. ``None`` for a
+            job whose group could not be resolved — such a job is killed
+            through the direct child only.
         created_at: ISO-8601 UTC launch time.
         finished_at: ISO-8601 UTC completion time (or None).
         returncode: Exit code once reaped (or None while running).

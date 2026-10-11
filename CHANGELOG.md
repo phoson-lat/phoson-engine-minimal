@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fix
+
+- **cli**: session titles no longer inherit the compaction summary banner
+  (`[Conversation summary …]`); a rebuilt history is titled from the first real
+  user turn, and stored banner titles are repaired or cleared.
+- **agent**: process probing and termination is centralised in the new
+  `phoson_agent.procutil`, because the two operations look portable and are not.
+  Liveness is now probed with `OpenProcess` + `GetExitCodeProcess` on Windows
+  instead of `os.kill(pid, 0)`: that is a probe on POSIX but hands the value to
+  `TerminateProcess` on Windows, so probing a *recycled* pid could terminate an
+  unrelated process — a `CRITICAL_PROCESS_DIED` bluescreen when it names a
+  system image. Every kill that reaches a process *by number* (Windows
+  `taskkill /T /F`) now first refuses a pid that is not running or that is one
+  of those images. `os.killpg` / `os.getpgid` / `os.setsid` — POSIX-only, and
+  raising `AttributeError`, which `except OSError` does not catch (#269) — are
+  reached only through `pid_alive`, `process_group_of`, `process_group_alive`,
+  `kill_process_group` and `session_kwargs`, which degrade to the pid-based
+  primitives where there is no process-group concept.
+- **cli**, **bgjobs**: the shell tool and the background-jobs plugin use those
+  helpers instead of their own copies, so both kill through one audited path
+  (the group on POSIX, `taskkill /T /F` on Windows). The bgjobs plugin now
+  records the id it can actually kill by and leaves it unset when the child's
+  group could not be resolved, rather than keeping a pid that is not a group.
+
 ## v0.50.1 (2026-10-10)
 
 ### Fix

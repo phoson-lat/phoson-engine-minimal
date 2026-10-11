@@ -17,10 +17,12 @@ contract — no new engine lifecycle.
 
 ## Tools
 
-- `run_bg_job(command, name?, cwd?, env?, max_output_chars?)` — spawn a
-  detached job (`start_new_session=True`, own process group) and return
-  **immediately** with its id. The launch is a tool call, so it passes the
-  host's permission gate with the exact command visible.
+- `run_bg_job(command, name?, cwd?, env?, max_output_chars?)` — spawn a job in
+  its own session (`start_new_session=True`, own process group) and return
+  **immediately** with its id. Process groups are POSIX-only: on Windows
+  there is nothing to detach into and the job survives simply because nothing
+  kills it (see the security note below). The launch is a tool call, so it
+  passes the host's permission gate with the exact command visible.
 - `list_bg_jobs()` — state, elapsed time, exit code and pending wakes.
 - `stop_bg_job(job_id)` — `os.killpg()` over the whole process group (no
   zombies / stuck pipes). The completion wake is still delivered, with state
@@ -53,8 +55,8 @@ State lives under `data_dir` (default `~/.phoson/bgjobs/`):
 - `jobs/<job_id>/output.log` — the full combined stdout/stderr (only the tail
   is copied into the registry/wake).
 
-The **disk is the source of truth; in-memory tasks are a cache**. Jobs are
-detached by design, so they keep running if the host dies. On the next start,
+The **disk is the source of truth; in-memory tasks are a cache**. Outliving
+the host is by design, so jobs keep running if it dies. On the next start,
 `ensure_started()` reconciles every job still marked `running`:
 
 - alive process group (we are not its parent anymore) → polled until it exits,
@@ -102,8 +104,11 @@ same `ConversationTree` when woken.
 ## Security
 
 Launching a job is permission-gated (you approve the exact command once), but
-the job is **detached**: it keeps running after the run ends and its output is
-captured to disk. Treat `run_bg_job` as standing shell access until
+the job **outlives the run**: it keeps running after the run ends and its
+output is captured to disk. It is detached into its own session on POSIX
+(`start_new_session` + `killpg`); on Windows there are no process groups, so
+it survives because nothing terminates it and it is stopped by pid
+(`taskkill /T`). Treat `run_bg_job` as standing shell access until
 `stop_bg_job`. In non-interactive (one-shot) hosts the permission gate fails
 closed like any other tool call.
 

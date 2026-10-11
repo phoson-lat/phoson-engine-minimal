@@ -20,6 +20,14 @@ from .models import (
 )
 from .plugin import Plugin, PluginSpec, PluginLoader
 from .context import AgentContext
+from .procutil import (
+    pid_alive,
+    session_kwargs,
+    process_group_of,
+    kill_process_tree,
+    kill_process_group,
+    process_group_alive,
+)
 from .sessions import (
     SessionMeta,
     JsonlStorage,
@@ -142,4 +150,11 @@ __all__ = [
     "PermissionMiddleware",
     "PermissionPolicy",
     "ToolBlockedError",
+    # process utilities (cross-platform liveness / termination)
+    "pid_alive",
+    "kill_process_tree",
+    "session_kwargs",
+    "process_group_of",
+    "kill_process_group",
+    "process_group_alive",
 ]

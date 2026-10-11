@@ -4,7 +4,6 @@ Covers the three backends (Wayland, X11, macOS) and the text fallback
 added in IMPROVEMENTS.md D3.
 """
 
-import os
 import sys
 import signal
 import asyncio
@@ -12,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from phoson_agent.procutil import pid_alive
 from phoson_cli.fullscreen.clipboard import (
     _run_command,
     _text_command,
@@ -252,8 +252,9 @@ async def test_clipboard_cancellation_kills_and_reaps_child(tmp_path) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    # Not ``os.kill(pid, 0)``: on Windows that is ``TerminateProcess``, not a
+    # probe, and a recycled pid could name a critical system process.
+    assert pid_alive(pid) is False
 
 
 async def test_repeated_cancellation_waits_through_term_kill_and_reap(
@@ -414,8 +415,7 @@ time.sleep(30)
             assert proc.returncode == -signal.SIGKILL
         assert proc.stdout.at_eof()
         assert proc._transport.is_closing()
-        with pytest.raises(ProcessLookupError):
-            os.kill(proc.pid, 0)
+        assert pid_alive(proc.pid) is False
         assert not (asyncio.all_tasks() - before)
     finally:
         # Rescue even the unfixed implementation without leaving a child,
