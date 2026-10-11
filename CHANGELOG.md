@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Fix
+
+- **cli**: a turn is now persisted *while* it runs, not only when it ends, so a hard kill
+  (crash, `taskkill`, power loss) no longer takes the whole turn with it. The session used to
+  be written exclusively by its terminal paths (`_finalize_run` / `_append_partial_history` /
+  `_abort_turn`), and a killed process runs none of them: the user's prompt and every step the
+  model had already produced vanished. The controller now mirrors the engine's in-flight
+  history into the tree and saves — once before the first LLM call (the user turn plus an
+  `active` status, so the session is resumable and orphan-checkable, #129) and after every
+  `AgentToolStartEvent` / `AgentStepDoneEvent` (the engine has appended the assistant
+  `tool_use` and is about to dispatch a possibly long handler, so a kill mid-tool leaves a
+  resumable orphan instead of silently dropping the model's call). A monotonic sync counter
+  keeps the mirroring idempotent — the mid-turn checkpoints and the terminal paths never
+  duplicate a message, including on the cancel path — and a mid-run compaction is rebased onto
+  a fresh branch before its tail is appended. Cost: every checkpoint rewrites the session file
+  (`fsync` + `os.replace`, off the event loop), so a turn now pays one write per step.
+- **tests**: 7 regression tests in `tests/phoson_cli/test_hard_kill_durability.py` assert the
+  **on-disk JSONL** (through a fresh `JsonlStorage`, i.e. what a new process would see) rather
+  than the in-memory tree: the prompt is durable before the first LLM call, every finished step
+  lands as it completes, a kill mid-turn keeps the completed work, the killed session resumes
+  in a new controller with its orphaned `tool_use` repaired, and neither the success, error nor
+  cancel path stores a message twice.
+
 ## v0.51.0 (2026-10-11)
 
 ### Feat
