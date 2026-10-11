@@ -54,6 +54,12 @@ class CostCalculator(Protocol):
 
     Implementations may return ``(0.0, False)`` to signal that the cost is
     not knowable (e.g. OpenRouter, where the provider's price varies).
+
+    ``input_tokens`` is the **net** (uncached) input: the cached portion is
+    reported separately in ``cache_read_tokens`` / ``cache_write_tokens`` and
+    must not be included in ``input_tokens`` — otherwise it would be priced
+    twice (full input rate *plus* the cache rate). OpenAI-compatible usage
+    reports this net value as ``prompt_tokens`` minus the cache details.
     """
 
     def __call__(
@@ -94,6 +100,14 @@ class _MessageDict(TypedDict):
     tool_calls: NotRequired[list[dict]]
     tool_call_id: NotRequired[str]
     reasoning_content: NotRequired[str]
+
+
+#: Explicit prompt-cache marker (Alibaba Model Studio et al.). Placed on a
+#: text *content part* (array form), it asks the provider to cache everything
+#: from the start of the ``messages`` array up to that part. Only at most
+#: four markers are allowed per request; the cached block must be ≥1024 tokens
+#: and the entry lives 5 minutes, renewed on every hit.
+_EPHEMERAL_CACHE_CONTROL: JsonObject = {"type": "ephemeral"}
 
 
 # ─── Message / tool conversion ──────────────────────────────────────────────
@@ -420,6 +434,124 @@ class ToolCallAccumulator:
         return events
 
 
+def _cache_marked_text_content(text: str) -> list[dict]:
+    """Wrap a string as a single text part carrying the cache marker.
+
+    Markers are only understood on array-form content, so a message whose
+    content is a plain string has to be expanded to its block-list form.
+    """
+    return [{"type": "text", "text": text, "cache_control": _EPHEMERAL_CACHE_CONTROL}]
+
+
+def _apply_explicit_cache(messages: list[_MessageDict]) -> None:
+    """Tag the stable prefix and the newest message with cache markers.
+
+    Alibaba Model Studio's *explicit* cache is enabled per request by placing
+    ``"cache_control": {"type": "ephemeral"}`` on a message content part: the
+    provider then caches everything from the start of the array up to that
+    part. Two markers cover an agentic conversation:
+
+    - the **system** message — the prefix. Tool definitions travel with the
+      system prompt for caching purposes, so this single marker covers both
+      and no separate marker is needed on the ``tools`` array, and
+    - the **last** message, which advances each turn — the next request
+      re-reads the whole prior history from cache while creating a cache that
+      extends through the current turn (the multi-turn best practice).
+
+    A marker only takes effect when the cached block reaches 1024 tokens, so
+    short prompts simply stay uncached. At most four markers are allowed per
+    request; this uses two. The function mutates ``messages`` in place.
+    """
+    if not messages:
+        return
+
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                msg["content"] = _cache_marked_text_content(content)
+            break
+
+    last = messages[-1]
+    if last.get("role") == "system":
+        return  # The system message is the only content — already anchored.
+
+    content = last.get("content")
+    if isinstance(content, str):
+        # An assistant turn that only emitted ``tool_calls`` has "" content:
+        # nothing to anchor on, so it is left untouched.
+        if content:
+            last["content"] = _cache_marked_text_content(content)
+    elif isinstance(content, list):
+        for part in reversed(content):
+            if part.get("type") == "text":
+                part["cache_control"] = _EPHEMERAL_CACHE_CONTROL
+                break
+
+
+def _coalesce_tool_messages(messages: list[_MessageDict]) -> None:
+    """Fuse each run of consecutive ``tool`` messages into a single message.
+
+    Model Studio's backward cache lookup only examines the 20 content blocks
+    that precede a ``cache_control`` marker; anything further back is a cache
+    miss. A turn where the model issues parallel tool calls otherwise emits one
+    ``tool`` message per result, so a burst of calls can push the previous
+    turn's cache beyond that window. Model Studio's OpenAI-compatible endpoint
+    documents merging consecutive tool results into one ``tool`` message whose
+    ``content`` is a block list — the first block inherits the message's
+    ``tool_call_id``, later blocks carry their own — which keeps the block count
+    down and the cached prefix within reach.
+
+    This is an Alibaba extension (plain OpenAI rejects a ``tool_call_id`` inside
+    a content block and one message per call), so it is applied only on the
+    explicit-cache path. Runs of length one are left untouched, and every
+    ``tool_call_id`` is preserved. The function mutates ``messages`` in place.
+    """
+    merged: list[_MessageDict] = []
+    i, n = 0, len(messages)
+    while i < n:
+        msg = messages[i]
+        if msg.get("role") != "tool":
+            merged.append(msg)
+            i += 1
+            continue
+
+        run = [msg]
+        j = i + 1
+        while j < n and messages[j].get("role") == "tool":
+            run.append(messages[j])
+            j += 1
+
+        if len(run) > 1:
+            head: _MessageDict = {"role": "tool"}
+            if "tool_call_id" in run[0]:
+                head["tool_call_id"] = run[0]["tool_call_id"]
+            head["content"] = [
+                _tool_result_part(run[0], include_id=False),
+                *(_tool_result_part(m, include_id=True) for m in run[1:]),
+            ]
+            merged.append(head)
+        else:
+            merged.append(msg)
+        i = j
+
+    messages[:] = merged
+
+
+def _tool_result_part(msg: _MessageDict, *, include_id: bool) -> dict:
+    """Render a tool message's result as a text block for a merged message."""
+    content = msg.get("content")
+    if isinstance(content, list):
+        text = next((p.get("text", "") for p in content if p.get("type") == "text"), "")
+    else:
+        text = content or ""
+    tool_call_id = msg.get("tool_call_id")
+    part: dict = {"type": "text", "text": text}
+    if include_id and tool_call_id:
+        part["tool_call_id"] = tool_call_id
+    return part
+
+
 def _build_request_kwargs(
     *,
     config: ModelConfig,
@@ -427,11 +559,18 @@ def _build_request_kwargs(
     tools: list["ToolDefinition"] | None,
     max_tokens_key: str,
     extra_kwargs: dict[str, Any] | None = None,
+    cache: bool = False,
 ) -> dict[str, Any]:
     """Build the kwargs dict for ``chat.completions.create``.
 
     Encapsulates the differences between providers (``max_tokens`` vs.
     ``max_completion_tokens``) and the system-message normalization.
+
+    Args:
+        cache: When True, apply explicit prompt-cache markers to the stable
+            prefix (system + tool definitions) and the last message. Only
+            enabled for providers that document the ``cache_control``
+            content-part field (see :func:`_apply_explicit_cache`).
     """
     kwargs: dict[str, Any] = {
         "model": config.model,
@@ -449,6 +588,14 @@ def _build_request_kwargs(
             0,
             {"role": "system", "content": config.system},
         )
+
+    # Applied after the system-message normalization so the marker lands on
+    # whichever system message ends up at the front (config.system or the
+    # conversation's own). Consecutive tool results are fused first so the
+    # last-message marker stays within Model Studio's 20-block lookback window.
+    if cache:
+        _coalesce_tool_messages(kwargs["messages"])
+        _apply_explicit_cache(kwargs["messages"])
 
     if config.temperature is not None:
         kwargs["temperature"] = config.temperature
@@ -483,6 +630,7 @@ async def stream_chat_completions(
     max_tokens_key: str = "max_tokens",
     cost_calculator: CostCalculator = _no_cost,
     extra_kwargs: dict[str, Any] | None = None,
+    cache: bool = False,
 ) -> AsyncIterator[LLMEvent]:
     """Stream a response from an OpenAI-compatible Chat Completions endpoint.
 
@@ -507,6 +655,10 @@ async def stream_chat_completions(
             and a confidence flag. Defaults to "unknown cost".
         extra_kwargs: Provider-specific overrides forwarded to
             ``chat.completions.create``.
+        cache: When True, send explicit prompt-cache markers on the stable
+            prefix and the last message (providers that document the
+            ``cache_control`` content-part field — see
+            :func:`_apply_explicit_cache`).
 
     Yields:
         Phoson ``LLMEvent`` instances in the order documented by
@@ -518,6 +670,7 @@ async def stream_chat_completions(
         tools=tools,
         max_tokens_key=max_tokens_key,
         extra_kwargs=extra_kwargs,
+        cache=cache,
     )
 
     text_acc = ""
@@ -618,9 +771,16 @@ async def stream_chat_completions(
             # OpenAI reports the cached part of the prompt in
             # prompt_tokens_details.cached_tokens; OpenRouter (and some
             # upstreams) additionally report cache_write_tokens for the
-            # first request that establishes a cache entry.
+            # first request that establishes a cache entry. Alibaba Model
+            # Studio reports the explicit-cache write as
+            # prompt_tokens_details.cache_creation_input_tokens.
             cache_read=getattr(prompt_details, "cached_tokens", 0) or 0,
-            cache_write=getattr(prompt_details, "cache_write_tokens", 0) or 0,
+            cache_write=(
+                getattr(prompt_details, "cache_write_tokens", 0)
+                or getattr(prompt_details, "cache_creation_input_tokens", 0)
+                or getattr(final_usage, "cache_creation_input_tokens", 0)
+                or 0
+            ),
         )
         # A provider-reported cost (OpenRouter's ``usage.cost``) is the
         # authoritative number — it is what the provider actually
@@ -630,9 +790,19 @@ async def stream_chat_completions(
         if provider_cost is not None:
             cost_usd, cost_known = provider_cost, True
         else:
+            # OpenAI-compatible usage reports ``prompt_tokens`` as the *gross*
+            # input: the cached (``cached_tokens``) and explicit-cache-creation
+            # (``cache_creation_input_tokens``) tokens are already counted in
+            # it (Model Studio bills the remaining "other" tokens at the
+            # standard input price). ``calculate_cost`` prices ``input_tokens``
+            # at the full rate and *adds* the cache rates, so handing it the
+            # gross count would bill the cached tokens twice. Pass the net
+            # (uncached) input; ``usage.input`` keeps the gross count for
+            # display/metrics.
+            net_input = max(0, usage.input - usage.cache_read - usage.cache_write)
             cost_usd, cost_known = cost_calculator(
                 model=config.model,
-                input_tokens=usage.input,
+                input_tokens=net_input,
                 output_tokens=usage.output,
                 cache_read_tokens=usage.cache_read,
                 cache_write_tokens=usage.cache_write,

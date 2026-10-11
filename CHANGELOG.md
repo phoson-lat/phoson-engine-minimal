@@ -8,8 +8,33 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ## Unreleased
 
+### Feat
+
+- **llm**: explicit prompt caching for Alibaba Model Studio (Qwen). The shared
+  OpenAI-compatible loop tags the stable prefix (system prompt — tool
+  definitions ride along with it for caching) and the last message with
+  `cache_control: {"type": "ephemeral"}` content parts, so the cached prefix
+  advances each turn. Explicit cache is mutually exclusive with Model Studio's
+  implicit cache and takes effect once a cached block reaches 1024 tokens. It is
+  applied only for the models that document the marker (`supports_explicit_cache`
+  — Qwen Max / Plus / Flash / Coder / VL and some DeepSeek/Kimi/GLM ids);
+  unsupported models stay on the implicit path. Usage is read from
+  `cache_creation_input_tokens` (write) / `cached_tokens` (read) and priced via
+  the new `alibaba/*` cache rates (write ≈ 1.25x input, read ≈ 0.10x input).
+
 ### Fix
 
+- **llm**: OpenAI-compatible cost no longer double-counts cached tokens. The
+  provider reports `prompt_tokens` as a *gross* total that already includes the
+  cache-read and cache-write tokens, but `calculate_cost` priced the full count
+  as uncached input and added the cache rates on top. The net (uncached) input
+  is now handed to the cost callback; the gross count is still reported for
+  display.
+- **llm**: correct Alibaba `qwen3.8-max` / `qwen3.8-flash` explicit-cache
+  prices. These models do not bill cache hits at the usual 10% of input, so
+  their `cache_read` values were wrong (and `qwen3.8-flash`'s `cache_write`
+  too); they now use the true per-model rates from the Singapore / international
+  pricing pages.
 - **cli**: session titles no longer inherit the compaction summary banner
   (`[Conversation summary …]`); a rebuilt history is titled from the first real
   user turn, and stored banner titles are repaired or cleared.

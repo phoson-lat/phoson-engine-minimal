@@ -87,3 +87,29 @@ def test_calculate_cost_resolves_alibaba_dated_snapshot_alias() -> None:
 
     assert cost_known is True
     assert cost_usd == pytest.approx(2.00, abs=1e-9)
+
+
+def test_calculate_cost_alibaba_qwen38_explicit_cache_rates() -> None:
+    # The qwen3.8 family does NOT bill explicit-cache hits at the usual 10% of
+    # input; the adapter uses the true per-model rates (Singapore / intl).
+    cost_usd, cost_known = calculate_cost(
+        model="qwen3.8-max",
+        provider="alibaba",
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+        cache_write_tokens=1_000_000,
+    )
+    assert cost_known is True
+    assert cost_usd == pytest.approx(0.17 + 2.50, abs=1e-9)
+
+    cost_usd, cost_known = calculate_cost(
+        model="qwen3.8-flash",
+        provider="alibaba",
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+        cache_write_tokens=1_000_000,
+    )
+    assert cost_known is True
+    assert cost_usd == pytest.approx(0.016 + 0.20, abs=1e-9)
