@@ -860,10 +860,16 @@ async def test_new_session_resets_context_and_stamps_current_cwd(
 @pytest.mark.asyncio
 async def test_load_session_replays_tail_and_metrics(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
-    # Create and save a session with one turn.
-    controller.tree.append(parent_id=None, message=Message(role="user", content="hi"))
+    # Create and save a session with one turn. The assistant must hang off the
+    # user node: ``tree.append`` does not move ``current_node_id``, so reading it
+    # here left the assistant as a *second root* — two leaves for the "cursor on
+    # the newest leaf" assertion below to disambiguate by a random node id, which
+    # flaked ~50% on Windows (#277).
+    user_node = controller.tree.append(
+        parent_id=None, message=Message(role="user", content="hi")
+    )
     controller.tree.append(
-        parent_id=controller.current_node_id,
+        parent_id=user_node.id,
         message=Message(role="assistant", content="hello"),
     )
     await controller.storage.save(controller.tree)
@@ -1498,6 +1504,38 @@ def test_find_latest_node_id_prefers_newest_leaf(tmp_path) -> None:
         parent_id=n1.id, message=Message(role="assistant", content="a")
     )
     assert controller.find_latest_node_id() == n2.id
+
+
+def test_find_latest_node_id_breaks_created_at_tie_by_insertion_order(tmp_path) -> None:
+    """#277: a tied ``created_at`` must pick the last-inserted leaf.
+
+    Two *genuine* branches (both children of the root) created within one clock
+    tick — rewind-then-send, or a mid-turn checkpoint. Freezing the clock makes
+    the tie certain on every platform, and the ids are forced so that the
+    *older* leaf carries the lexicographically greatest id: the pre-fix
+    ``max(key=(created_at, id))`` therefore picks the wrong leaf deterministically
+    here, instead of only ~half the time as it did with random ids.
+    """
+    frozen = datetime.datetime(2026, 10, 11, 12, 0, 0, tzinfo=datetime.UTC)
+    ids = iter(["ffff0001", "ffff0003", "ffff0002"])  # root, older leaf, newest
+    controller, _ = _make_controller(tmp_path)
+    with (
+        patch("phoson_agent.sessions.models._utc_now", return_value=frozen),
+        patch("phoson_agent.sessions.models._new_id", side_effect=lambda: next(ids)),
+    ):
+        root = controller.tree.append(
+            parent_id=None, message=Message(role="user", content="root")
+        )
+        older = controller.tree.append(
+            parent_id=root.id, message=Message(role="assistant", content="a")
+        )
+        newest = controller.tree.append(
+            parent_id=root.id, message=Message(role="assistant", content="b")
+        )
+
+    assert older.created_at == newest.created_at
+    assert older.id > newest.id  # the id tie-break would have picked `older`
+    assert controller.find_latest_node_id() == newest.id
 
 
 # ── Shutdown ─────────────────────────────────────────────────────────────────

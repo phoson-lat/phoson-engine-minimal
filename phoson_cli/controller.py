@@ -2578,8 +2578,13 @@ class SessionController:
         """Find the most recent leaf node — the continuation point.
 
         Only leaves are considered (the next turn appends to a leaf), and
-        ties on ``created_at`` are broken deterministically by node id so a
-        loaded tree (nodes re-inserted in saved order) yields a stable pick.
+        ties on ``created_at`` are broken deterministically by *insertion
+        order* — the last node added wins. A loaded tree re-inserts its
+        nodes in their saved order (``_save_sync`` sorts by ``created_at``
+        with a stable sort), so the order survives a round-trip. This is
+        deliberately not a node-id tie-break: ids are random uuid slices,
+        so comparing them picked an arbitrary leaf whenever two were created
+        in the same clock tick (#277).
         """
         target = tree or self.tree
         if not target.nodes:
@@ -2587,9 +2592,9 @@ class SessionController:
         leaves = target.get_leaves()
         if not leaves:
             return None
-        leaf_nodes = [target.nodes[node_id] for node_id in leaves]
-        latest = max(leaf_nodes, key=lambda n: (n.created_at, n.id))
-        return latest.id
+        order = {node_id: index for index, node_id in enumerate(target.nodes)}
+        latest = max(leaves, key=lambda nid: (target.nodes[nid].created_at, order[nid]))
+        return latest
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
