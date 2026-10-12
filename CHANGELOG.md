@@ -24,6 +24,11 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   duplicate a message, including on the cancel path — and a mid-run compaction is rebased onto
   a fresh branch before its tail is appended. Cost: every checkpoint rewrites the session file
   (`fsync` + `os.replace`, off the event loop), so a turn now pays one write per step.
+  A checkpoint also runs inside the front end's persistence barrier, so a cancellation that lands
+  *during* the write defers the exit instead of interrupting it, and a checkpoint that **fails**
+  is reported as a persistence failure (`Could not save session`) rather than as a generic
+  operation error — the barrier is released as soon as the save lands, so Ctrl+C keeps cancelling
+  an ordinary mid-turn turn.
 - **tests**: 7 regression tests in `tests/phoson_cli/test_hard_kill_durability.py` assert the
   **on-disk JSONL** (through a fresh `JsonlStorage`, i.e. what a new process would see) rather
   than the in-memory tree: the prompt is durable before the first LLM call, every finished step
