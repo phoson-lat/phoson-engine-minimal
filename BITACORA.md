@@ -977,3 +977,236 @@ arregla, que es una línea.
 checkpoint mid-turn que falla ahora se reporta como fallo de persistencia (el bullet de `Unreleased` habla
 de la persistencia mid-turn pero no de este matiz, que es interno a la misma feature todavía sin
 publicar). Se decide con el owner; no se toca por iniciativa propia.
+
+---
+
+## 14. CI EN VERDE — run 38193904914 (commit 669eab6). PR #279 desbloqueado
+
+**Ejecutado (autorizado):**
+
+    patch_file tests/phoson_cli/test_updater_regressions.py     → except (FileNotFoundError, ProcessLookupError) + comentario de por qué
+    patch_file .github/workflows/ci.yml                         → paso sed eliminado, -q restaurado, timeout-minutes: 20 y pytest-timeout conservados
+    uv run ruff check tests/phoson_cli/test_updater_regressions.py         → All checks passed!
+    uv run ruff format --check tests/phoson_cli/test_updater_regressions.py → 1 file already formatted
+    uv run python -c "import yaml …"                            → YAML ok; steps del job tests: Checkout, Setup uv, Setup Python, Install ripgrep, Install dependencies, Run tests
+    git commit …                                                → 669eab6 (3 files changed, 137 insertions, 22 deletions)
+    git push origin fix/mid-turn-durability                     → 48d0833..669eab6
+    gh run list --branch fix/mid-turn-durability --limit 3      → run nuevo: 38193904914
+    gh run watch 38193904914 --exit-status --interval 20        → ✓ tests in 1m39s
+    gh run view 38193904914 --json …                            → {"conclusion":"success","headSha":"669eab6…"}
+    gh run view 38193904914 --log > _scratch_ci_run6.log        → 3731 passed, 65 skipped, 0 failed in 75.85s
+
+**Resultado: los SIETE jobs en verde.**
+
+    ✓ lint in 11s            ✓ typecheck in 23s        ✓ smoke in 10s
+    ✓ docs-parity in 8s      ✓ windows-tests in 28s    ✓ computeruse-windows in 24s
+    ✓ tests in 1m39s         →  3731 passed, 65 skipped, 0 failed in 75.85s
+
+Comparación con el punto de partida: el job `tests` llevaba desde el run `38189409096` cancelándose al
+**18%** (una vez a los 20 min, otra a los 40). Ahora: **100% en 76 s**, y con **más** tests corridos que
+antes (3731 contra los ~700 que alcanzaba a ejecutar antes de morir). El `pytest-timeout` y el
+`timeout-minutes: 20` quedan instalados como red permanente.
+
+**Qué queda cerrado de la investigación:**
+
+1. El hang de `test_escape_abort_save_failure_is_captured_and_rendered` → **muerto**, y con la causa
+   confirmada (checkpoint pre-LLM que corría antes de que el sink latcheara `persistence_required`).
+2. Las dos fallas adyacentes (#751, #753) → **pasan sin cambios**; la predicción de #11 se cumplió.
+3. El flake del updater → **arreglado** en el mismo push, con el mecanismo identificado (ESRCH tras
+   `open()` en `/proc/<pid>/stat`) y el precedente del propio repo citado en el commit.
+4. El andamiaje de diagnóstico → **retirado**. Nada de `sed` ni de `-v` queda en el workflow.
+5. «¿Qué hay después del índice ~754?» → **nada**: la suite entera corre limpia.
+
+**Estado de la rama:** `fix/mid-turn-durability` = `669eab6`, 6 commits por delante de main
+(`60aa819`, `448b86f`, `8201766`, `78470f3`, `48d0833`, `669eab6`), PR #279 abierto y **CI en verde**.
+
+**Lo que NO he hecho (y no haré sin permiso):** mergear #279, editar el CHANGELOG, o borrar los
+`_scratch_*` (son la forense de esta sesión; el run 5 y el run 6 son la evidencia del antes y el
+después).
+
+---
+
+## 15. Estado de los BSOD: consulta al visor de sucesos (AUTORIZADA por el owner)
+
+**Contexto.** El owner pregunta si además del fix de `procutil` «ya está» lo de los BSOD. Respuesta de
+código: `400c84d` (PR #274) **ya está en main y publicado en v0.51.0** y elimina *una* clase concreta
+(probe de pid reciclado → `TerminateProcess` de imagen crítica → `CRITICAL_PROCESS_DIED`). Pero la
+investigación sigue **abierta y sin causa probada**, y su §0.0 dice literalmente: *«waiting for one real
+crash»*, con el próximo paso = leer el 1001 del próximo crash natural. Así que se consulta si **ha caído
+alguno nuevo** desde las 18:05, hora del último apunte del journal.
+
+**Comandos (SÓLO LECTURA — nada de pytest, nada de tocar el sistema):**
+
+    powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object LastBootUpTime, LocalDateTime | Format-List"
+    powershell -NoProfile -Command "Get-WinEvent -FilterHashtable @{LogName='System';Id=1001} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | Format-List"
+    dir C:\Windows\Minidump
+    powershell -NoProfile -Command "Get-WinEvent -FilterHashtable @{LogName='System';Id=41,6008} -MaxEvents 5 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, ProviderName | Format-Table -Auto"
+
+**Qué se busca concretamente:**
+
+| señal | significado |
+|---|---|
+| `LastBootUpTime` sigue siendo el boot de las 03:44 | **no ha habido reinicio** → ningún BSOD desde entonces |
+| ningún 1001 nuevo tras 18:05 | ningún bugcheck registrado |
+| ningún `.dmp` nuevo en `C:\Windows\Minidump` | ningún crash volcó nada |
+| 41 / 6008 nuevos (Kernel-Power / apagado inesperado) | reinicio sucio **sin** 1001 → otro mecanismo, no un bugcheck |
+
+**Después de esto:** cerrar el PR #279 y preparar la release, en ese orden. Nada de lo anterior modifica
+el repo.
+
+**RESULTADOS (comandos extra no listados arriba, todos de lectura: `dir /a`, `Test-Path`, consulta al
+registro `CrashControl`, y el censo de 41 a 3 días).**
+
+### Hallazgo 1 — el reinicio de las 18:40 NO fue un bugcheck
+
+    LastBootUpTime : 11/10/2026 06:40:38 p. m.     ← el journal tenía el boot de las 03:44
+    LocalDateTime  : 11/10/2026 08:04:27 p. m.
+
+El último evento **1001** del sistema es de las **03:56:02** y es el `0xE2` **deliberado** (crash #9,
+`101126-12484-01.dmp`). Entre las 03:56 y ahora **no hay ni un solo 1001**. Los 1001 anteriores: 27/09
+(`0x3B`), 26/05, 17/05… es decir, el «produce un 1001 y lo leemos» funcionó **una vez**, y fue cuando lo
+provocamos a propósito.
+
+### Hallazgo 2 — 17 reinicios sucios sólo hoy, y ninguno con código de bugcheck
+
+    Kernel-Power 41 (el cierre anterior fue sucio) + 6008 (apagado inesperado). 18 eventos en 3 días:
+
+    10/10 20:39
+    11/10 00:38, 00:49, 01:22, 01:29, 01:45, 02:10, 02:55, 03:20, 03:55*, 14:06,
+          17:21, 17:29, 17:54, 18:07, 18:22, 18:28, 18:40
+          (* 03:55 = el único con 1001: el 0xE2 deliberado)
+
+**17 hoy.** Sólo uno escribió código y volcado — y es el que forzamos. Los 16 restantes son `41` + `6008`
+con **`BugcheckCode = 0` y sin `.dmp`**: firma de un **reset duro sin bugcheck** (pérdida de energía,
+reset forzado, o un kernel que muere antes de que WER pueda registrar nada). `AutoReboot = 1`, así que la
+máquina vuelve sola y sigue.
+
+**Consecuencia para la investigación, y es incómoda:** el plan de §0.0 —*«no hagas nada provocador y lee el
+1001 del próximo crash»*— **no puede funcionar**. El próximo crash ya llegó 16 veces hoy y no trae código.
+La tubería de volcados está bien configurada (`CrashDumpEnabled = 3`, `MinidumpDir = C:\Windows\Minidump`,
+`DumpFile = C:\Windows\MEMORY.DMP`) y **no se activa nunca**, porque no hay bugcheck que volcar. Habrá que
+cambiar de instrumento (p. ej. capturar el estado *antes* del reset: contadores, temperatura,
+`Get-WinEvent` de los drivers justo antes, o mirar si es apagón y no kernel).
+
+**Aclaración honesta de un casi-error propio:** `dir C:\Windows\Minidump` (sin elevar) no lista nada y
+`Test-Path` sobre el `.dmp` devuelve **«Acceso denegado»**. No es que el volcado se haya borrado: es un
+**artefacto de permisos**. Confirmar su existencia requiere una consola elevada. No lo afirmo como
+hallazgo.
+
+### Hallazgo 3 — ventana de crashes y ventana limpia
+
+Crashes a las 17:21, 17:29, 17:54, 18:07, 18:22, 18:28 y 18:40 (intervalos 8, 25, 13, 15, 6, 12 min):
+**6 reset es en 79 minutos**, justo mientras los runs de CI colgados iban y venían. Desde las 18:40:51
+(los 6005 de arranque) hasta las 20:04 —**84 minutos**— no ha habido **ninguno**, y esa ventana limpia
+cubre exactamente el trabajo que terminó en CI verde. No es prueba de nada (la tasa es racheada), pero es
+el tramo más largo sin un solo `41`.
+
+---
+
+## 16. Cómo se cierra #279 y cómo se publica la release (mecánica verificada, aún sin ejecutar)
+
+**Lo que ya está averiguado, para no improvisar sobre `main`:**
+
+| pieza | cómo funciona |
+|---|---|
+| bump de versión | **commitizen** (`[tool.commitizen]`: `tag_format = "v$version"`, `version_files = ["pyproject.toml:version"]`). El commit `b013c48` «bump: version 0.50.1 → 0.51.0» tocó `CHANGELOG.md` + `pyproject.toml` (2 sitios: `[project].version` y `[tool.commitizen].version`) + `uv.lock` |
+| CHANGELOG | el bump renombra `## Unreleased` → `## vX.Y.Z (fecha)` |
+| merge de PRs | el repo usa **merge commits**: `48e01de Merge pull request #274 from …`, `72533a8 Merge pull request #275 from …` |
+| tag | `vX.Y.Z` sobre el commit de bump |
+| publicación | `.github/workflows/publish.yml` se dispara con **`release: [published]`** → `uv build` + PyPI por OIDC |
+| binarios | `release-binaries.yml`, también en `release: [published]` → adjunta los 5 artefactos (`darwin-arm64`, `darwin-x86_64`, `linux-arm64`, `linux-x86_64`, `windows-x86_64.exe`) |
+| título/cuerpo de la release | título descriptivo («v0.51.0 — explicit Qwen prompt caching, safe process kills on Windows»); cuerpo = una frase de resumen + las secciones `### Feat` / `### Fix` del CHANGELOG con los enlaces a los PR + «See CHANGELOG.md for details.» |
+
+**Secuencia propuesta (deliberadamente corta y troceada, por los resets de arriba: cada paso empujado a
+origin es inmune a un crash):**
+
+1. Commitear las entradas #14–#16 de `BITACORA.md` en la rama (queda coherente con los commits anteriores
+   de la rama, que ya incluían `BITACORA.md`) y push → CI verde otra vez.
+2. `gh pr merge 279 --merge` (merge commit, como #274/#275). Sin borrar la rama todavía.
+3. `git checkout main && git pull` → comprobar que `main` trae la durabilidad.
+4. `uv run cz bump` (calcula el incremento de los commits `fix(cli)` desde `v0.51.0`) → commit de bump +
+   tag local.
+5. `uv lock` y amendar/enmendar el `uv.lock` al commit de bump **como en `b013c48`**, que lo llevaba en el
+   mismo commit.
+6. Verificar en local (sin pytest): `git show --stat`, `uv build`… y **empujar** commit + tag.
+7. Escribir el cuerpo de la release siguiendo el formato de `v0.51.0` y `gh release create vX.Y.Z --title
+   «vX.Y.Z — …» --notes-file …` → dispara PyPI + binarios.
+
+**Nota sobre `BITACORA.md`:** 855+ líneas de este fichero viajarían a `main` al mergear. Es un log de
+trabajo; conviene decidir explícitamente si eso se quiere en `main` o no.
+
+**Nota sobre los tests de durabilidad en Windows:** no los propongo para esta release. El job
+`windows-tests` corre un subconjunto curado de 5 ficheros; añadir `test_hard_kill_durability.py` es una
+mejora real (la feature importa justo ahí) pero merece su propio PR después, sin arriesgar el verde
+recién ganado.
+
+---
+
+## 17. Decisiones del owner y comandos de cierre + release (2026-10-11 ~20:20)
+
+**Decisiones tomadas en esta conversación:**
+
+| pregunta | decisión |
+|---|---|
+| versión | **minor → `0.52.0`** (la persistencia mid-turn es capacidad nueva, no un simple arreglo) |
+| alcance | **merge + release completo**, parando a confirmar en los puntos delicados (**push a main** y **tag**) |
+| `BITACORA.md` | **NO viaja a main** → hay que devolverlo al contenido de `origin/main` antes del merge |
+| CHANGELOG | **sí**, añadir la frase del checkpoint fallido → fallo de persistencia |
+
+**Problema de orden que hay que resolver sin perder el log.** El log de esta sesión (entradas #14–#17)
+vive **sólo** en el árbol de trabajo; las #1–#13 ya están en el historial de la rama. Si devuelvo
+`BITACORA.md` a la versión de main sin más, **las entradas de hoy se pierden**. Solución: primero se
+commitea el log (queda recuperable del historial de la rama) y **después** se devuelve el fichero. Además
+se conserva una copia íntegra y **untracked** (`_scratch_BITACORA_session.md`) para poder seguir
+apuntando los comandos durante la release, ya que `BITACORA.md` deja de ser instrumento válido en cuanto
+vuelve al contenido de main.
+
+**Comandos, en orden.** Todo lo que toca `main` o crea tags va marcado como **PUNTO DE CONFIRMACIÓN** y
+no se ejecuta sin un «adelante» explícito.
+
+    # (1) copia de seguridad del log, fuera de git
+    copy BITACORA.md _scratch_BITACORA_session.md
+
+    # (2) la línea del CHANGELOG (se añade al bullet de **cli** de la sección Unreleased)
+    patch_file CHANGELOG.md
+
+    # (3) commit del log + CHANGELOG, y push (rama de PR: no toca main)
+    git add BITACORA.md CHANGELOG.md
+    git commit -m "docs: note that a failed mid-turn checkpoint reports as a persistence failure" …
+    git push origin fix/mid-turn-durability
+
+    # (4) devolver BITACORA.md al contenido de main (net-zero en el merge)
+    git checkout origin/main -- BITACORA.md
+    git add BITACORA.md
+    git commit -m "docs: keep the working log out of main" …
+    git push origin fix/mid-turn-durability
+
+    # (5) CI verde en la cabeza de la rama otra vez
+    gh run list --branch fix/mid-turn-durability --limit 1
+    gh run watch <id> --exit-status --interval 20
+
+    ---------- PUNTO DE CONFIRMACIÓN #1: push a main ----------
+    # (6) merge con merge commit, como #274/#275
+    gh pr merge 279 --merge
+    git checkout main
+    git pull
+
+    ---------- PUNTO DE CONFIRMACIÓN #2: tag ----------
+    # (7) bump minor (commitizen) + uv.lock en el MISMO commit, como b013c48
+    uv run cz bump --increment minor --no-verify
+    uv lock
+    git add uv.lock
+    git commit --amend --no-edit
+    git show --stat HEAD          # verificar: CHANGELOG + pyproject (2 sitios) + uv.lock
+    git push origin main --follow-tags
+
+    ---------- PUNTO DE CONFIRMACIÓN #3: release pública ----------
+    # (8) cuerpo de la release al estilo de v0.51.0, y publicar
+    gh release create v0.52.0 --title "v0.52.0 — …" --notes-file _scratch_release_0.52.0.md
+
+**Criterio de éxito:** `publish.yml` (PyPI, OIDC) y `release-binaries.yml` (5 artefactos) completos, y
+`gh release view v0.52.0` listando los binarios.
+
+**Riesgo asumido y consciente:** tras 17 resets hoy, cualquier paso local puede caerse a media faena.
+Por eso el orden es «todo local → verificar → empujar», y cada push deja el estado recuperable. Nada de
+esto corre pytest en local.
