@@ -853,3 +853,127 @@ devuelve el árbol al comportamiento de `78470f3`.
 **Pendiente para un commit posterior (no urgente):** quitar el paso temporal `Locate the hanging test`
 (`sed -n '740,785p'`) del workflow y decidir si se conservan `-v`, `--with pytest-timeout`,
 `--timeout=300 --timeout-method=thread`, `-o faulthandler_timeout=600` y `timeout-minutes: 20`.
+
+**EJECUTADO (autorizado por el owner, «Sí: commit + push» / «Dejarlo como está»):**
+
+    git add … 5 ficheros                                        → OK, sólo los 5 en el índice
+    git commit …                                                → 48d0833 (5 files changed, 352 insertions, 4 deletions)
+    git push origin fix/mid-turn-durability                     → 78470f3..48d0833
+    gh run list --branch fix/mid-turn-durability --limit 4      → run nuevo: 38193472559 (queued)
+    gh run watch 38193472559 --exit-status --interval 20        → X tests in 1m30s (el resto verde)
+    gh run view 38193472559 --log > _scratch_ci_run5.log        → 875 907 bytes
+
+---
+
+## 13. Veredicto del run 38193472559 (commit 48d0833): el hang está muerto
+
+**El resultado, sin adornos:**
+
+    collecting ... collected 3792 items / 4 skipped
+    ===== 1 failed, 3730 passed, 65 skipped, 17 warnings in 56.96s =====
+
+**Los cuatro criterios de la entrada #12, verificados uno a uno contra el log:**
+
+| # | criterio | resultado |
+|---|---|---|
+| 1 | `test_ctrl_c_defers_exit_until_real_session_save_settles` | **PASSED [19%]** |
+| 2 | `test_normal_save_failure_is_captured_and_rendered` | **PASSED [19%]** |
+| 3 | `test_escape_abort_save_failure_is_captured_and_rendered` | **PASSED [19%]** — ya no HANG; el job terminó en 1m30s en vez de morir en el `pytest-timeout` de 300 s |
+| 4 | el job supera el ~18% y termina | **100%**, 3730 pasan, el log acaba en el resumen de pytest |
+
+Extra, no pedido pero tranquilizador: `test_escape_reports_persistence_is_protected` **PASSED** (el test que
+nunca había llegado a correr), `test_deferred_exit_is_not_honored_when_real_session_save_fails` PASSED,
+`test_cancel_during_context_refresh_persists_user_turn_to_disk` PASSED, y los **siete** tests de
+`test_hard_kill_durability.py` PASSED [46%] — la WIP de durabilidad sigue en pie bajo la semántica nueva
+de `_checkpoint`.
+
+**Pregunta abierta de #11, respondida:** «¿qué hay después del índice ~754?» → **nada**. La suite llega al
+100% en 57 s y no hay ninguna otra sorpresa. El `-v` + la cola completa era exactamente lo que faltaba
+para saberlo.
+
+### El único fallo: un race del propio test, no del producto
+
+    tests/phoson_cli/test_updater_regressions.py::test_cancellation_kills_process_group_grandchild
+      FAILED [ 72%] — ProcessLookupError: [Errno 3] No such process   (línea 252)
+
+**Mecanismo.** El test comprueba que el nieto murió leyendo `/proc/<pid>/stat` en un bucle:
+
+    try:
+        with open(f"/proc/{grandchild}/stat", encoding="utf-8") as stream:
+            state = stream.read().split(") ", 1)[1].split()[0]      # ← línea 252, aquí revienta
+    except FileNotFoundError:
+        state = None
+
+Si el proceso ya está reapeado, el `open()` da `ENOENT` → `FileNotFoundError` → `state = None` → `break`
+(camino previsto y ya cubierto). Pero si el proceso muere **entre** el `open()` y el `read()`, el `open()`
+tiene éxito y el `read()` devuelve **ESRCH** → `ProcessLookupError`. Y `ProcessLookupError` es subclase de
+`OSError`, **no** de `FileNotFoundError`, así que se escapa del `except`. La excepción salta justo en la
+línea 252, que es la firma de este hueco y de ningún otro.
+
+Lo importante: **el nieto sí murió**. El test no se equivoca juzgando el comportamiento; se rompe al
+*observarlo*. No hay bug del updater ni del kill de grupo de procesos.
+
+**Por qué no es de mi cambio (tres pruebas independientes):**
+
+    git diff origin/main -- tests/phoson_cli/test_updater_regressions.py   →  vacío (idéntico a main)
+    git diff --stat origin/main...HEAD -- phoson_cli/updater*.py …         →  vacío (la rama no toca el updater)
+    git log -- tests/phoson_cli/test_updater_regressions.py               →  último toque: 400c84d, ya en main
+
+El flake viene de `bb3d196` (04-oct) y estaba **latente en main**; el baseline verde `38178940921`
+sencillamente tuvo suerte, y **todos** los runs de esta rama morían al 18% sin llegar nunca al 72% donde
+vive este test. No es un fallo nuevo: es un fallo que nadie había alcanzado.
+
+**Precedente en el propio repo, para el arreglo:**
+
+    tests/phoson_cli/test_bash_tool.py:31-38
+    def _process_is_running(pid: int) -> bool:
+        status_path = Path(f"/proc/{pid}/stat")
+        try:
+            …
+        except (FileNotFoundError, ProcessLookupError):     # ← mismo idioma, ya arreglado aquí
+            return False
+
+Es el **mismo** patrón `/proc/<pid>/stat`; en `test_bash_tool.py` se capturan las dos excepciones y en
+`test_updater_regressions.py` se olvidó la segunda. El arreglo es esa misma tupla en el otro fichero —
+una línea, sólo tests, sin tocar producto. `grep` confirma que **no hay ningún otro sitio** con el hueco.
+
+### Comandos a ejecutar ahora (AUTORIZADOS: «Arreglarlo en esta rama» + «Limpiarlo ahora»)
+
+Dos cambios en un mismo push: el arreglo del flake y la retirada del andamiaje de diagnóstico.
+
+**(a) El flake** — una línea, sólo tests:
+
+    patch_file tests/phoson_cli/test_updater_regressions.py    # except FileNotFoundError → except (FileNotFoundError, ProcessLookupError)
+
+**(b) El workflow** — se quita el paso temporal `Locate the hanging test` (`sed`) y se restaura `-q`; se
+**conservan** `timeout-minutes: 20` y `--with pytest-timeout --timeout=300 --timeout-method=thread` como
+red de seguridad permanente, y se retira `-o faulthandler_timeout=600` (era para el volcado interactivo
+del diagnóstico). El comentario del job se reescribe para describir el estado final, no la caza del hang.
+
+    patch_file .github/workflows/ci.yml
+
+**(c) Verificación y publicación:**
+
+    uv run ruff check tests/phoson_cli/test_updater_regressions.py
+    uv run ruff format --check tests/phoson_cli/test_updater_regressions.py
+    git status --short
+    git add tests/phoson_cli/test_updater_regressions.py .github/workflows/ci.yml BITACORA.md
+    git commit -m "test(cli): treat a reaped grandchild as gone in the updater regression" -m "Reading /proc/<pid>/stat races the process's exit: open() can succeed and the following read() returns ESRCH, which is a ProcessLookupError and not a FileNotFoundError. The loop already treats a vanished process as a dead one, so catch both. test_bash_tool.py::_process_is_running already does exactly this for the same idiom." -m "Also retires the temporary #279 diagnostics: the sed step that guessed the stalled collection index and the -v that named the culprit in the end. pytest-timeout (ephemeral, via uv run --with) and the job cap stay as a permanent backstop."
+    git push origin fix/mid-turn-durability
+    gh run list --branch fix/mid-turn-durability --limit 3
+    gh run watch <id> --exit-status --interval 20
+    gh run view <id> --log > _scratch_ci_run6.log
+
+**Criterio de éxito del run 6:** `tests` verde, ~3731 passed, 0 failed, y el job completo «success» —
+con eso PR #279 queda desbloqueado y **todo** lo demás (durabilidad mid-turn, tail de la suite) ya está
+verificado.
+
+**Alternativa considerada y descartada:** re-lanzar el run 5 sin tocar nada (`gh run rerun 38193472559`)
+para «ver si pasa» sin arreglar el race. Pasa casi seguro —es un flake raro— pero deja en el repo un test
+que puede volver a tumbar CI en cualquier push futuro, y encima sin la excusa de que moría antes. Se
+arregla, que es una línea.
+
+**Pendiente menor, señalado y NO hecho sin permiso:** el `README`/`CHANGELOG` no mencionan que un
+checkpoint mid-turn que falla ahora se reporta como fallo de persistencia (el bullet de `Unreleased` habla
+de la persistencia mid-turn pero no de este matiz, que es interno a la misma feature todavía sin
+publicar). Se decide con el owner; no se toca por iniciativa propia.

@@ -52,9 +52,9 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     # A stalled test used to be unbounded here: this job sat at 18% from
-    # 22:50:21Z until it was cancelled by hand 29 minutes later. The pytest
-    # option below names the stuck test in the log; this cap is the backstop
-    # that actually ends the job.
+    # 22:50:21Z until it was cancelled by hand 29 minutes later. pytest-timeout
+    # below fails a stuck test in minutes; this cap ends the job even if the
+    # plugin itself is what hangs.
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -76,24 +76,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev --locked
 
-      - name: Locate the hanging test
-        # TEMPORARY (#279): this branch's suite stalls deterministically just
-        # past the "18%" line. Counting the -q dots (72/line) puts the stall at
-        # ~#754 with two *new* failures at ~#751 and ~#753, but the interactive
-        # faulthandler dump cannot name them — a suspended coroutine is not on
-        # the native stack. This prints the real collection order there; remove
-        # once the tests are named.
-        run: uv run pytest --collect-only -q | sed -n '740,785p'
-
       - name: Run tests
-        # -v is what actually names the stalled test: pytest prints the nodeid
-        # *before* running it, so the last line without a result is the culprit
-        # (and the two failures print inline as they happen). faulthandler_timeout
-        # is built into pytest (no plugin, no new dep); pytest-timeout comes in as
-        # an ephemeral dependency of `uv run --with` (uv.lock is untouched) so a
-        # stalled test fails in minutes instead of sitting at 18% until the cap
-        # above kills it.
-        run: uv run --with pytest-timeout pytest -v --timeout=300 --timeout-method=thread -o faulthandler_timeout=600 || [ $? -eq 5 ]
+        # pytest-timeout comes in as an ephemeral dependency of `uv run --with`
+        # (uv.lock is untouched) so a stalled test fails in minutes instead of
+        # sitting at 18% until the cap above kills the job.
+        run: uv run --with pytest-timeout pytest -q --timeout=300 --timeout-method=thread || [ $? -eq 5 ]
 
   # The config/persistence tests isolate themselves via $HOME, which Windows'
   # `expanduser` ignores (it uses $USERPROFILE), so on Windows they used to

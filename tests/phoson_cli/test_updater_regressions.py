@@ -250,7 +250,11 @@ async def test_cancellation_kills_process_group_grandchild(
         try:
             with open(f"/proc/{grandchild}/stat", encoding="utf-8") as stream:
                 state = stream.read().split(") ", 1)[1].split()[0]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # FileNotFoundError: the entry is gone. ProcessLookupError: the
+            # entry was there when we opened it but the task died before we
+            # read it (read(2) on /proc/<pid> returns ESRCH). Both mean the
+            # grandchild is gone, which is what this loop is waiting for.
             state = None
         if state in (None, "Z", "X"):
             break
