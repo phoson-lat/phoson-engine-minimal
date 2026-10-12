@@ -1077,13 +1077,31 @@ async def test_normal_save_failure_is_captured_and_rendered(
 async def test_escape_abort_save_failure_is_captured_and_rendered(
     app: PhosonApp, monkeypatch
 ) -> None:
+    """Escape aborts an in-flight turn, and the abort's save failure is shown.
+
+    The first save of a turn is now the durable pre-LLM checkpoint
+    (``SessionController._checkpoint``): it runs before the context refresh
+    this test pauses on. So the checkpoint is allowed to land and the failure
+    is injected on the *next* save — the one the abort itself performs — which
+    is the failure the transcript has to report.
+    """
     refresh_started = asyncio.Event()
+    real_save = app.repl.storage.save
+    saves = 0
 
     async def paused_refresh() -> None:
         refresh_started.set()
         await asyncio.sleep(30)
 
     async def failing_save(tree) -> None:
+        nonlocal saves
+        saves += 1
+        if not refresh_started.is_set():
+            # Before the refresh: the pre-LLM checkpoint. It must land, or
+            # the turn never reaches the paused refresh below and this test
+            # would wait on it forever.
+            await real_save(tree)
+            return
         raise OSError("abort save failed")
 
     monkeypatch.setattr(app.repl._controller, "_refresh_context_window", paused_refresh)
@@ -1097,6 +1115,7 @@ async def test_escape_abort_save_failure_is_captured_and_rendered(
     _trigger(app, "escape")
     result = await task
 
+    assert saves >= 2  # the abort really did try to save
     assert isinstance(result.error, OSError)
     assert task.exception() is None
     assert "Could not save session" in _transcript(app)

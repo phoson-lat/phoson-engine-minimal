@@ -129,12 +129,14 @@ class FullScreenSink:
         on_session_reset=None,
         on_session_restore=None,
         on_persistence_required=None,
+        on_persistence_released=None,
     ) -> None:
         self._on_invalidate = on_invalidate
         self._on_session_snapshot = on_session_snapshot
         self._on_session_reset = on_session_reset
         self._on_session_restore = on_session_restore
         self._on_persistence_required = on_persistence_required
+        self._on_persistence_released = on_persistence_released
         self.theme = theme
         self.session_id: str | None = None
         self.dirty = True
@@ -843,6 +845,20 @@ class FullScreenSink:
         """Mark the current app operation's remaining save as required."""
         if self._on_persistence_required is not None:
             self._on_persistence_required()
+
+    def release_persistence(self) -> None:
+        """Drop the requirement once the save it guarded has settled.
+
+        Used around the *mid-turn* checkpoints: the write is
+        durability-critical while it is in flight (an interrupted save loses
+        the steps it was persisting), but once it has landed the turn is
+        cancellable again like any other, so Ctrl+C must go back to
+        cancelling instead of deferring exit until the turn runs to the end.
+        A *failed* checkpoint never reaches this: the failure is itself a
+        persistence failure and stays protected.
+        """
+        if self._on_persistence_released is not None:
+            self._on_persistence_released()
 
     def snapshot_session_view(self) -> object:
         """Capture transcript and app-owned state for transactional replacement."""

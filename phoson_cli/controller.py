@@ -30,6 +30,7 @@ from phoson_agent import (
     AgentMiddleware,
     AgentStartEvent,
     AgentStepDoneEvent,
+    AgentToolStartEvent,
 )
 from phoson_llm.schemas import (
     REASONING_EFFORTS,
@@ -314,6 +315,12 @@ class SessionController:
         self._turn_lock = asyncio.Lock()
         self._turn_in_progress = False
         self._turn_history_initialized = False
+        # Durable mid-turn checkpoints: how many messages of the engine's
+        # in-flight history are already mirrored into the tree. The stream
+        # consumer advances it as each step completes and saves the session
+        # right away, so a hard kill (crash, ``taskkill``, power loss) keeps
+        # every step that finished instead of losing the whole turn.
+        self._synced_history_count = 0
         self._turn_owner_task: asyncio.Task | None = None
         self._operation_starter: (
             Callable[[Coroutine[Any, Any, Any], str], asyncio.Task | None] | None
@@ -958,6 +965,28 @@ class SessionController:
                 self.sink.on_event(event)
                 if isinstance(event, (AgentDoneEvent, AgentErrorEvent)):
                     terminal = event
+                # Durable mid-turn checkpoints: after the event is rendered,
+                # mirror whatever it put in the engine history into the tree
+                # and persist it before the next step starts. A hard kill
+                # (crash / ``taskkill`` / power loss) then keeps every step
+                # that finished instead of losing the whole turn.
+                #
+                # ``AgentToolStartEvent`` is the moment the engine has already
+                # appended the assistant ``tool_use`` message and is about to
+                # dispatch a possibly long-running handler: checkpointing here
+                # means a kill mid-tool leaves a resumable orphan (#129)
+                # instead of silently dropping the model's call.
+                # ``terminal is None``: never checkpoint past the terminal event.
+                # That event owns the *latched* persistence requirement, so a
+                # checkpoint after it would release the latch and downgrade a
+                # failing end-of-turn save to a generic operation error.
+                if terminal is None and isinstance(
+                    event, (AgentToolStartEvent, AgentStepDoneEvent)
+                ):
+                    if self._mirror_history_into_tree(
+                        self.engine.get_partial_history()
+                    ):
+                        await self._checkpoint()
 
         self.current_task = asyncio.create_task(consume())
         try:
@@ -1002,6 +1031,39 @@ class SessionController:
             tools=self.summarizer.tool_definitions,
         )
 
+    def _mirror_history_into_tree(self, history: list[Message]) -> bool:
+        """Append the engine history's unsynced tail to the tree.
+
+        ``_synced_history_count`` records how many messages of the engine's
+        in-flight history are already mirrored, which makes this safe to
+        call repeatedly *during* a run: each call appends only what is new,
+        so the mid-turn checkpoints and the terminal
+        :meth:`_finalize_run` / :meth:`_append_partial_history` paths never
+        duplicate a message.
+
+        A mid-run compaction is handled first: the compacted history is
+        grafted as a fresh branch off the root
+        (:meth:`_rebase_after_compaction`) and the counter jumps to its
+        length, since the engine's history no longer lines up with the
+        tree's old path.
+
+        Returns:
+            True when the tree changed (messages appended or rebased).
+        """
+        if self._rebase_after_compaction(history):
+            self._synced_history_count = len(history)
+            return True
+        if len(history) <= self._synced_history_count:
+            return False
+        start = self._synced_history_count
+        self._synced_history_count = len(history)
+        new_messages = _drop_env_context(history[start:])
+        if not new_messages:
+            return False
+        created = self.tree.append_many(self.current_node_id, new_messages)
+        self.current_node_id = created[-1].id
+        return True
+
     def _finalize_run(self, done_event: AgentDoneEvent, base_count: int) -> None:
         """Append new messages to tree and refresh the context indicator.
 
@@ -1011,28 +1073,24 @@ class SessionController:
         every step, so this only updates the tree and the final context
         indicator (from the now-committed tree path).
         """
-        if self._rebase_after_compaction(done_event.result.history):
-            return
-
-        new_messages = _drop_env_context(done_event.result.history[base_count:])
-        if new_messages:
-            created = self.tree.append_many(self.current_node_id, new_messages)
-            self.current_node_id = created[-1].id
-
+        # ``base_count`` is only a floor: during a real run the mid-turn
+        # checkpoints have already advanced the counter past it, while
+        # direct callers (tests) that bypass ``_execute_turn`` still pass
+        # the tree's starting length.
+        self._synced_history_count = max(self._synced_history_count, base_count)
+        self._mirror_history_into_tree(done_event.result.history)
         self._context_tokens = self.estimate_active_path()
 
     def _append_partial_history(self, base_count: int) -> None:
-        """Slice engine partial history and append new nodes to the tree.
+        """Mirror the engine's partial history tail into the tree.
 
-        Updates ``current_node_id`` to the last appended node.
+        Updates ``current_node_id`` to the last appended node. ``base_count``
+        is only a floor: during a real run the running
+        ``_synced_history_count`` (advanced by the mid-turn checkpoints)
+        already covers it, so nothing is appended twice.
         """
-        partial = self.engine.get_partial_history()
-        if self._rebase_after_compaction(partial):
-            return
-        new_messages = _drop_env_context(partial[base_count:])
-        if new_messages:
-            created = self.tree.append_many(self.current_node_id, new_messages)
-            self.current_node_id = created[-1].id
+        self._synced_history_count = max(self._synced_history_count, base_count)
+        self._mirror_history_into_tree(self.engine.get_partial_history())
 
     def _rebase_after_compaction(self, history: list[Message]) -> bool:
         """Rebase the tree onto a compacted engine history (I-91).
@@ -1126,6 +1184,33 @@ class SessionController:
                 "last_run_id": self.tree.last_run_id,
             },
         )
+
+    async def _checkpoint(self) -> None:
+        """Persist a durability-critical checkpoint of the in-flight turn.
+
+        The messages being written are already on the tree, so the save is
+        protected while it is in flight: a cancellation that lands inside it
+        is *deferred* instead of interrupting the write
+        (``protect_persistence``), and a failure is reported as a persistence
+        failure rather than as a generic operation error — the front end
+        tells the two apart by exactly that flag (``_finish_operation`` in
+        ``fullscreen/app.py``).
+
+        The requirement is released once the save has landed, so Ctrl+C keeps
+        cancelling an ordinary mid-turn turn instead of being swallowed for
+        the rest of it. A *failure* deliberately leaves the flag set: the
+        turn never reached disk.
+
+        Both callbacks are optional so unit tests and the classic REPL, which
+        drive the controller with a minimal sink, keep working.
+        """
+        protect = getattr(self.sink, "protect_persistence", None)
+        if callable(protect):
+            protect()
+        await self._save_session()
+        release = getattr(self.sink, "release_persistence", None)
+        if callable(release):
+            release()
 
     _WAKE_TITLE_PREFIXES = (
         "[MONITOR EVENTS]",
@@ -1403,6 +1488,10 @@ class SessionController:
         user_message = self._build_user_message(effective_input)
         _node_id, path = self._append_user_turn(user_message)
         base_count = len(path)
+        # Everything up to and including the user turn is on the tree; the
+        # engine's history starts from this same path, so the sync counter
+        # starts aligned with it.
+        self._synced_history_count = base_count
 
         # Retained reasoning (IMPROVEMENTS.md E1): register the current
         # path's captured reasoning so an auto-compaction mid-run can fold
@@ -1424,6 +1513,11 @@ class SessionController:
         self._set_run_status(STATUS_ACTIVE, run_id)
 
         try:
+            # First durable checkpoint: the user turn and the ``active``
+            # status reach disk before the first LLM call, so a hard kill at
+            # any point from here keeps the prompt (and leaves the session
+            # orphan-checkable on the next resume — #129).
+            await self._checkpoint()
             reasoning_effort = self.config.reasoning_effort
             if reasoning_effort not in REASONING_EFFORTS:
                 reasoning_effort = None
