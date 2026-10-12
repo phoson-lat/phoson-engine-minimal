@@ -2111,10 +2111,15 @@ class SessionController:
         compacted_msgs.extend(keep_msgs)
 
         after = self.summarizer.estimate_tokens(compacted_msgs)
-        self.tree.append_many(None, compacted_msgs)
-        leaves = self.tree.get_leaves()
-        latest = max(leaves, key=lambda nid: self.tree.nodes[nid].created_at)
-        self.current_node_id = latest
+        # #276: take the cursor from the nodes ``append_many`` created instead of
+        # re-deriving "the latest leaf" from ``created_at``. ``max`` returns the
+        # *first* maximal element, and ``datetime.now()`` ticks coarse enough on
+        # Windows (~15.6 ms) that the new branch can tie with the
+        # pre-compaction leaf — the cursor then stays behind and the compaction
+        # is silently discarded by the next turn. ``_mirror_history_into_tree``
+        # and ``_rebase_after_compaction`` already use the returned ids.
+        created = self.tree.append_many(None, compacted_msgs)
+        self.current_node_id = created[-1].id
 
         # Record the event so telemetry sees manual compactions too.
         self.summarizer.record_compaction_event(

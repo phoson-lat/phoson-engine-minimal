@@ -2,6 +2,7 @@
 plan, auto-compact mode, retained-reasoning registration, and config presets.
 """
 
+import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -217,6 +218,31 @@ async def test_compact_default_profile_keeps_configured_tail() -> None:
     assert changed is True
     path = controller.tree.get_path(controller.current_node_id)
     assert len(path) == 1 + 4
+
+
+@pytest.mark.asyncio
+async def test_compact_moves_cursor_when_created_at_ties() -> None:
+    """#276: a tied ``created_at`` must not strand the cursor on the old branch.
+
+    ``datetime.now()`` ticks ~15.6 ms on Windows, so a compaction whose summary
+    round-trip is fast (stubbed, cached, or simply unlucky) can append the new
+    branch within the same tick as the previous leaf. The pre-fix code picked
+    ``max(leaves, key=created_at)`` — the *first* maximal element — which is the
+    pre-compaction leaf, so the compaction was persisted but abandoned. Freezing
+    the clock makes that tie certain on every platform, not just Windows.
+    """
+    frozen = datetime.datetime(2026, 10, 11, 12, 0, 0, tzinfo=datetime.UTC)
+    with patch("phoson_agent.sessions.models._utc_now", return_value=frozen):
+        controller = _controller(turns=6)
+        before, after, changed = await controller.compact_context("aggressive")
+        assert changed is True
+        path = controller.tree.get_path(controller.current_node_id)
+        # Same 3 messages as the un-tied case: 1 summary + keep(2).
+        assert len(path) == 3
+        assert after < before
+        # The branch really was grafted off the root: the old 12-message chain
+        # is still intact and merely no longer the active path.
+        assert len(controller.tree.get_leaves()) == 2
 
 
 def test_path_reasoning_map_reads_node_metadata() -> None:
