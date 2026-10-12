@@ -51,6 +51,11 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    # A stalled test used to be unbounded here: this job sat at 18% from
+    # 22:50:21Z until it was cancelled by hand 29 minutes later. The pytest
+    # option below names the stuck test in the log; this cap is the backstop
+    # that actually ends the job.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,7 +77,10 @@ jobs:
         run: uv sync --dev --locked
 
       - name: Run tests
-        run: uv run pytest -q || [ $? -eq 5 ]
+        # faulthandler_timeout is built into pytest (no plugin, no new dep): at
+        # 10 minutes it dumps every thread's traceback, so a hang names its own
+        # test instead of printing nothing for half an hour.
+        run: uv run pytest -q -o faulthandler_timeout=600 || [ $? -eq 5 ]
 
   # The config/persistence tests isolate themselves via $HOME, which Windows'
   # `expanduser` ignores (it uses $USERPROFILE), so on Windows they used to

@@ -103,6 +103,14 @@ class HardKill(BaseException):
     """
 
 
+# Upper bound for every wait a cancelled run has to satisfy. It replaces an
+# unbounded ``asyncio.sleep(3600)`` plus a bare ``await task``: with no cap, a
+# cancellation that silently fails to land turns a 30-second failure into an
+# hour-long silent hang — which is what left CI's ``tests`` job sitting at 18%
+# until somebody cancelled it by hand.
+_CANCEL_GRACE = 30.0
+
+
 def _make_controller(tmp_path) -> tuple[SessionController, FakeSink]:
     sink = FakeSink()
     config = PhosonConfig(provider="ollama", model="test-model", sessions_dir=tmp_path)
@@ -410,18 +418,20 @@ async def test_cancel_mid_turn_does_not_duplicate_checkpointed_steps(tmp_path) -
         # event, i.e. its checkpoint is done; cancel from a known state
         # instead of racing the run's (slow, git/network-touching) startup.
         checkpointed.set()
-        await asyncio.sleep(3600)  # cancelled here
+        await asyncio.sleep(_CANCEL_GRACE)  # cancelled here
 
     controller.engine.stream = stream
     task = asyncio.create_task(controller.run_turn("q"))
-    await asyncio.wait_for(checkpointed.wait(), timeout=30)
+    await asyncio.wait_for(checkpointed.wait(), timeout=_CANCEL_GRACE)
     assert [m.role for m in await _disk_messages(tmp_path, session_id)] == [
         "user",
         "assistant",
     ]
     assert controller.cancel_current() is True
 
-    outcome = await task
+    # Bounded too: a cancel that never lands must fail here in seconds. With a
+    # bare `await task` it would instead sit on the sleep above for an hour.
+    outcome = await asyncio.wait_for(task, timeout=_CANCEL_GRACE)
 
     assert outcome.status == "cancelled"
     messages = await _disk_messages(tmp_path, session_id)
