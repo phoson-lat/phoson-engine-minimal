@@ -1,3 +1,4 @@
+import sys
 import tempfile
 from pathlib import Path
 
@@ -309,7 +310,16 @@ async def test_list_sessions_skips_ids_rejected_by_crud(temp_dir, caplog):
     tree = ConversationTree.new(session_id="safe-session")
     tree.append(parent_id=None, message=Message(role="user", content="safe"))
     await storage.save(tree)
-    (temp_dir / "safe-session.jsonl").rename(temp_dir / "unsafe:name.jsonl")
+    # #278: the unsafe name has to be one the platform can actually put on disk.
+    # ``unsafe:name`` is POSIX-only (``:`` is the drive separator on Windows, so
+    # the rename raised before list_sessions() ever ran and the guard went
+    # untested there). ``unsafe. `` -- a trailing space inside the stem, since
+    # the component ends in ``.jsonl`` -- is creatable on Windows and is
+    # rejected by the same rule (``session_id[-1] in {".", " "}``), so the
+    # assertions below cover both branches and double as a Windows regression
+    # test for the trailing-space rule.
+    unsafe_id = "unsafe. " if sys.platform == "win32" else "unsafe:name"
+    (temp_dir / "safe-session.jsonl").rename(temp_dir / f"{unsafe_id}.jsonl")
 
     with caplog.at_level("WARNING"):
         sessions = await storage.list_sessions()
@@ -317,7 +327,7 @@ async def test_list_sessions_skips_ids_rejected_by_crud(temp_dir, caplog):
     assert sessions == []
     assert "unsafe id" in caplog.text
     with pytest.raises(ValueError):
-        await storage.load("unsafe:name")
+        await storage.load(unsafe_id)
 
 
 @pytest.mark.asyncio
