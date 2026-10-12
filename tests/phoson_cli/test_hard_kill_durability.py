@@ -123,11 +123,18 @@ def _make_controller(tmp_path) -> tuple[SessionController, FakeSink]:
 
 
 def _latest_leaf(tree) -> str | None:
-    """The tree's continuation point (same rule as ``find_latest_node_id``)."""
+    """The tree's continuation point (same rule as ``find_latest_node_id``).
+
+    ``created_at`` first, insertion order as the tie-break — see #277. Kept in
+    sync with the controller on purpose: this is the on-disk assertion's notion
+    of "where a new process would resume", so it must not encode a different
+    rule.
+    """
     leaves = tree.get_leaves()
     if not leaves:
         return None
-    return max(leaves, key=lambda nid: (tree.nodes[nid].created_at, nid))
+    order = {node_id: index for index, node_id in enumerate(tree.nodes)}
+    return max(leaves, key=lambda nid: (tree.nodes[nid].created_at, order[nid]))
 
 
 async def _disk_tree(tmp_path, session_id):
