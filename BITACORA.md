@@ -584,3 +584,272 @@ test y muestre los dos fallos, en un solo run:
 
 **Nada ejecutado en local.** Sin pytest, sin Docker, sin contenedor. Todo el trabajo de esta entrada es
 lectura de log de Azure + edición de `ci.yml` y esta bitácora.
+
+---
+
+## Entrada #10 — 2026-10-11 — **HANG-2 CONFIRMADA y causa raíz de los 4 resultados**
+
+**Qué se ejecutó (autorizado en #9):** commit `78470f3`, push del branch, run `38191745319`
+(headSha `78470f3`). Descarga:
+
+    gh run view 38191745319 --log > _scratch_ci_run4.log
+
+Otra vez `conclusion: failure` en ~5 min. **`-v` era el arreglo**: el run nombró todo.
+
+**Los cuatro tests (contiguos, y los cuatro explican el `F.F` + cuelgue de #9):**
+
+| # | test (todos en `tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py`) | resultado |
+|---|---|---|
+| ~751 | `test_ctrl_c_defers_exit_until_real_session_save_settles` | **FAILED** |
+| ~752 | `test_deferred_exit_is_not_honored_when_real_session_save_fails` | PASSED |
+| ~753 | `test_normal_save_failure_is_captured_and_rendered` | **FAILED** |
+| ~754 | `test_escape_abort_save_failure_is_captured_and_rendered` | **HANG (timeout 300 s)** |
+
+El nodeid del cuelgue lo dio el propio pytest-timeout, en la línea anterior al volcado:
+
+    tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py::test_escape_abort_save_failure_is_captured_and_rendered +++ Timeout +++
+    ~~~~~~~~~~~~~~~~~~~~ Stack of MainThread ~~~~~~~~~~~~~~~
+      selectors.py:468 in select  ← loop ocioso, sin nada que despertarlo
+
+**HANG-2 confirmada, y acotada a un solo fichero.** El fichero de tests es **byte a byte idéntico a
+`origin/main`** (`git cat-file -e origin/main:…` = existe; `git diff --stat origin/main...HEAD --
+tests/…` = sin cambios). Lo único que difiere en toda la rama es **`phoson_cli/controller.py`, +78/−17**.
+Y el CI de `main` está verde entero (`38178940921`, 79 s): los 3 fallos + 1 cuelgue son **regresión pura
+del diff de producto**, no flakiness. `HANG-1` y `HANG-3` quedan descartadas, y también `HANG-0`.
+
+**Causa raíz (una sola, mecánica).** El diff añade un checkpoint **antes de la primera llamada al LLM**:
+
+    self._set_run_status(STATUS_ACTIVE, run_id)        # controller.py:1480
+    try:
+        await self._save_session()                      # ← NUEVO, controller.py:1487
+        …
+        await self._refresh_context_window()            # controller.py:1522
+        terminal_event = await self._consume_stream(path, config)   # 1525
+
+…y el front-end fullscreen decide **dos cosas** con una bandera que sólo se activa al ver un evento
+**terminal** (`sink.py:635` en `AgentDoneEvent`, `sink.py:651` en `AgentErrorEvent`, más
+`_abort_turn` → `protect_persistence`, `controller.py:1575`):
+
+    self._operation.persistence_required = True   # app.py:881-884, vía sink.on_persistence_required
+
+Esa bandera gobierna (a) el mensaje al fallar, `app.py:855-860`:
+
+    "Could not save session; the application remains open: …"  si persistence_required
+    "Operation failed: …"                                    si no
+
+y (b) el significado de Ctrl+C, `app.py:892-895`: con la bandera en True, `_cancel_operation` **no
+cancela**: pone `exit_when_done` y devuelve `"protected"` (⇒ `lifecycle_controller.py:23-24` imprime
+**"Saving session before exit..."**).
+
+Con el checkpoint nuevo, el **primer** save de un turno simple pasa a ocurrir **antes** del evento
+terminal. De ahí, exactamente, los cuatro resultados:
+
+1. **#754 cuelga** — `test_escape_abort_save_failure…` para el flow con un monkeypatch real:
+   `_refresh_context_window` → `refresh_started.set()` + `await asyncio.sleep(30)`, y `storage.save` →
+   `raise OSError("abort save failed")`. El test hace `_trigger(app,"enter")` y luego
+   `await refresh_started.wait()` **sin cota** (línea 1093). En la rama el save falla **antes** de que
+   se llame a `_refresh_context_window`, la corrutina del turno muere con el `OSError`,
+   `refresh_started` **nunca se setea** y la espera es infinita: el MainThread queda **ocioso en el
+   selector** — la pila del timeout, literal. En `main` el orden es al revés (el save es el terminal),
+   así que refresh sí corre y el escape cancela a tiempo: verde.
+2. **#753 falla** — `failing_save` lanza `OSError("read-only filesystem")` en el **primer** save, que
+   ahora es el pre-LLM ⇒ el sink no ha visto ningún evento terminal ⇒ `persistence_required` sigue
+   **False** ⇒ el mensaje es `"Operation failed: read-only filesystem"` y el assert
+   `"Could not save session" in _transcript(app)` (línea 1073) falla. `result.error` sí es el `OSError`
+   correcto: por eso sólo salta ese assert.
+3. **#751 falla** — `paused_save` hace `saving.set()` y espera `release_save`. El test hace
+   `await saving.wait()` y **después** `_trigger(app,"c-c")`. En `main` ese save pausado es el
+   **terminal** (`persistence_required` ya True) ⇒ c-c → `"protected"` ⇒ `"Saving session before
+   exit..."` presente (assert 1015) y `mock_exit.assert_not_called()` ✓. En la rama el save pausado es
+   el **pre-LLM** ⇒ la bandera sigue False ⇒ `_cancel_operation` **cancela de verdad** ⇒ no se imprime
+   "Saving session before exit" ⇒ assert 1015 falla. `release_save` nunca se setea en esa rama del
+   test, así que falla rápido (0.2 s), no cuelga.
+4. **#752 pasa por casualidad** — sus asserts son todos del camino de error (`result.error` es OSError,
+   `task.exception()` None, "Could not save session", `mock_exit` no llamado) y ese camino sobrevive al
+   reordenamiento: el primer save pausado no cambia el tipo ni el receptor del error.
+
+**Por qué no saltó en local y sí en CI.** El subconjunto que corrí en local fueron ficheros
+"afectados" por el diff; este fichero no está entre ellos, y su fallo depende de **dónde cae el save
+pausado** respecto al evento terminal, que es orden puro de la corrutina. CI corre la suite completa.
+
+**Ya descartado como arreglo (comprobado en código, no ejecutado):** marcar `persistence_required` al
+**arrancar el turno**. `_cancel_operation` con la bandera en True **no cancela y no llama a
+`repl.cancel_current()`**, y `test_ctrl_c_cancels_instead_of_exiting_while_content_is_visible`
+(línea 891) exige justo lo contrario: `mock_cancel.assert_called_once()`. Sería cambiar el
+comportamiento de Ctrl+C en todo el turno para arreglar un test.
+
+**Opciones de arreglo (decisión del diseño de la WIP, no la tomo yo).**
+
+| | arreglo | #751 | #753 | #754 | coste |
+|---|---|---|---|---|---|
+| **A** | 1er checkpoint **después** de `_refresh_context_window()`, antes de `_consume_stream()` | ✗ | ✓ si además se protege la bandera al fallar el save | ✓ | pierde durabilidad durante la preparación (git env + refresh) |
+| **B** | mantener el orden, **proteger la ventana del save** (protect→save→unprotect) y **proteger+re-lanzar** al fallar | ✓ | ✓ | ✗ cuelga igual | toca la semántica de la bandera en `app.py` |
+| **C** | mantener el orden y **actualizar los 3 tests** a la semántica nueva | ✓ | ✓ | requiere cambiar el monkeypatch (que el **1er** save tenga éxito y falle el del **abort**) | toca tests de `main`; máxima durabilidad |
+
+**Nota para cualquier opción:** `#754` cuelga **sin cota** por diseño del test
+(`await refresh_started.wait()`), así que hay que arreglarlo sí o sí — un cuelgue de 300 s por test es
+peor que un fallo, y ese patrón puede repetirse en otros tests con gates `asyncio.Event`.
+
+**Nada ejecutado en local.** Sin pytest, sin Docker, sin contenedor. Todo es lectura de logs de Azure +
+`git` de sólo lectura + edición de esta bitácora.
+
+---
+
+## Entrada #11 — 2026-10-11 — **Decisión: opción C** + diseño final del arreglo
+
+**Decisión del owner (esta sesión):** hacer la **C** — asumir la semántica nueva: un save durabilidad-
+crítico que falla es un **fallo de persistencia**, y una cancelación que cae **dentro** de ese save
+**difiere la salida** en vez de interrumpirlo.
+
+**Hallazgo que abarata la C: no hay que tocar 3 tests, sólo 1.** Al auditar los tests que dependen de
+esta semántica apareció uno que **pasó** en CI y que fija el diseño:
+
+    tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py:937
+    test_cancel_during_context_refresh_persists_user_turn_to_disk        → PASSED [19%]
+
+Ese test pausa `_refresh_context_window`, manda escape y exige que el turno **se cancele de verdad**
+(`status == ABORTED`, `"Partial progress saved"`). Como el checkpoint pre-turno **ya ha corrido** en ese
+punto, queda demostrado que la protección **no puede ser pegajosa desde el inicio del turno**: tiene que
+**liberarse** cuando el save ha aterrizado, o el escape dejaría de cancelar y el turno seguiría hasta el
+final. Eso descarta el arreglo "proteger al arrancar el turno" (que además ya había quedado descartado
+por `test_ctrl_c_cancels_instead_of_exiting_while_content_is_visible:891`, que exige
+`mock_cancel.assert_called_once()`).
+
+Con el diseño correcto —**proteger sólo la ventana del save**— el recuento real es:
+
+| test | con la C |
+|---|---|
+| `test_ctrl_c_defers_exit_until_real_session_save_settles` (#751) | **pasa sin cambios**: el c-c cae dentro de la ventana protegida |
+| `test_deferred_exit_is_not_honored_when_real_session_save_fails` (#752) | pasa sin cambios |
+| `test_normal_save_failure_is_captured_and_rendered` (#753) | **pasa sin cambios**: protegido antes del save ⇒ "Could not save session" |
+| `test_escape_reports_persistence_is_protected` (línea 1106, **nunca llegó a correr**: el run murió en #754) | **pasa sin cambios**: mismo caso que #751, y `escape_controller.py:95` ya imprime "required persistence cannot be cancelled" con `"protected"` |
+| `test_escape_abort_save_failure_is_captured_and_rendered` (#754) | **único cambio**: el save que falla debe ser el del **abort**, no el del checkpoint |
+
+**Diseño implementado (4 ficheros).**
+
+1. `phoson_cli/fullscreen/sink.py` — parámetro `on_persistence_released` y método
+   `release_persistence()`, pareja de `protect_persistence()`.
+2. `phoson_cli/fullscreen/app.py` — `_release_operation_persistence()` (pone
+   `_operation.persistence_required = False`) y lo enlaza al sink. **No** toca `exit_when_done`: una
+   salida ya pedida dentro de la ventana sigue vigente para cuando el turno se asiente.
+3. `phoson_cli/controller.py` — nuevo `_checkpoint()`:
+
+       protect_persistence()  →  await self._save_session()  →  release_persistence()
+
+   usado en los **dos** puntos durabilidad-críticos: el checkpoint pre-LLM y el de cada
+   `AgentToolStartEvent`/`AgentStepDoneEvent`. Un fallo **no** libera (la bandera queda puesta: el turno
+   nunca llegó a disco). Los dos callbacks van con `getattr`/`callable`, igual que `_abort_turn`, porque
+   `ClassicSink` (REPL clásico y tests) no los tiene.
+4. `tests/…/test_fullscreen_shell_unit.py` — el checkpoint aterriza y el fallo se inyecta en el save
+   siguiente (el del abort), con un contador `nonlocal`. Se añade `assert saves >= 2` para que el test
+   no pueda volver a pasar "por accidente" sin ejercitar el save del abort.
+
+**Auditoría de los demás `_save_session()`** (para que ningún fallo cambie de mensaje): error-event →
+protegido por el sink (`AgentErrorEvent`), completado → `AgentDoneEvent`, abort → `protect_persistence()`
+al entrar. `compact_context` (línea ~2128) y `_repair_orphaned_run` (usa `storage.save` directo) quedan
+como estaban, sin envolver: no son rutas de turno.
+
+**Comandos a ejecutar ahora (linter, no tests — sin pytest en el host):**
+
+    uv run ruff check phoson_cli/controller.py phoson_cli/fullscreen/sink.py phoson_cli/fullscreen/app.py tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py
+    uv run ruff format --check phoson_cli/controller.py phoson_cli/fullscreen/sink.py phoson_cli/fullscreen/app.py tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py
+
+**Lo que sigue y requiere autorización aparte:** commit + push + un run de CI completo (Azure). Es la
+**única** verificación posible de este arreglo en esta máquina: la suite no se puede correr en local por
+los BSOD. Ese run además destapará cualquier test afectado que haya quedado **después del índice ~754**
+(el run anterior murió ahí y no ejecutó el resto del fichero ni la cola de la suite).
+
+**Riesgo residual documentado.** Si un c-c cae dentro de una ventana de save, se difiere la salida y el
+turno **no** se cancela: sigue hasta su final natural y el app sale al terminar. Es lo que exige #751 y
+el precio de no interrumpir una escritura obligatoria; el hueco es el de un `save` (milisegundos salvo
+que el disco esté lento). Queda como comportamiento consciente, no accidental.
+
+**RESULTADOS de los comandos de arriba.**
+
+    uv run ruff check  …  →  All checks passed!
+    uv run ruff format --check  …  →  4 files already formatted
+
+**Dos correcciones más, encontradas al revisar el propio diff.**
+
+1. **Guardia `terminal is None`** en el checkpoint del stream
+   (`controller.py:979`). Sin ella, si un motor mal educado emitiera un paso *después* del evento
+   terminal, el `release` del checkpoint borraría el pestillo que el propio evento terminal acaba de
+   poner — y el fallo del save de fin de turno volvería a reportarse como "Operation failed". Con la
+   guardia, tras el terminal ya no se hace ningún checkpoint. Es un no-op para el contrato real del
+   engine ("exactamente un evento terminal") y deja el invariante escrito al lado del código.
+2. **El test no se ata a un ordinal.** La primera versión del arreglo de #754 fallaba el save
+   "número 1"; lo cambié a **"falla todo save que ocurra después de que el refresh haya empezado"**
+   (`if not refresh_started.is_set()`). Es semántico —"el save del abort es el que falla"— en vez de
+   depender de cuántos saves haga hoy el camino, así que no se rompe si mañana aparece un save nuevo
+   antes. Se conserva `assert saves >= 2` para que el test no pueda volver a pasar sin ejercitar
+   realmente el save del abort.
+
+**Estado del cambio (5 ficheros, +263/−4 incluyendo bitácora):**
+
+| fichero | cambio |
+|---|---|
+| `phoson_cli/controller.py` | `_checkpoint()` (protect→save→release), 2 usos, guardia `terminal is None` |
+| `phoson_cli/fullscreen/sink.py` | `on_persistence_released` + `release_persistence()` |
+| `phoson_cli/fullscreen/app.py` | `_release_operation_persistence()` + wiring |
+| `tests/…/test_fullscreen_shell_unit.py` | sólo `test_escape_abort_save_failure_is_captured_and_rendered` |
+| `BITACORA.md` | entradas #9, #10, #11 |
+
+**Sin commitear todavía, sin push, sin CI.** El siguiente paso (commit + push + run completo en Azure)
+necesita autorización explícita: es la **única** verificación posible en esta máquina, y además es la que
+revelará si queda algún test afectado **después del índice ~754**, que el run anterior nunca llegó a
+ejecutar.
+
+---
+
+## 12. Plan de commit + push + run de CI (2026-10-11)
+
+**Estado:** comandos **escritos aquí antes de ejecutarlos**, aún **no** autorizados ni corridos. Nada de
+esto se ejecuta hasta que el owner dé el visto bueno. Se añaden sólo los **cinco** ficheros del arreglo;
+los `_scratch_*`, `BSOD_INVESTIGATION.md` y `tests/_bsod_journal.py` son forense local y **se quedan
+fuera** (nunca `git add -A`).
+
+**Mensaje de commit (ASCII, sin acentos; tipo `fix(cli)` como los recientes):**
+
+    fix(cli): protect mid-turn checkpoints so a save failure reports as persistence
+
+    The pre-LLM checkpoint runs before any terminal event, so the front end had
+    not yet latched persistence_required: a save failure there was rendered as a
+    generic "Operation failed", and a Ctrl+C landing inside the write cancelled
+    the turn instead of deferring the exit until the write settled.
+
+    Protect only the save window (protect -> save -> release) rather than latching
+    from the start of the turn, so an ordinary mid-turn Ctrl+C still cancels. A
+    failed checkpoint deliberately leaves the flag set: the turn never reached disk.
+
+**Comandos, en orden:**
+
+    git add BITACORA.md phoson_cli/controller.py phoson_cli/fullscreen/app.py phoson_cli/fullscreen/sink.py tests/phoson_cli/fullscreen/test_fullscreen_shell_unit.py
+    git status --short
+    git commit -m "fix(cli): protect mid-turn checkpoints so a save failure reports as persistence" -m "The pre-LLM checkpoint runs before any terminal event, so the front end had not yet latched persistence_required: a save failure there was rendered as a generic Operation failed, and a Ctrl+C landing inside the write cancelled the turn instead of deferring the exit until the write settled." -m "Protect only the save window (protect -> save -> release) rather than latching from the start of the turn, so an ordinary mid-turn Ctrl+C still cancels. A failed checkpoint deliberately leaves the flag set: the turn never reached disk."
+    git push origin fix/mid-turn-durability
+
+**Seguimiento del run (Azure).** Tras el push, localizar el run de esta rama y bajar su log:
+
+    gh run list --branch fix/mid-turn-durability --limit 3
+    gh run watch <run-id> --exit-status
+    gh run view <run-id> --log > _scratch_ci_run5.log
+
+(`gh run view --log` es sólo lectura; el log va a `_scratch_ci_run5.log`, que es untracked.)
+
+**Criterios de verificación del run** (lo único que se puede comprobar en esta máquina):
+
+1. `test_ctrl_c_defers_exit_until_real_session_save_settles` → PASSED.
+2. `test_normal_save_failure_is_captured_and_rendered` → PASSED.
+3. `test_escape_abort_save_failure_is_captured_and_rendered` → PASSED (ya no HANG; el job sigue y
+   termina en lugar de morir en el `pytest-timeout` de 300 s).
+4. El job `tests` **supera el ~18%** y **termina**, ejecutando por fin la cola que nunca corrió
+   (resto de `test_fullscreen_shell_unit.py` y el resto de la suite). Cualquier fallo ahí es nuevo
+   terreno y se anota como hallazgo, no se arregla a ciegas.
+
+**Rollback si sale mal:** `git revert <sha>` (o simplemente no mergear PR #279). El commit **no** toca
+la lógica del engine: `_checkpoint()` sólo envuelve el `_save_session()` que ya existía, así que revertir
+devuelve el árbol al comportamiento de `78470f3`.
+
+**Pendiente para un commit posterior (no urgente):** quitar el paso temporal `Locate the hanging test`
+(`sed -n '740,785p'`) del workflow y decidir si se conservan `-v`, `--with pytest-timeout`,
+`--timeout=300 --timeout-method=thread`, `-o faulthandler_timeout=600` y `timeout-minutes: 20`.

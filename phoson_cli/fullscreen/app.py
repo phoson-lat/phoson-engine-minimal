@@ -363,6 +363,7 @@ class PhosonApp:
             on_session_reset=self._reset_session_view,
             on_session_restore=self._restore_session_view,
             on_persistence_required=self._protect_operation_persistence,
+            on_persistence_released=self._release_operation_persistence,
         )
         # Controller construction can read models.json. Route any malformed-file
         # warning into the future transcript before the alternate screen starts.
@@ -882,6 +883,16 @@ class PhosonApp:
         """Prevent repeated cancellation from interrupting required session saves."""
         if self._operation is not None:
             self._operation.persistence_required = True
+
+    def _release_operation_persistence(self) -> None:
+        """Allow cancellation again once a required save has landed.
+
+        Only the barrier's *completion* is released: a ``exit_when_done`` flag
+        latched by a cancellation that arrived inside the save window stays,
+        so that Ctrl+C still ends the app when the turn settles.
+        """
+        if self._operation is not None:
+            self._operation.persistence_required = False
 
     def _cancel_operation(self, *, exit_when_done: bool = False) -> str:
         """Cancel the outer app operation, or defer exit through persistence."""

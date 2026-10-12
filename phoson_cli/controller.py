@@ -976,11 +976,17 @@ class SessionController:
                 # dispatch a possibly long-running handler: checkpointing here
                 # means a kill mid-tool leaves a resumable orphan (#129)
                 # instead of silently dropping the model's call.
-                if isinstance(event, (AgentToolStartEvent, AgentStepDoneEvent)):
+                # ``terminal is None``: never checkpoint past the terminal event.
+                # That event owns the *latched* persistence requirement, so a
+                # checkpoint after it would release the latch and downgrade a
+                # failing end-of-turn save to a generic operation error.
+                if terminal is None and isinstance(
+                    event, (AgentToolStartEvent, AgentStepDoneEvent)
+                ):
                     if self._mirror_history_into_tree(
                         self.engine.get_partial_history()
                     ):
-                        await self._save_session()
+                        await self._checkpoint()
 
         self.current_task = asyncio.create_task(consume())
         try:
@@ -1178,6 +1184,33 @@ class SessionController:
                 "last_run_id": self.tree.last_run_id,
             },
         )
+
+    async def _checkpoint(self) -> None:
+        """Persist a durability-critical checkpoint of the in-flight turn.
+
+        The messages being written are already on the tree, so the save is
+        protected while it is in flight: a cancellation that lands inside it
+        is *deferred* instead of interrupting the write
+        (``protect_persistence``), and a failure is reported as a persistence
+        failure rather than as a generic operation error — the front end
+        tells the two apart by exactly that flag (``_finish_operation`` in
+        ``fullscreen/app.py``).
+
+        The requirement is released once the save has landed, so Ctrl+C keeps
+        cancelling an ordinary mid-turn turn instead of being swallowed for
+        the rest of it. A *failure* deliberately leaves the flag set: the
+        turn never reached disk.
+
+        Both callbacks are optional so unit tests and the classic REPL, which
+        drive the controller with a minimal sink, keep working.
+        """
+        protect = getattr(self.sink, "protect_persistence", None)
+        if callable(protect):
+            protect()
+        await self._save_session()
+        release = getattr(self.sink, "release_persistence", None)
+        if callable(release):
+            release()
 
     _WAKE_TITLE_PREFIXES = (
         "[MONITOR EVENTS]",
@@ -1484,7 +1517,7 @@ class SessionController:
             # status reach disk before the first LLM call, so a hard kill at
             # any point from here keeps the prompt (and leaves the session
             # orphan-checkable on the next resume — #129).
-            await self._save_session()
+            await self._checkpoint()
             reasoning_effort = self.config.reasoning_effort
             if reasoning_effort not in REASONING_EFFORTS:
                 reasoning_effort = None
