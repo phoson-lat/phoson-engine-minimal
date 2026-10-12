@@ -76,11 +76,20 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev --locked
 
+      - name: Locate the hanging test
+        # TEMPORARY (#279): this branch's suite stalls deterministically on test
+        # #721 (720 completed, printed as "18%") and the faulthandler dump cannot
+        # name it — a suspended coroutine is not on the native stack. This prints
+        # the real collection order around that index; remove once it is named.
+        run: uv run pytest --collect-only -q | sed -n '700,745p'
+
       - name: Run tests
         # faulthandler_timeout is built into pytest (no plugin, no new dep): at
-        # 10 minutes it dumps every thread's traceback, so a hang names its own
-        # test instead of printing nothing for half an hour.
-        run: uv run pytest -q -o faulthandler_timeout=600 || [ $? -eq 5 ]
+        # 10 minutes it dumps every thread's traceback. pytest-timeout comes in
+        # as an ephemeral dependency of `uv run --with` (uv.lock is untouched)
+        # so a stalled test is *named* and the job fails in minutes instead of
+        # sitting at 18% until the cap above kills it.
+        run: uv run --with pytest-timeout pytest -q --timeout=300 --timeout-method=thread -o faulthandler_timeout=600 || [ $? -eq 5 ]
 
   # The config/persistence tests isolate themselves via $HOME, which Windows'
   # `expanduser` ignores (it uses $USERPROFILE), so on Windows they used to
