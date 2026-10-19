@@ -6,6 +6,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Add
+
+- **llm**: new `chatgpt` provider — the ChatGPT subscription (Plus/Pro/Team) served through the
+  Codex backend (`https://chatgpt.com/backend-api/codex`, Responses API) instead of a metered API
+  key. Sign in with `phoson_llm.auth.chatgpt.login()` (device code for headless/SSH, or a browser
+  PKCE flow on the loopback callback) and the OAuth tokens are stored in `~/.phoson/auth.json`
+  (0600, atomic writes) — never in `config.toml`. An existing `~/.codex/auth.json` login is adopted
+  automatically, the access token is refreshed on expiry (and once more after a 401), and usage is
+  reported with `cost_known=False` since a subscription is not billed per token. Available through
+  `build_chat("chatgpt")` and listed in the model picker via the backend's own `gpt-*` catalogue.
+- **cli**: `/auth` slash command (`status`, `login chatgpt [--device|--browser]`, `logout`) and a
+  ChatGPT step in the setup wizard that offers the sign-in instead of an API key prompt. A stored
+  login counts as the provider's credential: `/provider chatgpt` enables it in `config.toml` on
+  its own and picks a model the subscription actually serves (the previous provider's slug would
+  be rejected by the backend), and `/model` lists the live `gpt-*` catalogue. When no login is
+  stored, `/provider` and `/model` report the exact fix (`run /auth login chatgpt`).
+  The aliases `codex`, `openai-codex` and `openai_codex` fold to `chatgpt` in either the
+  provider argument, the `--provider` flag or `config.toml` (the spelling is kept in
+  `config.toml`; `enabled_providers` is stored canonicalized).
+- **llm**: new `google-code-assist` provider — a Google *subscription* (OAuth, no API key) served
+  through the Code Assist backend (`https://cloudcode-pa.googleapis.com/v1internal`,
+  `:streamGenerateContent`). Sign in with `phoson_llm.auth.code_assist.login()` (browser PKCE on a
+  loopback callback, or a copy/paste code for headless/SSH) and the OAuth tokens are stored in
+  `~/.phoson/auth-google.json` (0600, atomic writes) — a dedicated file so the ChatGPT login in
+  `~/.phoson/auth.json` and this one never clobber each other. An existing Gemini CLI login
+  (`~/.gemini/oauth_creds.json`) is adopted automatically, the access token is refreshed on expiry
+  (and once more after a 401), and usage is reported with `cost_known=False` since a subscription is
+  not billed per token. The Cloud project is resolved through the `:loadCodeAssist` / `:onboardUser`
+  handshake and cached on the credentials. Available through `build_chat("google-code-assist")` and
+  listed in the model picker via `:retrieveUserQuota` (with a static Gemini catalogue as fallback).
+  The OAuth **client** is not bundled: the login reads it from `PHOSON_GOOGLE_CLIENT_ID` (and the
+  optional `PHOSON_GOOGLE_CLIENT_SECRET`, omitted for a public PKCE client), so no client id or
+  secret lives in the repository; when the variable is unset the login fails with an actionable
+  message instead of an opaque HTTP 400.
+- **cli**: `/auth` is now provider-aware (`status [provider]`, `login [provider]
+  [--device|--browser]`, `logout [provider]`) and the setup wizard lists both subscription
+  providers first, tagged *subscription, no API key*, and offers their sign-in with the flow
+  wording that fits each one (device code for ChatGPT, pasted authorize code for Google). A
+  stored login counts as the provider's credential:
+  `/provider google-code-assist` enables it in `config.toml` on its own and picks a model the
+  subscription serves; when no login is stored, `/provider` and `/model` report the exact fix
+  (`run /auth login google-code-assist`). The aliases `code-assist`, `code_assist`, `codeassist`,
+  `gemini-code-assist` and `gca` fold to `google-code-assist` (the `google` alias still means
+  `gemini`).
+
+### Fix
+
+- **cli**: the Google Code Assist onboarding no longer fails with a misleading message. A stored
+  login whose account cannot be provisioned used to read as *"No Google Code Assist login stored —
+  run `/auth login google-code-assist` first"*, even though the sign-in was fine; the real cause
+  (e.g. Google retiring the free individual tier — `UNSUPPORTED_CLIENT` — or a tier that requires
+  `userDefinedCloudaicompanionProject`) is now surfaced, with the actionable fix
+  (`set GOOGLE_CLOUD_PROJECT to a project with the Code Assist API enabled and a Code Assist
+  licence`). A project the account may not use (`projectValidationError`, e.g. a missing IAM
+  permission) is now rejected up front as a terminal error instead of failing on every request.
+- **cli**: `/provider google-code-assist` no longer leaves the *previous* provider's model in place
+  when the subscription's catalogue cannot be fetched (an offline or unlicensed account used to
+  keep, say, `gpt-6-luna` — a ChatGPT slug the Google backend would reject). It now falls back to
+  a native default (`gemini-2.5-pro`) so the `(provider, model)` pair stays coherent, and points at
+  `/model` to change it.
+
 ## v0.52.0 (2026-10-12)
 
 ### Fix

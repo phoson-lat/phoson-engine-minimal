@@ -72,6 +72,18 @@ PROVIDER_ALIASES: dict[str, str] = {
     "aws": "bedrock",
     "grok": "xai",
     "dashscope": "alibaba",
+    # The ChatGPT subscription is served by OpenAI's Codex backend, so the
+    # codex-flavoured names are what users reach for.
+    "codex": "chatgpt",
+    "openai-codex": "chatgpt",
+    "openai_codex": "chatgpt",
+    # The Google subscription surface (Code Assist) is not the Gemini API, so
+    # it needs a name of its own; ``google`` already means the API-key one.
+    "code-assist": "google-code-assist",
+    "code_assist": "google-code-assist",
+    "codeassist": "google-code-assist",
+    "gemini-code-assist": "google-code-assist",
+    "gca": "google-code-assist",
 }
 
 #: Canonical provider names the CLI can serve (mirrors ``build_chat``).
@@ -97,6 +109,8 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "fireworks",
         "cohere",
         "omniroute",
+        "chatgpt",
+        "google-code-assist",
         "bedrock",
         "aws",
         "vllm",
@@ -106,9 +120,9 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
 
 
 def normalize_provider(provider: str) -> str:
-    """Lowercase a provider name and fold aliases (``google`` → ``gemini``)."""
-    p = provider.lower()
-    return PROVIDER_ALIASES.get(p, p)
+    """Trim, lowercase and fold aliases (``google`` → ``gemini``)."""
+    name = provider.strip().lower()
+    return PROVIDER_ALIASES.get(name, name)
 
 
 def model_provider_for(

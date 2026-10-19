@@ -49,6 +49,7 @@ if TYPE_CHECKING:
         AlibabaChat,
         BaseLLMChat,
         BedrockChat,
+        ChatGPTChat,
         MistralChat,
         DeepSeekChat,
         LMStudioChat,
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
         AnthropicChat,
         FireworksChat,
         OmniRouteChat,
+        CodeAssistChat,
         OpenRouterChat,
         PerplexityChat,
         GitHubModelsChat,
@@ -124,6 +126,8 @@ __all__ = [
     "FireworksChat",
     "CohereChat",
     "OmniRouteChat",
+    "ChatGPTChat",
+    "CodeAssistChat",
     "build_chat",
     # schemas - inputs
     "Message",
@@ -191,6 +195,8 @@ _CHAT_EXPORTS = frozenset(
         "FireworksChat",
         "CohereChat",
         "OmniRouteChat",
+        "ChatGPTChat",
+        "CodeAssistChat",
     }
 )
 

@@ -1,3 +1,4 @@
+from typing import ClassVar
 from pathlib import Path
 from contextlib import contextmanager
 from dataclasses import replace
@@ -15,11 +16,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.shortcuts import CompleteStyle, PromptSession
 
 from phoson_cli.theme import load_theme, build_wizard_prompt_style
-from phoson_cli.labels import (
-    PLUGIN_LABELS,
-    PROVIDER_LABELS,
-    PLUGIN_REQUIRED_EXTRAS,
-)
+from phoson_cli.labels import PLUGIN_LABELS, PLUGIN_REQUIRED_EXTRAS, provider_label
 
 from .config import (
     PhosonConfig,
@@ -50,6 +47,74 @@ class SetupWizard:
     then writes the result to ``~/.phoson/config.toml`` via
     :func:`~phoson_cli.config.save_config`.
     """
+
+    #: Subscription (OAuth) providers offered by the wizard, mapped to their
+    #: display label and the description appended to "signs in with your …".
+    _SUBSCRIPTION_BLURBS: ClassVar[dict[str, tuple[str, str]]] = {
+        "chatgpt": ("ChatGPT", "ChatGPT subscription (Plus/Pro)"),
+        "google-code-assist": (
+            "Google Code Assist",
+            "Google subscription (Gemini Code Assist / Cloud)",
+        ),
+    }
+
+    #: Per-provider wording of the sign-in step: the flows accepted (first is
+    #: the default), the hint shown in the flow prompt and the note printed
+    #: before the round-trip. The two providers differ — ChatGPT hands back a
+    #: device code, Google Code Assist prints an authorize URL and takes the
+    #: pasted code back.
+    _SUBSCRIPTION_FLOWS: ClassVar[dict[str, tuple[tuple[str, ...], str, str]]] = {
+        "chatgpt": (
+            ("browser", "device"),
+            "device for headless/SSH",
+            "the device code is shown here for headless/SSH",
+        ),
+        "google-code-assist": (
+            ("browser", "headless"),
+            "paste for headless/SSH",
+            "the authorize URL is printed here for headless/SSH",
+        ),
+    }
+
+    #: Spelling a user may type for a non-default login flow, folded to the
+    #: canonical method each provider's ``login()`` expects.
+    _LOGIN_METHOD_ALIASES: ClassVar[dict[str, dict[str, str]]] = {
+        "chatgpt": {"headless": "device", "paste": "device", "code": "device"},
+        "google-code-assist": {
+            "device": "headless",
+            "paste": "headless",
+            "code": "headless",
+        },
+    }
+
+    #: Providers offered in the selection step, in display order. The
+    #: subscription (OAuth) providers come first: they need no API key, only a
+    #: sign-in, which makes them the quickest way to get started.
+    _PROVIDER_CHOICES: ClassVar[tuple[str, ...]] = (
+        "chatgpt",
+        "google-code-assist",
+        "openrouter",
+        "openai",
+        "anthropic",
+        "ollama",
+        "github",
+        "nvidia",
+        "xai",
+        "groq",
+        "deepseek",
+        "alibaba",
+        "together",
+        "perplexity",
+        "lmstudio",
+        "vllm",
+        "azure",
+        "gemini",
+        "mistral",
+        "bedrock",
+        "fireworks",
+        "cohere",
+        "omniroute",
+    )
 
     def __init__(
         self, config: PhosonConfig | None = None, console: Console | None = None
@@ -223,36 +288,15 @@ class SetupWizard:
         Displays a numbered list and lets the user toggle entries by typing
         their numbers. Updates ``self.enabled_providers`` in place.
         """
-        providers = [
-            "openrouter",
-            "openai",
-            "anthropic",
-            "ollama",
-            "github",
-            "nvidia",
-            "xai",
-            "groq",
-            "deepseek",
-            "alibaba",
-            "together",
-            "perplexity",
-            "lmstudio",
-            "vllm",
-            "azure",
-            "gemini",
-            "mistral",
-            "bedrock",
-            "fireworks",
-            "cohere",
-            "omniroute",
-        ]
+        providers = list(self._PROVIDER_CHOICES)
         selected = set(self.enabled_providers)
 
         while True:
             self._section(
                 1,
                 "Providers",
-                "Type numbers to toggle (e.g. 1 3), Enter to continue.",
+                "Type numbers to toggle (e.g. 1 3), Enter to continue. "
+                "Subscription providers need no API key — you sign in to them.",
             )
             body = Text()
             for idx, provider in enumerate(providers, start=1):
@@ -262,7 +306,9 @@ class SetupWizard:
                 )
                 line = Text(f"  {idx}. ")
                 line.append(f"{marker} ", style=state_style)
-                line.append(PROVIDER_LABELS[provider], style=self.theme.text)
+                line.append(provider_label(provider), style=self.theme.text)
+                if provider in self._SUBSCRIPTION_BLURBS:
+                    line.append("  · subscription, no API key", style=self.theme.muted)
                 body.append(line)
                 body.append("\n")
             body.rstrip()
@@ -447,7 +493,117 @@ class SetupWizard:
                 config.omniroute_api_key,
                 field_name="omniroute_api_key",
             )
+        if "chatgpt" in self.enabled_providers:
+            await self._configure_subscription_login("chatgpt")
+        if "google-code-assist" in self.enabled_providers:
+            await self._configure_subscription_login("google-code-assist")
         return config
+
+    async def _configure_chatgpt_login(self) -> None:
+        """Back-compat wrapper for the ChatGPT sign-in step."""
+        await self._configure_subscription_login("chatgpt")
+
+    async def _configure_subscription_login(self, provider: str) -> None:
+        """Offer the sign-in of a subscription (OAuth) provider.
+
+        Neither ``chatgpt`` nor ``google-code-assist`` has an API key: they
+        authenticate with an OAuth login stored under ``~/.phoson/``, so nothing
+        is written to ``config.toml`` here. The OAuth round-trip only runs on a
+        real terminal — piped/scripted runs (and the unit tests driving them)
+        must never touch the network.
+        """
+        label, blurb = self._SUBSCRIPTION_BLURBS[provider]
+        self.console.print(
+            Text(
+                f"  {label} — signs in with your {blurb} — no API key.",
+                style=self.theme.muted,
+            )
+        )
+        if not self.console.is_terminal:
+            self.console.print(
+                Text(
+                    "  Skipping the sign-in on a non-interactive terminal; "
+                    f"run /auth login {provider} later.",
+                    style=self.theme.muted,
+                )
+            )
+            return
+        if not await self._confirm(f"Sign in to {label} now?", default=True):
+            self.console.print(
+                Text(
+                    f"  Skipped — run /auth login {provider} when you are ready.",
+                    style=self.theme.muted,
+                )
+            )
+            return
+        methods, flow_hint, _ = self._SUBSCRIPTION_FLOWS[provider]
+        raw = await self._prompt_text(
+            f"Login flow ({methods[0]}, {flow_hint})",
+            methods[0],
+        )
+        method = raw.strip().lower() or methods[0]
+        method = self._LOGIN_METHOD_ALIASES.get(provider, {}).get(method, method)
+        if method not in methods:
+            self.console.print(
+                Text(
+                    f"Unknown login flow {method!r} — using {methods[0]!r}.",
+                    style=self.theme.warn,
+                )
+            )
+            method = methods[0]
+        await self._subscription_sign_in(provider, method)
+
+    async def _chatgpt_sign_in(self, method: str) -> None:
+        """Back-compat wrapper for the ChatGPT sign-in."""
+        await self._subscription_sign_in("chatgpt", method)
+
+    async def _subscription_sign_in(self, provider: str, method: str) -> None:
+        """Run the provider login, keeping the wizard alive on any failure."""
+        label, _ = self._SUBSCRIPTION_BLURBS[provider]
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
+            from phoson_llm.auth.chatgpt import login
+        else:
+            from phoson_llm.auth.code_assist import CodeAssistAuthError as AuthError
+            from phoson_llm.auth.code_assist import login
+
+        def notice(message: str) -> None:
+            """Print the device code / authorize URL (markup off, line by line)."""
+            for line in str(message).splitlines():
+                self.console.print(Text(f"  {line}", style=self.theme.muted))
+
+        _, _, flow_notice = self._SUBSCRIPTION_FLOWS[provider]
+        self.console.print(
+            Text(
+                f"  The sign-in happens in your browser ({flow_notice}).",
+                style=self.theme.muted,
+            )
+        )
+        try:
+            tokens = await login(method, on_prompt=notice, on_url=notice)
+        except AuthError as exc:
+            style = f"bold {self.theme.err}" if exc.terminal else self.theme.warn
+            self.console.print(Text(f"  {label} sign-in failed: {exc}", style=style))
+            self.console.print(
+                Text(
+                    f"  Setup continues without it — run /auth login {provider} later.",
+                    style=self.theme.muted,
+                )
+            )
+            return
+        except OSError as exc:  # e.g. the loopback port is busy
+            self.console.print(
+                Text(f"  {label} sign-in failed: {exc}", style=self.theme.warn)
+            )
+            return
+        account = tokens.email or "unknown account"
+        plan = getattr(tokens, "plan_type", None) or getattr(tokens, "tier", None)
+        self.console.print(
+            Text(
+                f"  Signed in to {label} as {account} ({plan or 'unknown plan'}).",
+                style=self.theme.ok,
+            )
+        )
 
     async def _configure_defaults(self, config: PhosonConfig) -> PhosonConfig:
         """Prompt for default provider, main model, and sub-agent model.
@@ -678,6 +834,8 @@ class SetupWizard:
         table.add_row("Cohere", self._mask_secret(config.cohere_api_key))
         table.add_row("OmniRoute", config.omniroute_base_url or "—")
         table.add_row("OmniRoute key", self._mask_secret(config.omniroute_api_key))
+        table.add_row("ChatGPT", self._chatgpt_summary())
+        table.add_row("Google Code Assist", self._google_code_assist_summary())
         plugin_names = [
             PLUGIN_LABELS[spec][0]
             if isinstance(spec, str) and spec in PLUGIN_LABELS
@@ -690,6 +848,31 @@ class SetupWizard:
         table.add_row("Safe mode", "on" if config.safe_mode else "off")
         self.console.print()
         self.console.print(table)
+
+    def _chatgpt_summary(self) -> str:
+        """One summary-table cell for the ChatGPT subscription login.
+
+        Reads ``~/.phoson/auth.json`` only (no network, no token).
+        """
+        from phoson_llm.auth.chatgpt import auth_status
+
+        return self._subscription_summary(auth_status())
+
+    def _google_code_assist_summary(self) -> str:
+        """One summary-table cell for the Google Code Assist login.
+
+        Reads ``~/.phoson/auth-google.json`` only (no network, no token).
+        """
+        from phoson_llm.auth.code_assist import auth_status
+
+        return self._subscription_summary(auth_status())
+
+    @staticmethod
+    def _subscription_summary(status) -> str:
+        """Render a subscription login as an email/plan summary cell."""
+        if not status.logged_in:
+            return "not signed in"
+        return f"{status.email or 'signed in'} ({status.plan_type or 'unknown plan'})"
 
     async def _choose_default_provider(self, current: str) -> str:
         """Prompt the user to select the default provider from enabled ones.
@@ -712,7 +895,7 @@ class SetupWizard:
             for idx, provider in enumerate(self.enabled_providers, start=1):
                 marker = "▶" if provider == current else "•"
                 self.console.print(
-                    f"  {idx}. {marker} {PROVIDER_LABELS[provider]} ({provider})"
+                    f"  {idx}. {marker} {provider_label(provider)} ({provider})"
                 )
             raw = (await self._prompt_text("default provider", current)).strip().lower()
             if not raw:
@@ -929,7 +1112,34 @@ class SetupWizard:
             or config.provider == "omniroute"
         ):
             enabled.append("omniroute")
+        if config.provider == "chatgpt" or _chatgpt_logged_in():
+            enabled.append("chatgpt")
+        if config.provider == "google-code-assist" or _google_code_assist_logged_in():
+            enabled.append("google-code-assist")
         return enabled or [config.provider]
+
+
+def _chatgpt_logged_in() -> bool:
+    """Whether a ChatGPT subscription login is stored (no network).
+
+    ``chatgpt`` has no ``config.toml`` credential: its only credential is the
+    OAuth token file, so the wizard pre-selects it when that file exists.
+    """
+    from phoson_llm.auth.chatgpt import has_tokens
+
+    return has_tokens()
+
+
+def _google_code_assist_logged_in() -> bool:
+    """Whether a Google Code Assist login is stored (no network).
+
+    Like ``chatgpt`` its only credential is the OAuth token file
+    (``~/.phoson/auth-google.json``), so the wizard pre-selects it when that
+    file exists. The auth module is imported lazily.
+    """
+    from phoson_llm.auth.code_assist import has_tokens
+
+    return has_tokens()
 
 
 async def run_install_wizard(config: PhosonConfig | None = None) -> PhosonConfig:

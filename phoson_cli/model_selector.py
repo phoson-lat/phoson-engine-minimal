@@ -113,6 +113,10 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_lmstudio_models(config)
     if provider == "omniroute":
         return await _list_omniroute_models(config)
+    if provider == "chatgpt":
+        return await _list_chatgpt_models(config)
+    if provider == "google-code-assist":
+        return await _list_google_code_assist_models(config)
     return [ModelOption(id=config.model, label=config.model, provider=provider)]
 
 
@@ -738,6 +742,85 @@ async def _list_omniroute_models(config: PhosonConfig) -> list[ModelOption]:
         )
         for item in data.get("data", [])
         if item.get("id")
+    ]
+    return _prioritize_current(options, config.model)
+
+
+#: Shared hint for the ChatGPT subscription provider (no API key exists).
+_CHATGPT_NOT_LOGGED_IN = "No ChatGPT login stored — run `/auth login chatgpt` first."
+
+
+async def _list_chatgpt_models(config: PhosonConfig) -> list[ModelOption]:
+    """Catalogue of the signed-in ChatGPT subscription.
+
+    The returned slugs are exactly the ones ``ChatGPTChat`` accepts. The
+    login lives in ``~/.phoson/auth.json`` (no config.toml credential), so
+    a missing login is reported as an actionable error.
+    """
+    from phoson_llm.auth.chatgpt import ChatGPTAuthError, has_tokens
+    from phoson_llm.chats.chatgpt import CHATGPT_CODEX_BASE_URL, list_models
+
+    if not has_tokens():
+        raise ModelListingError(_CHATGPT_NOT_LOGGED_IN)
+    base_url = _models_provider_base_url(config, "chatgpt") or CHATGPT_CODEX_BASE_URL
+    try:
+        models = await list_models(base_url=base_url)
+    except ChatGPTAuthError as exc:
+        raise ModelListingError(f"{_CHATGPT_NOT_LOGGED_IN} ({exc})") from exc
+    except Exception as exc:  # noqa: BLE001 — network/parse failures are expected
+        raise ModelListingError(f"Failed to fetch ChatGPT models: {exc}") from exc
+
+    options = [
+        ModelOption(id=model.slug, label=model.label, provider="chatgpt")
+        for model in models
+        if model.slug
+    ]
+    return _prioritize_current(options, config.model)
+
+
+#: Shared hint for the Google Code Assist subscription provider (no API key).
+_GOOGLE_CODE_ASSIST_NOT_LOGGED_IN = (
+    "No Google Code Assist login stored — run `/auth login google-code-assist` first."
+)
+
+
+async def _list_google_code_assist_models(config: PhosonConfig) -> list[ModelOption]:
+    """Catalogue of the signed-in Google Code Assist subscription.
+
+    Ids come from ``:retrieveUserQuota`` (falling back to the static
+    :data:`~phoson_llm.chats.code_assist.DEFAULT_MODELS`). The login lives in
+    ``~/.phoson/auth-google.json`` (no config.toml credential), so a missing
+    login is reported as an actionable error.
+    """
+    from phoson_llm.auth.code_assist import (
+        CODE_ASSIST_BASE_URL,
+        CodeAssistAuthError,
+        has_tokens,
+    )
+    from phoson_llm.chats.code_assist import list_models
+
+    if not has_tokens():
+        raise ModelListingError(_GOOGLE_CODE_ASSIST_NOT_LOGGED_IN)
+    base_url = _models_provider_base_url(config, "google-code-assist") or (
+        CODE_ASSIST_BASE_URL
+    )
+    try:
+        models = await list_models(base_url=base_url)
+    except CodeAssistAuthError as exc:
+        # A login *is* stored (checked above), so a failure here is about the
+        # account/project (missing Code Assist licence, unprovisioned project, an
+        # expired token), never about being signed out — reuse the backend's own
+        # message instead of the misleading "no login" hint.
+        raise ModelListingError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — network/parse failures are expected
+        raise ModelListingError(
+            f"Failed to fetch Google Code Assist models: {exc}"
+        ) from exc
+
+    options = [
+        ModelOption(id=model.slug, label=model.label, provider="google-code-assist")
+        for model in models
+        if model.slug
     ]
     return _prioritize_current(options, config.model)
 

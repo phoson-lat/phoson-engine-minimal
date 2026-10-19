@@ -50,6 +50,8 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
     "FireworksChat": "phoson_llm.chats.fireworks",
     "CohereChat": "phoson_llm.chats.cohere",
     "OmniRouteChat": "phoson_llm.chats.omniroute",
+    "ChatGPTChat": "phoson_llm.chats.chatgpt",
+    "CodeAssistChat": "phoson_llm.chats.code_assist",
 }
 
 
@@ -552,6 +554,14 @@ _PROVIDER_ALIASES: Final[dict[str, str]] = {
     "dashscope": "alibaba",
     "google": "gemini",
     "grok": "xai",
+    "codex": "chatgpt",
+    "openai-codex": "chatgpt",
+    "openai_codex": "chatgpt",
+    "code-assist": "google-code-assist",
+    "code_assist": "google-code-assist",
+    "codeassist": "google-code-assist",
+    "gemini-code-assist": "google-code-assist",
+    "gca": "google-code-assist",
 }
 _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
     {
@@ -559,11 +569,13 @@ _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
         "anthropic",
         "azure",
         "bedrock",
+        "chatgpt",
         "cohere",
         "deepseek",
         "fireworks",
         "gemini",
         "github",
+        "google-code-assist",
         "groq",
         "lmstudio",
         "mistral",
@@ -586,6 +598,18 @@ def _canonical_provider(value: str, *, source: str) -> str:
     if not name or canonical not in _CANONICAL_PROVIDERS:
         raise PhosonConfigError(f"{source} contains unknown provider {value!r}")
     return canonical
+
+
+def _provider_name(value: str) -> str:
+    """Fold a provider alias to its canonical name (unknown names pass through).
+
+    Unlike :func:`_canonical_provider` this never raises, so callers that merely
+    branch on the provider id (adapter building, credential checks) keep their
+    existing error behaviour. Keep :data:`_PROVIDER_ALIASES` in sync with
+    ``phoson_cli.models.PROVIDER_ALIASES`` (``test_models_file`` guards both).
+    """
+    name = value.strip().lower()
+    return _PROVIDER_ALIASES.get(name, name)
 
 
 def canonicalize_enabled_providers(
@@ -1854,6 +1878,30 @@ def save_config(
     return config_path
 
 
+def _chatgpt_logged_in() -> bool:
+    """Whether a ChatGPT subscription login is stored.
+
+    ``chatgpt`` has no config.toml credential at all — it authenticates with
+    the OAuth tokens in ``~/.phoson/auth.json`` — so the auth module (and
+    ``httpx``) is imported only when this check actually runs.
+    """
+    from phoson_llm.auth.chatgpt import has_tokens
+
+    return bool(has_tokens())
+
+
+def _google_code_assist_logged_in() -> bool:
+    """Whether a Google Code Assist subscription login is stored.
+
+    Like ``chatgpt`` this provider has no API key: it authenticates with the
+    OAuth tokens in ``~/.phoson/auth-google.json``. The auth module is
+    imported lazily so CLI startup never pays for ``httpx``.
+    """
+    from phoson_llm.auth.code_assist import has_tokens
+
+    return bool(has_tokens())
+
+
 def _credential_providers(config: PhosonConfig) -> list[str]:
     """Return the providers that have a usable credential in ``config``.
 
@@ -1905,6 +1953,10 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("vllm")
     if getattr(config, "lmstudio_base_url", None):
         providers.append("lmstudio")
+    if _chatgpt_logged_in():
+        providers.append("chatgpt")
+    if _google_code_assist_logged_in():
+        providers.append("google-code-assist")
     return providers
 
 
@@ -1942,9 +1994,15 @@ def has_configured_provider(config: PhosonConfig) -> bool:
 
     True when the active provider needs no credential (see
     :data:`NO_CREDENTIAL_PROVIDERS`) or when any credential is present.
+    ``chatgpt`` has no API key — it counts as configured only while a
+    subscription login is stored in ``~/.phoson/auth.json``.
     """
-    if config.provider.lower() in NO_CREDENTIAL_PROVIDERS:
+    if _provider_name(config.provider) in NO_CREDENTIAL_PROVIDERS:
         return True
+    if _provider_name(config.provider) == "chatgpt":
+        return _chatgpt_logged_in()
+    if _provider_name(config.provider) == "google-code-assist":
+        return _google_code_assist_logged_in()
     return bool(_credential_providers(config))
 
 
@@ -1989,7 +2047,7 @@ def build_chat(config: PhosonConfig) -> BaseLLMChat:
 
 def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
     """Build the raw LLM chat adapter (no retry wrapper) for a provider."""
-    provider = config.provider.lower()
+    provider = _provider_name(config.provider)
     base_url = _models_provider_base_url(config, provider)
     if provider == "openrouter":
         if not config.openrouter_api_key:
@@ -2077,4 +2135,13 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
         return _chat_class("LMStudioChat")(
             base_url=base_url or config.lmstudio_base_url or "http://localhost:1234/v1"
         )
+    if provider == "chatgpt":
+        # No API key: credentials come from the stored OAuth login
+        # (``~/.phoson/auth.json``), the base URL only overrides the backend.
+        return _chat_class("ChatGPTChat")(base_url=base_url)
+    if provider == "google-code-assist":
+        # No API key: credentials come from the stored OAuth login
+        # (``~/.phoson/auth-google.json``); the base URL only overrides the
+        # Code Assist backend.
+        return _chat_class("CodeAssistChat")(base_url=base_url)
     raise ValueError(f"Unsupported provider: {config.provider}")

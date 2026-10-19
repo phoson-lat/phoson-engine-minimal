@@ -740,7 +740,10 @@ async def test_setup_deselection_persists_without_deleting_credential(
     )
     save_config(config)
     wizard = SetupWizard(load_config())
-    monkeypatch.setattr(wizard, "_prompt_text", AsyncMock(side_effect=["3", "", ""]))
+    anthropic_index = str(list(SetupWizard._PROVIDER_CHOICES).index("anthropic") + 1)
+    monkeypatch.setattr(
+        wizard, "_prompt_text", AsyncMock(side_effect=[anthropic_index, "", ""])
+    )
     monkeypatch.setattr(
         wizard, "_configure_providers", AsyncMock(side_effect=lambda c: c)
     )

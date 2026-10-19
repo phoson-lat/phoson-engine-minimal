@@ -227,6 +227,7 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 |----------|-----------|
 | Native adapters | **OpenAI** (tool use, reasoning effort), **Anthropic** (thinking, tool use, prompt caching), **Google Gemini**, **Mistral**, **Azure OpenAI**, **AWS Bedrock** |
 | OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Alibaba (DashScope)**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
+| Subscription (OAuth, no API key) | **ChatGPT** (Plus/Pro/Team via device code or browser sign-in; tokens in `~/.phoson/auth.json`), **Google Code Assist** (Gemini subscription via browser or copy/paste sign-in; tokens in `~/.phoson/auth-google.json`, backend `cloudcode-pa.googleapis.com`, needs `PHOSON_GOOGLE_CLIENT_ID`) |
 
 All of them are available via the `build_chat()` factory, e.g. `build_chat("openrouter")`, and expose the same `stream()` event contract.
 
@@ -400,6 +401,24 @@ AWS_DEFAULT_REGION=us-east-1
 
 Local servers (Ollama, LM Studio, vLLM) need no API key — just the right `base_url`.
 
+### Subscription providers (OAuth)
+
+The **ChatGPT** and **Google Code Assist** providers sign in with an OAuth
+subscription rather than an API key, so no key variable is needed for them. The
+Google Code Assist login additionally needs an OAuth *client*: no client is
+bundled, so point it at your own (or the Gemini CLI's) installed-app client —
+without it the login fails with an actionable message instead of an opaque HTTP
+400.
+
+```env
+PHOSON_GOOGLE_CLIENT_ID=...      # required for `google-code-assist` login
+PHOSON_GOOGLE_CLIENT_SECRET=...  # optional: omit for a public PKCE client
+```
+
+Tokens land in `~/.phoson/auth.json` (ChatGPT) and
+`~/.phoson/auth-google.json` (Google Code Assist) — never in `config.toml`, and
+never in these variables.
+
 ### Runtime / CLI
 
 ```env
@@ -550,6 +569,7 @@ the classic REPL is selected automatically.
 | `/agents-md` | Show which AGENTS.md/CLAUDE.md memory files are loaded |
 | `/skills` | List available skills; `/skills <name>` shows one's instructions |
 | `/setup` | Run the initial setup wizard again |
+| `/auth` | Sign in/out of subscription providers: `/auth status [provider]`, `/auth login chatgpt\|google-code-assist [--device\|--browser]`, `/auth logout [provider]` (`codex` and `openai-codex` are accepted as aliases of `chatgpt`; `code-assist`, `code_assist`, `gemini-code-assist` and `gca` of `google-code-assist`) |
 | `/update` (`/upgrade`) | Check for and install CLI updates |
 | `/help` | Show all commands |
 | `/exit` (`/quit`) | Exit the REPL |

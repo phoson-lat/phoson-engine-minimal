@@ -228,6 +228,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/notify",
             "/warnings",
             "/mcp",
+            "/auth",
             "/setup",
             "/update",
             "/help",
@@ -387,6 +388,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),
     CommandSpec(("/tokens",), "Show running input/output token totals", "_cmd_tokens"),
     CommandSpec(("/steps",), "Show the number of agent steps so far", "_cmd_steps"),
+    CommandSpec(
+        ("/auth",),
+        "Sign in/out of subscription providers (ChatGPT, Google Code Assist)",
+        "_cmd_auth",
+    ),
     CommandSpec(("/setup",), "Run the initial setup wizard again", "_cmd_setup"),
     CommandSpec(("/mcp",), "Manage Model Context Protocol servers", "_cmd_mcp"),
     CommandSpec(
@@ -685,6 +691,45 @@ def parse_command(text: str) -> Command | None:
 # ─── Handler ─────────────────────────────────────────────────────────────────
 
 
+#: Usage line for ``/auth``, shown for an unknown subcommand.
+_AUTH_USAGE: Final[str] = (
+    "Usage:  /auth [status|login [provider] [--device|--browser]|logout [provider]]"
+)
+
+#: Providers whose credential is an OAuth login rather than an API key, mapped
+#: to their human-readable label. Used by ``/auth``, ``/provider`` self-enable
+#: and the model picker's "not signed in" guard.
+_SUBSCRIPTION_PROVIDER_LABELS: Final[dict[str, str]] = {
+    "chatgpt": "ChatGPT",
+    "google-code-assist": "Google Code Assist",
+}
+
+
+def _format_auth_expiry(epoch: float | None) -> str:
+    """Human-readable access-token expiry: local time plus a relative window."""
+    if epoch is None:
+        return "unknown"
+    when = datetime.datetime.fromtimestamp(epoch).astimezone()
+    seconds = (when - datetime.datetime.now(datetime.UTC)).total_seconds()
+    if seconds <= 0:
+        return f"{when:%Y-%m-%d %H:%M} (expired)"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        relative = f"in {minutes} min"
+    elif minutes < 48 * 60:
+        relative = f"in {minutes // 60} h"
+    else:
+        relative = f"in {minutes // (24 * 60)} d"
+    return f"{when:%Y-%m-%d %H:%M} ({relative})"
+
+
+def _short_account_id(account_id: str | None) -> str:
+    """Redacted ChatGPT account id (first 8 characters, never a token)."""
+    if not account_id:
+        return "—"
+    return f"{account_id[:8]}…" if len(account_id) > 8 else account_id
+
+
 class CommandHandler:
     """Handles execution of CLI slash commands.
 
@@ -774,6 +819,45 @@ class CommandHandler:
 
     def _available_providers(self) -> list[str]:
         return enabled_providers_from_config(self.repl.config)
+
+    def _subscription_signed_in(self, provider: str) -> bool:
+        """Whether a stored OAuth login exists for a subscription provider.
+
+        ``chatgpt`` and ``google-code-assist`` have no API key: their credential
+        is the login in a local auth file. The auth modules (and ``httpx``) are
+        imported lazily so no command pays for them unless asked.
+        """
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import has_tokens
+        elif provider == "google-code-assist":
+            from phoson_llm.auth.code_assist import has_tokens
+        else:
+            return False
+        return bool(has_tokens())
+
+    def _enable_subscription_provider(self, provider: str) -> bool:
+        """Add a subscription provider to the explicit ``enabled_providers``.
+
+        A stored OAuth login *is* the provider's credential, so a config written
+        before the sign-in must not block a provider the user can already use.
+        Returns whether the list changed (a config without an explicit list
+        already derives the provider from the login).
+        """
+        enabled = getattr(self.repl.config, "enabled_providers", None)
+        if enabled is None or provider in enabled:
+            return False
+        self.repl.config.enabled_providers = canonicalize_enabled_providers(
+            [*enabled, provider], active_provider=self.repl.config.provider
+        )
+        return True
+
+    def _chatgpt_signed_in(self) -> bool:
+        """Whether a ChatGPT subscription login is stored (lazy import)."""
+        return self._subscription_signed_in("chatgpt")
+
+    def _enable_chatgpt(self) -> bool:
+        """Add ``chatgpt`` to the explicit ``enabled_providers`` list."""
+        return self._enable_subscription_provider("chatgpt")
 
     def _picker_unavailable(self, usage: str) -> bool:
         checker = getattr(self.host, "picker_unavailable", None)
@@ -963,16 +1047,29 @@ class CommandHandler:
             if target_provider and target_provider != normalize_provider(
                 self.repl.config.provider
             ):
+                sub_label = _SUBSCRIPTION_PROVIDER_LABELS.get(target_provider)
                 if (
                     target_provider not in self._available_providers()
                     and target_provider not in NO_CREDENTIAL_PROVIDERS
-                ):
-                    r.print_error(
-                        f"Model {chosen} belongs to provider {target_provider}, "
-                        "which has no credentials configured. Configure it "
-                        "(API key / base URL) and retry — nothing was saved."
+                    and not (
+                        sub_label and self._subscription_signed_in(target_provider)
                     )
+                ):
+                    if sub_label:
+                        r.print_error(
+                            f"Model {chosen} belongs to provider {target_provider}, "
+                            f"which is not signed in. Run /auth login "
+                            f"{target_provider} and retry — nothing was saved."
+                        )
+                    else:
+                        r.print_error(
+                            f"Model {chosen} belongs to provider {target_provider}, "
+                            "which has no credentials configured. Configure it "
+                            "(API key / base URL) and retry — nothing was saved."
+                        )
                     return
+                if sub_label:
+                    self._enable_subscription_provider(target_provider)
                 await self.repl.set_model(
                     chosen, provider=target_provider, reuse_engine=True
                 )
@@ -1099,7 +1196,7 @@ class CommandHandler:
                 r.print_info(f" {marker} {provider}")
             return True
 
-        target_provider = cmd.args or None
+        target_provider = normalize_provider(cmd.args) if cmd.args else None
         if not target_provider:
             result = await self.host.pick_provider(providers, self.repl.config.provider)
             if getattr(result, "unavailable", False):
@@ -1110,8 +1207,20 @@ class CommandHandler:
             target_provider = result.provider
 
         if target_provider not in providers:
-            r.print_error(f"Provider not configured: {target_provider}")
-            return True
+            label = _SUBSCRIPTION_PROVIDER_LABELS.get(target_provider)
+            if label and self._subscription_signed_in(target_provider):
+                self._enable_subscription_provider(target_provider)
+                providers = [*providers, target_provider]
+                r.print_info(f"{label} is signed in — enabling it in config.toml.")
+            elif label:
+                r.print_error(
+                    f"Provider {target_provider} is not signed in: "
+                    f"run /auth login {target_provider}."
+                )
+                return True
+            else:
+                r.print_error(f"Provider not configured: {target_provider}")
+                return True
 
         try:
             await self.repl.set_provider(target_provider)
@@ -1125,6 +1234,8 @@ class CommandHandler:
         if callable(mark_provider_explicit):
             mark_provider_explicit()
 
+        if target_provider in _SUBSCRIPTION_PROVIDER_LABELS:
+            await self._select_subscription_model(target_provider)
         save_config(
             self.repl.config,
             only_fields={"provider", "model", "enabled_providers"},
@@ -1136,6 +1247,102 @@ class CommandHandler:
         )
         r.print_info("Use /model <name> to pick a model for this provider.")
         return True
+
+    async def _select_subscription_model(self, provider: str) -> None:
+        """Keep the current model only when the subscription actually serves it.
+
+        The catalogue is the subscription's own model list, so a model coming
+        from the previous provider would be rejected by the backend. The
+        picker's own lister is reused, and a failed fetch only warns: the switch
+        itself must not fail because the network is down.
+        """
+        from .model_selector import list_models_for_providers
+
+        label = _SUBSCRIPTION_PROVIDER_LABELS.get(provider, provider)
+        slug = str(self.repl.current_model or "")
+        try:
+            listings = await list_models_for_providers(self.repl.config, [provider])
+        except Exception as exc:  # noqa: BLE001 — listing must never break the switch
+            self._r.print_warn(f"Could not list {label} models: {exc}")
+            await self._fallback_subscription_model(provider)
+            return
+        listing = next((lst for lst in listings if lst.provider == provider), None)
+        if listing is None or not listing.options:
+            reason = getattr(listing, "error", None) or "no models returned"
+            self._r.print_warn(f"Could not list {label} models: {reason}")
+            await self._fallback_subscription_model(provider)
+            return
+        slugs = [
+            option.id
+            for option in listing.options
+            if option.id and option.provider != "custom"
+        ]
+        if not slugs:
+            self._r.print_warn(f"{label} listed no models — run /model to retry.")
+            return
+        if slug and slug in slugs:
+            return  # the subscription serves the current model: keep it
+        # The picker appends the current model as a ``custom`` entry so the
+        # user never loses their selection; it is not something the
+        # subscription serves. OpenAI's review-only entries are a poor default
+        # for interactive work, so prefer anything else there.
+        chosen = slugs[0]
+        if provider == "chatgpt":
+            general = [
+                candidate for candidate in slugs if "review" not in candidate.lower()
+            ]
+            chosen = (general or slugs)[0]
+        self._r.print_info(
+            f"{slug or 'The current model'} is not served by the {label} "
+            f"subscription — using {chosen}."
+        )
+        mark_provider_explicit = getattr(
+            self.repl.config, "mark_provider_explicit", None
+        )
+        try:
+            await self.repl.set_model(chosen, provider=provider, reuse_engine=True)
+        except ValueError as exc:  # keep the provider switch, explain the model
+            self._r.print_warn(f"Could not switch model to {chosen}: {exc}")
+            return
+        if callable(mark_provider_explicit):
+            mark_provider_explicit()
+
+    async def _select_chatgpt_model(self) -> None:
+        """Back-compat shim for :meth:`_select_subscription_model`."""
+        await self._select_subscription_model("chatgpt")
+
+    async def _fallback_subscription_model(self, provider: str) -> None:
+        """Pick a provider-native default when the live catalogue is unreachable.
+
+        The ``/provider`` switch itself must still succeed, but keeping the
+        *previous* provider's model would leave a slug the new subscription
+        cannot serve (e.g. a ChatGPT id after switching to google-code-assist).
+        When the provider ships a static catalogue, fall back to its first entry
+        so the ``(provider, model)`` pair stays coherent; otherwise leave the
+        model untouched and let the user's next ``/model`` decide.
+        """
+        if provider != "google-code-assist":
+            return
+        from phoson_llm.chats.code_assist import DEFAULT_MODELS
+
+        default = DEFAULT_MODELS[0][0]
+        if str(self.repl.current_model or "") == default:
+            return
+        try:
+            await self.repl.set_model(default, provider=provider, reuse_engine=True)
+        except ValueError as exc:  # keep the provider switch, explain the model
+            self._r.print_warn(f"Could not switch model to {default}: {exc}")
+            return
+        mark_provider_explicit = getattr(
+            self.repl.config, "mark_provider_explicit", None
+        )
+        if callable(mark_provider_explicit):
+            mark_provider_explicit()
+        label = _SUBSCRIPTION_PROVIDER_LABELS.get(provider, provider)
+        self._r.print_info(
+            f"{label} catalogue was unavailable — using {default}. "
+            "Run /model to change it."
+        )
 
     async def _cmd_tree(self, cmd: Command) -> bool:  # noqa: ARG002
         from ._views import render_tree_rich
@@ -1700,6 +1907,178 @@ class CommandHandler:
             r.print_info(f"  {skill_meta.name}  [{skill_meta.source}]")
             r.print_info(f"      {detail}")
         r.print_info("(/skills <name> shows a skill's full instructions)")
+        return True
+
+    async def _cmd_auth(self, cmd: Command) -> bool:
+        """Sign in/out of subscription providers.
+
+        Credentials live in a local auth file under ``~/.phoson/`` — never in
+        config.toml: ``auth.json`` for ChatGPT, ``auth-google.json`` for Google
+        Code Assist. Each provider has its own file so a logout only removes
+        *that* provider's login.
+        """
+        parts = cmd.args.split()
+        sub = parts[0].lower() if parts else "status"
+
+        if sub == "status":
+            return self._print_auth_status(parts[1:])
+        if sub == "login":
+            return await self._auth_login(parts[1:])
+        if sub == "logout":
+            return self._auth_logout(parts[1:])
+        self._r.print_info(_AUTH_USAGE)
+        return True
+
+    def _auth_target(self, args: list[str]) -> str | None:
+        """Resolve the provider argument of ``/auth`` (default ``chatgpt``).
+
+        Prints the usage line and returns ``None`` when the provider is unknown
+        or is not a subscription (OAuth) provider.
+        """
+        raw = next((arg for arg in args if not arg.startswith("-")), "chatgpt")
+        provider = normalize_provider(raw)
+        if provider not in _SUBSCRIPTION_PROVIDER_LABELS:
+            self._r.print_error(f"Unknown auth provider: {raw}")
+            self._r.print_info(_AUTH_USAGE)
+            return None
+        return provider
+
+    def _print_auth_status(self, args: list[str] | None = None) -> bool:
+        """Show whether a subscription login exists (email/plan/expiry, no token)."""
+        # Lazy: the auth modules (httpx) are only needed for /auth.
+        provider = self._auth_target(args or [])
+        if provider is None:
+            return True
+
+        r = self._r
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import auth_status
+
+            label = "ChatGPT"
+            plan_word = "plan"
+            account_word = "account"
+            login_hint = "Run /auth login chatgpt to use your subscription (Plus/Pro)."
+        else:
+            from phoson_llm.auth.code_assist import auth_status
+
+            label = "Google Code Assist"
+            plan_word = "tier"
+            account_word = "project"
+            login_hint = (
+                "Run /auth login google-code-assist to use your subscription "
+                "(Gemini Code Assist / Cloud)."
+            )
+
+        status = auth_status()
+        if not status.logged_in:
+            r.print_info(f"Not signed in to {label}.")
+            r.print_info(login_hint)
+            r.print_info(f"Credentials file: {status.path}")
+            return True
+
+        r.print_info(
+            f"{label}: {status.email or 'unknown account'}"
+            f"  ·  {plan_word}={status.plan_type or 'unknown'}"
+            f"  ·  {account_word}={_short_account_id(status.account_id)}"
+        )
+        r.print_info(
+            f"access token expires {_format_auth_expiry(status.expires_at)}"
+            f"  ·  refreshable={'yes' if status.refreshable else 'no'}"
+        )
+        r.print_info(f"Credentials file: {status.path}")
+        return True
+
+    async def _auth_login(self, args: list[str]) -> bool:
+        """Run ``/auth login [provider] [--device|--headless|--browser]``."""
+        r = self._r
+        provider = self._auth_target(args)
+        if provider is None:
+            return True
+        label = _SUBSCRIPTION_PROVIDER_LABELS[provider]
+
+        if "--device" in args or "--headless" in args:
+            method = "device"
+        elif "--browser" in args:
+            method = "browser"
+        else:
+            method = "auto"
+
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
+            from phoson_llm.auth.chatgpt import login
+
+            hint = {
+                "device": " with a device code — open the URL below…",
+                "browser": " in your browser…",
+            }.get(method, " (browser, falling back to a device code)…")
+            retry_hint = (
+                f"Retry with /auth login {provider} --device on a headless/SSH box."
+            )
+        else:
+            from phoson_llm.auth.code_assist import CodeAssistAuthError as AuthError
+            from phoson_llm.auth.code_assist import login
+
+            hint = {
+                "device": " with a copy/paste code — open the URL below…",
+                "browser": " in your browser…",
+            }.get(method, " (browser, falling back to a copy/paste code)…")
+            retry_hint = (
+                f"Retry with /auth login {provider} --device on a headless/SSH box."
+            )
+
+        r.print_info(f"Signing in to {label}{hint}")
+
+        try:
+            # Streams the device-code prompt / authorize URL to the user
+            # (``r.print_info`` renders plain text — no markup, no token).
+            tokens = await login(method, on_prompt=r.print_info, on_url=r.print_info)
+        except AuthError as exc:
+            if exc.terminal:
+                r.print_error(f"{label} sign-in failed, log in again: {exc}")
+            else:
+                r.print_warn(f"{label} sign-in failed (retryable): {exc}")
+                r.print_info(retry_hint)
+            return True
+        except OSError as exc:  # e.g. the loopback callback port is taken
+            r.print_error(f"{label} sign-in failed: {exc}")
+            return True
+
+        plan = getattr(tokens, "plan_type", None) or getattr(tokens, "tier", None)
+        r.print_info(
+            f"Signed in to {label} as {tokens.email or 'unknown account'}"
+            f" ({plan or 'unknown plan'})."
+        )
+        r.print_info(f"Use it with /provider {provider}, then /model to pick a model.")
+        return True
+
+    def _auth_logout(self, args: list[str] | None = None) -> bool:
+        """Delete the local token file of one subscription provider."""
+        r = self._r
+        provider = self._auth_target(args or [])
+        if provider is None:
+            return True
+        label = _SUBSCRIPTION_PROVIDER_LABELS[provider]
+
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
+            from phoson_llm.auth.chatgpt import clear_tokens
+        else:
+            from phoson_llm.auth.code_assist import CodeAssistAuthError as AuthError
+            from phoson_llm.auth.code_assist import clear_tokens
+
+        r.print_info(
+            f"Removing the local {label} credentials — "
+            f"your {label} account is untouched."
+        )
+        try:
+            removed = clear_tokens()
+        except AuthError as exc:
+            r.print_error(f"Could not remove the {label} credentials: {exc}")
+            return True
+        if removed:
+            r.print_info(f"Signed out of {label} — credentials removed.")
+        else:
+            r.print_info(f"No {label} credentials were stored; nothing to remove.")
         return True
 
     async def _cmd_setup(self, cmd: Command) -> bool:  # noqa: ARG002
