@@ -536,6 +536,67 @@ def _allowed_tiers(payload: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _needs_user_project(payload: dict[str, Any]) -> bool:
+    """Whether ``:loadCodeAssist`` says the account must supply its own project.
+
+    Google marks the tier with ``userDefinedCloudaicompanionProject: true`` when
+    it will *not* auto-provision a project (typically an enterprise seat on a
+    project the user already owns). In that case no ``:onboardUser`` call can
+    conjure one: the project has to come from config/env.
+    """
+    tiers = payload.get("allowedTiers")
+    if not isinstance(tiers, list):
+        return False
+    return any(
+        isinstance(t, dict) and t.get("userDefinedCloudaicompanionProject") is True
+        for t in tiers
+    )
+
+
+def _ineligible_reasons(payload: dict[str, Any]) -> tuple[str, ...]:
+    """Human-readable reasons a tier was refused (``ineligibleTiers``)."""
+    tiers = payload.get("ineligibleTiers")
+    if not isinstance(tiers, list):
+        return ()
+    reasons: list[str] = []
+    for entry in tiers:
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("reasonMessage")
+        if isinstance(message, str) and message.strip():
+            reasons.append(message.strip())
+        elif isinstance(entry.get("reasonCode"), str) and entry["reasonCode"]:
+            reasons.append(str(entry["reasonCode"]))
+    return tuple(reasons)
+
+
+def _onboarding_suffix(payload: dict[str, Any]) -> str:
+    """Best-effort explanation of why no project could be provisioned.
+
+    Appended to the terminal onboarding error so the fix is visible without
+    digging into the raw backend payload: either the tier demands a project the
+    user owns (``userDefinedCloudaicompanionProject``) or the tier was refused
+    outright (``ineligibleTiers``, e.g. Google retiring the free individual
+    tier for this client).
+    """
+    notes: list[str] = []
+    if _needs_user_project(payload):
+        notes.append(
+            "this account's tier needs a Cloud project you own — set "
+            "GOOGLE_CLOUD_PROJECT to a project with the Code Assist API enabled "
+            "and a Code Assist licence"
+        )
+    reasons = _ineligible_reasons(payload)
+    if reasons:
+        notes.append("ineligible tiers: " + "; ".join(reasons))
+    if not notes:
+        notes.append(
+            "set GOOGLE_CLOUD_PROJECT to a licensed project, or check the "
+            "account's eligibility"
+        )
+    return " — " + "; ".join(notes)
+
+
 def _project_from_value(value: Any) -> str | None:
     """Read a project id from ``"id"``/``{"id": …}``/``{"name": …}`` shapes."""
     if isinstance(value, str) and value:
@@ -734,6 +795,16 @@ async def ensure_project(
     resolved = resolved or project_id or tokens.project_id
     resolved = resolved or os.environ.get("GOOGLE_CLOUD_PROJECT")
 
+    # A project the account may not use is a dead end: surface the backend's own
+    # IAM message now instead of failing later on every generate request.
+    validation = payload.get("projectValidationError") if payload else None
+    if resolved and isinstance(validation, dict):
+        detail = str(validation.get("message") or "").strip() or "project rejected"
+        raise CodeAssistAuthError(
+            f"Code Assist refused project {resolved!r}: {detail}",
+            terminal=True,
+        )
+
     if not resolved:
         tier = setup.tier or TIER_FREE
         onboarded = await onboard_user(
@@ -750,8 +821,8 @@ async def ensure_project(
         resolved = _project_from_value(inner.get("cloudaicompanionProject"))
         if not resolved:
             raise CodeAssistAuthError(
-                "Code Assist onboarding did not return a project; "
-                "set GOOGLE_CLOUD_PROJECT or check the account's eligibility"
+                "Code Assist could not provision a project for this account"
+                + _onboarding_suffix(payload)
             )
         setup.tier = tier
 

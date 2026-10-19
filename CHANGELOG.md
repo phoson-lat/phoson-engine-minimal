@@ -53,6 +53,22 @@ and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
   `gemini-code-assist` and `gca` fold to `google-code-assist` (the `google` alias still means
   `gemini`).
 
+### Fix
+
+- **cli**: the Google Code Assist onboarding no longer fails with a misleading message. A stored
+  login whose account cannot be provisioned used to read as *"No Google Code Assist login stored —
+  run `/auth login google-code-assist` first"*, even though the sign-in was fine; the real cause
+  (e.g. Google retiring the free individual tier — `UNSUPPORTED_CLIENT` — or a tier that requires
+  `userDefinedCloudaicompanionProject`) is now surfaced, with the actionable fix
+  (`set GOOGLE_CLOUD_PROJECT to a project with the Code Assist API enabled and a Code Assist
+  licence`). A project the account may not use (`projectValidationError`, e.g. a missing IAM
+  permission) is now rejected up front as a terminal error instead of failing on every request.
+- **cli**: `/provider google-code-assist` no longer leaves the *previous* provider's model in place
+  when the subscription's catalogue cannot be fetched (an offline or unlicensed account used to
+  keep, say, `gpt-6-luna` — a ChatGPT slug the Google backend would reject). It now falls back to
+  a native default (`gemini-2.5-pro`) so the `(provider, model)` pair stays coherent, and points at
+  `/model` to change it.
+
 ## v0.52.0 (2026-10-12)
 
 ### Fix

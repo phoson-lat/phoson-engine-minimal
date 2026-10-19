@@ -1264,11 +1264,13 @@ class CommandHandler:
             listings = await list_models_for_providers(self.repl.config, [provider])
         except Exception as exc:  # noqa: BLE001 — listing must never break the switch
             self._r.print_warn(f"Could not list {label} models: {exc}")
+            await self._fallback_subscription_model(provider)
             return
         listing = next((lst for lst in listings if lst.provider == provider), None)
         if listing is None or not listing.options:
             reason = getattr(listing, "error", None) or "no models returned"
             self._r.print_warn(f"Could not list {label} models: {reason}")
+            await self._fallback_subscription_model(provider)
             return
         slugs = [
             option.id
@@ -1308,6 +1310,39 @@ class CommandHandler:
     async def _select_chatgpt_model(self) -> None:
         """Back-compat shim for :meth:`_select_subscription_model`."""
         await self._select_subscription_model("chatgpt")
+
+    async def _fallback_subscription_model(self, provider: str) -> None:
+        """Pick a provider-native default when the live catalogue is unreachable.
+
+        The ``/provider`` switch itself must still succeed, but keeping the
+        *previous* provider's model would leave a slug the new subscription
+        cannot serve (e.g. a ChatGPT id after switching to google-code-assist).
+        When the provider ships a static catalogue, fall back to its first entry
+        so the ``(provider, model)`` pair stays coherent; otherwise leave the
+        model untouched and let the user's next ``/model`` decide.
+        """
+        if provider != "google-code-assist":
+            return
+        from phoson_llm.chats.code_assist import DEFAULT_MODELS
+
+        default = DEFAULT_MODELS[0][0]
+        if str(self.repl.current_model or "") == default:
+            return
+        try:
+            await self.repl.set_model(default, provider=provider, reuse_engine=True)
+        except ValueError as exc:  # keep the provider switch, explain the model
+            self._r.print_warn(f"Could not switch model to {default}: {exc}")
+            return
+        mark_provider_explicit = getattr(
+            self.repl.config, "mark_provider_explicit", None
+        )
+        if callable(mark_provider_explicit):
+            mark_provider_explicit()
+        label = _SUBSCRIPTION_PROVIDER_LABELS.get(provider, provider)
+        self._r.print_info(
+            f"{label} catalogue was unavailable — using {default}. "
+            "Run /model to change it."
+        )
 
     async def _cmd_tree(self, cmd: Command) -> bool:  # noqa: ARG002
         from ._views import render_tree_rich

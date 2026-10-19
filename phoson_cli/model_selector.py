@@ -808,7 +808,11 @@ async def _list_google_code_assist_models(config: PhosonConfig) -> list[ModelOpt
     try:
         models = await list_models(base_url=base_url)
     except CodeAssistAuthError as exc:
-        raise ModelListingError(f"{_GOOGLE_CODE_ASSIST_NOT_LOGGED_IN} ({exc})") from exc
+        # A login *is* stored (checked above), so a failure here is about the
+        # account/project (missing Code Assist licence, unprovisioned project, an
+        # expired token), never about being signed out — reuse the backend's own
+        # message instead of the misleading "no login" hint.
+        raise ModelListingError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — network/parse failures are expected
         raise ModelListingError(
             f"Failed to fetch Google Code Assist models: {exc}"

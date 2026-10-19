@@ -815,6 +815,78 @@ async def test_ensure_project_onboards_the_free_tier_without_a_project(
     assert stored.project_id == "proj-new"
 
 
+@pytest.mark.asyncio
+async def test_ensure_project_explains_a_required_user_project(
+    auth_env, monkeypatch
+) -> None:
+    """``userDefinedCloudaicompanionProject`` must point the user at config/env."""
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    onboarding = {
+        "allowedTiers": [
+            {
+                "id": "standard-tier",
+                "isDefault": True,
+                "userDefinedCloudaicompanionProject": True,
+            }
+        ],
+        "ineligibleTiers": [
+            {
+                "reasonCode": "UNSUPPORTED_CLIENT",
+                "reasonMessage": "this client is no longer supported",
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(":loadCodeAssist"):
+            return httpx.Response(200, json=onboarding)
+        assert request.url.path.endswith(":onboardUser")
+        return httpx.Response(
+            200, json={"done": True, "response": {"cloudaicompanionProject": {}}}
+        )
+
+    with pytest.raises(CodeAssistAuthError) as excinfo:
+        await ensure_project(
+            _tokens(), path=auth_env, transport=httpx.MockTransport(handler)
+        )
+
+    message = str(excinfo.value)
+    assert "GOOGLE_CLOUD_PROJECT" in message
+    assert "this client is no longer supported" in message
+
+
+@pytest.mark.asyncio
+async def test_ensure_project_rejects_a_project_the_account_cannot_use(
+    auth_env, monkeypatch
+) -> None:
+    """A backend ``projectValidationError`` becomes a terminal, clear error."""
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(":loadCodeAssist")
+        return httpx.Response(
+            200,
+            json={
+                "projectValidationError": {
+                    "code": 7,
+                    "message": "lacks the required IAM permission",
+                },
+                "allowedTiers": [{"id": "standard-tier"}],
+            },
+        )
+
+    with pytest.raises(CodeAssistAuthError) as excinfo:
+        await ensure_project(
+            _tokens(project_id="proj-x"),
+            path=auth_env,
+            transport=httpx.MockTransport(handler),
+        )
+
+    assert "refused project" in str(excinfo.value)
+    assert "lacks the required IAM permission" in str(excinfo.value)
+    assert excinfo.value.terminal is True
+
+
 # ─── Model catalogue ─────────────────────────────────────────────────────────
 
 

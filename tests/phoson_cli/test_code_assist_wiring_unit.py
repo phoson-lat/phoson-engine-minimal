@@ -26,6 +26,7 @@ from phoson_cli.model_selector import ModelListingError, _list_google_code_assis
 from phoson_llm.auth.code_assist import (
     CODE_ASSIST_BASE_URL,
     CodeAssistTokens,
+    CodeAssistAuthError,
     save_tokens,
 )
 from phoson_llm.chats.code_assist import CodeAssistChat, CodeAssistModel
@@ -182,6 +183,28 @@ async def test_list_google_code_assist_models_without_login_raises_hint(
         await _list_google_code_assist_models(
             PhosonConfig(provider="google-code-assist", model="gemini-2.5-pro")
         )
+
+
+@pytest.mark.asyncio
+async def test_list_google_code_assist_models_error_is_not_a_login_hint(
+    auth_file, monkeypatch
+) -> None:
+    """A stored login with a broken project must not read as "not signed in"."""
+    _store_login(auth_file)
+
+    async def boom(*, base_url: str) -> list[CodeAssistModel]:
+        raise CodeAssistAuthError("Code Assist could not provision a project")
+
+    monkeypatch.setattr("phoson_llm.chats.code_assist.list_models", boom)
+
+    with pytest.raises(ModelListingError) as excinfo:
+        await _list_google_code_assist_models(
+            PhosonConfig(provider="google-code-assist", model="gemini-2.5-pro")
+        )
+
+    message = str(excinfo.value)
+    assert "could not provision a project" in message
+    assert "No Google Code Assist login stored" not in message
 
 
 # ─── /auth command ───────────────────────────────────────────────────────────
@@ -479,6 +502,37 @@ async def test_provider_google_code_assist_keeps_a_served_model(
 
     assert repl.models == []
     assert "not served by the Google Code Assist subscription" not in _output(handler)
+
+
+@pytest.mark.asyncio
+async def test_provider_google_code_assist_falls_back_when_listing_fails(
+    auth_file, monkeypatch
+) -> None:
+    """An unreachable catalogue must not leave the previous provider's model."""
+    import phoson_cli.model_selector as selector
+
+    _store_login(auth_file)
+
+    async def boom(config, providers):  # noqa: ARG001
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(selector, "list_models_for_providers", boom)
+    config = PhosonConfig(
+        provider="alibaba", model="qwen3.8-27b", enabled_providers=["alibaba"]
+    )
+    handler, repl = _provider_handler(config, monkeypatch)
+
+    assert (
+        await handler._cmd_provider(
+            Command(name="/provider", args="google-code-assist")
+        )
+        is True
+    )
+
+    assert repl.switched == ["google-code-assist"]
+    assert repl.models == [("gemini-2.5-pro", "google-code-assist")]
+    assert "Could not list Google Code Assist models" in _output(handler)
+    assert "using gemini-2.5-pro" in _output(handler)
 
 
 @pytest.mark.asyncio
