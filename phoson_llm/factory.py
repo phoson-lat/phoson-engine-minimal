@@ -39,6 +39,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "aws": (".chats.bedrock", "BedrockChat"),
     "fireworks": (".chats.fireworks", "FireworksChat"),
     "cohere": (".chats.cohere", "CohereChat"),
+    "chatgpt": (".chats.chatgpt", "ChatGPTChat"),
     "omniroute": (".chats.omniroute", "OmniRouteChat"),
 }
 

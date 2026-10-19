@@ -26,6 +26,7 @@ from phoson_cli.config import (
     load_config,
     has_configured_provider,
 )
+from phoson_cli.models import normalize_provider
 from phoson_cli._version import get_current_version
 from phoson_cli.terminal import stream_is_tty, cursor_output_capable
 
@@ -320,7 +321,7 @@ def _apply_overrides(config: PhosonConfig, options: CliOptions) -> None:
     mutated in place (it is a dataclass, not persisted back to disk).
     """
     if options.provider:
-        config.provider = options.provider
+        config.provider = normalize_provider(options.provider)
         config._provider_source = "cli"
     if options.model:
         config.model = options.model

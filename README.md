@@ -227,6 +227,7 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 |----------|-----------|
 | Native adapters | **OpenAI** (tool use, reasoning effort), **Anthropic** (thinking, tool use, prompt caching), **Google Gemini**, **Mistral**, **Azure OpenAI**, **AWS Bedrock** |
 | OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Alibaba (DashScope)**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
+| Subscription (OAuth, no API key) | **ChatGPT** (Plus/Pro/Team via device code or browser sign-in; tokens in `~/.phoson/auth.json`) |
 
 All of them are available via the `build_chat()` factory, e.g. `build_chat("openrouter")`, and expose the same `stream()` event contract.
 
@@ -550,6 +551,7 @@ the classic REPL is selected automatically.
 | `/agents-md` | Show which AGENTS.md/CLAUDE.md memory files are loaded |
 | `/skills` | List available skills; `/skills <name>` shows one's instructions |
 | `/setup` | Run the initial setup wizard again |
+| `/auth` | Sign in/out of subscription providers: `/auth status [provider]`, `/auth login chatgpt [--device\|--browser]`, `/auth logout [provider]` (`codex` and `openai-codex` are accepted as aliases of `chatgpt`) |
 | `/update` (`/upgrade`) | Check for and install CLI updates |
 | `/help` | Show all commands |
 | `/exit` (`/quit`) | Exit the REPL |

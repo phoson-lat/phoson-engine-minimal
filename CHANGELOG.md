@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Add
+
+- **llm**: new `chatgpt` provider — the ChatGPT subscription (Plus/Pro/Team) served through the
+  Codex backend (`https://chatgpt.com/backend-api/codex`, Responses API) instead of a metered API
+  key. Sign in with `phoson_llm.auth.chatgpt.login()` (device code for headless/SSH, or a browser
+  PKCE flow on the loopback callback) and the OAuth tokens are stored in `~/.phoson/auth.json`
+  (0600, atomic writes) — never in `config.toml`. An existing `~/.codex/auth.json` login is adopted
+  automatically, the access token is refreshed on expiry (and once more after a 401), and usage is
+  reported with `cost_known=False` since a subscription is not billed per token. Available through
+  `build_chat("chatgpt")` and listed in the model picker via the backend's own `gpt-*` catalogue.
+- **cli**: `/auth` slash command (`status`, `login chatgpt [--device|--browser]`, `logout`) and a
+  ChatGPT step in the setup wizard that lists the subscription providers first (tagged
+  *subscription, no API key*) and offers the sign-in instead of an API key prompt. A stored
+  login counts as the provider's credential: `/provider chatgpt` enables it in `config.toml` on
+  its own and picks a model the subscription actually serves (the previous provider's slug would
+  be rejected by the backend), and `/model` lists the live `gpt-*` catalogue. When no login is
+  stored, `/provider` and `/model` report the exact fix (`run /auth login chatgpt`).
+  The aliases `codex`, `openai-codex` and `openai_codex` fold to `chatgpt` in either the
+  provider argument, the `--provider` flag or `config.toml` (the spelling is kept in
+  `config.toml`; `enabled_providers` is stored canonicalized).
+
 ## v0.52.0 (2026-10-12)
 
 ### Fix

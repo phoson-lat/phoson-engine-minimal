@@ -34,6 +34,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "fireworks": "Fireworks AI",
     "cohere": "Cohere",
     "omniroute": "OmniRoute",
+    "chatgpt": "ChatGPT",
 }
 
 

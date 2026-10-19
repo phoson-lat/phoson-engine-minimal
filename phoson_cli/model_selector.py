@@ -113,6 +113,8 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_lmstudio_models(config)
     if provider == "omniroute":
         return await _list_omniroute_models(config)
+    if provider == "chatgpt":
+        return await _list_chatgpt_models(config)
     return [ModelOption(id=config.model, label=config.model, provider=provider)]
 
 
@@ -738,6 +740,38 @@ async def _list_omniroute_models(config: PhosonConfig) -> list[ModelOption]:
         )
         for item in data.get("data", [])
         if item.get("id")
+    ]
+    return _prioritize_current(options, config.model)
+
+
+#: Shared hint for the ChatGPT subscription provider (no API key exists).
+_CHATGPT_NOT_LOGGED_IN = "No ChatGPT login stored — run `/auth login chatgpt` first."
+
+
+async def _list_chatgpt_models(config: PhosonConfig) -> list[ModelOption]:
+    """Catalogue of the signed-in ChatGPT subscription.
+
+    The returned slugs are exactly the ones ``ChatGPTChat`` accepts. The
+    login lives in ``~/.phoson/auth.json`` (no config.toml credential), so
+    a missing login is reported as an actionable error.
+    """
+    from phoson_llm.auth.chatgpt import ChatGPTAuthError, has_tokens
+    from phoson_llm.chats.chatgpt import CHATGPT_CODEX_BASE_URL, list_models
+
+    if not has_tokens():
+        raise ModelListingError(_CHATGPT_NOT_LOGGED_IN)
+    base_url = _models_provider_base_url(config, "chatgpt") or CHATGPT_CODEX_BASE_URL
+    try:
+        models = await list_models(base_url=base_url)
+    except ChatGPTAuthError as exc:
+        raise ModelListingError(f"{_CHATGPT_NOT_LOGGED_IN} ({exc})") from exc
+    except Exception as exc:  # noqa: BLE001 — network/parse failures are expected
+        raise ModelListingError(f"Failed to fetch ChatGPT models: {exc}") from exc
+
+    options = [
+        ModelOption(id=model.slug, label=model.label, provider="chatgpt")
+        for model in models
+        if model.slug
     ]
     return _prioritize_current(options, config.model)
 

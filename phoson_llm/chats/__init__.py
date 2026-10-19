@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from phoson_llm.chats.openai import OpenAIChat
     from phoson_llm.chats.alibaba import AlibabaChat
     from phoson_llm.chats.bedrock import BedrockChat
+    from phoson_llm.chats.chatgpt import ChatGPTChat
     from phoson_llm.chats.mistral import MistralChat
     from phoson_llm.chats.deepseek import DeepSeekChat
     from phoson_llm.chats.lmstudio import LMStudioChat
@@ -64,6 +65,7 @@ __all__ = [
     "FireworksChat",
     "CohereChat",
     "OmniRouteChat",
+    "ChatGPTChat",
 ]
 
 #: public name → submodule that defines it (relative to this package).
@@ -90,6 +92,7 @@ _MODULES: dict[str, str] = {
     "BedrockChat": ".bedrock",
     "FireworksChat": ".fireworks",
     "CohereChat": ".cohere",
+    "ChatGPTChat": ".chatgpt",
     "OmniRouteChat": ".omniroute",
 }
 
