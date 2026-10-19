@@ -40,6 +40,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "fireworks": (".chats.fireworks", "FireworksChat"),
     "cohere": (".chats.cohere", "CohereChat"),
     "chatgpt": (".chats.chatgpt", "ChatGPTChat"),
+    "google-code-assist": (".chats.code_assist", "CodeAssistChat"),
     "omniroute": (".chats.omniroute", "OmniRouteChat"),
 }
 

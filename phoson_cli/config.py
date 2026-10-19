@@ -51,6 +51,7 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
     "CohereChat": "phoson_llm.chats.cohere",
     "OmniRouteChat": "phoson_llm.chats.omniroute",
     "ChatGPTChat": "phoson_llm.chats.chatgpt",
+    "CodeAssistChat": "phoson_llm.chats.code_assist",
 }
 
 
@@ -556,6 +557,11 @@ _PROVIDER_ALIASES: Final[dict[str, str]] = {
     "codex": "chatgpt",
     "openai-codex": "chatgpt",
     "openai_codex": "chatgpt",
+    "code-assist": "google-code-assist",
+    "code_assist": "google-code-assist",
+    "codeassist": "google-code-assist",
+    "gemini-code-assist": "google-code-assist",
+    "gca": "google-code-assist",
 }
 _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
     {
@@ -569,6 +575,7 @@ _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
         "fireworks",
         "gemini",
         "github",
+        "google-code-assist",
         "groq",
         "lmstudio",
         "mistral",
@@ -1883,6 +1890,17 @@ def _chatgpt_logged_in() -> bool:
     return bool(has_tokens())
 
 
+def _google_code_assist_logged_in() -> bool:
+    """Whether a Google Code Assist subscription login is stored.
+
+    Like ``chatgpt`` this provider has no API key: it authenticates with the
+    OAuth tokens in ``~/.phoson/auth-google.json``. The auth module is
+    imported lazily so CLI startup never pays for ``httpx``.
+    """
+    from phoson_llm.auth.code_assist import has_tokens
+
+    return bool(has_tokens())
+
 
 def _credential_providers(config: PhosonConfig) -> list[str]:
     """Return the providers that have a usable credential in ``config``.
@@ -1937,6 +1955,8 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("lmstudio")
     if _chatgpt_logged_in():
         providers.append("chatgpt")
+    if _google_code_assist_logged_in():
+        providers.append("google-code-assist")
     return providers
 
 
@@ -1981,6 +2001,8 @@ def has_configured_provider(config: PhosonConfig) -> bool:
         return True
     if _provider_name(config.provider) == "chatgpt":
         return _chatgpt_logged_in()
+    if _provider_name(config.provider) == "google-code-assist":
+        return _google_code_assist_logged_in()
     return bool(_credential_providers(config))
 
 
@@ -2117,4 +2139,9 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
         # No API key: credentials come from the stored OAuth login
         # (``~/.phoson/auth.json``), the base URL only overrides the backend.
         return _chat_class("ChatGPTChat")(base_url=base_url)
+    if provider == "google-code-assist":
+        # No API key: credentials come from the stored OAuth login
+        # (``~/.phoson/auth-google.json``); the base URL only overrides the
+        # Code Assist backend.
+        return _chat_class("CodeAssistChat")(base_url=base_url)
     raise ValueError(f"Unsupported provider: {config.provider}")

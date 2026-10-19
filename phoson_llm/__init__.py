@@ -57,6 +57,7 @@ if TYPE_CHECKING:
         AnthropicChat,
         FireworksChat,
         OmniRouteChat,
+        CodeAssistChat,
         OpenRouterChat,
         PerplexityChat,
         GitHubModelsChat,
@@ -126,6 +127,7 @@ __all__ = [
     "CohereChat",
     "OmniRouteChat",
     "ChatGPTChat",
+    "CodeAssistChat",
     "build_chat",
     # schemas - inputs
     "Message",
@@ -194,6 +196,7 @@ _CHAT_EXPORTS = frozenset(
         "CohereChat",
         "OmniRouteChat",
         "ChatGPTChat",
+        "CodeAssistChat",
     }
 )
 

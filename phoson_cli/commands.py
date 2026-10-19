@@ -701,6 +701,7 @@ _AUTH_USAGE: Final[str] = (
 #: and the model picker's "not signed in" guard.
 _SUBSCRIPTION_PROVIDER_LABELS: Final[dict[str, str]] = {
     "chatgpt": "ChatGPT",
+    "google-code-assist": "Google Code Assist",
 }
 
 
@@ -822,14 +823,16 @@ class CommandHandler:
     def _subscription_signed_in(self, provider: str) -> bool:
         """Whether a stored OAuth login exists for a subscription provider.
 
-        ``chatgpt`` has no API key: its credential is the login in a local
-        auth file. The auth module (and ``httpx``) is imported lazily so no
-        command pays for it unless asked.
+        ``chatgpt`` and ``google-code-assist`` have no API key: their credential
+        is the login in a local auth file. The auth modules (and ``httpx``) are
+        imported lazily so no command pays for them unless asked.
         """
-        if provider != "chatgpt":
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import has_tokens
+        elif provider == "google-code-assist":
+            from phoson_llm.auth.code_assist import has_tokens
+        else:
             return False
-        from phoson_llm.auth.chatgpt import has_tokens
-
         return bool(has_tokens())
 
     def _enable_subscription_provider(self, provider: str) -> bool:
@@ -1875,8 +1878,9 @@ class CommandHandler:
         """Sign in/out of subscription providers.
 
         Credentials live in a local auth file under ``~/.phoson/`` — never in
-        config.toml: ``~/.phoson/auth.json`` for ChatGPT. Each provider has
-        its own file so a logout only removes *that* provider's login.
+        config.toml: ``auth.json`` for ChatGPT, ``auth-google.json`` for Google
+        Code Assist. Each provider has its own file so a logout only removes
+        *that* provider's login.
         """
         parts = cmd.args.split()
         sub = parts[0].lower() if parts else "status"
@@ -1912,14 +1916,25 @@ class CommandHandler:
             return True
 
         r = self._r
-        from phoson_llm.auth.chatgpt import auth_status
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import auth_status
 
-        label = "ChatGPT"
-        plan_word = "plan"
-        account_word = "account"
-        login_hint = (
-            "Run /auth login chatgpt to use your subscription (Plus/Pro)."
-        )
+            label = "ChatGPT"
+            plan_word = "plan"
+            account_word = "account"
+            login_hint = (
+                "Run /auth login chatgpt to use your subscription (Plus/Pro)."
+            )
+        else:
+            from phoson_llm.auth.code_assist import auth_status
+
+            label = "Google Code Assist"
+            plan_word = "tier"
+            account_word = "project"
+            login_hint = (
+                "Run /auth login google-code-assist to use your subscription "
+                "(Gemini Code Assist / Cloud)."
+            )
 
         status = auth_status()
         if not status.logged_in:
@@ -1955,16 +1970,28 @@ class CommandHandler:
         else:
             method = "auto"
 
-        from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
-        from phoson_llm.auth.chatgpt import login
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
+            from phoson_llm.auth.chatgpt import login
 
-        hint = {
-            "device": " with a device code — open the URL below…",
-            "browser": " in your browser…",
-        }.get(method, " (browser, falling back to a device code)…")
-        retry_hint = (
-            f"Retry with /auth login {provider} --device on a headless/SSH box."
-        )
+            hint = {
+                "device": " with a device code — open the URL below…",
+                "browser": " in your browser…",
+            }.get(method, " (browser, falling back to a device code)…")
+            retry_hint = (
+                f"Retry with /auth login {provider} --device on a headless/SSH box."
+            )
+        else:
+            from phoson_llm.auth.code_assist import CodeAssistAuthError as AuthError
+            from phoson_llm.auth.code_assist import login
+
+            hint = {
+                "device": " with a copy/paste code — open the URL below…",
+                "browser": " in your browser…",
+            }.get(method, " (browser, falling back to a copy/paste code)…")
+            retry_hint = (
+                f"Retry with /auth login {provider} --device on a headless/SSH box."
+            )
 
         r.print_info(f"Signing in to {label}{hint}")
 
@@ -1999,8 +2026,12 @@ class CommandHandler:
             return True
         label = _SUBSCRIPTION_PROVIDER_LABELS[provider]
 
-        from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
-        from phoson_llm.auth.chatgpt import clear_tokens
+        if provider == "chatgpt":
+            from phoson_llm.auth.chatgpt import ChatGPTAuthError as AuthError
+            from phoson_llm.auth.chatgpt import clear_tokens
+        else:
+            from phoson_llm.auth.code_assist import CodeAssistAuthError as AuthError
+            from phoson_llm.auth.code_assist import clear_tokens
 
         r.print_info(
             f"Removing the local {label} credentials — "

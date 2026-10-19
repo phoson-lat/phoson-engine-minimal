@@ -77,6 +77,13 @@ PROVIDER_ALIASES: dict[str, str] = {
     "codex": "chatgpt",
     "openai-codex": "chatgpt",
     "openai_codex": "chatgpt",
+    # The Google subscription surface (Code Assist) is not the Gemini API, so
+    # it needs a name of its own; ``google`` already means the API-key one.
+    "code-assist": "google-code-assist",
+    "code_assist": "google-code-assist",
+    "codeassist": "google-code-assist",
+    "gemini-code-assist": "google-code-assist",
+    "gca": "google-code-assist",
 }
 
 #: Canonical provider names the CLI can serve (mirrors ``build_chat``).
@@ -103,6 +110,7 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "cohere",
         "omniroute",
         "chatgpt",
+        "google-code-assist",
         "bedrock",
         "aws",
         "vllm",

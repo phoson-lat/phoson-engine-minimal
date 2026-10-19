@@ -35,6 +35,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "cohere": "Cohere",
     "omniroute": "OmniRoute",
     "chatgpt": "ChatGPT",
+    "google-code-assist": "Google Code Assist",
 }
 
 
