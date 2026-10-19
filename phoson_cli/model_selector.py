@@ -780,8 +780,7 @@ async def _list_chatgpt_models(config: PhosonConfig) -> list[ModelOption]:
 
 #: Shared hint for the Google Code Assist subscription provider (no API key).
 _GOOGLE_CODE_ASSIST_NOT_LOGGED_IN = (
-    "No Google Code Assist login stored — run "
-    "`/auth login google-code-assist` first."
+    "No Google Code Assist login stored — run `/auth login google-code-assist` first."
 )
 
 

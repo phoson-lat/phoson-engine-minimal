@@ -1957,9 +1957,7 @@ class CommandHandler:
             label = "ChatGPT"
             plan_word = "plan"
             account_word = "account"
-            login_hint = (
-                "Run /auth login chatgpt to use your subscription (Plus/Pro)."
-            )
+            login_hint = "Run /auth login chatgpt to use your subscription (Plus/Pro)."
         else:
             from phoson_llm.auth.code_assist import auth_status
 

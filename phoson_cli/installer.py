@@ -600,8 +600,7 @@ class SetupWizard:
         plan = getattr(tokens, "plan_type", None) or getattr(tokens, "tier", None)
         self.console.print(
             Text(
-                f"  Signed in to {label} as {account} "
-                f"({plan or 'unknown plan'}).",
+                f"  Signed in to {label} as {account} ({plan or 'unknown plan'}).",
                 style=self.theme.ok,
             )
         )

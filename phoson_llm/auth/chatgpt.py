@@ -306,10 +306,10 @@ def parse_id_token_claims(id_token: str | None) -> dict[str, str | None]:
     claims = decode_jwt_claims(id_token)
     if not claims:
         return {}
-    auth = claims.get(AUTH_CLAIM) if isinstance(claims.get(AUTH_CLAIM), dict) else {}
-    profile = (
-        claims.get(PROFILE_CLAIM) if isinstance(claims.get(PROFILE_CLAIM), dict) else {}
-    )
+    auth = claims.get(AUTH_CLAIM)
+    auth = auth if isinstance(auth, dict) else {}
+    profile = claims.get(PROFILE_CLAIM)
+    profile = profile if isinstance(profile, dict) else {}
     email = claims.get("email") or profile.get("email")
     return {
         "email": email if isinstance(email, str) else None,

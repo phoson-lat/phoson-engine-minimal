@@ -291,9 +291,7 @@ def test_build_generate_body_wraps_a_plain_text_turn() -> None:
 
     assert body["model"] == "gemini-2.5-pro"
     assert body["project"] == "proj-1"
-    assert body["request"]["contents"] == [
-        {"role": "user", "parts": [{"text": "hi"}]}
-    ]
+    assert body["request"]["contents"] == [{"role": "user", "parts": [{"text": "hi"}]}]
     assert body["request"]["generationConfig"] == {
         "temperature": 0.7,
         "maxOutputTokens": 32 * 1024,
@@ -376,9 +374,7 @@ def test_build_generate_body_puts_the_system_instruction_apart() -> None:
 
     body = build_generate_body(messages=messages, config=config, project_id=None)
 
-    assert body["request"]["systemInstruction"] == {
-        "parts": [{"text": "config wins"}]
-    }
+    assert body["request"]["systemInstruction"] == {"parts": [{"text": "config wins"}]}
     assert [entry["role"] for entry in body["request"]["contents"]] == ["user"]
 
 
@@ -659,9 +655,7 @@ async def test_stream_sends_build_generate_body_output(auth_env) -> None:
 @pytest.mark.asyncio
 async def test_stream_surfaces_an_error_frame_as_an_error_event(auth_env) -> None:
     save_tokens(_tokens(expiry=time.time() + 3600))
-    frames = [
-        {"error": {"message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}}
-    ]
+    frames = [{"error": {"message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}}]
     chat = CodeAssistChat(
         transport=httpx.MockTransport(_stream_handler([], frames=frames))
     )

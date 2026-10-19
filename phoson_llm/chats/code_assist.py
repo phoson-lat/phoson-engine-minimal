@@ -210,9 +210,7 @@ def _block_part(block: Any, tool_name_by_id: dict[str, str]) -> dict[str, Any]:
             data = load_file_as_base64(path, mime)
             if data is None:
                 return {"text": missing_attachment_placeholder("image", path)}
-            return {
-                "inlineData": {"mimeType": mime, "data": data.split(",", 1)[-1]}
-            }
+            return {"inlineData": {"mimeType": mime, "data": data.split(",", 1)[-1]}}
         # Hosted URI (gs:// or https://) — pass through as-is.
         return {"fileData": {"mimeType": mime, "fileUri": source}}
 
@@ -448,9 +446,7 @@ def _sse_error(payload: dict[str, Any]) -> tuple[str, str, bool]:
     """Extract ``(message, code, retryable)`` from a failure frame."""
     error = _frame_error(payload) or {}
 
-    message = str(
-        error.get("message") or "the Code Assist backend reported a failure"
-    )
+    message = str(error.get("message") or "the Code Assist backend reported a failure")
     status = str(error.get("status") or "")
     raw_code = str(error.get("code") or "")
 
@@ -751,6 +747,19 @@ async def onboard_user(
     return payload
 
 
+def _deadline_seconds(timeout: httpx.Timeout | float | None) -> float | None:
+    """Reduce a client timeout to the seconds budget a poll deadline needs.
+
+    ``_poll_operation`` compares its budget against :func:`time.monotonic`, so it
+    cannot take the composite :class:`httpx.Timeout`. The *read* component is the
+    one that bounds how long a single response may take, which is what the poll
+    wait actually measures.
+    """
+    if isinstance(timeout, httpx.Timeout):
+        return timeout.read
+    return timeout
+
+
 async def ensure_project(
     tokens: CodeAssistTokens,
     *,
@@ -758,7 +767,7 @@ async def ensure_project(
     path: str | Path | None = None,
     base_url: str = CODE_ASSIST_BASE_URL,
     persist: bool = True,
-    timeout: float | None = None,
+    timeout: httpx.Timeout | float | None = None,
     client: httpx.AsyncClient | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> CodeAssistSetup:
@@ -812,7 +821,7 @@ async def ensure_project(
             tier=tier,
             project_id=project_id,
             base_url=base_url,
-            timeout=timeout,
+            timeout=_deadline_seconds(timeout),
             client=client,
             transport=transport,
         )
@@ -915,8 +924,7 @@ async def list_models(
                     seen.append(entry)
         if seen:
             return [
-                CodeAssistModel(slug=s, display_name=labels.get(s, ""))
-                for s in seen
+                CodeAssistModel(slug=s, display_name=labels.get(s, "")) for s in seen
             ]
 
     return [CodeAssistModel(slug=s, display_name=name) for s, name in DEFAULT_MODELS]
