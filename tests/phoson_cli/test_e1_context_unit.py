@@ -17,6 +17,7 @@ from phoson_cli.config import (
 from phoson_llm.schemas import Message, LLMDoneEvent
 from phoson_cli.commands import Command, CommandHandler
 from phoson_cli.controller import CompactPlan, SessionController
+from phoson_cli.session_titles import SessionTitler
 from phoson_agent.sessions.models import ConversationTree
 
 # ── config presets (E1) ──────────────────────────────────────────────────
@@ -153,6 +154,7 @@ def _controller(turns: int, **cfg) -> SessionController:
         controller.current_model = "test-model"
         controller.current_task = None
         controller._save_session = AsyncMock()
+        controller.titles = SessionTitler(controller)
         controller._session = SimpleNamespace(
             tree=ConversationTree.new(), metrics=MagicMock(), current_node_id=None
         )

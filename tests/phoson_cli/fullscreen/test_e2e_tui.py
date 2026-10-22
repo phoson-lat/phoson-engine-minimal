@@ -123,7 +123,7 @@ async def test_pipe_input_ctrl_c_cancels_active_turn_without_exiting(tmp_path) -
                 app.sink.on_event(AgentStartEvent(model="test-model", message_count=1))
                 app.sink.on_event(AgentTokenEvent(content="working..."))
                 # First Ctrl+C cancels the authoritative outer operation.
-                with patch.object(app.repl, "cancel_current") as mock_cancel:
+                with patch.object(app.session, "cancel_current") as mock_cancel:
                     pipe.send_text("\x03")
                     await asyncio.sleep(0.05)
                     mock_cancel.assert_called_once()
@@ -158,7 +158,7 @@ async def test_pipe_input_escape_cancels_inflight_run(tmp_path) -> None:
             fake_task = asyncio.create_task(asyncio.sleep(10))
             app._run_task = fake_task
 
-            with patch.object(app.repl, "cancel_current") as mock_cancel:
+            with patch.object(app.session, "cancel_current") as mock_cancel:
 
                 async def drive_app():
                     await asyncio.sleep(0.02)
@@ -280,7 +280,7 @@ async def test_pipe_input_remapped_keys_dispatch(tmp_path) -> None:
             async def mock_run_agent(prompt: str) -> None:
                 submitted.append(prompt)
 
-            with patch.object(app.repl, "_run_agent", side_effect=mock_run_agent):
+            with patch.object(app.session, "run_turn", side_effect=mock_run_agent):
 
                 async def drive_app():
                     await asyncio.sleep(0.02)
@@ -336,7 +336,7 @@ async def test_headless_full_agent_turn_lifecycle(tmp_path) -> None:
                 )
             )
 
-        with patch.object(app.repl, "_run_agent", side_effect=mock_run_agent):
+        with patch.object(app.session, "run_turn", side_effect=mock_run_agent):
             app._prompt_input.text = "say hello"
             app.submit()
             assert app._run_task is not None
@@ -386,7 +386,7 @@ async def test_headless_failed_retries_collapse_to_one_notice_line(tmp_path) -> 
                 )
             )
 
-        with patch.object(app.repl, "_run_agent", side_effect=mock_run_agent):
+        with patch.object(app.session, "run_turn", side_effect=mock_run_agent):
             app._prompt_input.text = "please work"
             app.submit()
             assert app._run_task is not None

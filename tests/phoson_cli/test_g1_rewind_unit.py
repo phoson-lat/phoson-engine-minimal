@@ -49,7 +49,9 @@ def _make_repl(tmp_path, *texts: str):
         repl = PhosonRepl(config)
 
     for i, text in enumerate(texts):
-        user_node, _ = repl._append_user_turn(Message(role="user", content=text))
+        user_node, _ = repl._controller._append_user_turn(
+            Message(role="user", content=text)
+        )
         assistant_node = repl.tree.append(
             user_node, Message(role="assistant", content=f"reply {i}")
         )
@@ -134,7 +136,9 @@ def test_jump_candidates_excludes_tool_result_nodes(tmp_path) -> None:
     )
     repl.current_node_id = tool_result_node.id
     # And one more genuine user turn after the tool round-trip.
-    user3_id, _ = repl._append_user_turn(Message(role="user", content="third"))
+    user3_id, _ = repl._controller._append_user_turn(
+        Message(role="user", content="third")
+    )
     reply3 = repl.tree.append(user3_id, Message(role="assistant", content="reply 3"))
     repl.current_node_id = reply3.id
 
@@ -171,7 +175,7 @@ def test_jump_candidates_excludes_env_context_nodes(tmp_path) -> None:
     active path must not be offered as rewind targets — even if a legacy
     session persisted them before the leak fix."""
     repl = _make_repl(tmp_path, "first", "second")
-    env_id, _ = repl._append_user_turn(
+    env_id, _ = repl._controller._append_user_turn(
         Message(
             role="user", content="[env: step 1/20, time 0s elapsed, 600s remaining]"
         )
@@ -264,7 +268,7 @@ def test_rewound_next_turn_branches_from_the_landing_point(tmp_path) -> None:
     ok, landed = repl._controller.jump_to_user_turn(second_node_id)
     assert ok
 
-    repl._append_user_turn(Message(role="user", content="second (retry)"))
+    repl._controller._append_user_turn(Message(role="user", content="second (retry)"))
     new_leaf = repl.current_node_id
     assert new_leaf != second_node_id
     # Both "second" and "second (retry)" hang off the same parent now.
@@ -329,7 +333,7 @@ def test_rewind_is_not_a_config_action(monkeypatch, tmp_path) -> None:
 
 def test_lone_idle_esc_arms_but_does_not_rewind(tmp_path) -> None:
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
     blocks_before = len(app.sink.blocks)
 
     app.handle_escape()  # first press: arms the window
@@ -339,7 +343,7 @@ def test_lone_idle_esc_arms_but_does_not_rewind(tmp_path) -> None:
 
 async def test_double_idle_esc_opens_the_rewind_picker(tmp_path) -> None:
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second", "third")
+    app.session = _make_repl(tmp_path, "first", "second", "third")
 
     app._last_escape_at = time.monotonic()  # a press just now (<1.0 s)
     opened: dict[str, object] = {}
@@ -364,7 +368,7 @@ async def test_double_idle_esc_opens_the_rewind_picker(tmp_path) -> None:
 
 async def test_rewind_outside_window_does_not_open_picker(tmp_path) -> None:
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
     app._last_escape_at = time.monotonic() - 10.0  # stale press
 
     with patch.object(app, "run_float_picker") as mock_pick:
@@ -378,7 +382,7 @@ async def test_rewind_outside_window_does_not_open_picker(tmp_path) -> None:
 async def test_mid_run_esc_still_cancels_and_never_rewinds(tmp_path) -> None:
     """#68 precedence: in flight, Esc cancels immediately (no double-tap)."""
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -388,8 +392,8 @@ async def test_mid_run_esc_still_cancels_and_never_rewinds(tmp_path) -> None:
         await release.wait()
 
     with (
-        patch.object(app.repl, "_run_agent", new=slow_run),
-        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        patch.object(app.session, "run_turn", new=slow_run),
+        patch.object(app.session, "cancel_current", return_value=True) as mock_cancel,
     ):
         app._prompt_input.text = "go"
         app.submit()
@@ -418,7 +422,7 @@ async def test_mid_run_esc_still_cancels_and_never_rewinds(tmp_path) -> None:
 async def test_rewind_ignored_while_a_float_is_open(tmp_path) -> None:
     """A second Esc must not rewind on top of another overlay."""
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
     app._active_float = object()  # simulate an open overlay
 
     with patch.object(app, "run_float_picker") as mock_pick:
@@ -432,7 +436,7 @@ async def test_rewind_ignored_while_a_float_is_open(tmp_path) -> None:
 async def test_apply_rewind_redraws_and_prepopulates(tmp_path) -> None:
     app = _app_for(tmp_path)
     repl = _make_repl(tmp_path, "first", "second", "third")
-    app.repl = repl
+    app.session = repl
     previous_leaf = repl.current_node_id
 
     # Seed some transcript blocks (as a live turn would).
@@ -457,12 +461,12 @@ async def test_apply_rewind_redraws_and_prepopulates(tmp_path) -> None:
     # Header token count reflects the shorter path (same estimator).
     shorter_path_tokens = repl._controller.estimate_active_path()
     assert shorter_path_tokens < full_path_tokens
-    assert repl._context_tokens == shorter_path_tokens
+    assert repl._controller._context_tokens == shorter_path_tokens
 
 
 async def test_apply_rewind_rejects_bad_node(tmp_path) -> None:
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
     blocks_before = len(app.sink.blocks)
     await app._apply_rewind("deadbeef")
     # One error notice; no redraw, no undo stack entry.
@@ -474,7 +478,7 @@ async def test_apply_rewind_rejects_bad_node(tmp_path) -> None:
 async def test_undo_jump_restores_the_previous_point(tmp_path) -> None:
     app = _app_for(tmp_path)
     repl = _make_repl(tmp_path, "first", "second")
-    app.repl = repl
+    app.session = repl
     leaf = repl.current_node_id
 
     await app._apply_rewind(_user_node(repl, "second"))
@@ -491,7 +495,7 @@ async def test_undo_jump_restores_the_previous_point(tmp_path) -> None:
 async def test_consecutive_rewinds_are_individually_reversible(tmp_path) -> None:
     app = _app_for(tmp_path)
     repl = _make_repl(tmp_path, "first", "second", "third", "fourth")
-    app.repl = repl
+    app.session = repl
     leaf = repl.current_node_id
 
     # Rewind A: to just before "third" → lands on "second"'s reply.
@@ -514,7 +518,7 @@ async def test_consecutive_rewinds_are_individually_reversible(tmp_path) -> None
 
 async def test_undo_jump_without_rewind_is_a_notice(tmp_path) -> None:
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
     blocks_before = len(app.sink.blocks)
     app.undo_jump()
     assert len(app.sink.blocks) == blocks_before + 1  # one notice
@@ -556,7 +560,7 @@ async def test_pipe_input_esc_esc_idle_opens_rewind_picker(tmp_path) -> None:
 
     app = _app_for(tmp_path)
     repl = _make_repl(tmp_path, "first", "second", "third")
-    app.repl = repl
+    app.session = repl
 
     with create_pipe_input() as pipe:
         app.app.input = pipe
@@ -589,7 +593,7 @@ async def test_pipe_input_lone_esc_idle_does_nothing(tmp_path) -> None:
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
     blocks_before = len(app.sink.blocks)
 
     with create_pipe_input() as pipe:
@@ -618,7 +622,7 @@ async def test_pipe_input_ctrl_z_without_rewind_notifies(tmp_path) -> None:
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
     blocks_before = len(app.sink.blocks)
 
     with create_pipe_input() as pipe:
@@ -653,7 +657,7 @@ async def test_pipe_input_alt_backspace_idle_does_not_rewind(tmp_path) -> None:
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
     blocks_before = len(app.sink.blocks)
 
     with create_pipe_input() as pipe:
@@ -686,7 +690,7 @@ async def test_pipe_input_alt_backspace_mid_run_does_not_cancel(tmp_path) -> Non
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -696,8 +700,8 @@ async def test_pipe_input_alt_backspace_mid_run_does_not_cancel(tmp_path) -> Non
         await release.wait()
 
     with (
-        patch.object(app.repl, "_run_agent", new=slow_run),
-        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        patch.object(app.session, "run_turn", new=slow_run),
+        patch.object(app.session, "cancel_current", return_value=True) as mock_cancel,
         create_pipe_input() as pipe,
     ):
         app.app.input = pipe
@@ -728,7 +732,7 @@ async def test_pipe_input_clean_esc_still_cancels_mid_run(tmp_path) -> None:
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first")
+    app.session = _make_repl(tmp_path, "first")
 
     started = asyncio.Event()
     release = asyncio.Event()
@@ -738,8 +742,8 @@ async def test_pipe_input_clean_esc_still_cancels_mid_run(tmp_path) -> None:
         await release.wait()
 
     with (
-        patch.object(app.repl, "_run_agent", new=slow_run),
-        patch.object(app.repl, "cancel_current", return_value=True) as mock_cancel,
+        patch.object(app.session, "run_turn", new=slow_run),
+        patch.object(app.session, "cancel_current", return_value=True) as mock_cancel,
         create_pipe_input() as pipe,
     ):
         app.app.input = pipe
@@ -774,7 +778,7 @@ async def test_pipe_input_alt_x_idle_does_not_rewind(tmp_path) -> None:
     from prompt_toolkit.output import DummyOutput
 
     app = _app_for(tmp_path)
-    app.repl = _make_repl(tmp_path, "first", "second")
+    app.session = _make_repl(tmp_path, "first", "second")
 
     with create_pipe_input() as pipe:
         app.app.input = pipe

@@ -92,7 +92,9 @@ def test_build_plugin_specs_orders_configured_plugins_before_mcp() -> None:
     configured = _ConfiguredPlugin()
     config = PhosonConfig(plugins=["entrypoint:first"])
 
-    with patch("phoson_cli.session_utils.build_mcp_plugins", return_value=[configured]):
+    with patch(
+        "phoson_cli.session_utils.load_official_plugins", return_value=[configured]
+    ):
         specs = build_plugin_specs(config)
 
     assert specs == ["entrypoint:first", configured]

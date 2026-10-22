@@ -4,14 +4,15 @@ Each slash command lives in its own ``_cmd_*`` method. The
 :class:`CommandHandler` builds a dispatch table at construction time
 (``{cmd_name: handler}``) so that ``handle()`` is a flat lookup rather
 than a 250-line cascade of ``if/elif`` branches. The :data:`COMMAND_SPECS`
-list is the single source of truth for command names, aliases and
-help strings — both ``/help`` and the slash-completer in the REPL read
-from it.
+list (in :mod:`phoson_cli.command_catalog`) is the single source of truth
+for command names, aliases and help strings — both ``/help`` and the
+slash-completer in the REPL read from it.
 
 To add a new command:
 
   1. Write ``_cmd_foo(self, cmd: Command) -> bool``.
-  2. Append a :class:`CommandSpec` entry to :data:`COMMAND_SPECS`.
+  2. Append a :class:`CommandSpec` entry to :data:`COMMAND_SPECS`
+     (``phoson_cli/command_catalog.py``).
 
 That's it; the dispatch table picks it up automatically.
 """
@@ -22,10 +23,9 @@ import sys
 import asyncio
 import inspect
 import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 from pathlib import Path
-from dataclasses import dataclass
-from collections.abc import Callable, Iterable, Sequence, Awaitable
+from collections.abc import Callable, Iterable, Awaitable
 
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import (
@@ -36,7 +36,7 @@ from prompt_toolkit.completion import (
     FuzzyCompleter,
 )
 
-from phoson_agent import Plugin, CliCommandSpec, CliCommandContext, CliCommandInvocation
+from phoson_agent import CliCommandSpec, CliCommandInvocation
 from phoson_llm.schemas import REASONING_EFFORTS
 from phoson_agent.sessions.storage_jsonl import list_session_metas
 
@@ -57,9 +57,28 @@ from .theme_picker import (  # noqa: F401 - patched by tests / host
     ThemePickerResult,
     pick_theme,
 )
+from .ui_protocols import SessionPort
 from ._mcp_commands import _MCPSubcommands
 from .file_mentions import format_file_size, iter_candidate_paths
 from .model_selector import list_available_models, list_models_for_providers
+from .command_catalog import (  # noqa: F401 - re-exported
+    COMMANDS,
+    _CMD_META,
+    COMMAND_SPECS,
+    _CATEGORY_ORDER,
+    HELP_CATEGORIES,
+    RUN_SAFE_COMMANDS,
+    Command,
+    CommandSpec,
+    CommandCatalog,
+    PluginCommandHandlerFn,
+    RegisteredPluginCommand,
+    parse_command,
+    get_command_help,
+    is_run_safe_command,
+    build_command_catalog,
+    get_grouped_command_help,
+)
 from .provider_picker import pick_provider  # noqa: F401 - patched by tests / host
 from .permissions_store import load_policy
 
@@ -69,56 +88,7 @@ if TYPE_CHECKING:
     from .repl import PhosonRepl
 
 
-# ─── Command spec ─────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class CommandSpec:
-    """Metadata for a single slash command.
-
-    Attributes:
-        names: Canonical name plus aliases (all start with ``/``).
-        help: One-line help string shown in ``/help``.
-        method: Name of the ``CommandHandler`` method that implements it.
-    """
-
-    names: tuple[str, ...]
-    help: str
-    method: str
-
-    @property
-    def primary(self) -> str:
-        return self.names[0]
-
-
 CommandHandlerFn = Callable[["CommandHandler", "Command"], Awaitable[bool]]
-PluginCommandHandlerFn = Callable[
-    [CliCommandInvocation, CliCommandContext], Awaitable[bool]
-]
-
-
-@dataclass(frozen=True)
-class RegisteredPluginCommand:
-    """A validated plugin command bound to its loaded plugin instance."""
-
-    plugin_name: str
-    plugin: Plugin
-    spec: CliCommandSpec
-    handler: PluginCommandHandlerFn
-
-
-@dataclass(frozen=True)
-class CommandCatalog:
-    """Native and plugin commands available to one CLI session.
-
-    ``version`` changes whenever the controller rebuilds the agent runtime;
-    handlers/completers can safely refresh without retaining a closed plugin
-    instance. Native commands always appear before plugin commands.
-    """
-
-    specs: tuple[CommandSpec | CliCommandSpec, ...]
-    plugin_commands: dict[str, RegisteredPluginCommand]
-    version: int = 0
 
 
 class PluginCommandContext:
@@ -128,11 +98,11 @@ class PluginCommandContext:
         self,
         *,
         plugin_name: str,
-        repl: "PhosonRepl",
+        session: SessionPort,
         host: CommandHost,
     ) -> None:
         self._plugin_name = plugin_name
-        self._repl = repl
+        self._session = session
         self._host = host
 
     @property
@@ -145,12 +115,12 @@ class PluginCommandContext:
 
     @property
     def session_id(self) -> str:
-        return str(self._repl.tree.session_id)
+        return str(self._session.tree.session_id)
 
     @property
     def ui(self):
         """Controller-scoped UI service (or an explicit non-interactive port)."""
-        return self._repl._controller.plugin_ui
+        return self._session.plugin_ui
 
     def notify(self, kind: str, message: str) -> None:
         printer = getattr(self._host, f"print_{kind}", None)
@@ -192,347 +162,6 @@ class PluginCommandContext:
         except Exception:  # noqa: BLE001 - a plugin must never break the REPL
             return False
         return True
-
-
-#: /help sections (IMPROVEMENTS.md C4): each command spec declares the
-#: category it renders under. Commands not listed fall into "Other".
-HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    (
-        "Session",
-        ("/new", "/tree", "/undo", "/compact", "/resume", "/sessions", "/delete"),
-    ),
-    ("Model", ("/model", "/provider", "/subagent-model", "/reasoning-effort")),
-    (
-        "Info",
-        (
-            "/status",
-            "/about",
-            "/env",
-            "/cost",
-            "/tokens",
-            "/steps",
-            "/agents-md",
-            "/skills",
-        ),
-    ),
-    (
-        "Config & System",
-        (
-            "/label",
-            "/title",
-            "/theme",
-            "/keys",
-            "/attach",
-            "/permissions",
-            "/details",
-            "/notify",
-            "/warnings",
-            "/mcp",
-            "/auth",
-            "/setup",
-            "/update",
-            "/help",
-            "/exit",
-        ),
-    ),
-)
-
-#: Spec order is display order inside a category; unknown commands land in
-#: "Other" so a forgotten registration is still visible in /help.
-_CATEGORY_ORDER: Final[dict[str, int]] = {
-    name: idx for idx, (_title, names) in enumerate(HELP_CATEGORIES) for name in names
-}
-
-
-def get_grouped_command_help(
-    specs: Sequence[CommandSpec | CliCommandSpec] | None = None,
-) -> list[tuple[str, list[tuple[str, str]]]]:
-    """Return ``/help`` entries grouped by category, in category order.
-
-    Returns:
-        A list of ``(category_title, [(name, help), ...])`` pairs. Specs
-        whose primary command (or any alias) is not listed in
-        :data:`HELP_CATEGORIES` are collected under an "Other" section.
-    """
-    grouped: dict[str, list[tuple[str, str]]] = {}
-    for spec in specs or COMMAND_SPECS:
-        entry_name = spec.primary if len(spec.names) == 1 else " · ".join(spec.names)
-        entry = (entry_name, spec.help)
-        category = (
-            spec.category
-            if isinstance(spec, CliCommandSpec)
-            else next(
-                (
-                    title
-                    for title, names in HELP_CATEGORIES
-                    if any(n in names for n in spec.names)
-                ),
-                "Other",
-            )
-        )
-        grouped.setdefault(category, []).append(entry)
-
-    titles = [title for title, _names in HELP_CATEGORIES]
-    ordered: list[tuple[str, list[tuple[str, str]]]] = []
-    for title in titles + ["Other"]:
-        if title in grouped:
-            ordered.append((title, grouped.pop(title)))
-    # Anything left (unknown categories can't happen today, but stay safe).
-    for title, entries in grouped.items():
-        ordered.append((title, entries))
-    return ordered
-
-
-# Order here is the order they appear in ``/help``.
-COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
-    CommandSpec(("/exit", "/quit"), "Exit the REPL", "_cmd_exit"),
-    CommandSpec(("/new", "/clear"), "Start a new session", "_cmd_new"),
-    CommandSpec(
-        ("/model",),
-        "Pick or set the active model (all configured providers)",
-        "_cmd_model",
-    ),
-    CommandSpec(("/provider",), "Pick or set the active provider", "_cmd_provider"),
-    CommandSpec(
-        ("/subagent-model",),
-        "Pick or set the model used by sub-agents",
-        "_cmd_subagent_model",
-    ),
-    CommandSpec(
-        ("/reasoning-effort", "/effort"),
-        "Show or set reasoning effort: low, medium, high, xhigh, max, or off",
-        "_cmd_reasoning_effort",
-    ),
-    CommandSpec(("/tree",), "Show the conversation tree as ASCII", "_cmd_tree"),
-    CommandSpec(
-        ("/compact",),
-        "Compact the conversation (preview + confirm); /compact on|off "
-        "toggles auto-compaction",
-        "_cmd_compact",
-    ),
-    CommandSpec(
-        ("/resume",),
-        "Resume a saved session by id (prefix match works)",
-        "_cmd_resume",
-    ),
-    CommandSpec(
-        ("/status",),
-        "Show provider, model, session, cost, tokens and permissions",
-        "_cmd_status",
-    ),
-    CommandSpec(
-        ("/about",),
-        "Show the Phoson wordmark and about info",
-        "_cmd_about",
-    ),
-    CommandSpec(
-        ("/sessions",), "List, load (#) or pick saved sessions", "_cmd_sessions"
-    ),
-    CommandSpec(("/delete",), "Delete a session by id", "_cmd_delete"),
-    CommandSpec(("/label",), "Label the current node with a short name", "_cmd_label"),
-    CommandSpec(
-        ("/title",), "Set a human-readable title for this session", "_cmd_title"
-    ),
-    CommandSpec(
-        ("/theme",),
-        "Show, pick or set the color theme: dark, light, ansi, no-color",
-        "_cmd_theme",
-    ),
-    CommandSpec(
-        ("/keys",),
-        "List the key bindings (full-screen TUI; [keys] remaps in config.toml)",
-        "_cmd_keys",
-    ),
-    CommandSpec(
-        ("/undo",),
-        "Undo the last turn (branch from before your last message)",
-        "_cmd_undo",
-    ),
-    CommandSpec(
-        ("/attach", "/attachments"),
-        "Attach a file to the next message, or list pending attachments",
-        "_cmd_attach",
-    ),
-    CommandSpec(("/help",), "Show this help", "_cmd_help"),
-    CommandSpec(
-        ("/permissions", "/perms"),
-        "Show or change per-tool permissions: /permissions <tool> <allow|ask|deny>",
-        "_cmd_permissions",
-    ),
-    CommandSpec(
-        ("/details", "/tool-cards"),
-        "Toggle tool-card bodies (diffs, write summaries, bash output)",
-        "_cmd_details",
-    ),
-    CommandSpec(
-        ("/notify",),
-        "Notify the terminal when a run finishes: /notify <bell|desktop|off>",
-        "_cmd_notify",
-    ),
-    CommandSpec(
-        ("/warnings",),
-        "Show or set CLI warning notices: /warnings <on|off>",
-        "_cmd_warnings",
-    ),
-    CommandSpec(
-        ("/agents-md",),
-        "Show which AGENTS.md/CLAUDE.md memory files are loaded into the prompt",
-        "_cmd_agents_md",
-    ),
-    CommandSpec(
-        ("/skills",),
-        "List available skills, or show one's instructions: /skills <name>",
-        "_cmd_skills",
-    ),
-    CommandSpec(("/env",), "Show provider, model and session info", "_cmd_env"),
-    CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),
-    CommandSpec(("/tokens",), "Show running input/output token totals", "_cmd_tokens"),
-    CommandSpec(("/steps",), "Show the number of agent steps so far", "_cmd_steps"),
-    CommandSpec(
-        ("/auth",),
-        "Sign in/out of subscription providers (ChatGPT, Google Code Assist)",
-        "_cmd_auth",
-    ),
-    CommandSpec(("/setup",), "Run the initial setup wizard again", "_cmd_setup"),
-    CommandSpec(("/mcp",), "Manage Model Context Protocol servers", "_cmd_mcp"),
-    CommandSpec(
-        ("/update", "/upgrade"),
-        "Check for and install CLI updates",
-        "_cmd_update",
-    ),
-)
-
-
-#: Slash commands that stay available while an agent turn is in flight.
-#:
-#: They are local UI/config actions or read-only info: none of them creates,
-#: loads, compacts or deletes a session, switches the model/provider, or
-#: otherwise competes with the running turn for the controller. Anything not
-#: listed here — including every plugin command, which is unknown by default —
-#: is refused mid-run, and a plain message is queued instead.
-RUN_SAFE_COMMANDS: Final[frozenset[str]] = frozenset(
-    {
-        # Local UI / config
-        "/theme",
-        "/warnings",
-        "/notify",
-        "/details",
-        "/tool-cards",
-        "/keys",
-        "/help",
-        "/permissions",
-        "/perms",
-        "/reasoning-effort",
-        "/effort",
-        "/attach",
-        "/attachments",
-        # Read-only info
-        "/status",
-        "/about",
-        "/env",
-        "/cost",
-        "/tokens",
-        "/steps",
-        "/tree",
-        "/agents-md",
-        "/skills",
-    }
-)
-
-
-def is_run_safe_command(name: str) -> bool:
-    """Whether the slash command ``name`` may run while a turn is in flight.
-
-    ``name`` is matched verbatim, so every alias of a safe command must be
-    listed in :data:`RUN_SAFE_COMMANDS` too.
-    """
-    return name in RUN_SAFE_COMMANDS
-
-
-def build_command_catalog(
-    plugins: Sequence[Plugin], *, version: int = 0
-) -> CommandCatalog:
-    """Build and validate the command catalog for one loaded plugin set.
-
-    Native names are permanently reserved. Plugin command aliases must be
-    unique globally; no "last plugin wins" policy is allowed because it makes
-    a user's active commands depend on installation order.
-    """
-    reserved = {name for spec in COMMAND_SPECS for name in spec.names}
-    seen = set(reserved)
-    specs: list[CommandSpec | CliCommandSpec] = list(COMMAND_SPECS)
-    registered: dict[str, RegisteredPluginCommand] = {}
-
-    for plugin in plugins:
-        try:
-            plugin_specs = plugin.get_commands()
-        except Exception as exc:
-            raise ValueError(
-                f"Plugin {plugin.name!r} failed while listing CLI commands: {exc}"
-            ) from exc
-        for spec in plugin_specs:
-            if not isinstance(spec, CliCommandSpec):
-                raise ValueError(
-                    f"Plugin {plugin.name!r} returned {type(spec).__name__} "
-                    "instead of CliCommandSpec"
-                )
-            if not spec.names or any(
-                not name.startswith("/") or " " in name or name == "/"
-                for name in spec.names
-            ):
-                raise ValueError(
-                    f"Plugin {plugin.name!r} command names must be non-empty "
-                    "slash commands without spaces"
-                )
-            if len(set(spec.names)) != len(spec.names):
-                raise ValueError(
-                    f"Plugin {plugin.name!r} repeats an alias in {spec.names!r}"
-                )
-            collision = next((name for name in spec.names if name in seen), None)
-            if collision is not None:
-                owner = (
-                    "a native command" if collision in reserved else "another plugin"
-                )
-                raise ValueError(
-                    f"Plugin {plugin.name!r} command {collision!r} "
-                    f"conflicts with {owner}"
-                )
-            handler = getattr(plugin, spec.handler, None)
-            if (
-                handler is None
-                or not callable(handler)
-                or not inspect.iscoroutinefunction(handler)
-            ):
-                raise ValueError(
-                    f"Plugin {plugin.name!r} handler {spec.handler!r} "
-                    "must be an async method"
-                )
-            command = RegisteredPluginCommand(
-                plugin_name=plugin.name,
-                plugin=plugin,
-                spec=spec,
-                handler=handler,
-            )
-            for name in spec.names:
-                seen.add(name)
-                registered[name] = command
-            specs.append(spec)
-
-    return CommandCatalog(tuple(specs), registered, version)
-
-
-# Flat set used by the legacy slash-completer API. A per-session catalog is
-# used when a controller has loaded community plugins.
-COMMANDS: Final[frozenset[str]] = frozenset(
-    name for spec in COMMAND_SPECS for name in spec.names
-)
-
-
-#: ``name -> help`` table built from the central COMMAND_SPECS so the
-#: completer's meta column stays in sync with /help and the dispatch table.
-_CMD_META: Final[dict[str, str]] = {
-    name: spec.help for spec in COMMAND_SPECS for name in spec.names
-}
 
 
 class SlashCompleter(Completer):
@@ -643,49 +272,11 @@ class PathCompleter(Completer):
             )
 
 
-def get_command_help(
-    specs: Sequence[CommandSpec | CliCommandSpec] | None = None,
-) -> list[tuple[str, str]]:
-    """Return ``(name, help)`` pairs in display order.
-
-    Aliases share their primary command's help line.
-    """
-    return [
-        (
-            spec.primary if len(spec.names) == 1 else " · ".join(spec.names),
-            spec.help,
-        )
-        for spec in specs or COMMAND_SPECS
-    ]
-
-
 #: Valid values for /reasoning-effort — single source of truth is
 #: ``phoson_llm.schemas.REASONING_EFFORTS`` (matches
 #: ``ModelConfig.reasoning_effort``), which OpenAI-compatible backends
 #: forward as-is (e.g. o1/o3's ``reasoning_effort`` request parameter).
 _REASONING_EFFORTS: Final[frozenset[str]] = frozenset(REASONING_EFFORTS)
-
-
-# ─── Parsing ─────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Command:
-    """Represents a parsed slash command."""
-
-    name: str
-    args: str
-
-
-def parse_command(text: str) -> Command | None:
-    """Parse a string input into a Command, if it starts with '/'."""
-    stripped = text.strip()
-    if not stripped.startswith("/"):
-        return None
-    parts = stripped.split(maxsplit=1)
-    name = parts[0]
-    args = parts[1].strip() if len(parts) > 1 else ""
-    return Command(name=name, args=args)
 
 
 # ─── Handler ─────────────────────────────────────────────────────────────────
@@ -736,24 +327,28 @@ class CommandHandler:
     The dispatch table is built once per instance from :data:`COMMAND_SPECS`.
     """
 
-    def __init__(self, repl: "PhosonRepl", host: CommandHost | None = None) -> None:
-        """Initialize handler with a session host and a presentation host.
+    def __init__(self, session: SessionPort, host: CommandHost | None = None) -> None:
+        """Initialize handler with a session and a presentation host.
 
         Args:
-            repl: Session facade (classic REPL or the TUI adapter).
-            host: Presentation adapter. Defaults to the Rich/prompt_toolkit
-                host so existing ``CommandHandler(repl)`` call sites keep
-                working.
+            session: The session commands act on (see
+                :class:`~phoson_cli.ui_protocols.SessionPort`).
+            host: Presentation adapter. Defaults to the classic
+                Rich/prompt_toolkit host, which needs the session to be a
+                :class:`~phoson_cli.repl.PhosonRepl`.
         """
-        self.repl = repl
-        self.host = host if host is not None else RendererCommandHost(repl)
+        self.session = session
+        self.host = (
+            host
+            if host is not None
+            else RendererCommandHost(cast("PhosonRepl", session))
+        )
         self._dispatch: dict[str, CommandHandlerFn] = {}
         self._catalog_version = -1
         self._refresh_dispatch()
 
     def _catalog(self) -> CommandCatalog:
-        controller = getattr(self.repl, "_controller", None)
-        catalog = getattr(controller, "command_catalog", None)
+        catalog = getattr(self.session, "command_catalog", None)
         if isinstance(catalog, CommandCatalog):
             return catalog
         return build_command_catalog(())
@@ -783,7 +378,7 @@ class CommandHandler:
         async def handle_plugin(_handler: "CommandHandler", cmd: Command) -> bool:
             context = PluginCommandContext(
                 plugin_name=registered.plugin_name,
-                repl=self.repl,
+                session=self.session,
                 host=self.host,
             )
             try:
@@ -818,7 +413,7 @@ class CommandHandler:
         return self.host
 
     def _available_providers(self) -> list[str]:
-        return enabled_providers_from_config(self.repl.config)
+        return enabled_providers_from_config(self.session.config)
 
     def _subscription_signed_in(self, provider: str) -> bool:
         """Whether a stored OAuth login exists for a subscription provider.
@@ -843,11 +438,11 @@ class CommandHandler:
         Returns whether the list changed (a config without an explicit list
         already derives the provider from the login).
         """
-        enabled = getattr(self.repl.config, "enabled_providers", None)
+        enabled = getattr(self.session.config, "enabled_providers", None)
         if enabled is None or provider in enabled:
             return False
-        self.repl.config.enabled_providers = canonicalize_enabled_providers(
-            [*enabled, provider], active_provider=self.repl.config.provider
+        self.session.config.enabled_providers = canonicalize_enabled_providers(
+            [*enabled, provider], active_provider=self.session.config.provider
         )
         return True
 
@@ -876,7 +471,9 @@ class CommandHandler:
         """
         r = self._r
         current = (
-            self.repl.current_model if target == "main" else self.repl.subagent_model
+            self.session.current_model
+            if target == "main"
+            else self.session.subagent_model
         )
 
         if explicit == "list":
@@ -887,10 +484,10 @@ class CommandHandler:
                 # whose live listing failed as unavailable (never a
                 # silent single-model fallback).
                 listings = await list_models_for_providers(
-                    self.repl.config, self._available_providers()
+                    self.session.config, self._available_providers()
                 )
             else:
-                models = await list_available_models(self.repl.config)
+                models = await list_available_models(self.session.config)
                 if not models:
                     r.print_info("No models available.")
                     return
@@ -920,7 +517,7 @@ class CommandHandler:
                     is_current = (
                         target == "main"
                         and option.id == current
-                        and option.provider == self.repl.config.provider
+                        and option.provider == self.session.config.provider
                     )
                     marker = "*" if is_current else " "
                     r.print_info(f"   {marker} {option.id}")
@@ -942,7 +539,7 @@ class CommandHandler:
             # carries its provider so selection below switches the
             # (model, provider) pair via the I-89 path.
             providers = self._available_providers()
-            listings = await list_models_for_providers(self.repl.config, providers)
+            listings = await list_models_for_providers(self.session.config, providers)
             models = [m for lst in listings for m in lst.options]
             unavailable = [
                 (lst.provider, lst.error) for lst in listings if not lst.available
@@ -1007,7 +604,7 @@ class CommandHandler:
             # model_provider_for) only when no configured provider's
             # live listing contains the id at all.
             listings = await list_models_for_providers(
-                self.repl.config, self._available_providers()
+                self.session.config, self._available_providers()
             )
             matches = [
                 listing.provider
@@ -1015,7 +612,7 @@ class CommandHandler:
                 for option in listing.options
                 if option.id == chosen
             ]
-            active = normalize_provider(self.repl.config.provider)
+            active = normalize_provider(self.session.config.provider)
             active_match = next(
                 (
                     provider
@@ -1042,10 +639,10 @@ class CommandHandler:
             # provider too, so the persisted (provider, model) pair stays
             # consistent and the session keeps working after a restart.
             target_provider = model_provider_for(
-                chosen, self.repl.config.provider, option_provider
+                chosen, self.session.config.provider, option_provider
             )
             if target_provider and target_provider != normalize_provider(
-                self.repl.config.provider
+                self.session.config.provider
             ):
                 sub_label = _SUBSCRIPTION_PROVIDER_LABELS.get(target_provider)
                 if (
@@ -1070,61 +667,65 @@ class CommandHandler:
                     return
                 if sub_label:
                     self._enable_subscription_provider(target_provider)
-                await self.repl.set_model(
+                await self.session.set_model(
                     chosen, provider=target_provider, reuse_engine=True
                 )
-                enabled = getattr(self.repl.config, "enabled_providers", None)
+                enabled = getattr(self.session.config, "enabled_providers", None)
                 if enabled is not None:
-                    self.repl.config.enabled_providers = canonicalize_enabled_providers(
-                        [*enabled, self.repl.config.provider],
-                        active_provider=self.repl.config.provider,
+                    self.session.config.enabled_providers = (
+                        canonicalize_enabled_providers(
+                            [*enabled, self.session.config.provider],
+                            active_provider=self.session.config.provider,
+                        )
                     )
                 mark_provider_explicit = getattr(
-                    self.repl.config, "mark_provider_explicit", None
+                    self.session.config, "mark_provider_explicit", None
                 )
                 if callable(mark_provider_explicit):
                     mark_provider_explicit()
                 save_config(
-                    self.repl.config,
+                    self.session.config,
                     only_fields={"model", "provider", "enabled_providers"},
                 )
                 r.print_info(
-                    f"Provider → {self.repl.config.provider}  ·  "
-                    f"Model → {self.repl.current_model}  ·  saved"
+                    f"Provider → {self.session.config.provider}  ·  "
+                    f"Model → {self.session.current_model}  ·  saved"
                 )
             else:
                 # Pure model switch within the active provider: reuse the live
                 # runtime (chat client/tools/plugins) instead of reloading every
                 # plugin — the model is carried per request, not by the client.
-                await self.repl.set_model(chosen, reuse_engine=True)
+                await self.session.set_model(chosen, reuse_engine=True)
                 fields = {"model", "enabled_providers"}
-                if getattr(self.repl.config, "_provider_source", "explicit") in {
+                if getattr(self.session.config, "_provider_source", "explicit") in {
                     "env",
                     "cli",
                 }:
                     # /model is deliberate even when it keeps the transient
                     # provider. Persist that route too, never its model under
                     # the unrelated provider from the previous launch.
-                    self.repl.config.enabled_providers = canonicalize_enabled_providers(
-                        [
-                            *enabled_providers_from_config(self.repl.config),
-                            self.repl.config.provider,
-                        ],
-                        active_provider=self.repl.config.provider,
+                    self.session.config.enabled_providers = (
+                        canonicalize_enabled_providers(
+                            [
+                                *enabled_providers_from_config(self.session.config),
+                                self.session.config.provider,
+                            ],
+                            active_provider=self.session.config.provider,
+                        )
                     )
-                    self.repl.config.mark_provider_explicit()
+                    self.session.config.mark_provider_explicit()
                     fields.add("provider")
-                save_config(self.repl.config, only_fields=fields)
-                r.print_info(f"Model → {self.repl.current_model}  ·  saved")
+                save_config(self.session.config, only_fields=fields)
+                r.print_info(f"Model → {self.session.current_model}  ·  saved")
         else:
-            self.repl.subagent_model = chosen
-            self.repl.config.subagent_model = chosen
-            self.repl.engine.context.extra["default_model"] = chosen
-            self.repl.engine.context.extra["main_model"] = (
-                self.repl.engine.context.extra.get("main_model")
-                or self.repl.config.model
+            self.session.subagent_model = chosen
+            self.session.config.subagent_model = chosen
+            self.session.engine.context.extra["default_model"] = chosen
+            self.session.engine.context.extra["main_model"] = (
+                self.session.engine.context.extra.get("main_model")
+                or self.session.config.model
             )
-            save_config(self.repl.config, only_fields={"subagent_model"})
+            save_config(self.session.config, only_fields={"subagent_model"})
             r.print_info(f"Sub-agent model → {chosen}  ·  saved")
 
     # ── Command implementations ─────────────────────────────────────────
@@ -1133,15 +734,15 @@ class CommandHandler:
         return False
 
     async def _cmd_new(self, cmd: Command) -> bool:  # noqa: ARG002
-        if getattr(self.repl, "is_running", False):
+        if getattr(self.session, "is_running", False):
             self._r.print_warn(
                 "A turn is running — press Esc (or Ctrl+C) first (F-35)."
             )
             return True
-        maybe = self.repl.new_session()
+        maybe = self.session.new_session()
         if inspect.isawaitable(maybe):
             await maybe  # type: ignore[misc]
-        self._r.print_info(f"New session  {self.repl.tree.session_id[:8]}")
+        self._r.print_info(f"New session  {self.session.tree.session_id[:8]}")
         return True
 
     async def _cmd_model(self, cmd: Command) -> bool:
@@ -1154,7 +755,7 @@ class CommandHandler:
 
     async def _cmd_reasoning_effort(self, cmd: Command) -> bool:
         r = self._r
-        current = self.repl.config.reasoning_effort
+        current = self.session.config.reasoning_effort
 
         arg = cmd.args.strip().lower()
         if not arg:
@@ -1175,8 +776,8 @@ class CommandHandler:
             )
             return True
 
-        self.repl.config.reasoning_effort = chosen
-        save_config(self.repl.config, only_fields={"reasoning_effort"})
+        self.session.config.reasoning_effort = chosen
+        save_config(self.session.config, only_fields={"reasoning_effort"})
         r.print_info(f"Reasoning effort → {chosen or 'off'}  ·  saved")
         return True
 
@@ -1192,13 +793,15 @@ class CommandHandler:
         if cmd.args == "list":
             r.print_info("Available providers:")
             for provider in providers:
-                marker = "*" if provider == self.repl.config.provider else " "
+                marker = "*" if provider == self.session.config.provider else " "
                 r.print_info(f" {marker} {provider}")
             return True
 
         target_provider = normalize_provider(cmd.args) if cmd.args else None
         if not target_provider:
-            result = await self.host.pick_provider(providers, self.repl.config.provider)
+            result = await self.host.pick_provider(
+                providers, self.session.config.provider
+            )
             if getattr(result, "unavailable", False):
                 return True
             if result.cancelled or not result.provider:
@@ -1223,13 +826,13 @@ class CommandHandler:
                 return True
 
         try:
-            await self.repl.set_provider(target_provider)
+            await self.session.set_provider(target_provider)
         except ValueError as exc:
             r.print_error(str(exc))
             return True
 
         mark_provider_explicit = getattr(
-            self.repl.config, "mark_provider_explicit", None
+            self.session.config, "mark_provider_explicit", None
         )
         if callable(mark_provider_explicit):
             mark_provider_explicit()
@@ -1237,13 +840,13 @@ class CommandHandler:
         if target_provider in _SUBSCRIPTION_PROVIDER_LABELS:
             await self._select_subscription_model(target_provider)
         save_config(
-            self.repl.config,
+            self.session.config,
             only_fields={"provider", "model", "enabled_providers"},
         )
         r.print_info(
             "Provider → "
-            f"{self.repl.config.provider}  ·  "
-            f"Model → {self.repl.current_model}  ·  saved"
+            f"{self.session.config.provider}  ·  "
+            f"Model → {self.session.current_model}  ·  saved"
         )
         r.print_info("Use /model <name> to pick a model for this provider.")
         return True
@@ -1259,9 +862,9 @@ class CommandHandler:
         from .model_selector import list_models_for_providers
 
         label = _SUBSCRIPTION_PROVIDER_LABELS.get(provider, provider)
-        slug = str(self.repl.current_model or "")
+        slug = str(self.session.current_model or "")
         try:
-            listings = await list_models_for_providers(self.repl.config, [provider])
+            listings = await list_models_for_providers(self.session.config, [provider])
         except Exception as exc:  # noqa: BLE001 — listing must never break the switch
             self._r.print_warn(f"Could not list {label} models: {exc}")
             await self._fallback_subscription_model(provider)
@@ -1297,10 +900,10 @@ class CommandHandler:
             f"subscription — using {chosen}."
         )
         mark_provider_explicit = getattr(
-            self.repl.config, "mark_provider_explicit", None
+            self.session.config, "mark_provider_explicit", None
         )
         try:
-            await self.repl.set_model(chosen, provider=provider, reuse_engine=True)
+            await self.session.set_model(chosen, provider=provider, reuse_engine=True)
         except ValueError as exc:  # keep the provider switch, explain the model
             self._r.print_warn(f"Could not switch model to {chosen}: {exc}")
             return
@@ -1326,15 +929,15 @@ class CommandHandler:
         from phoson_llm.chats.code_assist import DEFAULT_MODELS
 
         default = DEFAULT_MODELS[0][0]
-        if str(self.repl.current_model or "") == default:
+        if str(self.session.current_model or "") == default:
             return
         try:
-            await self.repl.set_model(default, provider=provider, reuse_engine=True)
+            await self.session.set_model(default, provider=provider, reuse_engine=True)
         except ValueError as exc:  # keep the provider switch, explain the model
             self._r.print_warn(f"Could not switch model to {default}: {exc}")
             return
         mark_provider_explicit = getattr(
-            self.repl.config, "mark_provider_explicit", None
+            self.session.config, "mark_provider_explicit", None
         )
         if callable(mark_provider_explicit):
             mark_provider_explicit()
@@ -1348,7 +951,9 @@ class CommandHandler:
         from ._views import render_tree_rich
 
         self._r.print_renderable(
-            render_tree_rich(self.repl.tree, self.repl.current_node_id, self.repl.theme)
+            render_tree_rich(
+                self.session.tree, self.session.current_node_id, self.session.theme
+            )
         )
         return True
 
@@ -1356,7 +961,7 @@ class CommandHandler:
         if not cmd.args:
             self._r.print_info("Usage:  /label <text>")
             return True
-        self.repl.label_current_node(cmd.args)
+        self.session.label_current_node(cmd.args)
         self._r.print_info(f"Labelled  “{cmd.args}”")
         return True
 
@@ -1371,28 +976,30 @@ class CommandHandler:
         if len(title) > 80:
             title = title[:80]
         # Persist on the tree and flush to the session_meta record.
-        self.repl.tree.title = title
+        self.session.tree.title = title
         # Mark it user-set: a background LLM title must not overwrite it (#55).
-        self.repl.note_user_title()
-        await self.repl.storage.save(self.repl.tree)
-        meta = self.repl.session_metrics.to_meta()
+        self.session.note_user_title()
+        await self.session.storage.save(self.session.tree)
+        meta = self.session.session_metrics.to_meta()
         meta["title"] = title
-        await self.repl.storage.save_meta(self.repl.tree.session_id, meta)
+        await self.session.storage.save_meta(self.session.tree.session_id, meta)
         r.print_info(f"Titled  “{title}”")
         return True
 
     async def _current_session_title(self) -> str | None:
-        metas = await self.repl.storage.list_meta()
+        metas = await self.session.storage.list_meta()
         for m in metas:
-            if str(m.id) == str(self.repl.tree.session_id):
+            if str(m.id) == str(self.session.tree.session_id):
                 return m.title
         return None
 
     async def _cmd_theme(self, cmd: Command) -> bool:
         """Show, pick, or set the color theme (IMPROVEMENTS.md E4)."""
         r = self._r
-        current = self.repl.theme.name
-        theme_registry = getattr(self.repl, "theme_registry", default_theme_registry())
+        current = self.session.theme.name
+        theme_registry = getattr(
+            self.session, "theme_registry", default_theme_registry()
+        )
 
         arg = cmd.args.strip().lower()
         if not arg:
@@ -1440,8 +1047,8 @@ class CommandHandler:
             )
             return True
 
-        self.repl.config.theme = theme.name
-        save_config(self.repl.config, only_fields={"theme"})
+        self.session.config.theme = theme.name
+        save_config(self.session.config, only_fields={"theme"})
         self.host.apply_theme(theme)
         r.print_info(f"Theme → {theme.name}  ·  saved")
         return True
@@ -1457,7 +1064,7 @@ class CommandHandler:
         r = self._r
         from .fullscreen.keys import listing_for_config
 
-        rows = listing_for_config(self.repl.config)
+        rows = listing_for_config(self.session.config)
         width = max(len(action) for action, _ in rows)
         r.print_info("Key bindings (full-screen TUI):")
         for action, keys in rows:
@@ -1476,7 +1083,7 @@ class CommandHandler:
         return True
 
     async def _cmd_undo(self, cmd: Command) -> bool:  # noqa: ARG002
-        ok, info = self.repl.undo_last_turn()
+        ok, info = self.session.undo_last_turn()
         if ok:
             self._r.print_info(f"\u21a9 Undid last turn (cursor \u2192 {info[:8]})")
         else:
@@ -1486,7 +1093,7 @@ class CommandHandler:
     async def _cmd_attach(self, cmd: Command) -> bool:
         r = self._r
         if not cmd.args:
-            pending = self.repl.attachments.list_pending()
+            pending = self.session.attachments.list_pending()
             if not pending:
                 r.print_info("No pending attachments. Usage:  /attach <path> [--clear]")
                 return True
@@ -1496,20 +1103,20 @@ class CommandHandler:
             return True
 
         if cmd.args == "--clear":
-            count = len(self.repl.attachments)
-            self.repl.attachments.clear()
+            count = len(self.session.attachments)
+            self.session.attachments.clear()
             r.print_info(f"Cleared {count} attachment(s).")
             return True
 
         try:
-            self.repl.attachments.attach(cmd.args)
+            self.session.attachments.attach(cmd.args)
         except (FileNotFoundError, ValueError) as exc:
             r.print_error(str(exc))
             return True
 
         r.print_info(f"Attached  {cmd.args}")
         warning = provider_compat_warning(
-            Path(cmd.args).suffix.lower(), self.repl.config.provider
+            Path(cmd.args).suffix.lower(), self.session.config.provider
         )
         if warning:
             r.print_info(f"⚠ {warning}")
@@ -1538,7 +1145,7 @@ class CommandHandler:
         # compaction run. ``balanced``/``aggressive`` are reserved for the
         # manual profile below (unambiguous that way).
         if arg in ("on", "off"):
-            ok = self.repl.set_compact_mode(arg)
+            ok = self.session.set_compact_mode(arg)
             if not ok:
                 r.print_error(
                     "Unknown compact mode — use balanced, aggressive, on or off."
@@ -1551,11 +1158,11 @@ class CommandHandler:
 
         profile = arg if arg in ("aggressive", "balanced") else None
 
-        if self.repl.is_running:
+        if self.session.is_running:
             r.print_warn("A turn is running — press Esc (or Ctrl+C) first.")
             return True
 
-        plan = self.repl.plan_compaction(profile)
+        plan = self.session.plan_compaction(profile)
         if not plan.ok:
             r.print_info(plan.reason)
             return True
@@ -1575,7 +1182,7 @@ class CommandHandler:
 
         r.print_info("Compacting conversation…")
         try:
-            before, after, changed = await self.repl.compact_context(profile)
+            before, after, changed = await self.session.compact_context(profile)
         except Exception as exc:  # noqa: BLE001
             r.print_error(f"Compaction failed: {exc}")
             return True
@@ -1603,29 +1210,29 @@ class CommandHandler:
             pkg_version = "dev"
 
         r = self._r
-        m = self.repl.session_metrics
+        m = self.session.session_metrics
         policy = load_policy()
         active_levels = [f"{t}:{lvl}" for t, lvl in sorted(policy.levels.items())]
         permissions = ", ".join(active_levels) if active_levels else "all allow"
 
         mcp_count = 0
-        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+        for plugin in getattr(self.session.engine, "_loaded_plugins", []):
             servers = getattr(plugin, "servers", {})
             if isinstance(servers, dict):
                 mcp_count += len(servers)
 
-        window = self.repl._context_window
-        used = self.repl._context_tokens
+        window = self.session.context_window
+        used = self.session.context_tokens
         pct = f" ({used / window * 100:.0f}%)" if window > 0 else ""
 
         lines = [
             f"version     {pkg_version}",
-            f"provider    {self.repl.config.provider}",
-            f"model       {self.repl.current_model}",
-            f"subagent    {self.repl.subagent_model}",
-            f"effort      {self.repl.config.reasoning_effort or 'off'}",
-            f"session     {self.repl.tree.session_id[:8]}"
-            f"  ·  {self.repl.tree.node_count()} nodes",
+            f"provider    {self.session.config.provider}",
+            f"model       {self.session.current_model}",
+            f"subagent    {self.session.subagent_model}",
+            f"effort      {self.session.config.reasoning_effort or 'off'}",
+            f"session     {self.session.tree.session_id[:8]}"
+            f"  ·  {self.session.tree.node_count()} nodes",
             f"cwd         {Path.cwd()}",
             f"steps       {m.step_count}",
             f"tokens      {m.total_input_tokens:,} in / {m.total_output_tokens:,} out",
@@ -1651,10 +1258,10 @@ class CommandHandler:
 
         self._r.print_renderable(
             render_banner(
-                provider=self.repl.config.provider,
-                model=self.repl.current_model,
-                session_id=self.repl.tree.session_id,
-                theme=self.repl.theme,
+                provider=self.session.config.provider,
+                model=self.session.current_model,
+                session_id=self.session.tree.session_id,
+                theme=self.session.theme,
                 show_meta=True,
             )
         )
@@ -1667,11 +1274,11 @@ class CommandHandler:
         if not query:
             r.print_info("Usage:  /resume <session_id>  (see /sessions)")
             return True
-        if getattr(self.repl, "is_running", False):
+        if getattr(self.session, "is_running", False):
             r.print_warn("A turn is running — press Esc (or Ctrl+C) first (F-35).")
             return True
 
-        sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
+        sessions = await self.session.storage.list_meta(cwd=str(Path.cwd()))
         matches = [s for s in sessions if str(s.id).startswith(query)]
         if not matches:
             r.print_error(f"No session matching {query!r}. Run /sessions to list.")
@@ -1685,7 +1292,7 @@ class CommandHandler:
             return True
 
         session_id = str(matches[0].id)
-        ok = await self.repl.load_session(session_id)
+        ok = await self.session.load_session(session_id)
         if ok:
             title = getattr(matches[0], "title", None)
             suffix = f"  ·  [{title}]" if title else ""
@@ -1750,9 +1357,9 @@ class CommandHandler:
         save_policy(policy)
         # Apply the change to the live gate immediately (it otherwise keeps
         # the policy loaded at startup until a restart).
-        controller = getattr(self.repl, "_controller", None)
-        if controller is not None:
-            controller.refresh_permission_policy()
+        refresh = getattr(self.session, "refresh_permission_policy", None)
+        if refresh is not None:
+            refresh()
         note = ""
         if level == LEVEL_ALLOW:
             note = " (allow is the default — the entry is dropped from the file)"
@@ -1767,7 +1374,7 @@ class CommandHandler:
         state; the classic front end has no such store and gets a
         plain notice.
         """
-        sink = getattr(getattr(self.repl, "_controller", None), "sink", None)
+        sink = getattr(self.session, "sink", None)
         toggler = getattr(sink, "set_tool_details", None)
         if toggler is None:
             self._r.print_warn(
@@ -1783,7 +1390,7 @@ class CommandHandler:
         from phoson_cli.notify import NOTIFY_MODES
 
         r = self._r
-        current = self.repl.config.notify_on_completion
+        current = self.session.config.notify_on_completion
 
         arg = cmd.args.strip().lower()
         if not arg:
@@ -1799,8 +1406,8 @@ class CommandHandler:
             )
             return True
 
-        self.repl.config.notify_on_completion = arg
-        save_config(self.repl.config, only_fields={"notify_on_completion"})
+        self.session.config.notify_on_completion = arg
+        save_config(self.session.config, only_fields={"notify_on_completion"})
         r.print_info(f"Notify on completion → {arg}  ·  saved")
         return True
 
@@ -1809,7 +1416,7 @@ class CommandHandler:
         from phoson_cli import warnings_hook
 
         r = self._r
-        current = bool(getattr(self.repl.config, "show_warnings", True))
+        current = bool(getattr(self.session.config, "show_warnings", True))
         arg = cmd.args.strip().lower()
 
         if arg in ("", "status"):
@@ -1824,8 +1431,8 @@ class CommandHandler:
             return True
 
         new = arg == "on"
-        self.repl.config.show_warnings = new
-        save_config(self.repl.config, only_fields={"show_warnings"})
+        self.session.config.show_warnings = new
+        save_config(self.session.config, only_fields={"show_warnings"})
         warnings_hook.set_enabled(new)
         r.print_info(f"CLI warning notices → {'on' if new else 'off'}  ·  saved")
         return True
@@ -2097,17 +1704,17 @@ class CommandHandler:
             if not num_part.isdigit():
                 r.print_info("Usage:  /sessions load <number>  (see /sessions)")
                 return True
-            sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
+            sessions = await self.session.storage.list_meta(cwd=str(Path.cwd()))
             idx = int(num_part) - 1
             if idx < 0 or idx >= len(sessions):
                 r.print_error(f"No session #{num_part}. Run /sessions to list.")
                 return True
-            ok = await self.repl.load_session(str(sessions[idx].id))
+            ok = await self.session.load_session(str(sessions[idx].id))
             if ok:
                 r.print_info(f"Loaded session  {str(sessions[idx].id)[:8]}")
             return True
 
-        sessions = await self.repl.storage.list_meta(cwd=str(Path.cwd()))
+        sessions = await self.session.storage.list_meta(cwd=str(Path.cwd()))
         if not sessions:
             r.print_info("No saved sessions.")
             return True
@@ -2126,7 +1733,7 @@ class CommandHandler:
 
     def _print_session_list(self, r: Any, sessions: list[Any]) -> None:
         """Print the inline numbered recent-sessions table (#55)."""
-        current = self.repl.tree.session_id
+        current = self.session.tree.session_id
         r.print_info(f"{len(sessions)} saved session(s) — most recent first:")
         for i, s in enumerate(sessions, start=1):
             marker = "▶" if str(s.id) == str(current) else " "
@@ -2139,7 +1746,7 @@ class CommandHandler:
             )
 
     async def _pick_session_modal(self, r: Any, sessions: "list[SessionMeta]") -> bool:
-        result = await self.host.pick_session(sessions, self.repl.tree.session_id)
+        result = await self.host.pick_session(sessions, self.session.tree.session_id)
 
         if getattr(result, "unavailable", False):
             return True
@@ -2154,7 +1761,7 @@ class CommandHandler:
             ids = [
                 sid
                 for sid in result.delete_ids
-                if sid != str(self.repl.tree.session_id)
+                if sid != str(self.session.tree.session_id)
             ]
             if not ids:
                 r.print_error(
@@ -2167,7 +1774,7 @@ class CommandHandler:
                 r.print_info("Delete cancelled.")
                 return True
             for session_id in ids:
-                await self.repl.storage.delete(session_id)
+                await self.session.storage.delete(session_id)
             r.print_info(
                 f"Deleted {len(ids)} session(s). Run /sessions again to refresh."
             )
@@ -2178,7 +1785,7 @@ class CommandHandler:
             return True
 
         if result.delete:
-            if result.session_id == self.repl.tree.session_id:
+            if result.session_id == self.session.tree.session_id:
                 r.print_error(
                     "Cannot delete the current active session. Use /new first."
                 )
@@ -2188,14 +1795,14 @@ class CommandHandler:
             ):
                 r.print_info("Delete cancelled.")
                 return True
-            await self.repl.storage.delete(result.session_id)
+            await self.session.storage.delete(result.session_id)
             r.print_info(
                 f"Session {result.session_id[:8]} deleted."
                 " Run /sessions again to refresh."
             )
             return True
 
-        ok = await self.repl.load_session(result.session_id)
+        ok = await self.session.load_session(result.session_id)
         if ok:
             r.print_info(f"Loaded session  {result.session_id[:8]}")
         return True
@@ -2206,7 +1813,7 @@ class CommandHandler:
             r.print_info("Usage:  /delete <session_id>")
             return True
         session_id = cmd.args.strip()
-        if session_id == self.repl.tree.session_id:
+        if session_id == self.session.tree.session_id:
             r.print_error("Cannot delete the current active session. Use /new first.")
             return True
         if not await self.host.confirm(
@@ -2215,7 +1822,7 @@ class CommandHandler:
             r.print_info("Delete cancelled.")
             return True
         try:
-            await self.repl.storage.delete(session_id)
+            await self.session.storage.delete(session_id)
             r.print_info(f"Session {session_id[:8]} deleted.")
         except ValueError:
             r.print_error(
@@ -2227,23 +1834,23 @@ class CommandHandler:
 
     async def _cmd_env(self, cmd: Command) -> bool:  # noqa: ARG002
         self._r.print_info(
-            f"provider={self.repl.config.provider} "
-            f"model={self.repl.current_model} "
-            f"subagent_model={self.repl.subagent_model} "
-            f"reasoning_effort={self.repl.config.reasoning_effort or 'off'} "
-            f"cwd={self.repl.config.sessions_dir}"
+            f"provider={self.session.config.provider} "
+            f"model={self.session.current_model} "
+            f"subagent_model={self.session.subagent_model} "
+            f"reasoning_effort={self.session.config.reasoning_effort or 'off'} "
+            f"cwd={self.session.config.sessions_dir}"
         )
         return True
 
     async def _cmd_cost(self, cmd: Command) -> bool:  # noqa: ARG002
-        m = self.repl.session_metrics
+        m = self.session.session_metrics
         self._r.print_info(
             f"cost=${m.total_cost_usd:.5f} credits={m.total_credits:.5f}"
         )
         return True
 
     async def _cmd_tokens(self, cmd: Command) -> bool:  # noqa: ARG002
-        m = self.repl.session_metrics
+        m = self.session.session_metrics
         cache = ""
         if m.total_cache_read_tokens or m.total_cache_write_tokens:
             cache = f" cache={m.total_cache_read_tokens}r/{m.total_cache_write_tokens}w"
@@ -2253,7 +1860,7 @@ class CommandHandler:
         return True
 
     async def _cmd_steps(self, cmd: Command) -> bool:  # noqa: ARG002
-        self._r.print_info(f"steps={self.repl.session_metrics.step_count}")
+        self._r.print_info(f"steps={self.session.session_metrics.step_count}")
         return True
 
     async def _cmd_mcp(self, cmd: Command) -> bool:

@@ -44,7 +44,7 @@ def short_cwd(cwd: Path) -> str:
 class HeaderModel:
     """Owns the header/footer rendering and its per-frame caches.
 
-    References the owning ``PhosonApp`` (``app``) for ``repl`` / ``sink`` and
+    References the owning ``PhosonApp`` (``app``) for ``session`` / ``sink`` and
     the shared cache state.  See the module docstring for why the state lives
     on the app rather than here.
     """
@@ -68,8 +68,8 @@ class HeaderModel:
         re-stat the filesystem or reformat the header on every frame.
         """
         app = self.app
-        repl = app.repl
-        cost = repl.session_metrics.total_cost_usd
+        session = app.session
+        cost = session.session_metrics.total_cost_usd
         cwd = short_cwd(Path.cwd())
         # Session identity (title + short id): the header is the single
         # location for session facts, so the auto/LLM title and the session
@@ -78,9 +78,9 @@ class HeaderModel:
         # but no session yet, so nothing is displayed. The title is truncated
         # so a long name cannot push the model/token segments off a narrow
         # terminal.
-        if repl._controller.session_started:
-            short_id = (repl.tree.session_id or "")[:8] or "—"
-            title = (repl.tree.title or "").strip()
+        if session.controller.session_started:
+            short_id = (session.tree.session_id or "")[:8] or "—"
+            title = (session.tree.title or "").strip()
             if len(title) > 40:
                 title = title[:39] + "…"
             if title:
@@ -109,20 +109,20 @@ class HeaderModel:
             else f"{self.token_indicator()} tok"
         )
 
-        attachments = len(repl.attachments)
+        attachments = len(session.attachments)
         attach_part = f" · 📎{attachments}" if attachments else ""
         memory_part = " · 📄 agents.md" if self.has_agents_md() else ""
         # Active-monitors indicator (I-126): the plugin reports it via a
         # duck-typed hook; the header is the single place for session
         # facts, so it lives here (in-memory, safe on every paint).
-        monitors = repl._controller.monitor_status()
+        monitors = session.controller.monitor_status()
         monitors_part = f" · {monitors}" if monitors else ""
         # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
         # very end of the header, shown as soon as the background PyPI
         # check lands and never blocking the paint. The shared REPL is
         # the single source of truth for the check result in both
         # front ends (the TUI starts it in ``run_async``).
-        update_part = f" | {repl.update_hint}" if repl.update_hint else ""
+        update_part = f" | {session.update_hint}" if session.update_hint else ""
         # Permission-mode chip (T-6): always visible; the accent word for
         # the *ask* state (confirmations are coming), dim for auto.
         perm_mode = self.permission_mode()
@@ -135,7 +135,7 @@ class HeaderModel:
         # level when set. Read straight from the in-memory config (the
         # cycle mutates it before invalidating the cache below), so no
         # throttle like the permission policy file read is needed.
-        effort = repl.config.reasoning_effort
+        effort = session.config.reasoning_effort
         effort_part = (
             f' <style class="header">effort: {escape(effort, quote=True)}</style>'
             if effort in REASONING_EFFORTS
@@ -213,8 +213,8 @@ class HeaderModel:
         else:
             hint = _FOOTER_HINT_IDLE
 
-        repl = app.repl
-        left = f"{repl.current_model} ({repl.config.provider})"
+        session = app.session
+        left = f"{session.current_model} ({session.config.provider})"
         # Queued-message indicator: messages typed during a turn are sent in
         # order as each turn settles (`turn_controller.enqueue_turn`). Kept in
         # the footer now that the header has no transient state.
@@ -266,5 +266,5 @@ class HeaderModel:
     def token_indicator(self) -> str:
         """Short token usage string like '12.4k/128k' for the header."""
         return format_token_indicator(
-            self.app.repl._context_tokens, self.app.repl._context_window
+            self.app.session.context_tokens, self.app.session.context_window
         )

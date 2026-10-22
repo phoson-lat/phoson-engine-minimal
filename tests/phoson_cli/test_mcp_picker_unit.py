@@ -166,7 +166,7 @@ def _make(config, *, plugin=None, picker=None):
         engine=_FakeEngine(plugin or _FakeMcpPlugin()),
         theme=None,
     )
-    parent = SimpleNamespace(repl=repl, host=host)
+    parent = SimpleNamespace(session=repl, host=host)
     return _MCPSubcommands(parent), host
 
 
@@ -195,7 +195,7 @@ async def test_bare_toggle_opens_menu_and_persists_changes(tmp_path):
     assert data["mcpServers"]["filesystem"]["enabled"] is False
     assert data["mcpServers"]["filesystem"]["tools"] == {"read_file": False}
     # changes → engine rebuilt once
-    sub.repl.set_model.assert_awaited_once_with("test-model")
+    sub.session.set_model.assert_awaited_once_with("test-model")
 
 
 async def test_bare_toggle_without_picker_capability_shows_usage(tmp_path):
@@ -219,7 +219,7 @@ async def test_bare_toggle_without_picker_capability_shows_usage(tmp_path):
         engine=_FakeEngine(_FakeMcpPlugin()),
         theme=None,
     )
-    sub = _MCPSubcommands(SimpleNamespace(repl=repl, host=plain_host))
+    sub = _MCPSubcommands(SimpleNamespace(session=repl, host=plain_host))
 
     await sub.dispatch(Command(name="/mcp", args="toggle"))
 

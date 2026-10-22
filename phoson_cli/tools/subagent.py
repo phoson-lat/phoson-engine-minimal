@@ -32,7 +32,7 @@ from phoson_agent.exceptions import PhosonAgentError, PhosonMaxIterationsError
 from phoson_agent.middleware import AgentMiddleware
 
 from ._timeouts import sanitize_timeout
-from .subagent_panel import (
+from .subagent_metrics import (
     AgentStatus,
     SubagentProgress,
     format_agent_block,

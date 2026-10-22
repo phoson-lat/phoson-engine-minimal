@@ -32,7 +32,7 @@ def clear_transcript(app: Any) -> None:
     # it (pending in-flight tool calls belong to the live turn and are freed
     # when the turn ends, see FullScreenSink.flush_line).
     app.sink.clear_transcript_bookkeeping()
-    app.repl._expanded_reasoning.clear()
+    app.session._expanded_reasoning.clear()
     # The banner is dropped with the transcript (unlike rewind, which
     # re-seeds it): forget the reference so a later apply_theme doesn't
     # look for an object that no longer exists in the pane.
@@ -60,29 +60,29 @@ def toggle_reasoning(app: Any) -> None:
     """
     if app.sink.current_turn is not None:
         new_state = app.sink.toggle_live_reasoning()
-        if getattr(app.repl.config, "show_reasoning", True) != new_state:
-            app.repl.config.show_reasoning = new_state
-            save_config(app.repl.config, only_fields={"show_reasoning"})
+        if getattr(app.session.config, "show_reasoning", True) != new_state:
+            app.session.config.show_reasoning = new_state
+            save_config(app.session.config, only_fields={"show_reasoning"})
             app.sink.show_reasoning_default = new_state
         return
 
-    cursor: str | None = app.repl.current_node_id
+    cursor: str | None = app.session.current_node_id
     path_ids: list[str] = []
     while cursor is not None:
         path_ids.append(cursor)
-        node = app.repl.tree.nodes.get(cursor)
+        node = app.session.tree.nodes.get(cursor)
         cursor = node.parent_id if node is not None else None
     found_reasoning = False
     for node_id in path_ids:
-        node = app.repl.tree.nodes.get(node_id)
+        node = app.session.tree.nodes.get(node_id)
         reasoning = node.metadata.get("reasoning") if node else None
         if not reasoning:
             continue
         found_reasoning = True
-        if node_id in app.repl._expanded_reasoning:
+        if node_id in app.session._expanded_reasoning:
             continue
         if app.sink.expand_reasoning(node_id, str(reasoning)):
-            app.repl._expanded_reasoning.add(node_id)
+            app.session._expanded_reasoning.add(node_id)
             return
         app.sink.notify("error", "Could not render captured reasoning.")
         return
@@ -127,9 +127,7 @@ def cycle_permission_mode(app: Any) -> None:
         set_level(policy, "bash", LEVEL_ASK)
         new_mode = "ask"
     save_policy(policy)
-    controller = getattr(app.repl, "_controller", None)
-    if controller is not None:
-        controller.refresh_permission_policy()
+    app.session.refresh_permission_policy()
     app._perm_mode_cached = new_mode
     app._perm_mode_checked_at = time.monotonic()
     app._header_cache_key = None  # rebuild the chip on the next frame
@@ -151,13 +149,13 @@ def cycle_reasoning_effort(app: Any) -> None:
     """
     # Deliberately allowed mid-turn: effort applies from the next turn, so it
     # cannot affect the run already in flight.
-    current = app.repl.config.reasoning_effort
+    current = app.session.config.reasoning_effort
     if current not in REASONING_EFFORTS:
         current = None  # "off"
     levels = (*REASONING_EFFORTS, None)
     next_effort = levels[(levels.index(current) + 1) % len(levels)]
-    app.repl.config.reasoning_effort = next_effort
-    save_config(app.repl.config, only_fields={"reasoning_effort"})
+    app.session.config.reasoning_effort = next_effort
+    save_config(app.session.config, only_fields={"reasoning_effort"})
     app._header_cache_key = None  # rebuild the chip on the next frame
     app.sink.notify(
         "info",

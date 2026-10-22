@@ -37,14 +37,14 @@ class _Repl:
 
 def test_plugin_command_context_routes_to_host():
     host = _Host()
-    ctx = PluginCommandContext(plugin_name="stt", repl=object(), host=host)
+    ctx = PluginCommandContext(plugin_name="stt", session=object(), host=host)
 
     assert ctx.prefill_prompt("hola") is True
     assert host.text == "hola"
 
 
 def test_plugin_command_context_reports_unsupported():
-    ctx = PluginCommandContext(plugin_name="stt", repl=object(), host=object())
+    ctx = PluginCommandContext(plugin_name="stt", session=object(), host=object())
 
     assert ctx.prefill_prompt("hola") is False
 
@@ -54,21 +54,21 @@ def test_plugin_command_context_swallows_host_errors():
         def insert_prompt_text(self, text):
             raise RuntimeError("boom")
 
-    ctx = PluginCommandContext(plugin_name="stt", repl=object(), host=_BadHost())
+    ctx = PluginCommandContext(plugin_name="stt", session=object(), host=_BadHost())
 
     assert ctx.prefill_prompt("hola") is False
 
 
 def test_plugin_command_context_streams_to_host():
     host = _StreamHost()
-    ctx = PluginCommandContext(plugin_name="stt", repl=object(), host=host)
+    ctx = PluginCommandContext(plugin_name="stt", session=object(), host=host)
 
     assert ctx.stream_prompt_text("hola") is True
     assert host.calls == ["hola"]
 
 
 def test_plugin_command_context_stream_unsupported():
-    ctx = PluginCommandContext(plugin_name="stt", repl=object(), host=object())
+    ctx = PluginCommandContext(plugin_name="stt", session=object(), host=object())
 
     assert ctx.stream_prompt_text("hola") is False
 

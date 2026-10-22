@@ -608,7 +608,7 @@ def test_app_apply_theme_recolors_everything(monkeypatch) -> None:
 
     assert app.theme is LIGHT
     assert app.sink.theme is LIGHT
-    assert app.repl.theme is LIGHT
+    assert app.session.theme is LIGHT
     # T-1: no banner block is ever in the sink, so apply_theme has no
     # block to re-render in place — the transcript stays untouched.
     assert app.sink.blocks == []
@@ -774,7 +774,7 @@ async def test_tui_theme_explicit_arg_recolors_app(tmp_path, monkeypatch) -> Non
         await asyncio.sleep(0)  # flush the follow-up invalidate
 
     assert app.theme is LIGHT
-    assert app.repl.theme is LIGHT
+    assert app.session.theme is LIGHT
     assert app.sink.theme is LIGHT
     # T-1: no banner is re-rendered in place — the transcript only gains
     # the "Theme → light" notification.

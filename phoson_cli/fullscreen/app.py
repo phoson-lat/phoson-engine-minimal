@@ -51,7 +51,6 @@ from phoson_llm.schemas import REASONING_EFFORTS
 from .. import warnings_hook
 from .keys import build_key_bindings, listing_for_config
 from .sink import FullScreenSink
-from ..repl import PhosonRepl
 from ..theme import (
     Theme,
     load_theme,
@@ -126,6 +125,7 @@ from .turn_controller import (
 from .turn_controller import (
     tick_activity_indicators as _tick_activity_indicators_impl,
 )
+from ..session_frontend import SessionFrontend
 from .escape_controller import (
     handle_escape as _handle_escape_impl,
 )
@@ -274,13 +274,13 @@ def _skill_names() -> list[str]:
 
 
 class PhosonApp:
-    """Full-screen front end over :class:`~phoson_cli.repl.PhosonRepl`."""
+    """Full-screen front end over :class:`.SessionFrontend`."""
 
     def __init__(self, config: PhosonConfig) -> None:
-        self.theme = getattr(config, "_startup_theme", None) or load_theme()
-        # Kept for _build_application (runs before self.repl exists): the
+        self.theme = config._startup_theme or load_theme()
+        # Kept for _build_application (runs before self.session exists): the
         # [keys] remap overrides (IMPROVEMENTS.md E6) come from the same
-        # config object the shared REPL later wraps.
+        # config object the session facade later wraps.
         self._config = config
 
         # Chat pane (scroll + windowed render + bounds cache), #187 slice 2.
@@ -371,17 +371,18 @@ class PhosonApp:
             True, lambda message: self.sink.notify("warn", message)
         )
         try:
-            self.repl = PhosonRepl(
+            self.session = SessionFrontend(
                 config,
-                sink=self.sink,
-                confirmation=FullScreenConfirmationService(self),
+                self.sink,
+                FullScreenConfirmationService(self),
+                theme=self.theme,
             )
         finally:
             warnings_hook.set_fullscreen_active(False)
-        self.repl._controller.set_operation_starter(self._start_operation)
-        self._commands = CommandHandler(self.repl, host=FullScreenCommandHost(self))
-        self.apply_theme(resolve_runtime_theme(config, self.repl.theme_registry))
-        # Header/footer model (#187). Created after ``self.repl`` exists (it
+        self.session.controller.set_operation_starter(self._start_operation)
+        self._commands = CommandHandler(self.session, host=FullScreenCommandHost(self))
+        self.apply_theme(resolve_runtime_theme(config, self.session.theme_registry))
+        # Header/footer model (#187). Created after ``self.session`` exists (it
         # reads ``repl.session_metrics`` / ``repl.config``); the ptk controls
         # only invoke the header/footer delegates during rendering, i.e. after
         # ``__init__`` completes, so this ordering is safe.
@@ -442,7 +443,7 @@ class PhosonApp:
             history=FileHistory(str(self._history_file)),
             completer=merge_completers(
                 [
-                    SlashCompleter(lambda: self.repl._controller.command_catalog),
+                    SlashCompleter(lambda: self.session.controller.command_catalog),
                     ModelArgCompleter(self.model_cache),
                     StaticArgCompleter(
                         ("/reasoning-effort ", "/effort "),
@@ -452,12 +453,12 @@ class PhosonApp:
                     # autocomplete pattern as /reasoning-effort (#55).
                     StaticArgCompleter(
                         ("/provider ",),
-                        lambda: enabled_providers_from_config(self.repl.config),
+                        lambda: enabled_providers_from_config(self.session.config),
                     ),
                     # /theme <tier> — includes tiers contributed by plugins.
                     StaticArgCompleter(
                         ("/theme ",),
-                        lambda: list(self.repl.theme_registry.valid_names()),
+                        lambda: list(self.session.theme_registry.valid_names()),
                     ),
                     # /skills <name> — discovered lazily per completion
                     # pass so a skill added mid-session shows up (G5).
@@ -468,7 +469,7 @@ class PhosonApp:
                     # paths after a trailing "@"; the controller expands
                     # the picked path into the file's content on send.
                     # Rooted at Path.cwd() (same as the controller
-                    # resolves mentions) — repl doesn't exist yet here.
+                    # resolves mentions) — the session doesn't exist yet here.
                     PathCompleter(Path.cwd()),
                 ]
             ),
@@ -589,7 +590,7 @@ class PhosonApp:
         the ANSI cache is dropped so the chat pane repaints cleanly.
         """
         self.theme = theme
-        self.repl.apply_theme(theme)
+        self.session.apply_theme(theme)
         self.sink.set_theme(theme)
         self._apply_style()
         self._block_ansi_cache.clear(0)
@@ -748,10 +749,10 @@ class PhosonApp:
 
         Registered as the ``before_render`` handler so the title follows the
         session title and the in-flight ``*`` marker for free, without adding
-        a repaint path. Deduplication lives on the repl, so a busy spinner
+        a repaint path. Deduplication lives on the session facade, so a busy spinner
         that renders many times only writes when the title actually changes.
         """
-        refresh = getattr(self.repl, "refresh_terminal_title", None)
+        refresh = getattr(self.session, "refresh_terminal_title", None)
         if callable(refresh):
             refresh(self._is_run_in_flight())
 
@@ -908,7 +909,7 @@ class PhosonApp:
         # outer task remains authoritative and is cancelled below, covering
         # preparation/commands/bash before the controller creates that child.
         self._cancel_requested = True
-        self.repl.cancel_current()
+        self.session.cancel_current()
         task.cancel()
         return "cancelled"
 
@@ -940,7 +941,7 @@ class PhosonApp:
         self.app.create_background_task(self._dictate())
 
     async def _dictate(self) -> None:
-        plugins = getattr(self.repl._controller.engine, "_loaded_plugins", [])
+        plugins = getattr(self.session.controller.engine, "_loaded_plugins", [])
         plugin = next(
             (p for p in plugins if callable(getattr(p, "dictate", None))), None
         )
@@ -951,7 +952,7 @@ class PhosonApp:
             )
             return
         context = PluginCommandContext(
-            plugin_name=plugin.name, repl=self.repl, host=self._commands.host
+            plugin_name=plugin.name, session=self.session, host=self._commands.host
         )
         await plugin.dictate(context)
 
@@ -1092,7 +1093,7 @@ class PhosonApp:
         """Capture app-owned session view state before transactional reset."""
         return _AppSessionViewSnapshot(
             rewind_stack=list(self._rewind_stack),
-            expanded_reasoning=set(self.repl._expanded_reasoning),
+            expanded_reasoning=set(self.session._expanded_reasoning),
             auto_scroll=self._auto_scroll,
             scroll_top=self._chat_scroll_top,
             ansi_cache=self._block_ansi_cache,
@@ -1104,7 +1105,7 @@ class PhosonApp:
         if not isinstance(snapshot, _AppSessionViewSnapshot):
             raise TypeError("invalid fullscreen app session view snapshot")
         self._rewind_stack = snapshot.rewind_stack
-        self.repl._expanded_reasoning = snapshot.expanded_reasoning
+        self.session._expanded_reasoning = snapshot.expanded_reasoning
         self._auto_scroll = snapshot.auto_scroll
         self._chat_scroll_top = snapshot.scroll_top
         self._block_ansi_cache = snapshot.ansi_cache
@@ -1146,19 +1147,19 @@ class PhosonApp:
         # Fire-and-forget: prefetch the model list for autocomplete without
         # delaying first paint. Plain create_task (not create_background_task)
         # since the Application isn't running yet for it to track this against.
-        asyncio.create_task(self.model_cache.refresh(self.repl.config))
+        asyncio.create_task(self.model_cache.refresh(self.session.config))
         asyncio.create_task(
-            self.session_cache.refresh(self.repl.storage, cwd=str(Path.cwd()))
+            self.session_cache.refresh(self.session.storage, cwd=str(Path.cwd()))
         )
         # Autonomous monitor wake loop (I-126): the full-screen front end
         # has its own event loop entry point (no PhosonRepl.run), so it
         # starts the loop here. No-op when enable_monitors is off.
-        self.repl._controller.start_monitor_wake_loop()
+        self.session.controller.start_monitor_wake_loop()
         # Startup PyPI update check (IMPROVEMENTS.md E5): background, at
         # most one round trip per day, never blocks first paint. The hint
         # lands in the header as soon as the check settles; on_settle
         # invalidates so even a fully idle screen repaints it.
-        self.repl.start_update_check(on_settle=self.app.invalidate)
+        self.session.start_update_check(on_settle=self.app.invalidate)
         # While the full-screen TUI is up, any library/app logger without
         # configured handlers would hit logging's "last resort" handler
         # and print raw warnings over the rendered UI (seen with sub-agent
@@ -1179,7 +1180,7 @@ class PhosonApp:
             await self.app.run_async()
         finally:
             try:
-                await self.repl.shutdown()
+                await self.session.shutdown()
             finally:
                 restore_warning_capture()
                 warnings_hook.set_fullscreen_active(False)

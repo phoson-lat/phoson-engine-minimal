@@ -6,13 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from phoson_cli.repl import PhosonRepl, SessionMetrics
+from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import PhosonConfig
 from phoson_agent.models import (
     RunStep,
     AgentDoneEvent,
     AgentRunResult,
 )
+from phoson_cli._session import SessionMetrics
 from phoson_agent.sessions.models import ConversationTree
 
 UTC = datetime.UTC
@@ -125,12 +126,12 @@ def test_session_metrics_to_meta_round_trip() -> None:
     assert restored.last_model == original.last_model
 
 
-# ── PhosonRepl._build_user_message ────────────────────────────────────────────
+# ── SessionController._build_user_message ────────────────────────────────────────────
 
 
 def test_build_user_message_plain_text(repl: PhosonRepl) -> None:
     """_build_user_message wraps plain text in a user Message."""
-    msg = repl._build_user_message("hello")
+    msg = repl._controller._build_user_message("hello")
 
     assert msg.role == "user"
     # Content is either a plain string or a list containing a TextBlock.
@@ -144,7 +145,7 @@ def test_build_user_message_plain_text(repl: PhosonRepl) -> None:
         assert any("hello" in t for t in texts)
 
 
-# ── PhosonRepl._append_user_turn ──────────────────────────────────────────────
+# ── SessionController._append_user_turn ──────────────────────────────────────────────
 
 
 def test_append_user_turn_adds_node(repl: PhosonRepl) -> None:
@@ -153,14 +154,14 @@ def test_append_user_turn_adds_node(repl: PhosonRepl) -> None:
 
     before = len(repl.tree.nodes)
     msg = Message(role="user", content="test question")
-    node_id, path = repl._append_user_turn(msg)
+    node_id, path = repl._controller._append_user_turn(msg)
 
     assert len(repl.tree.nodes) == before + 1
     assert path[-1].content == "test question"
     assert node_id == repl.current_node_id
 
 
-# ── PhosonRepl._finalize_run ──────────────────────────────────────────────────
+# ── SessionController._finalize_run ──────────────────────────────────────────────────
 
 
 def _make_run_step(cost: float = 0.001) -> RunStep:
@@ -186,7 +187,7 @@ def test_metrics_accumulate_live_and_finalize_does_not_double_count(
 
     # Seed the tree with a user message so base_count is 1.
     user_msg = Message(role="user", content="hi")
-    repl._append_user_turn(user_msg)
+    repl._controller._append_user_turn(user_msg)
     base_count = 1
 
     steps = [_make_run_step(0.01), _make_run_step(0.02)]
@@ -208,13 +209,13 @@ def test_metrics_accumulate_live_and_finalize_does_not_double_count(
     assert repl.session_metrics.total_cost_usd == pytest.approx(0.03)
 
     # Finalizing must not re-add them (no double count).
-    repl._finalize_run(done_event, base_count)
+    repl._controller._finalize_run(done_event, base_count)
 
     assert repl.session_metrics.step_count == 2
     assert repl.session_metrics.total_cost_usd == pytest.approx(0.03)
 
 
-# ── PhosonRepl._append_partial_history ────────────────────────────────────────
+# ── SessionController._append_partial_history ────────────────────────────────────────
 
 
 def test_append_partial_history_updates_node_id(repl: PhosonRepl) -> None:
@@ -222,7 +223,7 @@ def test_append_partial_history_updates_node_id(repl: PhosonRepl) -> None:
     from phoson_llm.schemas import Message
 
     user_msg = Message(role="user", content="partial question")
-    repl._append_user_turn(user_msg)
+    repl._controller._append_user_turn(user_msg)
     base_count = 1
 
     assistant_msg = Message(role="assistant", content="partial answer")
@@ -231,7 +232,7 @@ def test_append_partial_history_updates_node_id(repl: PhosonRepl) -> None:
     repl.engine.get_partial_history = MagicMock(return_value=partial_history)
 
     old_node_id = repl.current_node_id
-    repl._append_partial_history(base_count)
+    repl._controller._append_partial_history(base_count)
 
     # A new node was appended for the assistant message.
     assert repl.current_node_id != old_node_id or len(repl.tree.nodes) > 1
@@ -279,7 +280,7 @@ async def test_load_session_schema_mapping(repl: PhosonRepl, tmp_path) -> None:
     assert repl.session_metrics.last_model == "gpt-4"
 
 
-# ── PhosonRepl._rebuild_engine: old runtime cleanup ─────────────────────────
+# ── SessionController._rebuild_engine: old runtime cleanup ─────────────────────────
 
 
 def _fake_engine_with_plugins(*plugins) -> MagicMock:
@@ -331,7 +332,7 @@ async def test_rebuild_engine_closes_old_plugins_and_chat(repl: PhosonRepl) -> N
     new_engine = MagicMock()
     new_engine._loaded_plugins = []
     with patch("phoson_cli.controller.AgentEngine", return_value=new_engine):
-        repl._rebuild_engine()
+        repl._controller._rebuild_engine()
 
     # The close is scheduled as a task — give the loop a tick to run it.
     await asyncio.sleep(0.05)
@@ -357,7 +358,7 @@ async def test_rebuild_engine_survives_plugin_close_failure(repl: PhosonRepl) ->
     new_engine = MagicMock()
     new_engine._loaded_plugins = []
     with patch("phoson_cli.controller.AgentEngine", return_value=new_engine):
-        repl._rebuild_engine()  # must not raise
+        repl._controller._rebuild_engine()  # must not raise
 
     await asyncio.sleep(0.05)
 
@@ -397,11 +398,11 @@ def test_find_latest_node_id_returns_newest_leaf(repl: PhosonRepl) -> None:
     assert repl.find_latest_node_id() == continuation.id
 
 
-# ── PhosonRepl._build_system_prompt ──────────────────────────────────────────
+# ── SessionController._build_system_prompt ──────────────────────────────────────────
 
 
 def test_system_prompt_lists_real_tool_names(repl: PhosonRepl) -> None:
-    prompt = repl._build_system_prompt()
+    prompt = repl._controller.build_system_prompt()
 
     assert "agent, agents" in prompt
     assert "subagents" not in prompt
@@ -419,7 +420,7 @@ def test_system_prompt_mentions_mcp_tools_when_loaded(repl: PhosonRepl) -> None:
     # is in what the prompt reflects.
     repl.engine.prompt_tools = lambda: [plain_tool, fake_mcp_tool]
 
-    prompt = repl._build_system_prompt()
+    prompt = repl._controller.build_system_prompt()
 
     assert "MCP tools (names prefixed 'mcp_') are also available" in prompt
 
@@ -436,7 +437,7 @@ def test_system_prompt_mentions_masked_tools(repl: PhosonRepl) -> None:
     repl.engine.tools = [plain_tool, discover_tool]
     repl.engine.prompt_tools = lambda: [plain_tool, discover_tool]
 
-    prompt = repl._build_system_prompt()
+    prompt = repl._controller.build_system_prompt()
 
     assert "tools are masked to save context" in prompt
     assert "discover" in prompt
@@ -449,10 +450,10 @@ def _build_two_turn_tree(repl: PhosonRepl) -> tuple:
     """Build: u1 → a1 → u2 → a2, with the cursor at a2. Returns (u1, a1, u2, a2)."""
     from phoson_llm.schemas import Message
 
-    repl._append_user_turn(Message(role="user", content="q1"))
+    repl._controller._append_user_turn(Message(role="user", content="q1"))
     a1 = repl.tree.append(repl.current_node_id, Message(role="assistant", content="a1"))
     repl.current_node_id = a1.id
-    u2, _ = repl._append_user_turn(Message(role="user", content="q2"))
+    u2, _ = repl._controller._append_user_turn(Message(role="user", content="q2"))
     a2 = repl.tree.append(repl.current_node_id, Message(role="assistant", content="a2"))
     repl.current_node_id = a2.id
     u1 = next(n for n in repl.tree.nodes.values() if n.message.content == "q1")
@@ -473,7 +474,9 @@ def test_undo_last_turn_moves_cursor_before_last_user(repl: PhosonRepl) -> None:
     assert a2.id in repl.tree.nodes
 
     # The next user message branches from a1 (sibling of the undone u2).
-    u3_id, path = repl._append_user_turn(Message(role="user", content="q2-retry"))
+    u3_id, path = repl._controller._append_user_turn(
+        Message(role="user", content="q2-retry")
+    )
     assert repl.tree.nodes[u3_id].parent_id == a1.id
     assert path[-1].content == "q2-retry"
 
@@ -481,7 +484,7 @@ def test_undo_last_turn_moves_cursor_before_last_user(repl: PhosonRepl) -> None:
 def test_undo_single_turn_reports_nothing_to_undo(repl: PhosonRepl) -> None:
     from phoson_llm.schemas import Message
 
-    repl._append_user_turn(Message(role="user", content="only turn"))
+    repl._controller._append_user_turn(Message(role="user", content="only turn"))
 
     ok, info = repl.undo_last_turn()
 

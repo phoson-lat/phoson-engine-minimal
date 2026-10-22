@@ -582,11 +582,11 @@ def test_fullscreen_header_escapes_every_dynamic_html_value(
 ) -> None:
     app = _build_app(tmp_path)
     dangerous = "A&B <tag> \"quoted\" 'single'"
-    app.repl.update_hint = dangerous
-    app.repl._controller._session_started = True
-    app.repl.tree.title = dangerous
+    app.session.update_hint = dangerous
+    app.session._controller._session_started = True
+    app.session.tree.title = dangerous
     monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: Path("/tmp/A&B <tag>")))
-    monkeypatch.setattr(app.repl._controller, "monitor_status", lambda: dangerous)
+    monkeypatch.setattr(app.session._controller, "monitor_status", lambda: dangerous)
     app._header_cache_key = None
 
     plain = to_plain_text(app._get_header_text())
@@ -601,8 +601,8 @@ def test_fullscreen_footer_escapes_model_and_provider(
     """The model moved to the footer; it is still HTML-escaped there."""
     app = _build_app(tmp_path)
     dangerous = "A&B <tag> \"quoted\" 'single'"
-    app.repl.current_model = dangerous
-    app.repl.config.provider = dangerous
+    app.session.current_model = dangerous
+    app.session.config.provider = dangerous
 
     plain = to_plain_text(app._get_footer_text())
 
@@ -614,7 +614,7 @@ def test_runtime_theme_change_updates_plugin_ui_and_new_plugin_blocks(
     tmp_path: Path,
 ) -> None:
     app = _build_app(tmp_path)
-    ui = app.repl._controller.plugin_ui
+    ui = app.session._controller.plugin_ui
     assert ui.theme is DARK or ui.theme.name == "system"
 
     app.apply_theme(LIGHT)

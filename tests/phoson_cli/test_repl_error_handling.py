@@ -41,7 +41,7 @@ def _fake_stream(events):
 
 def _stub_run_dependencies(repl: PhosonRepl) -> None:
     """Stub the async/network pieces around the stream loop."""
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     repl.storage.save = AsyncMock()
     repl.storage.save_meta = AsyncMock()
 
@@ -59,7 +59,7 @@ async def test_agent_error_returns_to_prompt_instead_of_crashing(tmp_path) -> No
     warn_calls: list[str] = []
     repl.renderer.print_warn = lambda msg: warn_calls.append(msg)
 
-    await repl._run_agent("Hola!")  # must not raise
+    await repl.run_turn("Hola!")  # must not raise
 
     # The conversation (user turn) is persisted.
     assert repl.storage.save.await_count >= 1
@@ -83,7 +83,7 @@ async def test_agent_error_without_auth_code_no_hint(tmp_path) -> None:
     warn_calls: list[str] = []
     repl.renderer.print_warn = lambda msg: warn_calls.append(msg)
 
-    await repl._run_agent("do it")
+    await repl.run_turn("do it")
 
     assert not any("/setup" in msg for msg in warn_calls)
 
@@ -106,7 +106,7 @@ async def test_agent_error_after_partial_steps_persists_partial_history(
     ]
     repl.engine.get_partial_history = lambda: list(partial)
 
-    await repl._run_agent("do it")
+    await repl.run_turn("do it")
 
     roles = [node.message.role for node in repl.tree.nodes.values()]
     assert roles == ["user", "assistant"]
@@ -121,7 +121,7 @@ async def test_stream_without_terminal_event_still_raises(tmp_path) -> None:
     repl.engine.stream = _fake_stream([AgentStartEvent(model="m", message_count=1)])
 
     with pytest.raises(RuntimeError, match="terminal"):
-        await repl._run_agent("do it")
+        await repl.run_turn("do it")
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_successful_run_still_finalizes(tmp_path) -> None:
     ]
     repl.engine.stream = _fake_stream(events)
 
-    await repl._run_agent("do it")
+    await repl.run_turn("do it")
 
     assert repl.storage.save.await_count >= 1
     assert repl.storage.save_meta.await_count >= 1

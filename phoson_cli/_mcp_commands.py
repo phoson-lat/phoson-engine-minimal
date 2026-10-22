@@ -10,9 +10,9 @@ from pathlib import Path
 from .config import save_config
 
 if TYPE_CHECKING:
-    from .repl import PhosonRepl
     from .commands import Command, CommandHandler
     from .command_host import CommandHost
+    from .ui_protocols import SessionPort
 
 
 def _safe_name_part(value: str) -> str:
@@ -136,8 +136,8 @@ class _MCPSubcommands:
         self._parent = parent
 
     @property
-    def repl(self) -> "PhosonRepl":
-        return self._parent.repl
+    def session(self) -> "SessionPort":
+        return self._parent.session
 
     @property
     def r(self) -> "CommandHost":
@@ -170,7 +170,7 @@ class _MCPSubcommands:
         import json
         from pathlib import Path
 
-        config_file = self.repl.config.mcp_config_file
+        config_file = self.session.config.mcp_config_file
 
         if config_file.exists():
             self.r.print_warn(f"Config file already exists: {config_file}")
@@ -214,7 +214,7 @@ class _MCPSubcommands:
         return True
 
     async def _status(self) -> bool:
-        cfg = self.repl.config
+        cfg = self.session.config
         status = "enabled" if cfg.enable_mcp else "disabled"
         self.r.print_info(f"MCP: {status}")
 
@@ -236,7 +236,7 @@ class _MCPSubcommands:
         mcp_tools = (
             [
                 t
-                for t in self.repl.engine.tools
+                for t in self.session.engine.tools
                 if any(t.name.startswith(prefix) for prefix in tool_prefixes)
             ]
             if tool_prefixes
@@ -259,7 +259,7 @@ class _MCPSubcommands:
         servers_info: list[tuple[str, str, str, bool]] = []
         tool_prefixes: set[str] = set()
 
-        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+        for plugin in getattr(self.session.engine, "_loaded_plugins", []):
             if getattr(plugin, "name", "") != "phoson-plugin-mcp":
                 continue
             prefix = str(getattr(plugin, "tool_name_prefix", "mcp"))
@@ -283,7 +283,7 @@ class _MCPSubcommands:
 
     def _disabled_tools(self, server_name: str) -> list[str]:
         """Names of tools explicitly turned off for ``server_name``."""
-        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+        for plugin in getattr(self.session.engine, "_loaded_plugins", []):
             if getattr(plugin, "name", "") != "phoson-plugin-mcp":
                 continue
             prefix = str(getattr(plugin, "tool_name_prefix", "mcp"))
@@ -299,15 +299,15 @@ class _MCPSubcommands:
 
     def _tool_prefix(self) -> str:
         """Local tool-name prefix configured on the MCP plugin (default "mcp")."""
-        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+        for plugin in getattr(self.session.engine, "_loaded_plugins", []):
             if getattr(plugin, "name", "") == "phoson-plugin-mcp":
                 return str(getattr(plugin, "tool_name_prefix", "mcp"))
         return "mcp"
 
     async def _reapply_mcp(self) -> None:
         """Rebuild the engine now (or warn) after a persisted MCP change."""
-        if self.repl.config.enable_mcp:
-            await self.repl.set_model(self.repl.current_model)
+        if self.session.config.enable_mcp:
+            await self.session.set_model(self.session.current_model)
         else:
             self.r.print_warn(
                 "MCP is globally disabled; the change is saved but will not "
@@ -324,7 +324,7 @@ class _MCPSubcommands:
         """
         from .mcp_picker import McpToolView, McpServerView
 
-        config_file = self.repl.config.mcp_config_file
+        config_file = self.session.config.mcp_config_file
         if not config_file.exists():
             return []
         try:
@@ -338,7 +338,7 @@ class _MCPSubcommands:
 
         prefix = self._tool_prefix()
         runtime: dict[str, dict[str, bool]] = {}
-        for plugin in getattr(self.repl.engine, "_loaded_plugins", []):
+        for plugin in getattr(self.session.engine, "_loaded_plugins", []):
             if getattr(plugin, "name", "") != "phoson-plugin-mcp":
                 continue
             # Authoritative remote names, when discovery already ran.
@@ -401,7 +401,7 @@ class _MCPSubcommands:
         return views
 
     async def _toggle(self, rest: str) -> bool:
-        config_file = self.repl.config.mcp_config_file
+        config_file = self.session.config.mcp_config_file
         prefix = self._tool_prefix()
 
         # Explicit form: /mcp toggle <server> [tool] — unchanged behaviour.
@@ -452,27 +452,27 @@ class _MCPSubcommands:
         return True
 
     async def _enable(self) -> bool:
-        if self.repl.config.enable_mcp:
+        if self.session.config.enable_mcp:
             self.r.print_info("MCP is already enabled")
             return True
 
-        self.repl.config.enable_mcp = True
-        save_config(self.repl.config, only_fields={"enable_mcp"})
-        await self.repl.set_model(self.repl.current_model)
+        self.session.config.enable_mcp = True
+        save_config(self.session.config, only_fields={"enable_mcp"})
+        await self.session.set_model(self.session.current_model)
 
         self.r.print_info("MCP enabled  ·  saved")
-        self.r.print_info(f"Config file: {self.repl.config.mcp_config_file}")
+        self.r.print_info(f"Config file: {self.session.config.mcp_config_file}")
         self.r.print_info("Restart or run '/mcp status' to see loaded tools")
         return True
 
     async def _disable(self) -> bool:
-        if not self.repl.config.enable_mcp:
+        if not self.session.config.enable_mcp:
             self.r.print_info("MCP is already disabled")
             return True
 
-        self.repl.config.enable_mcp = False
-        save_config(self.repl.config, only_fields={"enable_mcp"})
-        await self.repl.set_model(self.repl.current_model)
+        self.session.config.enable_mcp = False
+        save_config(self.session.config, only_fields={"enable_mcp"})
+        await self.session.set_model(self.session.current_model)
 
         self.r.print_info("MCP disabled  ·  saved")
         return True
@@ -484,14 +484,14 @@ class _MCPSubcommands:
             self.r.print_error("Usage: /mcp config <path>")
             return True
 
-        self.repl.config.mcp_config_file = Path(path).expanduser()
-        save_config(self.repl.config, only_fields={"mcp_config_file"})
+        self.session.config.mcp_config_file = Path(path).expanduser()
+        save_config(self.session.config, only_fields={"mcp_config_file"})
 
-        if self.repl.config.enable_mcp:
-            await self.repl.set_model(self.repl.current_model)
+        if self.session.config.enable_mcp:
+            await self.session.set_model(self.session.current_model)
 
         self.r.print_info(
-            f"MCP config file → {self.repl.config.mcp_config_file}  ·  saved"
+            f"MCP config file → {self.session.config.mcp_config_file}  ·  saved"
         )
         return True
 
@@ -508,7 +508,7 @@ class _MCPSubcommands:
             "  /mcp toggle          Open the interactive server/tool menu",
             "  /mcp help            Show this help",
             "",
-            f"Default config location: {self.repl.config.mcp_config_file}",
+            f"Default config location: {self.session.config.mcp_config_file}",
             "",
             "Example phoson-mcp.json:",
             "  {",

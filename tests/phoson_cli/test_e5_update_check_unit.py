@@ -398,7 +398,7 @@ def test_tui_header_without_hint(tmp_path) -> None:
 
 def test_tui_header_with_hint(tmp_path) -> None:
     app = _make_app(tmp_path)
-    app.repl.update_hint = "⬆ v0.8.1 available — /update"
+    app.session.update_hint = "⬆ v0.8.1 available — /update"
     html = str(app._get_header_text())
     assert "⬆ v0.8.1 available — /update" in html
     # Rendered dim (header_dim), not bold accent.
@@ -422,7 +422,7 @@ async def test_tui_run_async_starts_update_check(tmp_path, monkeypatch) -> None:
     await app.run_async()
 
     check.assert_awaited_once()
-    assert app.repl.update_hint == "⬆ v0.8.1 available — /update"
+    assert app.session.update_hint == "⬆ v0.8.1 available — /update"
     # The hint is visible in the header once the check settled.
     assert "⬆ v0.8.1 available — /update" in str(app._get_header_text())
 
@@ -443,5 +443,5 @@ async def test_tui_run_async_check_offline_no_hint(tmp_path, monkeypatch) -> Non
 
     await app.run_async()
 
-    assert app.repl.update_hint is None
+    assert app.session.update_hint is None
     assert "/update" not in str(app._get_header_text())

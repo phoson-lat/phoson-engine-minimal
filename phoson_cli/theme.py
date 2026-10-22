@@ -32,15 +32,15 @@ fall back to ``dark``.
 import os
 import json
 import warnings
+from typing import TYPE_CHECKING
 from pathlib import Path
 from dataclasses import replace, dataclass
 from collections.abc import Mapping, Sequence
 
-from rich.style import Style as RichStyle
-from pygments.styles import get_style_by_name
-from prompt_toolkit.styles import Style as PromptToolkitStyle
-
 from phoson_agent import Plugin, ThemeExtension
+
+if TYPE_CHECKING:
+    from .config import PhosonConfig
 
 # ── Token model ───────────────────────────────────────────────────────────────
 
@@ -619,31 +619,28 @@ def get_theme(name: str, *, registry: ThemeRegistry | None = None) -> Theme | No
     return (registry or default_theme_registry()).get(name)
 
 
-def resolve_runtime_theme(config: object, registry: ThemeRegistry) -> Theme:
+def resolve_runtime_theme(config: "PhosonConfig", registry: ThemeRegistry) -> Theme:
     """Resolve a configured theme without warning during deferred CLI validation."""
-    requested = getattr(config, "cli_theme", None)
-    configured = getattr(config, "theme", None)
+    requested = config.cli_theme
+    configured = config.theme
     if requested and configured and configured != requested:
         # CLI selection seeds config.theme at startup. A later /theme or setup
         # choice replaces it; rebuilding plugins must not resurrect the seed.
         requested = configured
-        setattr(config, "cli_theme", requested)
-        setattr(config, "_cli_theme_deferred", False)
+        config.cli_theme = requested
+        config._cli_theme_deferred = False
     if (
         requested
-        and getattr(config, "_cli_theme_deferred", False)
+        and config._cli_theme_deferred
         and registry.get(requested) is None
+        and config._startup_theme is not None
     ):
-        return getattr(config, "_startup_theme")
-    theme = load_theme(
-        getattr(config, "theme", None),
-        registry=registry,
-        cli_value=requested,
-    )
+        return config._startup_theme
+    theme = load_theme(config.theme, registry=registry, cli_value=requested)
     if requested:
-        setattr(config, "_startup_theme_registry", registry)
-        setattr(config, "_startup_theme", theme)
-        setattr(config, "_cli_theme_deferred", False)
+        config._startup_theme_registry = registry
+        config._startup_theme = theme
+        config._cli_theme_deferred = False
     return theme
 
 
@@ -781,7 +778,16 @@ def build_prompt_style(theme: Theme) -> dict[str, str]:
 
 
 def _validate_theme_styles(theme: Theme) -> None:
-    """Fail before registry inclusion if Rich or prompt_toolkit rejects a token."""
+    """Fail before registry inclusion if Rich or prompt_toolkit rejects a token.
+
+    The style libraries are imported here, not at module level, so the
+    theme *data* (``Theme``, ``ThemeRegistry``) stays importable by the
+    UI-free session runtime.
+    """
+    from rich.style import Style as RichStyle
+    from pygments.styles import get_style_by_name
+    from prompt_toolkit.styles import Style as PromptToolkitStyle
+
     rich_fields = (
         "text",
         "muted",

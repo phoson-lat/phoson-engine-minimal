@@ -219,7 +219,7 @@ class TestBuildMonitorPlugins:
         )
         monkeypatch.setitem(sys.modules, "phoson_plugin_monitor", None)
         monkeypatch.setattr(
-            "phoson_cli.session_utils._in_tree_plugin_path",
+            "phoson_cli.official_plugins._in_tree_plugin_path",
             lambda package: tmp_path / "nope" / "_plugin.py",
         )
         with pytest.warns(UserWarning, match="monitors disabled"):
@@ -240,7 +240,7 @@ class TestBuildMonitorPlugins:
         assert specs == [{"name": expected_name, "config": {"a": 1}}]
         # Missing file -> warn + [] (no crash).
         monkeypatch.setattr(
-            "phoson_cli.session_utils._in_tree_plugin_path",
+            "phoson_cli.official_plugins._in_tree_plugin_path",
             lambda package: tmp_path / "gone" / "_plugin.py",
         )
         with pytest.warns(UserWarning, match="MCP disabled"):

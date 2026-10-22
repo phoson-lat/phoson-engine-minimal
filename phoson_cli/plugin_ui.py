@@ -1,12 +1,12 @@
-"""Host adapters for the neutral community-plugin UI contracts (I-110)."""
+"""Host adapters for the neutral community-plugin UI contracts (I-110).
+
+Rich is imported only where a block is actually rendered, so the session
+runtime can construct these services without loading the TUI stack.
+"""
 
 import sys
 from typing import TextIO
 from dataclasses import dataclass
-
-from rich.text import Text
-from rich.table import Table
-from rich.console import Group, Console
 
 from phoson_agent import (
     Choice,
@@ -24,12 +24,17 @@ from phoson_agent import (
 
 from .theme import Theme
 from .trace import TraceWriter
-from .formatting import render_notice
 from .ui_protocols import AgentEventSink
 
 
 def render_plugin_block(block: UiBlock, theme: Theme) -> object:
     """Adapt a neutral block to a Rich renderable shared by both frontends."""
+    from rich.text import Text
+    from rich.table import Table
+    from rich.console import Group
+
+    from .formatting import render_notice
+
     if isinstance(block, NoticeBlock):
         return render_notice(block.kind, block.message, theme)
     if isinstance(block, KeyValueBlock):
@@ -75,6 +80,8 @@ class NonInteractivePluginUiService(PluginUiService):
     trace_writer: TraceWriter | None = None
 
     def publish(self, block: UiBlock) -> None:
+        from rich.console import Console
+
         output = self.stream if self.stream is not None else sys.stderr
         console = Console(
             file=output,

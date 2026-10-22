@@ -67,7 +67,7 @@ def _handler() -> CommandHandler:
 
 
 def _output(handler: CommandHandler) -> str:
-    renderer = handler.repl.renderer
+    renderer = handler.session.renderer
     return "\n".join(renderer.info + renderer.warn + renderer.error)
 
 
@@ -283,7 +283,7 @@ async def test_auth_login_terminal_error_is_reported_not_raised(
     kept = await handler.handle(Command(name="/auth", args="login chatgpt"))
 
     assert kept is True
-    assert any("login denied" in message for message in handler.repl.renderer.error)
+    assert any("login denied" in message for message in handler.session.renderer.error)
 
 
 # ─── Setup wizard ────────────────────────────────────────────────────────────
