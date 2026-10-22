@@ -79,6 +79,47 @@ def test_import_config_stays_lightweight() -> None:
     assert _parse_marker(result.stdout, "HEAVY") == set()
 
 
+#: ``httpx`` imports ``rich``/``pygments`` for its own CLI entry point
+#: (``httpx._main``) when they are installed. Blocking that submodule (httpx
+#: falls back on ImportError) isolates what *our* modules import.
+_BLOCK_HTTPX_CLI = "sys.modules['httpx._main'] = None\n"
+
+
+def test_session_runtime_is_ui_free() -> None:
+    """The controller and runtime builder must not load the TUI stack, so an
+    embedded host can drive a session without prompt_toolkit/rich."""
+    result = _run_probe(
+        _BLOCK_HTTPX_CLI + "import phoson_cli.controller\nimport phoson_cli.runtime"
+    )
+    assert result.returncode == 0, result.stderr
+    assert _parse_marker(result.stdout, "HEAVY") == set()
+    assert _parse_marker(result.stdout, "DEFERRED") == set()
+
+
+def test_session_runtime_defers_cli_renderers() -> None:
+    body = (
+        _BLOCK_HTTPX_CLI + "import phoson_cli.controller\n"
+        "ui = ('phoson_cli.formatting', 'phoson_cli.commands', "
+        "'phoson_cli.renderer', 'phoson_cli.tools.subagent_panel')\n"
+        "print('UI=' + ','.join(m for m in ui if m in sys.modules))\n"
+    )
+    result = _run_probe(body)
+    assert result.returncode == 0, result.stderr
+    assert _parse_marker(result.stdout, "UI") == set()
+
+
+def test_fullscreen_app_does_not_depend_on_the_classic_repl() -> None:
+    """The TUI runs over ``SessionFrontend``, not over ``PhosonRepl``."""
+    body = (
+        "import phoson_cli.fullscreen.app\n"
+        "classic = ('phoson_cli.repl', 'phoson_cli.renderer')\n"
+        "print('CLASSIC=' + ','.join(m for m in classic if m in sys.modules))\n"
+    )
+    result = _run_probe(body)
+    assert result.returncode == 0, result.stderr
+    assert _parse_marker(result.stdout, "CLASSIC") == set()
+
+
 # ── help / version fast paths run without the heavy stack ────────────────────
 
 

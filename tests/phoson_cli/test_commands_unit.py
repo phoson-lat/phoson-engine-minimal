@@ -130,7 +130,7 @@ def test_command_handler_dispatch_table_covers_all_aliases() -> None:
     """The handler's internal dispatch must register every alias."""
     # We build the handler with a stub repl object — it never reads it.
     handler = CommandHandler.__new__(CommandHandler)
-    handler.repl = None  # type: ignore[assignment]
+    handler.session = None  # type: ignore[assignment]
     handler._dispatch = {}
     for spec in COMMAND_SPECS:
         method = getattr(CommandHandler, spec.method)
@@ -176,7 +176,7 @@ async def test_branch_command_reports_unknown() -> None:
     kept = await handler.handle(Command(name="/branch", args=""))
 
     assert kept is True
-    assert handler.repl.renderer.errors == ["Unknown command: /branch"]
+    assert handler.session.renderer.errors == ["Unknown command: /branch"]
 
 
 def test_run_safe_commands_are_real_commands() -> None:

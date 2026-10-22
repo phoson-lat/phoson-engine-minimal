@@ -193,7 +193,7 @@ def _done_result(question: str, answer: str) -> AgentRunResult:
 @pytest.mark.asyncio
 async def test_run_persists_reasoning_on_last_assistant_node(tmp_path) -> None:
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     events = [
         AgentStartEvent(model="m", message_count=1, max_iterations=50),
         AgentReasoningEvent(content="thinking hard about it..."),
@@ -202,7 +202,7 @@ async def test_run_persists_reasoning_on_last_assistant_node(tmp_path) -> None:
     ]
     repl.engine.stream = _fake_stream(events)
 
-    await repl._run_agent("q")
+    await repl.run_turn("q")
 
     node = repl.tree.nodes[repl.current_node_id]
     assert node.message.role == "assistant"
@@ -212,7 +212,7 @@ async def test_run_persists_reasoning_on_last_assistant_node(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_run_without_reasoning_leaves_metadata_empty(tmp_path) -> None:
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     events = [
         AgentStartEvent(model="m", message_count=1, max_iterations=50),
         AgentTokenEvent(content="answer"),
@@ -220,14 +220,14 @@ async def test_run_without_reasoning_leaves_metadata_empty(tmp_path) -> None:
     ]
     repl.engine.stream = _fake_stream(events)
 
-    await repl._run_agent("q")
+    await repl.run_turn("q")
 
     assert "reasoning" not in repl.tree.nodes[repl.current_node_id].metadata
 
 
 async def _run_repl_with_reasoning(tmp_path) -> PhosonRepl:
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     events = [
         AgentStartEvent(model="m", message_count=1, max_iterations=50),
         AgentReasoningEvent(content="thinking hard about it..."),
@@ -235,7 +235,7 @@ async def _run_repl_with_reasoning(tmp_path) -> PhosonRepl:
         AgentDoneEvent(result=_done_result("q", "answer")),
     ]
     repl.engine.stream = _fake_stream(events)
-    await repl._run_agent("q")
+    await repl.run_turn("q")
     return repl
 
 
@@ -293,14 +293,14 @@ def test_ctrl_t_expands_newest_reasoning_then_older(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_ctrl_t_without_reasoning_shows_info(tmp_path) -> None:
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     events = [
         AgentStartEvent(model="m", message_count=1, max_iterations=50),
         AgentTokenEvent(content="answer"),
         AgentDoneEvent(result=_done_result("q", "answer")),
     ]
     repl.engine.stream = _fake_stream(events)
-    await repl._run_agent("q")
+    await repl.run_turn("q")
 
     buf = _capture_console(repl)
     repl._on_reasoning_toggle()
@@ -311,7 +311,7 @@ async def test_ctrl_t_without_reasoning_shows_info(tmp_path) -> None:
 async def test_ctrl_t_toggles_live_view_during_run(tmp_path, monkeypatch) -> None:
     _no_real_save(monkeypatch)
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
 
     # Simulate an in-flight run: a task that is not done yet.
     async with _inflight_run(repl):
@@ -326,7 +326,7 @@ async def test_ctrl_t_persists_show_reasoning(tmp_path, monkeypatch) -> None:
     """Ctrl+T during a run is a durable preference, like the full-screen TUI."""
     saved = _no_real_save(monkeypatch)
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
 
     async with _inflight_run(repl):
         repl._on_reasoning_toggle()

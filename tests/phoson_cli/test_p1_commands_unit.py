@@ -154,8 +154,8 @@ async def test_status_prints_all_dimensions() -> None:
         step_count=3,
     )
     repl.engine = SimpleNamespace(_loaded_plugins=[])
-    repl._context_window = 128_000
-    repl._context_tokens = 500
+    repl.context_window = 128_000
+    repl.context_tokens = 500
     host = _FakeHost()
     handler = CommandHandler(repl, host=host)
 

@@ -188,9 +188,9 @@ async def paste_image_from_clipboard(
     app: Any,
 ) -> None:
     """Read an image (or fallback text) from the clipboard and attach/insert it."""
-    session_id = app.repl.tree.session_id
+    session_id = app.session.tree.session_id
     result = await read_clipboard_image()
-    if app.repl.tree.session_id != session_id:
+    if app.session.tree.session_id != session_id:
         return
     if result is None:
         await _paste_text_fallback(app, session_id)
@@ -204,19 +204,19 @@ async def paste_image_from_clipboard(
     target.write_bytes(data)
 
     try:
-        app.repl.attachments.attach(str(target))
+        app.session.attachments.attach(str(target))
     except (FileNotFoundError, ValueError) as exc:
         app.sink.notify("error", str(exc))
         return
 
     suffix = target.suffix.lower()
     warning = provider_compat_warning(
-        suffix, getattr(app.repl.config, "provider", None)
+        suffix, getattr(app.session.config, "provider", None)
     )
     if warning:
         app.sink.notify("warn", warning)
 
-    placeholder = f"[image #{len(app.repl.attachments)}] "
+    placeholder = f"[image #{len(app.session.attachments)}] "
     app._prompt_input.buffer.insert_text(placeholder)
     app.app.invalidate()
 
@@ -224,7 +224,7 @@ async def paste_image_from_clipboard(
 async def _paste_text_fallback(app: Any, session_id: str) -> None:
     """No image on the clipboard: paste its text instead (D3), if any."""
     text = await read_clipboard_text()
-    if app.repl.tree.session_id != session_id:
+    if app.session.tree.session_id != session_id:
         return
     if text:
         app._prompt_input.buffer.insert_text(text)

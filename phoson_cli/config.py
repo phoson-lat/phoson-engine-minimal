@@ -15,13 +15,16 @@ import tomllib
 import tempfile
 import warnings
 from types import MappingProxyType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from pathlib import Path
 from dataclasses import field, dataclass
 from collections.abc import Mapping, Callable
 
 from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
+
+if TYPE_CHECKING:
+    from .theme import Theme, ThemeRegistry
 
 _LOG = logging.getLogger("phoson_cli.retry")
 
@@ -330,6 +333,15 @@ class PhosonConfig:
     _persisted_model: str = field(
         default="qwen/qwen3.6-plus", repr=False, compare=False
     )
+    # Startup theme resolution (``__main__._prepare_cli_theme`` and
+    # ``theme.resolve_runtime_theme``): the registry/theme picked before a
+    # front end exists, and whether a ``--theme`` value is deferred until the
+    # plugin themes have loaded. Runtime-only — never persisted.
+    _startup_theme: "Theme | None" = field(default=None, repr=False, compare=False)
+    _startup_theme_registry: "ThemeRegistry | None" = field(
+        default=None, repr=False, compare=False
+    )
+    _cli_theme_deferred: bool = field(default=False, repr=False, compare=False)
 
     @property
     def secret_sources(self) -> Mapping[str, str]:

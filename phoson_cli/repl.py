@@ -2,10 +2,11 @@
 
 All session runtime — engine, tree, metrics, run lifecycle,
 persistence — lives in :class:`~phoson_cli.controller.SessionController`,
-which is free of UI dependencies. ``PhosonRepl`` is the *classic front
-end* over that controller: it owns the prompt loop, key bindings,
-completer, prompt fragments and banner, and adapts its Rich
-``Renderer`` to the controller's
+which is free of UI dependencies; the view state both front ends share
+lives in :class:`~phoson_cli.session_frontend.SessionFrontend`.
+``PhosonRepl`` is the *classic front end* on top of that: it owns the
+prompt loop, key bindings, completer, prompt fragments and banner, and
+adapts its Rich ``Renderer`` to the controller's
 :class:`~phoson_cli.ui_protocols.AgentEventSink` via ``ClassicSink``.
 
 **Status (IMPROVEMENTS.md D2):** the full-screen front end
@@ -24,7 +25,6 @@ import asyncio
 import logging
 from typing import Any
 from pathlib import Path
-from collections.abc import Callable, Coroutine
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
@@ -33,20 +33,11 @@ from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
 
-# Re-exported for backward compatibility (one-shot mode, existing tests).
-from phoson_agent import AgentEngine  # noqa: F401
 from phoson_llm.schemas import REASONING_EFFORTS
-from phoson_agent.sessions import ConversationTree  # noqa: F401
 
-from .theme import Theme, load_theme, build_prompt_style, resolve_runtime_theme
+from .theme import Theme, load_theme, build_prompt_style
 from ._views import print_banner, render_tree_ascii
-from .config import (
-    PhosonConfig,
-    build_chat,  # noqa: F401
-    save_config,
-    enabled_providers_from_config,
-)
-from ._session import SessionMetrics  # noqa: F401
+from .config import PhosonConfig, save_config, enabled_providers_from_config
 from .commands import (
     PathCompleter,
     CommandHandler,
@@ -55,24 +46,18 @@ from .commands import (
 )
 from .renderer import Renderer, ClassicSink
 from .terminal import stream_is_tty, cursor_output_capable
-from .controller import SessionController
 from .formatting import format_token_indicator
 from .model_cache import ModelCache
 from .confirmation import PromptToolkitConfirmationService
 from .ui_protocols import AgentEventSink, ConfirmationService
 from .session_cache import SessionListCache
-from .session_utils import (  # noqa: F401
-    close_plugins,
-    build_mcp_plugins,
-    build_plugin_specs,
-    build_system_prompt,
-)
 from .arg_completers import (
     ModelArgCompleter,
     ResumeArgCompleter,
     StaticArgCompleter,
     SessionsArgCompleter,
 )
+from .session_frontend import SessionFrontend
 
 _LOGGER = logging.getLogger("phoson_cli.repl")
 
@@ -94,13 +79,13 @@ _MCP_SUBCOMMANDS: tuple[str, ...] = (
 )
 
 
-class PhosonRepl:
+class PhosonRepl(SessionFrontend):
     """Classic interactive REPL for the Phoson agent platform.
 
-    Thin prompt_toolkit front end over
-    :class:`~phoson_cli.controller.SessionController`. The public API
-    (methods and state attributes) is preserved for the command handlers
-    and the existing test suite.
+    prompt_toolkit front end over :class:`SessionFrontend` (which owns the
+    :class:`~phoson_cli.controller.SessionController` and the shared view
+    state). This class adds the prompt loop, completers, banner and the
+    Rich ``Renderer``.
     """
 
     def __init__(
@@ -114,22 +99,20 @@ class PhosonRepl:
         Args:
             config: PhosonConfig containing provider, model, and session settings.
             sink: Presentation target for the session run. Defaults to
-                ``ClassicSink(self.renderer)`` — a full-screen front end
-                injects its own sink instead.
+                ``ClassicSink(self.renderer)``.
             confirmation: Interactive yes/no service (bash safe_mode).
                 Defaults to a prompt_toolkit prompt when not passed at
                 all; pass ``None`` explicitly to fail closed (no
                 confirmation available), or a modal-based implementation.
         """
-        self._config = config
         # Theme is resolved once at startup (env NO_COLOR/PHOSON_THEME, then
         # config.toml, then dark) and shared by every rendering site.
         # Plugin-provided themes cannot be known until the controller has
-        # loaded plugins. Start with a safe built-in tier, then resolve the
-        # configured theme against its per-session registry below.
-        self.theme: Theme = getattr(config, "_startup_theme", None) or load_theme()
+        # loaded plugins: start with a safe built-in tier; SessionFrontend
+        # resolves the configured theme against the per-session registry.
+        theme = config._startup_theme or load_theme()
         self.renderer = Renderer(
-            theme=self.theme,
+            theme=theme,
             show_reasoning=getattr(config, "show_reasoning", True),
         )
         self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
@@ -140,34 +123,19 @@ class PhosonRepl:
         # `/model ` or `/resume ` never blocks on a network round trip.
         self._model_cache = ModelCache()
         self._session_cache = SessionListCache()
-        # Node ids whose reasoning has already been expanded this session
-        # (the terminal is append-only, so a node's reasoning prints once).
-        self._expanded_reasoning: set[str] = set()
-        # Startup update-check result (IMPROVEMENTS.md E5): the dim
-        # "⬆ v0.8.1 available — /update" hint rendered in the prompt line,
-        # or None when up to date / offline / not due yet.
-        self.update_hint: str | None = None
-        self._update_check_task: asyncio.Task | None = None
         # Text queued by plugin dictation (Ctrl+O) to appear pre-filled in the
         # next prompt; consumed by the next prompt_async.
         self._prefill_text: str = ""
-        # Last terminal title we pushed (OSC 2) so a per-frame sync only writes
-        # when the session title or run state actually changes.
-        self._terminal_title: str | None = None
-
-        # The session runtime — engine, tree, metrics, run lifecycle —
-        # lives in the UI-independent controller; this REPL is its
-        # prompt_toolkit front end.
-        self._controller = SessionController(
+        super().__init__(
             config,
             sink if sink is not None else ClassicSink(self.renderer),
-            confirmation=(
+            (
                 PromptToolkitConfirmationService()
                 if confirmation is _DEFAULT_CONFIRMATION
                 else confirmation
             ),
+            theme=theme,
         )
-        self.apply_theme(resolve_runtime_theme(config, self._controller.theme_registry))
 
     def request_prefill(self, text: str) -> None:
         """Queue *text* for the next classic prompt buffer.
@@ -178,212 +146,17 @@ class PhosonRepl:
         """
         self._prefill_text = text
 
-    # ── Config / controller state ─────────────────────────────────────────
-
-    @property
-    def config(self) -> PhosonConfig:
-        return self._controller.config
-
-    @config.setter
-    def config(self, value: PhosonConfig) -> None:
-        self._controller.config = value
-        self._config = value
-
-    @property
-    def storage(self):
-        return self._controller.storage
-
-    @property
-    def tree(self) -> "ConversationTree":
-        """The active conversation tree."""
-        return self._controller.tree
-
-    @tree.setter
-    def tree(self, value: "ConversationTree") -> None:
-        self._controller.tree = value
-
-    @property
-    def current_node_id(self) -> str | None:
-        """ID of the most recently active tree node."""
-        return self._controller.current_node_id
-
-    @current_node_id.setter
-    def current_node_id(self, value: str | None) -> None:
-        self._controller.current_node_id = value
-
-    @property
-    def session_metrics(self) -> SessionMetrics:
-        """Accumulated metrics for the current session."""
-        return self._controller.session_metrics
-
-    @property
-    def engine(self):
-        return self._controller.engine
-
-    @engine.setter
-    def engine(self, value) -> None:
-        self._controller.engine = value
-
-    @property
-    def chat(self):
-        return self._controller.chat
-
-    @chat.setter
-    def chat(self, value) -> None:
-        self._controller.chat = value
-
-    @property
-    def theme_registry(self):
-        """Themes contributed by the currently loaded plugin set."""
-        return self._controller.theme_registry
-
-    @property
-    def tools(self):
-        return self._controller.tools
-
-    @property
-    def tools_dict(self):
-        return self._controller.tools_dict
-
-    @property
-    def current_model(self) -> str:
-        return self._controller.current_model
-
-    @current_model.setter
-    def current_model(self, value: str) -> None:
-        self._controller.current_model = value
-
-    @property
-    def subagent_model(self) -> str:
-        return self._controller.subagent_model
-
-    @subagent_model.setter
-    def subagent_model(self, value: str) -> None:
-        self._controller.subagent_model = value
-
-    @property
-    def attachments(self):
-        return self._controller.attachments
-
-    @property
-    def summarizer(self):
-        return self._controller.summarizer
-
-    @property
-    def current_task(self) -> asyncio.Task | None:
-        """The in-flight run task (``None`` when idle)."""
-        return self._controller.current_task
-
-    @current_task.setter
-    def current_task(self, value: asyncio.Task | None) -> None:
-        self._controller.current_task = value
-
-    @property
-    def is_running(self) -> bool:
-        """True while an agent run stream is being consumed."""
-        return self._controller.is_running
-
-    def cancel_current(self) -> bool:
-        """Cancel the in-flight run, if any. Returns True if one was cancelled."""
-        return self._controller.cancel_current()
-
-    # ── Private-state passthroughs (tests, prompt display) ─────────────────
-
-    @property
-    def _cw_resolver(self):
-        return self._controller._cw_resolver
-
-    @property
-    def _context_window(self) -> int:
-        return self._controller.context_window
-
-    @_context_window.setter
-    def _context_window(self, value: int) -> None:
-        self._controller._context_window = value
-
-    @property
-    def _context_tokens(self) -> int:
-        return self._controller.context_tokens
-
-    @_context_tokens.setter
-    def _context_tokens(self, value: int) -> None:
-        self._controller._context_tokens = value
-
-    # ── Delegated runtime methods ─────────────────────────────────────────
-
-    def _rebuild_engine(self) -> None:
-        self._controller._rebuild_engine()
-
-    def _build_system_prompt(self) -> str:
-        return self._controller.build_system_prompt()
-
-    def _build_user_message(self, user_input: str):
-        return self._controller._build_user_message(user_input)
-
-    def _append_user_turn(self, message):
-        return self._controller._append_user_turn(message)
-
-    def _finalize_run(self, done_event, base_count: int) -> None:
-        self._controller._finalize_run(done_event, base_count)
-
-    def _append_partial_history(self, base_count: int) -> None:
-        self._controller._append_partial_history(base_count)
-
-    async def _run_agent(self, user_input: str):
-        """Run one agent turn (delegates to the controller)."""
-        self.refresh_terminal_title(working=True)
-        try:
-            return await self._controller.run_turn(user_input)
-        finally:
-            self.refresh_terminal_title(working=False)
-
-    def new_session(self) -> None:
-        """Start a fresh session, resetting tree and metrics."""
-        self._controller.new_session_now()
-        self._expanded_reasoning.clear()
-
-    async def load_session(self, session_id: str) -> bool:
-        """Load a session from storage and replay its tail."""
-        outcome = await self._controller.load_session(session_id)
-        if outcome.ok:
-            self._expanded_reasoning.clear()
-        return outcome.ok
-
-    async def compact_context(
-        self, profile: str | None = None
-    ) -> tuple[int, int, bool]:
-        """Manually compact the conversation (delegates to the controller)."""
-        return await self._controller.compact_context(profile)
-
-    def plan_compaction(self, profile: str | None = None):
-        """Preview what a compaction would do (delegates to the controller)."""
-        return self._controller.plan_compaction(profile)
-
-    def set_compact_mode(self, mode: str) -> bool:
-        """Switch automatic compaction mode (delegates to the controller).
-
-        Returns True when the mode was applied.
-        """
-        return self._controller.set_compact_mode(mode)
-
-    async def set_provider(self, provider: str) -> None:
-        """Switch provider (models.json ``default_model`` honored)."""
-        await self._controller.set_provider(provider)
-
     def apply_theme(self, theme: Theme) -> None:
         """Switch the active theme at runtime (IMPROVEMENTS.md E4).
 
-        Re-points every theme consumer owned by this front end: this
-        front end's ``theme`` attribute, the shared renderer, and its
-        subagent spinner (the only component that captured its own
-        copy). Rich renderables are built with the theme's tokens, so the
-        next render picks the new palette up automatically — and the
+        Extends :meth:`SessionFrontend.apply_theme` with the classic
+        renderer and its subagent spinner (the only component that captured
+        its own copy). Rich renderables are built with the theme's tokens,
+        so the next render picks the new palette up automatically — and the
         no-color tier's empty tokens yield plain output without any
-        console-level fiddling. The full-screen shell wraps this with
-        its own repaint path (``PhosonApp.apply_theme``) because it owns
-        additional style consumers (prompt_toolkit styles, header, sink).
+        console-level fiddling.
         """
-        self.theme = theme
+        super().apply_theme(theme)
         self.renderer.theme = theme
         self.renderer._spinner._enabled = (
             theme.name != "no-color" and self.renderer._spinner._detect_enabled()
@@ -392,140 +165,6 @@ class PhosonRepl:
         self.renderer._subagent_spinner._enabled = (
             self.renderer._subagent_spinner._detect_enabled()
         )
-        plugin_ui = getattr(self._controller, "plugin_ui", None)
-        if plugin_ui is not None:
-            plugin_ui.set_theme(theme)
-
-    async def set_model(
-        self, model: str, provider: str | None = None, *, reuse_engine: bool = False
-    ) -> None:
-        """Switch model (and provider, when given).
-
-        ``reuse_engine`` asks the controller for the in-place fast path: keep
-        the plugin/tool/middleware layer and rebuild only the chat client when
-        the provider changed (see :meth:`SessionController.set_model`).
-        """
-        await self._controller.set_model(
-            model, provider=provider, reuse_engine=reuse_engine
-        )
-
-    def label_current_node(self, text: str) -> None:
-        """Label the current node with text."""
-        self._controller.label_current_node(text)
-
-    def note_user_title(self) -> None:
-        """Mark the session title as user-set (``/title``).
-
-        A background LLM title must never overwrite a title the user chose.
-        """
-        self._controller.note_user_title()
-
-    def refresh_terminal_title(self, working: bool | None = None) -> None:
-        """Sync the terminal window title with the session + run state.
-
-        The title is the session title (falling back to ``phoson-cli``) and
-        gets a ``*`` prefix while the agent is working — e.g. ``* Refactor X``.
-        ``working`` defaults to the controller's live run state; pass it
-        explicitly from a front end that tracks its own in-flight flag.
-        Deduplicated against the last write so a per-frame caller is cheap.
-        """
-        from .terminal_title import set_title, format_title
-
-        is_working = self._controller.is_running if working is None else working
-        title = format_title(self.tree.title, is_working)
-        if title == self._terminal_title:
-            return
-        self._terminal_title = title
-        set_title(title)
-
-    def undo_last_turn(self) -> tuple[bool, str]:
-        """Move the cursor back to just before the last user turn."""
-        return self._controller.undo_last_turn()
-
-    def jump_candidates(self) -> list[tuple[str, str]]:
-        """Rewind targets for the double-Esc picker (G1): user turns on
-        the active path, oldest first, as ``(node_id, preview)``."""
-        return self._controller.jump_candidates()
-
-    def jump_to_user_turn(self, user_node_id: str) -> tuple[bool, str]:
-        """Rewind to just before the selected user turn (G1)."""
-        return self._controller.jump_to_user_turn(user_node_id)
-
-    def jump_to_node(self, node_id: str) -> tuple[bool, str]:
-        """Move the cursor to any tree node (G1: undo a rewind jump)."""
-        return self._controller.jump_to_node(node_id)
-
-    def message_text(self, node_id: str) -> str:
-        """Plain text of a node's message (empty string when missing).
-
-        The full-screen rewind flow uses this to re-populate the
-        composer with the text of the turn being rewound.
-        """
-        from phoson_llm.schemas import TextBlock
-
-        node = self._controller.tree.nodes.get(node_id)
-        if node is None:
-            return ""
-        content = node.message.content
-        if isinstance(content, str):
-            return content
-        if content:
-            return " ".join(b.text for b in content if isinstance(b, TextBlock))
-        return ""
-
-    def find_latest_node_id(self) -> str | None:
-        """Most recent leaf node — the continuation point."""
-        return self._controller.find_latest_node_id()
-
-    async def shutdown(self) -> None:
-        """Release chat client and plugins (called on exit)."""
-        task = self._update_check_task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-        await self._controller.shutdown()
-
-    # ── Startup update check (IMPROVEMENTS.md E5) ─────────────────────────
-
-    def start_update_check(self, on_settle: Callable[[], None] | None = None) -> None:
-        """Kick off the non-blocking startup PyPI check (E5).
-
-        The check runs as a plain background task on the running loop: it
-        must not delay the first paint, input, or a run, and it may still
-        be in flight when the session exits (``shutdown`` cancels it).
-        The check itself enforces the once-per-day cadence (and retries
-        after a failed attempt) — the front end only renders the hint.
-        ``on_settle`` (optional) is invoked once the hint is known, so a
-        front end that repaints on demand (full-screen) can refresh the
-        header the moment the check lands.
-        """
-        from .updater import check_for_startup_update
-
-        self._update_check_task = asyncio.get_running_loop().create_task(
-            self._store_update_check(check_for_startup_update(), on_settle)
-        )
-
-    async def _store_update_check(
-        self,
-        check: Coroutine[Any, Any, str | None],
-        on_settle: Callable[[], None] | None = None,
-    ) -> None:
-        """Await the check and store its result; failure means no hint."""
-        from .updater import update_hint
-
-        try:
-            latest = await check
-        except Exception:  # noqa: BLE001
-            latest = None
-        self.update_hint = update_hint(latest) if latest else None
-        if on_settle is not None:
-            try:
-                on_settle()
-            except Exception:  # noqa: BLE001
-                pass
 
     # ── Main loop ─────────────────────────────────────────────────────────
 
@@ -563,7 +202,7 @@ class PhosonRepl:
         # Autonomous monitor wake loop (I-126): needs the running event
         # loop, so it starts here (the controller __init__ runs before it
         # in the classic REPL). No-op when enable_monitors is off.
-        self._controller.start_monitor_wake_loop()
+        self.controller.start_monitor_wake_loop()
 
         key_bindings = KeyBindings()
 
@@ -583,7 +222,7 @@ class PhosonRepl:
             # behave identically) and @file mentions (E3).
             completer=merge_completers(
                 [
-                    SlashCompleter(lambda: self._controller.command_catalog),
+                    SlashCompleter(lambda: self.command_catalog),
                     ModelArgCompleter(self._model_cache),
                     StaticArgCompleter(
                         ("/reasoning-effort ", "/effort "),
@@ -633,8 +272,8 @@ class PhosonRepl:
                     default=prefill,
                 )
             except KeyboardInterrupt:
-                if self._controller.is_running:
-                    self._controller.cancel_current()
+                if self.is_running:
+                    self.cancel_current()
                     self.renderer.print_warn("Interrupted — run cancelled.")
                 continue
             except EOFError:
@@ -656,10 +295,10 @@ class PhosonRepl:
                 continue
 
             try:
-                await self._run_agent(text)
+                await self.run_turn(text)
             except KeyboardInterrupt:
-                if self._controller.is_running:
-                    self._controller.cancel_current()
+                if self.is_running:
+                    self.cancel_current()
                     self.renderer.print_warn("Interrupted — run cancelled.")
 
     # ── Reasoning (Ctrl+T) ─────────────────────────────────────────────────
@@ -670,7 +309,7 @@ class PhosonRepl:
         Mirrors the full-screen TUI (``fullscreen/state_cycles.py``): the
         level is persisted and applies from the next turn.
         """
-        if self._controller.is_running:
+        if self.is_running:
             self.renderer.print_warn("Wait for the current operation to finish.")
             return
         current = self.config.reasoning_effort
@@ -693,7 +332,7 @@ class PhosonRepl:
         the current path that has any (a node's reasoning is printed at
         most once per REPL session — the terminal is append-only).
         """
-        if self._controller.is_running:
+        if self.is_running:
             new_state = self.renderer.toggle_live_reasoning()
             # Persist the choice like the full-screen front end does
             # (state_cycles.toggle_reasoning): Ctrl+T is a durable
@@ -759,7 +398,7 @@ class PhosonRepl:
         # Active-monitors indicator (I-126): the plugin reports it via a
         # duck-typed hook on the controller; shown dim in the prompt,
         # alongside model/node/tokens. In-memory, safe on every prompt.
-        monitors_part = self._controller.monitor_status() or ""
+        monitors_part = self.controller.monitor_status() or ""
 
         # Update-available hint (IMPROVEMENTS.md E5) — a dim, single-line
         # "⬆ v0.8.1 available — /update" slot appended to the prompt. It
@@ -785,7 +424,7 @@ class PhosonRepl:
 
     def _token_indicator(self) -> str:
         """Return a short token usage string like '12.4k/128k'."""
-        return format_token_indicator(self._context_tokens, self._context_window)
+        return format_token_indicator(self.context_tokens, self.context_window)
 
     # ── Banner ────────────────────────────────────────────────────────────
 

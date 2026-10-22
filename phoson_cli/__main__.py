@@ -426,8 +426,8 @@ async def _run_classic(repl, session: str | None) -> bool:
 
 async def _run_fullscreen(app, session: str | None) -> bool:
     """Resume *session* (when given) then run the full-screen app, one loop."""
-    if session and not await _resume_session(app.repl, session):
-        await app.repl.shutdown()
+    if session and not await _resume_session(app.session, session):
+        await app.session.shutdown()
         return False
     await app.run_async()
     return True
@@ -447,9 +447,9 @@ def _prepare_cli_theme(config: PhosonConfig):
         theme = load_theme(None, registry=registry)
     else:
         theme = load_theme(config.theme, registry=registry, cli_value=requested)
-    setattr(config, "_startup_theme_registry", registry)
-    setattr(config, "_startup_theme", theme)
-    setattr(config, "_cli_theme_deferred", deferred)
+    config._startup_theme_registry = registry
+    config._startup_theme = theme
+    config._cli_theme_deferred = deferred
     return registry
 
 
@@ -663,23 +663,21 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
     import asyncio
 
     from phoson_agent import AgentEngine
-    from phoson_cli.repl import close_plugins, build_plugin_specs, build_system_prompt
     from phoson_cli.theme import load_theme, build_theme_registry
-    from phoson_cli.tools import build_tools, build_tools_dict
     from phoson_cli.trace import TraceMiddleware
+    from phoson_cli.runtime import build_engine_runtime
     from phoson_llm.schemas import Message, ModelConfig
     from phoson_cli.plugin_ui import NonInteractivePluginUiService
     from phoson_cli.session_utils import (
         build_offload,
+        close_plugins,
         build_summarizer,
-        build_middlewares,
+        build_plugin_specs,
+        build_system_prompt,
         engine_prompt_tools,
     )
     from phoson_cli.guard_classifier import build_permission_classifier
-    from phoson_cli.permissions_store import (
-        apply_tool_hints,
-        build_permission_middleware,
-    )
+    from phoson_cli.permissions_store import build_permission_middleware
 
     tracing = trace or trace_enabled()
     trace_writer = TraceWriter() if tracing else None
@@ -695,49 +693,37 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
     trace_middleware: TraceMiddleware | None = None
     terminal: tuple[str, str, str, bool] | None = None
     try:
-        if config.cli_theme and not hasattr(config, "_startup_theme_registry"):
+        if config.cli_theme and config._startup_theme_registry is None:
             _prepare_cli_theme(config)
         chat = build_chat(config)
-        tools = build_tools()
-        # Same middleware chain as the REPL. One-shot has no confirmation
-        # service, so the permission gate fails closed for ``ask`` tools.
-        offload = build_offload(config)
-        summarizer = build_summarizer(config)
-        # Internal summary call must not carry the run's tool schemas
-        # (F-11 / #176): route it through the tool-free chat client.
-        summarizer.chat = chat
+        # Same runtime as the REPL (see ``runtime.py``). One-shot has no
+        # confirmation service, so the permission gate fails closed for
+        # ``ask`` tools — including annotated MCP tools that are not
+        # read-only.
         permission = build_permission_middleware(
             on_ask=None,
             classifier=build_permission_classifier(config, lambda: chat),
             classifier_auto_allow=config.permission_classifier_auto_allow,
             classifier_timeout_s=config.permission_classifier_timeout_s,
         )
-        middlewares = build_middlewares(
-            config=config,
-            offload=offload,
-            summarizer=summarizer,
-            permission=permission,
-        )
         # #139: optional structured run trace for headless one-shot. Appended
         # last (it only implements on_agent_event, so chain order is inert).
         if tracing:
             trace_middleware = TraceMiddleware(writer=trace_writer)
-            middlewares.append(trace_middleware)
-        engine = AgentEngine(
+        runtime = build_engine_runtime(
+            config,
             chat=chat,
-            tools=tools,
-            middlewares=middlewares,
             plugins=build_plugin_specs(config),
-            max_iterations=config.max_iterations,
-            tool_budget_tokens=config.tool_budget_tokens or None,
+            offload=build_offload(config),
+            summarizer=build_summarizer(config),
+            permission=permission,
+            main_model=config.model,
+            subagent_model=config.subagent_model or config.model,
+            extra_middlewares=[trace_middleware] if trace_middleware else [],
+            engine_factory=AgentEngine,
         )
-        # #144 phase 2: fold MCP tool annotations into the permission policy.
-        # One-shot has no confirmation callback, so an annotated MCP tool that
-        # is not read-only resolves to ask → refused (fail closed).
-        apply_tool_hints(permission.policy, engine.tools)
-        theme_registry = build_theme_registry(
-            list(getattr(engine, "_loaded_plugins", []))
-        )
+        engine = runtime.engine
+        theme_registry = build_theme_registry(runtime.loaded_plugins)
         try:
             active_theme = (
                 _validate_runtime_cli_theme(config, theme_registry)
@@ -757,22 +743,10 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         permission.on_decision = lambda decision: record_permission_decision(
             getattr(engine, "_loaded_plugins", []), decision
         )
-        # Same sub-agent runtime context as the interactive REPL.
-        engine.context.extra["safe_mode"] = config.safe_mode
-        engine.context.extra["middlewares"] = middlewares
         engine.context.extra["plugin_ui"] = NonInteractivePluginUiService(
             active_theme,
             trace_writer=trace_writer,
         )
-        engine.context.extra["available_tools"] = build_tools_dict()
-        engine.context.extra["default_model"] = config.subagent_model or config.model
-        engine.context.extra["main_model"] = config.model
-        engine.context.extra["max_iterations"] = config.max_iterations
-        engine.context.extra["subagent_max_parallel"] = config.subagent_max_parallel
-        engine.context.extra["subagent_timeout_seconds"] = (
-            config.subagent_timeout_seconds
-        )
-        engine.context.extra["chat"] = chat
         # Note: no ``on_subagent_progress`` callback here — one-shot mode
         # has no live panel to feed (E2), and the final per-task metrics
         # still arrive in the tool output the model receives.
@@ -1017,7 +991,7 @@ def _run_cli() -> None:
                 file=sys.stderr,
             )
         repl = _resolve("PhosonRepl")(config)
-        if options.theme and getattr(config, "_cli_theme_deferred", False):
+        if options.theme and config._cli_theme_deferred:
             try:
                 _validate_runtime_cli_theme(config, repl.theme_registry)
             except _CliThemeError as exc:
@@ -1054,11 +1028,11 @@ def _run_cli() -> None:
         # with the same friendly message as every other config error.
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    if options.theme and getattr(config, "_cli_theme_deferred", False):
+    if options.theme and config._cli_theme_deferred:
         try:
-            _validate_runtime_cli_theme(config, app.repl.theme_registry)
+            _validate_runtime_cli_theme(config, app.session.theme_registry)
         except _CliThemeError as exc:
-            asyncio.run(app.repl.shutdown())
+            asyncio.run(app.session.shutdown())
             _fail(str(exc))
     # Backstop: capture stray stderr (stray prints/logging) to a log file +
     # in-memory tail while the front end runs, so it cannot tear the render.

@@ -98,7 +98,7 @@ async def test_run_fullscreen_resumes_then_runs() -> None:
     from phoson_cli.__main__ import _run_fullscreen
 
     repl = _repl(metas=[_meta("abcdef1234567890")])
-    app = SimpleNamespace(repl=repl, run_async=AsyncMock())
+    app = SimpleNamespace(session=repl, run_async=AsyncMock())
 
     assert await _run_fullscreen(app, "abcdef") is True
     repl.load_session.assert_awaited_once_with("abcdef1234567890")
@@ -111,7 +111,7 @@ async def test_run_fullscreen_aborts_when_session_missing() -> None:
 
     repl = _repl(metas=[])
     repl.shutdown = AsyncMock()
-    app = SimpleNamespace(repl=repl, run_async=AsyncMock())
+    app = SimpleNamespace(session=repl, run_async=AsyncMock())
 
     assert await _run_fullscreen(app, "nope") is False
     repl.shutdown.assert_awaited_once()

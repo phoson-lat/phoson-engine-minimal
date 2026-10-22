@@ -53,7 +53,7 @@ class _FakeApp:
         self.sink = _FakeSink()
         self.theme = DARK
         self.seen_pickers: list[BasePicker] = []
-        self.repl = SimpleNamespace(
+        self.session = SimpleNamespace(
             storage=_FakeStorage(),
             config=SimpleNamespace(provider="openrouter"),
         )
@@ -220,7 +220,7 @@ async def test_pick_session_multi_delete_asks_and_deletes_on_confirm() -> None:
     result = await host.pick_session([_meta("aaa111"), _meta("bbb222")], "current-id")
 
     assert result.deleted_count == 2
-    assert app.repl.storage.deleted == ["aaa111", "bbb222"]
+    assert app.session.storage.deleted == ["aaa111", "bbb222"]
     app.run_float_confirm.assert_awaited_once()
     assert app.run_float_picker.await_count == 1
     assert "2 session(s)" in app.run_float_confirm.call_args[0][0]
@@ -239,7 +239,7 @@ async def test_pick_session_does_not_reopen_after_deleting_final_row() -> None:
 
     assert result.deleted_count == 1
     assert not result.cancelled
-    assert app.repl.storage.deleted == ["aaa111"]
+    assert app.session.storage.deleted == ["aaa111"]
     assert app.run_float_picker.await_count == 1
     assert app.sink.notices == [("info", "Deleted 1 session(s).")]
 
@@ -259,7 +259,7 @@ async def test_pick_session_multi_delete_cancelled_deletes_nothing() -> None:
     result = await host.pick_session([_meta("aaa111")], "current-id")
 
     assert result.cancelled is True
-    assert app.repl.storage.deleted == []
+    assert app.session.storage.deleted == []
     app.run_float_confirm.assert_awaited_once()
     # The picker reopened (two runs) and a cancellation notice was shown.
     assert app.run_float_picker.await_count == 2
@@ -282,7 +282,7 @@ async def test_pick_session_multi_delete_skips_current_session() -> None:
 
     await host.pick_session([_meta("current-id"), _meta("aaa111")], "current-id")
 
-    assert app.repl.storage.deleted == ["aaa111"]
+    assert app.session.storage.deleted == ["aaa111"]
     assert "1 session(s)" in app.run_float_confirm.call_args[0][0]
 
 

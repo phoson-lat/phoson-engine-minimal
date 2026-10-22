@@ -166,7 +166,10 @@ async def test_run_oneshot_passes_configured_community_plugins(tmp_path) -> None
 
     with (
         patch("phoson_cli.__main__.build_chat", return_value=_FakeChat()),
-        patch("phoson_cli.repl.build_plugin_specs", return_value=["entrypoint:demo"]),
+        patch(
+            "phoson_cli.session_utils.build_plugin_specs",
+            return_value=["entrypoint:demo"],
+        ),
         patch("phoson_agent.AgentEngine", _CapturingEngine),
     ):
         rc = await _run_oneshot(

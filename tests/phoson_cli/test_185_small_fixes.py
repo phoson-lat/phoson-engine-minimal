@@ -125,7 +125,7 @@ def test_mcp_config_set_expands_user(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(home))
 
     parent = SimpleNamespace(
-        repl=SimpleNamespace(
+        session=SimpleNamespace(
             config=SimpleNamespace(
                 mcp_config_file=Path("~/.phoson/mcps.json").expanduser(),
                 enable_mcp=False,
@@ -141,7 +141,7 @@ def test_mcp_config_set_expands_user(tmp_path, monkeypatch) -> None:
     with patch("phoson_cli._mcp_commands.save_config"):
         asyncio.run(handler._set_config("~/phoson/mcps.json"))
 
-    assert str(parent.repl.config.mcp_config_file) == str(target)
+    assert str(parent.session.config.mcp_config_file) == str(target)
 
 
 def test_toggle_mcp_config_restores_owner_only_perms(tmp_path) -> None:
@@ -302,7 +302,7 @@ async def test_cmd_new_rejected_while_running() -> None:
         print_info=MagicMock(), print_warn=MagicMock(), print_error=MagicMock()
     )
     handler = CommandHandler.__new__(CommandHandler)
-    handler.repl = repl
+    handler.session = repl
     handler.host = host
 
     await handler._cmd_new(Command(name="/new", args=""))
@@ -322,7 +322,7 @@ async def test_cmd_resume_rejected_while_running() -> None:
         print_info=MagicMock(), print_warn=MagicMock(), print_error=MagicMock()
     )
     handler = CommandHandler.__new__(CommandHandler)
-    handler.repl = repl
+    handler.session = repl
     handler.host = host
 
     await handler._cmd_resume(Command(name="/resume", args="abc"))

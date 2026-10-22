@@ -12,11 +12,8 @@ import pytest
 
 from phoson_cli.config import PhosonConfig
 from phoson_llm.schemas import Message, LLMDoneEvent
-from phoson_cli.controller import (
-    SessionController,
-    _sanitize_title,
-    _title_candidate_models,
-)
+from phoson_cli.controller import SessionController
+from phoson_cli.session_titles import _sanitize_title, _title_candidate_models
 
 
 class _Sink:
@@ -141,24 +138,24 @@ def test_title_candidate_models_deduplicates() -> None:
 def test_ensure_session_title_seeds_heuristic_and_marks_auto(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     _add_user(controller, "How do I fix the docker healthcheck?")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title == "How do I fix the docker healthcheck?"
-    assert controller._title_is_auto is True
+    assert controller.titles.is_auto is True
 
 
 def test_ensure_session_title_skips_commands_and_wakes(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     _add_user(controller, "/model gpt-4o")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title is None
-    assert controller._title_is_auto is False
+    assert controller.titles.is_auto is False
 
     controller2, _sink2 = _make_controller(tmp_path)
     _add_user(
         controller2,
         "[MONITOR EVENTS] A background monitor fired while you were idle.",
     )
-    controller2._ensure_session_title()
+    controller2.titles.ensure_title()
     assert controller2.tree.title is None
 
 
@@ -166,9 +163,9 @@ def test_ensure_session_title_never_overwrites_existing(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     controller.tree.title = "User chose this"
     _add_user(controller, "something else entirely")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title == "User chose this"
-    assert controller._title_is_auto is False
+    assert controller.titles.is_auto is False
 
 
 def test_ensure_session_title_skips_compaction_banner(tmp_path) -> None:
@@ -177,9 +174,9 @@ def test_ensure_session_title_skips_compaction_banner(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     _add_user(controller, "[Conversation summary up to this point: we discussed X]")
     _add_user(controller, "Now add the retry logic")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title == "Now add the retry logic"
-    assert controller._title_is_auto is True
+    assert controller.titles.is_auto is True
 
 
 def test_ensure_session_title_repairs_banner_title(tmp_path) -> None:
@@ -187,7 +184,7 @@ def test_ensure_session_title_repairs_banner_title(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     controller.tree.title = "[Conversation summary up to this point: old stuff]"
     _add_user(controller, "Investigate the flaky test")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title == "Investigate the flaky test"
 
 
@@ -197,7 +194,7 @@ def test_ensure_session_title_clears_banner_title_without_user_text(tmp_path) ->
     controller, _sink = _make_controller(tmp_path)
     controller.tree.title = "[Conversation summary]: everything was summarized"
     _add_user(controller, "[Conversation summary up to this point: newer]")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     assert controller.tree.title is None
 
 
@@ -208,7 +205,7 @@ def test_ensure_session_title_clears_banner_title_without_user_text(tmp_path) ->
 async def test_generate_llm_title_success_replaces_heuristic(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
     _add_user(controller, "the docker healthcheck keeps failing")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     await controller.storage.save(controller.tree)
 
     controller.chat.complete = AsyncMock(
@@ -216,7 +213,7 @@ async def test_generate_llm_title_success_replaces_heuristic(tmp_path) -> None:
             content='"Docker healthcheck failure"', has_tool_calls=False
         )
     )
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert controller.tree.title == "Docker healthcheck failure"
     # No transcript notice; the header is repainted via the silent hook.
@@ -232,12 +229,12 @@ async def test_generate_llm_title_success_replaces_heuristic(tmp_path) -> None:
 async def test_generate_llm_title_passes_fallback_model(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path, title_model="")
     _add_user(controller, "name me")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
 
     controller.chat.complete = AsyncMock(
         return_value=LLMDoneEvent(content="A name", has_tool_calls=False)
     )
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     _messages, request = controller.chat.complete.await_args.args
     assert request.model == controller.config.subagent_model
@@ -251,7 +248,7 @@ async def test_generate_llm_title_falls_back_to_active_model(tmp_path) -> None:
     the active model is tried next and the title is still generated."""
     controller, sink = _make_controller(tmp_path, title_model="")
     _add_user(controller, "investigate navier-stokes and openai")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     await controller.storage.save(controller.tree)
 
     calls: list[str] = []
@@ -263,7 +260,7 @@ async def test_generate_llm_title_falls_back_to_active_model(tmp_path) -> None:
         return LLMDoneEvent(content="Navier-Stokes research", has_tool_calls=False)
 
     controller.chat.complete = AsyncMock(side_effect=_complete)
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert calls == [controller.config.subagent_model, controller.current_model]
     assert controller.tree.title == "Navier-Stokes research"
@@ -275,11 +272,11 @@ async def test_generate_llm_title_falls_back_to_active_model(tmp_path) -> None:
 async def test_generate_llm_title_failure_keeps_heuristic(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
     _add_user(controller, "keep this heuristic title")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     heuristic = controller.tree.title
 
     controller.chat.complete = AsyncMock(side_effect=RuntimeError("provider down"))
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert controller.tree.title == heuristic
     assert not any("Session titled" in msg for _kind, msg in sink.notifications)
@@ -289,7 +286,7 @@ async def test_generate_llm_title_failure_keeps_heuristic(tmp_path) -> None:
 async def test_generate_llm_title_timeout_keeps_heuristic(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path, title_timeout_s=0.01)
     _add_user(controller, "slow provider")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     heuristic = controller.tree.title
 
     async def _slow(*_a, **_k):
@@ -297,7 +294,7 @@ async def test_generate_llm_title_timeout_keeps_heuristic(tmp_path) -> None:
         return LLMDoneEvent(content="Too late", has_tool_calls=False)
 
     controller.chat.complete = AsyncMock(side_effect=_slow)
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert controller.tree.title == heuristic
 
@@ -307,12 +304,12 @@ async def test_generate_llm_title_never_overwrites_user_title(tmp_path) -> None:
     controller, sink = _make_controller(tmp_path)
     _add_user(controller, "whatever")
     controller.tree.title = "Mine"
-    controller.note_user_title()  # user-set → not auto
+    controller.titles.note_user_title()  # user-set → not auto
 
     controller.chat.complete = AsyncMock(
         return_value=LLMDoneEvent(content="LLM guess", has_tool_calls=False)
     )
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert controller.tree.title == "Mine"
     assert not any("Session titled" in msg for _kind, msg in sink.notifications)
@@ -322,13 +319,13 @@ async def test_generate_llm_title_never_overwrites_user_title(tmp_path) -> None:
 async def test_generate_llm_title_empty_reply_keeps_heuristic(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     _add_user(controller, "seed")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     heuristic = controller.tree.title
 
     controller.chat.complete = AsyncMock(
         return_value=LLMDoneEvent(content="   ", has_tool_calls=False)
     )
-    await controller._generate_llm_title()
+    await controller.titles.generate_llm_title()
 
     assert controller.tree.title == heuristic
 
@@ -338,7 +335,7 @@ async def test_generate_llm_title_ignored_after_session_switch(tmp_path) -> None
     """A /new while the title call is in flight must not rename either tree."""
     controller, sink = _make_controller(tmp_path)
     _add_user(controller, "old session")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
     old_tree = controller.tree
     heuristic = old_tree.title
 
@@ -351,7 +348,7 @@ async def test_generate_llm_title_ignored_after_session_switch(tmp_path) -> None
         return LLMDoneEvent(content="Late title", has_tool_calls=False)
 
     controller.chat.complete = AsyncMock(side_effect=_blocked)
-    task = asyncio.create_task(controller._generate_llm_title())
+    task = asyncio.create_task(controller.titles.generate_llm_title())
     await started.wait()
     controller._reset_session()  # session swapped mid-flight
     release.set()
@@ -369,24 +366,24 @@ async def test_generate_llm_title_ignored_after_session_switch(tmp_path) -> None
 async def test_schedule_llm_title_disabled_does_not_create_task(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path, llm_titles=False)
     _add_user(controller, "hello")
-    controller._ensure_session_title()
-    controller._schedule_llm_title()
-    assert controller._title_task is None
+    controller.titles.ensure_title()
+    controller.titles.schedule_llm_title()
+    assert controller.titles._task is None
 
 
 @pytest.mark.asyncio
 async def test_schedule_llm_title_is_one_shot(tmp_path) -> None:
     controller, _sink = _make_controller(tmp_path)
     _add_user(controller, "hello")
-    controller._ensure_session_title()
+    controller.titles.ensure_title()
 
     controller.chat.complete = AsyncMock(
         return_value=LLMDoneEvent(content="A title", has_tool_calls=False)
     )
-    controller._schedule_llm_title()
-    first = controller._title_task
+    controller.titles.schedule_llm_title()
+    first = controller.titles._task
     assert first is not None
     await first
 
-    controller._schedule_llm_title()
-    assert controller._title_task is first  # not rescheduled
+    controller.titles.schedule_llm_title()
+    assert controller.titles._task is first  # not rescheduled

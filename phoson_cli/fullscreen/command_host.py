@@ -163,7 +163,7 @@ class FullScreenCommandHost:
         picker = build_unified_model_picker(
             models,
             current_model,
-            current_provider=self.app.repl.config.provider,
+            current_provider=self.app.session.config.provider,
             unavailable=unavailable,
             page_size=12,
             theme=self.app.theme,
@@ -189,9 +189,9 @@ class FullScreenCommandHost:
             current_theme,
             theme=self.app.theme,
             registry=(
-                self.app.repl.theme_registry
+                self.app.session.theme_registry
                 if isinstance(
-                    getattr(self.app.repl, "theme_registry", None), ThemeRegistry
+                    getattr(self.app.session, "theme_registry", None), ThemeRegistry
                 )
                 else None
             ),
@@ -228,7 +228,7 @@ class FullScreenCommandHost:
                 self.app.sink.notify("info", "Delete cancelled.")
                 continue
             for sid in ids:
-                await self.app.repl.storage.delete(sid)
+                await self.app.session.storage.delete(sid)
                 remaining = [s for s in remaining if str(s.id) != sid]
             self.app.sink.notify("info", f"Deleted {len(ids)} session(s).")
             if not remaining:
@@ -285,9 +285,7 @@ class FullScreenCommandHost:
         if decision == LEVEL_ASK:
             allowed = await self.app.run_float_bash_card(
                 command,
-                on_always=lambda cmd: self.app.repl._controller._remember_bash_pattern(
-                    cmd
-                ),
+                on_always=self.app.session.remember_bash_pattern,
             )
             if not allowed:
                 self.app.sink.add_bash_card(command, "", error="denied by the user")

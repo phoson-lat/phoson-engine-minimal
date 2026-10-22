@@ -165,7 +165,7 @@ def _make_subcommands(config, *, mcp_enabled: bool = True, plugin_servers=None):
         set_model=AsyncMock(),
         engine=_FakeEngine(plugin_servers),
     )
-    parent = SimpleNamespace(repl=repl, host=host)
+    parent = SimpleNamespace(session=repl, host=host)
     return _MCPSubcommands(parent), host
 
 
@@ -205,7 +205,7 @@ class TestToggleSubcommand:
             is False
         )
         # in-flight reapply via set_model (engine rebuild)
-        sub.repl.set_model.assert_awaited_once_with("test-model")
+        sub.session.set_model.assert_awaited_once_with("test-model")
 
     async def test_toggle_tool_persists(self, tmp_path):
         config_path = _write(tmp_path)
@@ -236,7 +236,7 @@ class TestToggleSubcommand:
         await sub.dispatch(Command(name="/mcp", args="toggle nope"))
 
         assert any("Unknown MCP server" in e for e in host.errors)
-        sub.repl.set_model.assert_not_awaited()
+        sub.session.set_model.assert_not_awaited()
 
     async def test_toggle_without_args_shows_usage(self, tmp_path):
         config_path = _write(tmp_path)
@@ -270,5 +270,5 @@ class TestToggleSubcommand:
             is False
         )
         # …but not applied, and warned
-        sub.repl.set_model.assert_not_awaited()
+        sub.session.set_model.assert_not_awaited()
         assert any("globally disabled" in w for w in host.warns)

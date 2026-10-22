@@ -278,7 +278,7 @@ def _make_repl_with_events(tmp_path, events):
     from unittest.mock import AsyncMock
 
     repl = _make_repl(tmp_path)
-    repl._cw_resolver.resolve = AsyncMock(return_value=128_000)
+    repl._controller._cw_resolver.resolve = AsyncMock(return_value=128_000)
     repl.engine.stream = _fake_stream(events)
     return repl
 
@@ -313,12 +313,12 @@ async def test_repl_uses_models_json_context_window(tmp_path) -> None:
     repl = _make_repl_with_events(tmp_path, events)
     repl.current_model = "openrouter/qwen3.8-27b"
     repl.config.provider = "openrouter"
-    mock_resolve = repl._cw_resolver.resolve
+    mock_resolve = repl._controller._cw_resolver.resolve
 
     with patch.object(controller_mod, "load_models_file", return_value=data):
-        await repl._run_agent("q")
+        await repl.run_turn("q")
 
-    assert repl._context_window == 262144
+    assert repl._controller._context_window == 262144
     mock_resolve.assert_not_called()  # models.json override short-circuited
 
 
@@ -353,9 +353,9 @@ async def test_repl_falls_back_to_engine_resolver_without_override(tmp_path) -> 
     import phoson_cli.controller as controller_mod
 
     with patch.object(controller_mod, "load_models_file", return_value={}):
-        await repl._run_agent("q")
+        await repl.run_turn("q")
 
-    assert repl._context_window == 128_000  # engine resolver value
+    assert repl._controller._context_window == 128_000  # engine resolver value
 
 
 async def test_set_provider_uses_default_model(tmp_path) -> None:

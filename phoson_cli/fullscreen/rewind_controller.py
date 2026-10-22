@@ -24,7 +24,7 @@ def one_line(text: str) -> str:
 class RewindController:
     """Owns the double-Esc rewind and Ctrl+Z undo-jump.
 
-    References the owning ``PhosonApp`` (``app``) for ``repl`` / ``sink`` and
+    References the owning ``PhosonApp`` (``app``) for ``session`` / ``sink`` and
     the ``_rewind_stack`` state.  See the module docstring for why the state
     lives on the app rather than here.
     """
@@ -47,7 +47,7 @@ class RewindController:
         app = self.app
         if app._active_float is not None or app._is_run_in_flight():
             return
-        candidates = app.repl.jump_candidates()
+        candidates = app.session.jump_candidates()
         if not candidates:
             app.sink.notify("info", "Nothing to rewind to in this session.")
             return
@@ -70,8 +70,8 @@ class RewindController:
         rewinds are individually restorable with repeated Ctrl+Z.
         """
         app = self.app
-        previous_cursor = app.repl.current_node_id
-        ok, info = app.repl.jump_to_user_turn(user_node_id)
+        previous_cursor = app.session.current_node_id
+        ok, info = app.session.jump_to_user_turn(user_node_id)
         if not ok:
             app.sink.notify("error", str(info))
             return
@@ -83,7 +83,7 @@ class RewindController:
         if previous_cursor is not None:
             app._rewind_stack.append(previous_cursor)
         try:
-            node_path = app.repl.tree.get_node_path(app.repl.current_node_id)
+            node_path = app.session.tree.get_node_path(app.session.current_node_id)
         except (ValueError, AttributeError, TypeError):
             app.sink.notify("error", "Could not redraw after rewind — cursor lost.")
             return
@@ -97,14 +97,14 @@ class RewindController:
             )
         else:
             app.sink.print_history(path, timestamps=timestamps)
-        app.repl._context_tokens = app.repl._controller.estimate_active_path()
+        app.session.controller.refresh_context_estimate()
         app._auto_scroll = True
         app._chat_scroll_top = 0
         app.app.invalidate()
 
         # Re-populate the composer with the turn being rewound — editing
         # it and resending replaces the abandoned branch in one Enter.
-        turn_text = app.repl.message_text(user_node_id).strip()
+        turn_text = app.session.message_text(user_node_id).strip()
         if turn_text:
             app._prompt_input.text = turn_text
 
@@ -132,7 +132,7 @@ class RewindController:
             app.sink.notify("info", "No rewind to undo.")
             return
         cursor = app._rewind_stack.pop()
-        ok, info = app.repl.jump_to_node(cursor)
+        ok, info = app.session.jump_to_node(cursor)
         if not ok:
             # The tree changed underneath (new/resume/compact replaced
             # the session): every remaining stack entry is stale too, so
@@ -141,7 +141,7 @@ class RewindController:
             app.sink.notify("warn", str(info))
             return
         try:
-            node_path = app.repl.tree.get_node_path(cursor)
+            node_path = app.session.tree.get_node_path(cursor)
         except (ValueError, AttributeError, TypeError):
             app.sink.notify("error", "Could not redraw — the node no longer exists.")
             app._rewind_stack = []
@@ -155,7 +155,7 @@ class RewindController:
             )
         else:
             app.sink.print_history(path, timestamps=timestamps)
-        app.repl._context_tokens = app.repl._controller.estimate_active_path()
+        app.session.controller.refresh_context_estimate()
         app._auto_scroll = True
         app._chat_scroll_top = 0
         app.app.invalidate()
@@ -179,7 +179,7 @@ class RewindController:
         app = self.app
         app.sink.blocks.clear()
         app.sink.clear_reasoning_state()
-        app.repl._expanded_reasoning.clear()
+        app.session._expanded_reasoning.clear()
         app.sink.drop_error_notice()
         app._block_ansi_cache.clear(0)
         app._block_ft_cache.clear(0)

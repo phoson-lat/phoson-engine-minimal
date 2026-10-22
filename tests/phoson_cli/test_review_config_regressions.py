@@ -175,7 +175,7 @@ async def test_theme_command_survives_real_engine_rebuild(
     _prepare_cli_theme(config)
     if frontend == "fullscreen":
         app = PhosonApp(config)
-        repl, handler = app.repl, app._commands
+        repl, handler = app.session, app._commands
     else:
         repl = PhosonRepl(config)
         handler = CommandHandler(repl)

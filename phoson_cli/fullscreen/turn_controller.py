@@ -124,12 +124,12 @@ async def run_command(app: Any, cmd: Command) -> None:
         # The available (or current-marked) model set may have just
         # changed — refresh in the background so autocomplete stays
         # accurate without blocking on another network round trip.
-        app.app.create_background_task(app.model_cache.refresh(app.repl.config))
+        app.app.create_background_task(app.model_cache.refresh(app.session.config))
     if cmd.name in {"/sessions", "/new", "/delete"}:
         # Session list may have changed (load/new/delete) — refresh the
         # /sessions autocomplete cache in the background as well.
         app.app.create_background_task(
-            app.session_cache.refresh(app.repl.storage, cwd=str(Path.cwd()))
+            app.session_cache.refresh(app.session.storage, cwd=str(Path.cwd()))
         )
     if not should_continue:
         app.app.exit()
@@ -148,7 +148,7 @@ async def run_turn(app: Any, text: str) -> None:
     turn_start = time.monotonic()
     renders_before = count_renders() if count_renders else 0
     try:
-        await app.repl._run_agent(text)
+        await app.session.run_turn(text)
     except asyncio.CancelledError:
         pass
     finally:

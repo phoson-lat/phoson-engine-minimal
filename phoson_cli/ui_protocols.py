@@ -10,11 +10,23 @@ Keeping this protocol narrow is the point: anything the controller needs
 to *show* goes through it, so a new front end is a sink, not a fork.
 """
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from collections.abc import Callable, Coroutine
 
 from phoson_agent import AgentEvent
 from phoson_llm.schemas import Message
+
+if TYPE_CHECKING:
+    from phoson_agent import AgentEngine
+    from phoson_agent.sessions import JsonlStorage, ConversationTree
+
+    from .theme import Theme, ThemeRegistry
+    from .config import PhosonConfig
+    from ._session import SessionMetrics
+    from .plugin_ui import SinkPluginUiService
+    from .controller import CompactPlan
+    from .attachments import AttachmentManager
+    from .command_catalog import CommandCatalog
 
 
 @runtime_checkable
@@ -120,8 +132,101 @@ class ConfirmationService(Protocol):
         ...
 
 
+class SessionPort(Protocol):
+    """The session surface slash commands are written against.
+
+    :class:`~phoson_cli.commands.CommandHandler` and
+    :class:`~phoson_cli.commands.PluginCommandContext` depend on this
+    protocol only — never on a concrete front end or on controller
+    internals. :class:`~phoson_cli.session_frontend.SessionFrontend`
+    implements it for both interactive UIs; tests may pass any object with
+    the members a command touches.
+    """
+
+    #: The active theme (a plain attribute on the front end).
+    theme: "Theme"
+
+    @property
+    def config(self) -> "PhosonConfig": ...
+
+    @property
+    def tree(self) -> "ConversationTree": ...
+
+    @property
+    def current_node_id(self) -> str | None: ...
+
+    @property
+    def current_model(self) -> str: ...
+
+    @property
+    def subagent_model(self) -> str: ...
+
+    @subagent_model.setter
+    def subagent_model(self, value: str) -> None: ...
+
+    @property
+    def storage(self) -> "JsonlStorage": ...
+
+    @property
+    def engine(self) -> "AgentEngine": ...
+
+    @property
+    def session_metrics(self) -> "SessionMetrics": ...
+
+    @property
+    def attachments(self) -> "AttachmentManager": ...
+
+    @property
+    def theme_registry(self) -> "ThemeRegistry": ...
+
+    @property
+    def command_catalog(self) -> "CommandCatalog": ...
+
+    @property
+    def plugin_ui(self) -> "SinkPluginUiService": ...
+
+    @property
+    def sink(self) -> AgentEventSink: ...
+
+    @property
+    def context_window(self) -> int: ...
+
+    @property
+    def context_tokens(self) -> int: ...
+
+    @property
+    def is_running(self) -> bool: ...
+
+    def new_session(self) -> None: ...
+
+    async def load_session(self, session_id: str) -> bool: ...
+
+    async def compact_context(
+        self, profile: str | None = None
+    ) -> tuple[int, int, bool]: ...
+
+    def plan_compaction(self, profile: str | None = None) -> "CompactPlan": ...
+
+    def set_compact_mode(self, mode: str) -> bool: ...
+
+    async def set_provider(self, provider: str) -> None: ...
+
+    async def set_model(
+        self, model: str, provider: str | None = None, *, reuse_engine: bool = False
+    ) -> None: ...
+
+    def refresh_permission_policy(self) -> None: ...
+
+    def label_current_node(self, text: str) -> None: ...
+
+    def note_user_title(self) -> None: ...
+
+    def undo_last_turn(self) -> tuple[bool, str]: ...
+
+
 __all__ = [
     "AgentEventSink",
     "ConfirmationService",
+    "SessionPort",
     "TransactionalSessionViewSink",
 ]

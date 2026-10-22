@@ -65,7 +65,7 @@ class PaletteController:
 
         app = self._app
         running = app._is_run_in_flight()
-        catalog = app.repl._controller.command_catalog
+        catalog = app.session.controller.command_catalog
         entries: list[PaletteEntry] = []
         for spec in catalog.specs:
             # Mid-turn the palette is a shortcut to the *available* actions,

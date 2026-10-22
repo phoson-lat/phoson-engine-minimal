@@ -53,7 +53,7 @@ class _Plugin(Plugin):
 def _repl(catalog):  # noqa: ANN001
     return SimpleNamespace(
         tree=SimpleNamespace(session_id="session-123"),
-        _controller=SimpleNamespace(command_catalog=catalog),
+        command_catalog=catalog,
     )
 
 

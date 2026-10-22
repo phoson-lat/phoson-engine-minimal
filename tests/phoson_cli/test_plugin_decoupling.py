@@ -122,7 +122,7 @@ class TestMcpFallback:
 
         monkeypatch.setitem(sys.modules, "phoson_plugin_mcp", None)
         monkeypatch.setattr(
-            "phoson_cli.session_utils._in_tree_plugin_path",
+            "phoson_cli.official_plugins._in_tree_plugin_path",
             lambda package: tmp_path / "gone" / "_plugin.py",
         )
         with pytest.warns(UserWarning, match="MCP disabled"):

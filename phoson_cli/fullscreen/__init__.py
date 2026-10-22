@@ -6,9 +6,10 @@ pickers/confirmations, in the spirit of a single-window chat TUI built
 directly on ``prompt_toolkit`` (no separate TUI framework).
 
 :class:`PhosonApp` is the entry point; it wraps a
-:class:`~phoson_cli.repl.PhosonRepl` (which owns the UI-independent
-:class:`~phoson_cli.controller.SessionController`) and owns everything
-presentation-specific: layout, key bindings, scrolling and rendering.
+:class:`~phoson_cli.session_frontend.SessionFrontend` (which owns the
+UI-independent :class:`~phoson_cli.controller.SessionController`) and owns
+everything presentation-specific: layout, key bindings, scrolling and
+rendering. It does not depend on the classic REPL.
 """
 
 from .app import PhosonApp

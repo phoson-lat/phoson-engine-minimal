@@ -9,7 +9,6 @@ front end — can use them without importing the prompt_toolkit REPL.
 import sys
 import types
 import logging
-import warnings
 from typing import TYPE_CHECKING, Any, cast
 from pathlib import Path
 from datetime import UTC, datetime
@@ -28,10 +27,18 @@ from phoson_agent.permissions import PermissionMiddleware
 from phoson_agent.plugins.offload import RetentionPolicy, OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
 
+from . import official_plugins
 from .config import PhosonConfig
 from .models import load_models_file, provider_settings
 from .skills import discover_skills, render_skill_index
 from .agents_md import load_agents_md
+from .official_plugins import (  # noqa: F401 - re-exported
+    _in_tree_plugin_path,
+    _user_specified_otel,
+    load_official_plugin,
+    load_official_plugins,
+    _in_tree_fallback_spec,
+)
 
 _LOGGER = logging.getLogger("phoson_cli.session_utils")
 
@@ -472,59 +479,67 @@ def engine_prompt_tools(engine: Any) -> list:
 
 
 def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Combine configured community plugins and optional built-in specs.
+    """Combine configured community plugins and the official in-tree plugins.
 
-    User-configured specs load first, followed by MCP, monitors and the
-    official OTel tracing plugin. The order is stable so tool/middleware
-    ordering remains predictable and can be documented. Direct
-    ``Plugin`` instances remain available only through ``AgentEngine``'s
-    API; TOML config is intentionally restricted to strings and
-    dictionaries.
+    User-configured specs load first, followed by the official plugins in
+    :data:`~phoson_cli.official_plugins.OFFICIAL_PLUGINS` order (MCP,
+    monitors, background jobs, peers, SSH, Computer Use, OTel, swarm,
+    questions). The order is stable so tool/middleware ordering remains
+    predictable and can be documented. Direct ``Plugin`` instances remain
+    available only through ``AgentEngine``'s API; TOML config is
+    intentionally restricted to strings and dictionaries.
     """
-    return [
-        *config.plugins,
-        *build_mcp_plugins(config),
-        *build_monitor_plugins(config),
-        *build_bgjobs_plugins(config),
-        *build_peers_plugins(config),
-        *build_ssh_plugins(config),
-        *build_computeruse_plugins(config),
-        *build_otel_plugins(config),
-        *build_swarm_plugins(config),
-        *build_questions_plugins(config),
-    ]
+    return [*config.plugins, *load_official_plugins(config)]
+
+
+# Per-plugin entry points, kept for direct callers and tests.
+def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the MCP plugin (see :mod:`phoson_cli.official_plugins`)."""
+    return load_official_plugin(official_plugins.MCP, config)
+
+
+def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the monitor plugin (I-126)."""
+    return load_official_plugin(official_plugins.MONITOR, config)
+
+
+def build_bgjobs_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the background-jobs plugin (#217)."""
+    return load_official_plugin(official_plugins.BGJOBS, config)
 
 
 def build_peers_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the named-peers plugin (``--name``) as a configured instance.
+    """Resolve the named-peers plugin (``--name``)."""
+    return load_official_plugin(official_plugins.PEERS, config)
 
-    Returns an empty list unless this window has a peer name. A name that is
-    invalid or already taken by a live window degrades to a warning (the CLI
-    still starts, just without peer messaging) instead of a crash.
-    """
-    name = (getattr(config, "peer_name", "") or "").strip()
-    if not name:
-        return []
-    peers_config = {
-        "name": name,
-        "team": getattr(config, "peer_team", "") or "default",
-        "data_dir": str(config.peers_data_dir),
-        "max_hops": config.peers_max_hops,
-    }
-    try:
-        from phoson_plugin_peers import PeersPlugin
 
-        instance = PeersPlugin()
-        instance.configure(peers_config)
-        instance.initialize()  # claim the name now: fail early and clearly
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_peers", peers_config, "peer messaging disabled"
-        )
-    except Exception as exc:
-        warnings.warn(f"Peer messaging disabled: {exc}", UserWarning, stacklevel=2)
-        return []
+def build_ssh_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the SSH plugin (#169)."""
+    return load_official_plugin(official_plugins.SSH, config)
+
+
+def build_computeruse_plugins(
+    config: PhosonConfig,
+) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the Computer Use plugin (#223)."""
+    return load_official_plugin(official_plugins.COMPUTERUSE, config)
+
+
+def build_otel_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the OTel tracing plugin (#140)."""
+    return load_official_plugin(official_plugins.OTEL, config)
+
+
+def build_swarm_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the Swarm plugin (#232)."""
+    return load_official_plugin(official_plugins.SWARM, config)
+
+
+def build_questions_plugins(
+    config: PhosonConfig,
+) -> list[str | dict[str, Any] | Plugin]:
+    """Resolve the Questions plugin."""
+    return load_official_plugin(official_plugins.QUESTIONS, config)
 
 
 def notify_turn_end(plugins: list[Plugin], outcome: Any) -> list[str]:
@@ -551,360 +566,6 @@ def notify_turn_end(plugins: list[Plugin], outcome: Any) -> list[str]:
                 exc_info=True,
             )
     return notices
-
-
-def build_mcp_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the MCP plugin specs for a configuration.
-
-    Returns an empty list when MCP is disabled. Tries the in-tree
-    ``phoson_plugin_mcp`` first; falls back to the path-based loader
-    used during local development if the package is not installed.
-    """
-    if not config.enable_mcp:
-        return []
-
-    mcp_config = {
-        "config_file": str(config.mcp_config_file),
-        "tool_name_prefix": "mcp",
-    }
-
-    try:
-        from phoson_plugin_mcp import MCPPlugin
-        from phoson_plugin_mcp._plugin import MCP_AVAILABLE
-
-        # The in-tree plugin imports without the SDK; ``initialize()`` is
-        # what raises. Don't hand the instance to the engine — that surfaces
-        # as ``Skipping plugin 'plugin'`` and a bogus "remove it from
-        # [defaults].plugins" hint. Skip here with an actionable warning.
-        if not MCP_AVAILABLE:
-            _LOGGER.warning(
-                "MCP is enabled but the `mcp` package is not installed. "
-                "Install with: uv sync --dev  (or: uv sync --extra mcp / "
-                "pip install 'phoson-engine-minimal[mcp]'). "
-                "Set enable_mcp = false in [defaults] to silence this."
-            )
-            return []
-
-        plugin = MCPPlugin()
-        plugin.configure(mcp_config)
-        return [plugin]
-    except ImportError:
-        return _in_tree_fallback_spec("phoson_plugin_mcp", mcp_config, "MCP disabled")
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise MCP plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-def build_monitor_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official monitor plugin specs (I-126).
-
-    Returns an empty list when monitors are disabled. Tries the in-tree
-    ``phoson_plugin_monitor`` first and returns a *pre-configured, fresh*
-    instance (the direct-``Plugin`` form, so the config is honored);
-    falls back to the path-based loader used during local development.
-
-    A fresh instance (never the module-level ``plugin`` singleton):
-    engine rebuilds close the old instance first and the singleton would
-    otherwise be double-configured and leak state between hosts.
-
-    When the package cannot be imported (e.g. installed in editable mode
-    without the sibling folder), an *absolute* path spec pointing at the
-    in-tree ``phoson_plugin_monitor`` is returned instead. If that file
-    does not exist either, a warning is emitted and an empty list is
-    returned so the engine never crashes on a missing optional plugin.
-    """
-    if not config.enable_monitors:
-        return []
-
-    monitor_config = {
-        "data_dir": str(config.monitors_data_dir),
-    }
-
-    try:
-        from phoson_plugin_monitor import MonitorPlugin
-
-        instance = MonitorPlugin()
-        instance.configure(monitor_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_monitor", monitor_config, "monitors disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise monitor plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-def build_bgjobs_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official background-jobs plugin specs (#217).
-
-    Returns an empty list when background jobs are disabled. Mirrors
-    :func:`build_monitor_plugins`: tries the in-tree ``phoson_plugin_bgjobs``
-    first and returns a *pre-configured, fresh* instance (the direct-``Plugin``
-    form, so the config is honored); falls back to the path-based loader used
-    during local development, and to an empty list (with a warning) when the
-    package is not importable and the in-tree file is missing.
-    """
-    if not config.enable_bgjobs:
-        return []
-
-    bgjobs_config = {
-        "data_dir": str(config.bgjobs_data_dir),
-    }
-
-    try:
-        from phoson_plugin_bgjobs import BgJobsPlugin
-
-        instance = BgJobsPlugin()
-        instance.configure(bgjobs_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_bgjobs", bgjobs_config, "background jobs disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise background-jobs plugin: {exc}",
-            UserWarning,
-            stacklevel=2,
-        )
-        return []
-
-
-def build_ssh_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official SSH plugin specs (#169).
-
-    Returns an empty list when SSH is disabled or the optional ``asyncssh``
-    transport is not installed. Mirrors :func:`build_bgjobs_plugins`: returns a
-    *pre-configured, fresh* instance (direct-``Plugin`` form, so the config is
-    honored) and falls back to the path-based loader during local development.
-    """
-    if not config.enable_ssh:
-        return []
-
-    ssh_config = {
-        "known_hosts": str(config.ssh_known_hosts),
-        "command_timeout": config.ssh_command_timeout,
-    }
-
-    try:
-        from phoson_plugin_ssh import SSH_AVAILABLE, SshPlugin
-
-        if not SSH_AVAILABLE:
-            _LOGGER.warning(
-                "SSH is enabled but the `asyncssh` package is not installed. "
-                "Install with: uv sync --extra ssh  (or: "
-                "pip install 'phoson-engine-minimal[ssh]'). "
-                "Set enable_ssh = false in [defaults] to silence this."
-            )
-            return []
-
-        instance = SshPlugin()
-        instance.configure(ssh_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec("phoson_plugin_ssh", ssh_config, "SSH disabled")
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise SSH plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-def build_computeruse_plugins(
-    config: PhosonConfig,
-) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official Computer Use plugin specs (#223).
-
-    Returns an empty list when Computer Use is disabled (the default: it
-    operates the real desktop). Mirrors :func:`build_ssh_plugins`: returns a
-    *pre-configured, fresh* instance and falls back to the path-based loader
-    during local development.
-    """
-    if not config.enable_computeruse:
-        return []
-
-    cu_config = {
-        "backend": config.computeruse_backend,
-        "require_confirmation": config.computeruse_require_confirmation,
-    }
-
-    try:
-        from phoson_plugin_computeruse import ComputerUsePlugin
-
-        instance = ComputerUsePlugin()
-        instance.configure(cu_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_computeruse", cu_config, "Computer Use disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise Computer Use plugin: {exc}",
-            UserWarning,
-            stacklevel=2,
-        )
-        return []
-
-
-def build_swarm_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official Swarm plugin specs (issue #232).
-
-    Returns an empty list when the swarm is disabled (the default). Mirrors
-    :func:`build_bgjobs_plugins`: returns a *pre-configured, fresh* instance
-    (direct-``Plugin`` form) and falls back to the path-based loader during
-    local development.
-    """
-    if not config.enable_swarm:
-        return []
-
-    swarm_config = {
-        "max_agents": config.swarm_max_agents,
-        "default_topology": config.swarm_default_topology,
-        "max_tokens_per_agent": config.swarm_max_tokens_per_agent,
-        "max_tokens_total": config.swarm_max_tokens_total,
-    }
-
-    try:
-        from phoson_plugin_swarm import SwarmPlugin
-
-        instance = SwarmPlugin()
-        instance.configure(swarm_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_swarm", swarm_config, "swarm disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise swarm plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-def build_questions_plugins(
-    config: PhosonConfig,
-) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official Questions plugin specs.
-
-    Returns an empty list when the questions tool is disabled (the default:
-    ``enable_questions`` is opt-in). Mirrors :func:`build_swarm_plugins`:
-    returns a *pre-configured, fresh* instance and falls back to the path-based
-    loader during local development.
-    """
-    if not config.enable_questions:
-        return []
-
-    questions_config = {"title": config.questions_title}
-
-    try:
-        from phoson_plugin_questions import QuestionsPlugin
-
-        instance = QuestionsPlugin()
-        instance.configure(questions_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_questions", questions_config, "questions disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise Questions plugin: {exc}",
-            UserWarning,
-            stacklevel=2,
-        )
-        return []
-
-
-def _in_tree_plugin_path(package: str) -> Path:
-    """Absolute path of an in-tree plugin's ``_plugin.py`` (fallback target).
-
-    Anchored on this file (not the CWD) so it resolves the same no matter
-    where the CLI is launched from.
-    """
-    root = Path(__file__).resolve().parent.parent
-    return root / package / "_plugin.py"
-
-
-def build_otel_plugins(config: PhosonConfig) -> list[str | dict[str, Any] | Plugin]:
-    """Resolve the official OTel tracing plugin spec (issue #140).
-
-    Returns an empty list when tracing is disabled (``enable_otel``) or
-    when the user has already listed ``phoson-plugin-otel`` in
-    ``[plugins]`` (their explicit spec wins — no double-tracing).
-
-    Tries the in-tree ``phoson_plugin_otel`` first and returns a
-    *pre-configured, fresh* instance (the direct-``Plugin`` form, so the
-    config flags are honored); falls back to the path-based loader used
-    during local development. Mirrors :func:`build_monitor_plugins`.
-    """
-    if not config.enable_otel:
-        return []
-    if _user_specified_otel(config.plugins):
-        return []
-
-    otel_config = {
-        "service_name": config.otel_service_name,
-        "file_path": str(config.otel_file_path),
-        "otlp_endpoint": config.otel_endpoint,
-    }
-
-    try:
-        from phoson_plugin_otel import PhosonOtelPlugin
-
-        instance = PhosonOtelPlugin()
-        instance.configure(otel_config)
-        return [instance]
-    except ImportError:
-        return _in_tree_fallback_spec(
-            "phoson_plugin_otel", otel_config, "otel tracing disabled"
-        )
-    except Exception as exc:
-        warnings.warn(
-            f"Failed to initialise otel plugin: {exc}", UserWarning, stacklevel=2
-        )
-        return []
-
-
-def _user_specified_otel(plugins: list[str | dict[str, Any]]) -> bool:
-    """True when the user explicitly enabled otel via a ``[plugins]`` spec."""
-    for spec in plugins:
-        name = (
-            spec
-            if isinstance(spec, str)
-            else (spec.get("name", "") if isinstance(spec, dict) else "")
-        )
-        if name in ("phoson-plugin-otel", "phoson_plugin_otel"):
-            return True
-    return False
-
-
-def _in_tree_fallback_spec(
-    package: str, config: dict[str, Any], disabled_msg: str
-) -> list[str | dict[str, Any] | Plugin]:
-    """Build a path-based plugin spec for an in-tree package (ImportError).
-
-    Used when the in-tree package cannot be imported (e.g. an editable
-    install whose sibling folder is not on ``sys.path``). Returns an
-    *absolute* (CWD-independent) ``path:`` spec; if the in-tree file does
-    not exist either, a warning is emitted and an empty list is returned
-    so the engine never crashes on a missing optional plugin.
-    """
-    candidate = _in_tree_plugin_path(package)
-    if not candidate.exists():
-        warnings.warn(
-            f"{package} not importable and in-tree file not found "
-            f"at {candidate}; {disabled_msg}.",
-            UserWarning,
-            stacklevel=3,
-        )
-        return []
-    return [{"name": f"path:{candidate}", "config": config}]
 
 
 def find_wake_plugins(plugins: list[Plugin]) -> list[Plugin]:

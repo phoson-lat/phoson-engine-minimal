@@ -50,7 +50,6 @@ from phoson_agent.sessions import (
 )
 from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
-from phoson_agent.reasoning_effort import make_live_scheduler
 from phoson_agent.plugins.summarizer import safe_cut_index
 from phoson_agent.plugins.context_window import ContextWindowResolver
 
@@ -60,7 +59,6 @@ from .theme import (
     resolve_runtime_theme,
     default_theme_registry,
 )
-from .tools import build_tools, build_tools_dict
 from .config import COMPACT_MODES, PhosonConfig, build_chat, save_config
 from .models import (
     load_models_file,
@@ -68,11 +66,11 @@ from .models import (
     normalize_provider,
     resolve_context_window,
 )
+from .runtime import build_engine_runtime
 from ._session import SessionState, SessionMetrics
-from .commands import build_command_catalog
 from .plugin_ui import SinkPluginUiService
-from .formatting import ToolRenderRegistry, build_tool_render_registry
 from .attachments import AttachmentManager
+from .tool_render import ToolRenderRegistry, build_tool_render_registry
 from .ui_protocols import (
     AgentEventSink,
     ConfirmationService,
@@ -91,7 +89,6 @@ from .session_utils import (
     drain_all_wakes,
     notify_turn_end,
     build_summarizer,
-    build_middlewares,
     find_wake_plugins,
     has_pending_wakes,
     build_plugin_specs,
@@ -100,8 +97,10 @@ from .session_utils import (
     engine_visible_tools,
 )
 from .tools.compact import compact_context
+from .session_titles import SessionTitler
+from .command_catalog import build_command_catalog
 from .guard_classifier import build_permission_classifier
-from .permissions_store import apply_tool_hints, build_permission_middleware
+from .permissions_store import build_permission_middleware
 
 # The monitor plugin ships in the same wheel; the fallback keeps
 # source-only dev checkouts (package not installed) importable.
@@ -148,68 +147,6 @@ def _render_wake_batches(batches: list) -> str:
 MAX_RESUME_REPLAY_MESSAGES = 200
 
 _LOGGER = logging.getLogger("phoson_cli.controller")
-
-#: Prompt for the LLM session-title call (#55 follow-up). Tool-free, tiny and
-#: temperature-cold: the model only has to name the conversation, nothing else.
-_TITLE_PROMPT = (
-    "Name this conversation with a short, specific title of 3 to 6 words. "
-    "Use the same language as the message. Reply with the title only — no "
-    "quotes, no trailing punctuation, no explanation.\n\n"
-    "First user message:\n{message}"
-)
-
-#: Cap on how much of the first message is sent to the title model.
-_TITLE_INPUT_CHARS = 1200
-
-#: Cap on the generated title length (chars); longer replies are truncated.
-_TITLE_MAX_CHARS = 80
-
-#: Output cap for the title call. Generous on purpose: a reasoning model can
-#: spend the budget "thinking" before emitting the title, and a tiny cap (e.g.
-#: 32) can leave the completion with no content at all.
-_TITLE_MAX_TOKENS = 256
-
-#: Fallback timeout when the config is missing the field (matches the default).
-_TITLE_TIMEOUT_FALLBACK = 30.0
-
-
-def _sanitize_title(raw: str) -> str:
-    """Reduce a model reply to a clean one-line session title.
-
-    Strips surrounding markdown/quote noise, keeps the first non-empty line,
-    collapses whitespace and truncates. Returns ``""`` when nothing usable is
-    left, so the caller can keep the heuristic title instead.
-    """
-    text = (raw or "").strip() if isinstance(raw, str) else ""
-    if not text:
-        return ""
-    # Models like to wrap the title in quotes or markdown bullets/headings.
-    text = text.splitlines()[0].strip()
-    text = text.strip("“”\"'`*#-—• \t")
-    text = " ".join(text.split())
-    if len(text) > _TITLE_MAX_CHARS:
-        text = text[: _TITLE_MAX_CHARS - 1].rstrip() + "…"
-    return text
-
-
-def _title_candidate_models(config: PhosonConfig, current_model: str) -> list[str]:
-    """Ordered, de-duplicated models to try for the title call.
-
-    ``title_model`` → ``subagent_model`` → the active model. The subagent
-    default can belong to a *different* provider than the active one (e.g. a
-    Gemini id while the provider is DeepSeek), so the active model is the
-    guaranteed-good last resort — the title never silently falls back to the
-    heuristic just because a cheap model is stale.
-    """
-    models: list[str] = []
-    for model in (
-        getattr(config, "title_model", ""),
-        getattr(config, "subagent_model", ""),
-        current_model,
-    ):
-        if model and model not in models:
-            models.append(model)
-    return models
 
 
 def _drop_env_context(messages: list[Message]) -> list[Message]:
@@ -329,14 +266,8 @@ class SessionController:
         # points once an event loop exists (None until then / when the
         # monitor plugin is disabled).
         self._monitor_wake_task: asyncio.Task | None = None
-        # LLM session title (#55 follow-up). One background task per session,
-        # best-effort: the heuristic title is applied synchronously so the
-        # picker is never empty, then this upgrades it. ``_title_is_auto``
-        # marks a title *we* set (heuristic or generated) so a user ``/title``
-        # always wins; ``_title_llm_attempted`` makes the call one-shot.
-        self._title_task: asyncio.Task | None = None
-        self._title_llm_attempted = False
-        self._title_is_auto = False
+        # Session title: heuristic seed + one-shot LLM upgrade (#55).
+        self.titles = SessionTitler(self)
         # Poll interval for the autonomous wake loop; tests shorten it.
         self._wake_poll_seconds = 1.0
         # Per-session plugin command catalog. It is rebuilt with the engine so
@@ -345,7 +276,7 @@ class SessionController:
         self.command_catalog = build_command_catalog(())
         self.tool_render_registry = ToolRenderRegistry({})
         self.theme_registry: ThemeRegistry = (
-            getattr(config, "_startup_theme_registry", None) or default_theme_registry()
+            config._startup_theme_registry or default_theme_registry()
         )
         self._command_catalog_version = 0
         # Sub-agent model: explicit override or fallback to main model.
@@ -472,13 +403,13 @@ class SessionController:
             if card is not None:
                 return await card(
                     command,
-                    on_always=lambda cmd: self._remember_bash_pattern(cmd),
+                    on_always=lambda cmd: self.remember_bash_pattern(cmd),
                 )
             return await self.confirmation.confirm_bash(command)
         summary = self._summarize_args_for_confirm(tool_name, args)
         return await self.confirmation.confirm_bash(summary)
 
-    async def _remember_bash_pattern(self, command: str) -> None:
+    async def remember_bash_pattern(self, command: str) -> None:
         """Persist "always allow this exact command" (T-6 card, [a]).
 
         The pattern is the *quoted* command: it is matched as a glob, so
@@ -630,15 +561,8 @@ class SessionController:
                             getattr(plugin, "name", "?"),
                             exc_info=True,
                         )
-        self.tools = build_tools()
-        self.tools_dict = build_tools_dict()
-
         self.summarizer.provider = self.config.provider
         self.summarizer.model = self.config.model
-        # The internal summary round trip must not carry the run's tool
-        # schemas (F-11 / #176): point the summarizer at the live chat
-        # client so its summary call goes out tool-free.
-        self.summarizer.chat = self.chat
         self.summarizer.vllm_base_url = self._vllm_base_url()
         # Provider-derived internals (tiktoken encoding, resolver endpoints)
         # are built once; refresh them here (see #242).
@@ -646,57 +570,31 @@ class SessionController:
         self._rebind_cw_resolver()
         self._apply_context_config()
 
-        plugins = self._build_plugin_specs()
-
-        # Middleware chain via the shared helper (single source of truth
-        # for order/gating — offload first, then summarizer, then the
-        # permission gate, with offload gated on ``offload_tool_outputs``).
-        middlewares: list[AgentMiddleware] = build_middlewares(
-            config=self.config,
+        # Shared with the one-shot path: tools, middleware chain, effort
+        # scheduler, permission tool hints, summarizer tool schemas and the
+        # host-independent sub-agent context (see ``runtime.py``).
+        #
+        # Agent-controlled compaction (#147): ``compact_context`` is exposed
+        # to the *main* engine only (``extra_tools`` stays out of
+        # ``tools_dict``), so sub-agents never compact the parent's history.
+        # It injects ``do_compact`` (bound below) which does the work here.
+        runtime = build_engine_runtime(
+            self.config,
+            chat=self.chat,
+            plugins=self._build_plugin_specs(),
             offload=self.offload,
             summarizer=self.summarizer,
             permission=self.permission_middleware,
+            main_model=self.current_model,
+            subagent_model=self.subagent_model,
+            extra_tools=[compact_context],
+            engine_factory=AgentEngine,
         )
-        # Retained so the sub-agent tools can hand the *same* chain to each
-        # sub-engine via ``context.extra["middlewares"]`` (#174/F-01).
-        self._middlewares = middlewares
-
-        # Agent-controlled compaction (#147): expose the ``compact_context``
-        # tool to the *main* engine only. It is added to a fresh tools list
-        # (not to ``self.tools`` / ``tools_dict``) so sub-agents — which pick
-        # their tools from ``available_tools`` = ``tools_dict`` — do not
-        # inherit it; a sub-agent compacting the parent's history would be
-        # wrong. The tool carries no visible args; it injects ``do_compact``
-        # (bound below) which does the work in the controller.
-        engine_tools = [*self.tools, compact_context]
-        # Reasoning sandwich (#145): install a per-iteration effort scheduler
-        # only when the feature is opted in.  The scheduler is *live* — it
-        # re-reads ``self.config`` on every iteration so a mid-session
-        # ``/reasoning-effort`` (which mutates ``config.reasoning_effort``)
-        # wins over the per-phase profile on the very next step, and a
-        # ``/reasoning-effort off`` (``None``) falls back to the profile.
-        # When the feature is off, ``effort_scheduler`` stays ``None`` and the
-        # engine reuses ``config.reasoning_effort`` unchanged.
-        effort_scheduler = None
-        if self.config.reasoning_sandwich:
-            effort_scheduler = make_live_scheduler(
-                get_override=lambda: self.config.reasoning_effort,
-                get_profile=lambda: self.config.reasoning_effort_profile,
-            )
-        self.engine = AgentEngine(
-            chat=self.chat,
-            tools=engine_tools,
-            middlewares=middlewares,
-            plugins=plugins,
-            max_iterations=self.config.max_iterations,
-            effort_scheduler=effort_scheduler,
-            tool_budget_tokens=self.config.tool_budget_tokens or None,
-        )
-        # #144 phase 2: fold MCP tool annotations (read-only/destructive/
-        # open-world) into the permission policy now that plugins have
-        # loaded. Replaces the hint map each rebuild so a changed tool set
-        # cannot leave stale hints behind.
-        apply_tool_hints(self.permission_middleware.policy, self.engine.tools)
+        self.engine = runtime.engine
+        self.tools = runtime.tools
+        self.tools_dict = runtime.tools_dict
+        # Retained so sub-agents inherit the gate (#174/F-01).
+        self._middlewares = runtime.middlewares
         self._command_catalog_version += 1
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
         try:
@@ -726,42 +624,16 @@ class SessionController:
         if set_tool_render_registry is not None:
             set_tool_render_registry(self.tool_render_registry)
 
-        # Inject runtime context for sub-agents.
-        self.engine.context.extra["safe_mode"] = self.config.safe_mode
         self.plugin_ui = SinkPluginUiService(
             self.sink,
             resolve_runtime_theme(self.config, self.theme_registry),
             confirmation=self.confirmation,
         )
         self.engine.context.extra["plugin_ui"] = self.plugin_ui
-
-        # Mirror the engine's tool schemas (built-in + plugin/MCP tools)
-        # into the summarizer so the auto-compact gate counts the schema
-        # weight of every request (IMPROVEMENTS.md I-91).
-        self.summarizer.tool_definitions = [
-            ToolDefinition(
-                name=tool.name,
-                description=tool.description,
-                parameters=tool.parameters,
-            )
-            for tool in engine_visible_tools(self.engine)
-        ]
-        self.engine.context.extra["available_tools"] = self.tools_dict
         # #147: the ``compact_context`` tool's injected callable. It runs the
         # agent-controlled compaction in this controller (splicing the
         # engine's in-flight history and queueing the tree-rebase event).
         self.engine.context.extra["do_compact"] = self._compact_inflight
-        self.engine.context.extra["default_model"] = self.subagent_model
-        # Fallback for sub-agents when the subagent model is unavailable.
-        self.engine.context.extra["main_model"] = self.current_model
-        self.engine.context.extra["max_iterations"] = self.config.max_iterations
-        self.engine.context.extra["subagent_max_parallel"] = (
-            self.config.subagent_max_parallel
-        )
-        self.engine.context.extra["subagent_timeout_seconds"] = (
-            self.config.subagent_timeout_seconds
-        )
-        self.engine.context.extra["chat"] = self.chat
         # Live sub-agent metrics (E2): the tools create a fresh tracker
         # per call and push it to the front end through this callback
         # (bound to ``sink.on_subagent_progress``).
@@ -771,9 +643,6 @@ class SessionController:
         # Interactive confirmations (safe_mode bash). None → the tool
         # fails closed (one-shot / non-interactive front ends).
         self.engine.context.extra["bash_confirmation"] = self.confirmation
-        # The middleware chain, handed to sub-agents so the permission gate
-        # applies to their tool calls too (#174/F-01).
-        self.engine.context.extra["middlewares"] = self._middlewares
 
         # Monitor plugin (I-126): inject a *provider* (callable), not a
         # snapshot — new_session()/load_session() swap the tree without
@@ -828,19 +697,9 @@ class SessionController:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._monitor_wake_task = None
-        # Give the one-shot LLM title task a brief chance to finish (and
-        # persist) before the chat client closes; its own call is time-bounded
-        # already. Cancel it if it lingers so no task outlives the session.
-        if self._title_task is not None and not self._title_task.done():
-            try:
-                await asyncio.wait_for(self._title_task, timeout=2.0)
-            except Exception:  # noqa: BLE001 — shutdown must not raise
-                self._title_task.cancel()
-                try:
-                    await self._title_task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
-        self._title_task = None
+        # Let the one-shot LLM title task finish (and persist) before the chat
+        # client closes, so no task outlives the session.
+        await self.titles.aclose()
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
         if plugins:
             await close_plugins(plugins)
@@ -1140,6 +999,10 @@ class SessionController:
             tools=self.summarizer.tool_definitions,
         )
 
+    def refresh_context_estimate(self) -> None:
+        """Re-estimate the context size after the cursor moved (rewind/jump)."""
+        self._context_tokens = self.estimate_active_path()
+
     def _persist_run_reasoning(self) -> None:
         """Attach captured reasoning to the last assistant node on the path.
 
@@ -1169,7 +1032,7 @@ class SessionController:
             self.tree.last_run_id = run_id
 
     async def _save_session(self) -> None:
-        self._ensure_session_title()
+        self.titles.ensure_title()
         # #129: persist the run status with the metrics so ``bg list`` and
         # resume can tell a clean finish from a crash. The tree fields are
         # the source of truth (set by _set_run_status / load_session);
@@ -1211,198 +1074,6 @@ class SessionController:
         release = getattr(self.sink, "release_persistence", None)
         if callable(release):
             release()
-
-    _WAKE_TITLE_PREFIXES = (
-        "[MONITOR EVENTS]",
-        "[BACKGROUND JOB EVENTS]",
-        "[PEER MESSAGES]",
-    )
-
-    #: Banner que la compactación inyecta como mensaje `user` (ver
-    #: ``_compact_history`` / ``summarizer``). No es texto del usuario: se
-    #: **omite** (a diferencia de los wake prefixes, que cortan la búsqueda)
-    #: porque en un historial compactado los turnos reales vienen detrás, y sin
-    #: esto la sesión acababa titulada como "[Conversation summary …]".
-    _TITLE_MARKER_PREFIXES = ("[Conversation summary",)
-
-    def note_user_title(self) -> None:
-        """Mark the session title as user-set (``/title``).
-
-        A no-op when it is already user-set; it exists so a background LLM
-        title call that is still in flight cannot overwrite a title the user
-        chose (#55 follow-up).
-        """
-        self._title_is_auto = False
-
-    def _first_user_text(self) -> str | None:
-        """First genuine user message text, or ``None``.
-
-        Skips command-only inputs (``/...``) and injected autonomous wake
-        turns, which make poor titles — and returns ``None`` at the first
-        such message so a command-only or wake-only session stays untitled
-        rather than getting named after a system banner.
-
-        Compaction markers (see ``_TITLE_MARKER_PREFIXES``) are *skipped*
-        instead of aborting: a rebuilt history starts with the summary banner,
-        and the real turns it kept come right after it.
-        """
-        for node in self.tree.nodes.values():
-            msg = node.message
-            if msg.role != "user":
-                continue
-            content = msg.content
-            text = (
-                content
-                if isinstance(content, str)
-                else " ".join(
-                    b.text for b in content if isinstance(b, TextBlock) and b.text
-                )
-            ).strip()
-            if not text:
-                continue
-            stripped = text.lstrip()
-            if text.startswith("/") or stripped.startswith(self._WAKE_TITLE_PREFIXES):
-                return None
-            if stripped.startswith(self._TITLE_MARKER_PREFIXES):
-                continue
-            return text
-        return None
-
-    def _ensure_session_title(self) -> None:
-        """Seed a session title from the first user message (#55).
-
-        Cheap, synchronous heuristic — first line of the first user message,
-        truncated to 60 chars — so the picker is never empty while the
-        optional LLM title (see :meth:`_schedule_llm_title`) is generated in
-        the background. Only fires when the session has no title yet; the
-        user's explicit ``/title`` always wins.
-
-        A stored title that is itself a compaction banner (sessions saved
-        before the marker filter existed) is repaired: it is replaced by the
-        first real user turn, or cleared when the history holds none.
-        """
-        current = (self.tree.title or "").strip()
-        if current and not current.lstrip().startswith(self._TITLE_MARKER_PREFIXES):
-            return
-        text = self._first_user_text()
-        if not text:
-            if current:
-                # Nada de donde titular (historial reducido al banner): mejor
-                # sin título — la UI cae a su propio fallback — que con basura.
-                self.tree.title = None
-            return
-        first_line = text.splitlines()[0].strip()
-        title = first_line[:57] + "…" if len(first_line) > 60 else first_line
-        if title:
-            self.tree.title = title
-            self._title_is_auto = True
-
-    def _schedule_llm_title(self) -> None:
-        """Kick off the one-shot background LLM title call (best-effort).
-
-        Only for titles this controller auto-generated (``_title_is_auto``),
-        so a session resumed with a stored title — or one the user named with
-        ``/title`` — is never renamed. No-op when disabled, already attempted,
-        or there is no running loop to own the task.
-        """
-        if not getattr(self.config, "llm_titles", False):
-            return
-        if self._title_llm_attempted or not self._title_is_auto:
-            return
-        if self._title_task is not None and not self._title_task.done():
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:  # pragma: no cover — _save_session always has a loop
-            return
-        self._title_llm_attempted = True
-        self._title_task = loop.create_task(
-            self._generate_llm_title(), name="session:title"
-        )
-
-    async def _generate_llm_title(self) -> None:
-        """Generate a short session title with one tool-free model call.
-
-        Tries each candidate model in order (see
-        :func:`_title_candidate_models`) until one returns a usable title, so
-        a cheap model that does not belong to the active provider degrades to
-        the active model instead of leaving the heuristic title in place.
-        Never raises: every error/timeout/empty reply is swallowed.
-        """
-        text = self._first_user_text()
-        if not text:
-            return
-        # Bind the title to the session it was generated for: a /new or
-        # /resume can swap ``self._session.tree`` while the call is in flight.
-        session_id = self.tree.session_id
-        tree = self.tree
-        prompt = _TITLE_PROMPT.format(message=text[:_TITLE_INPUT_CHARS])
-
-        title = ""
-        last_error = ""
-        for model in _title_candidate_models(self.config, self.current_model):
-            title, last_error = await self._call_title_model(model, prompt)
-            if title:
-                break
-        if not title:
-            tried = ", ".join(_title_candidate_models(self.config, self.current_model))
-            detail = f" — last error: {last_error}" if last_error else ""
-            _LOGGER.warning(
-                "LLM session title: no model produced a title (tried %s)%s",
-                tried,
-                detail,
-            )
-            return
-        # The user may have run /title, or switched session, while the call
-        # was in flight — in both cases the title must not be applied.
-        if not self._title_is_auto or self.tree is not tree:
-            return
-        tree.title = title
-        try:
-            await self.storage.save_meta(session_id, {"title": title})
-        except Exception:  # noqa: BLE001 — persistence is best-effort too
-            _LOGGER.warning("Could not persist generated session title", exc_info=True)
-        # Repaint ancillary chrome (the full-screen header reads ``tree.title``
-        # every frame) without adding a visible notice to the transcript. The
-        # hook is optional: front ends with no chrome simply do nothing.
-        refresh = getattr(self.sink, "on_session_title", None)
-        if callable(refresh):
-            refresh()
-
-    async def _call_title_model(self, model: str, prompt: str) -> tuple[str, str]:
-        """One title attempt against *model*.
-
-        Returns ``(title, error)``: a non-empty title on success, otherwise
-        ``""`` and a short human-readable error (surfaced in the final warning
-        so a failing title call is diagnosable instead of silent).
-        """
-        request = ModelConfig(
-            model=model,
-            temperature=0.2,
-            max_tokens=_TITLE_MAX_TOKENS,
-            system=None,
-            # Naming needs no chain-of-thought; disabling it keeps the call
-            # fast and stops a reasoning model from burning the small output
-            # budget on thinking and returning nothing (OpenRouter honors
-            # ``think=False`` as a per-request ``reasoning`` opt-out).
-            think=False,
-        )
-        try:
-            done = await asyncio.wait_for(
-                self.chat.complete(
-                    [Message(role="user", content=prompt)],
-                    request,
-                ),
-                timeout=float(
-                    getattr(self.config, "title_timeout_s", _TITLE_TIMEOUT_FALLBACK)
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001 — a title failure must never surface
-            _LOGGER.warning(
-                "LLM session title call failed for model %s", model, exc_info=True
-            )
-            return "", f"{type(exc).__name__}: {exc}"[:200]
-        return _sanitize_title(getattr(done, "content", "") or ""), ""
 
     async def run_turn(self, user_input: str) -> RunOutcome:
         """Execute one agent turn (run, persist, notify the sink).
@@ -1587,7 +1258,7 @@ class SessionController:
         # heuristic title with a model-generated one in the background. The
         # tree is already saved, so the task's save_meta is safe; the turn
         # end is never blocked by the call.
-        self._schedule_llm_title()
+        self.titles.schedule_llm_title()
         # #167: cue the terminal when a run finishes (TTY-gated; "off" is a
         # no-op). Covers both interactive front ends and monitor-wake turns
         # since they all flow through run_turn.
@@ -1797,12 +1468,8 @@ class SessionController:
         self._session.tree.cwd = str(Path.cwd())
         self.attachments.clear()
         self._context_tokens = 0
-        # A fresh session starts untitled: drop the one-shot title state. Any
-        # in-flight title task for the previous session self-guards on the
-        # tree identity and will not apply.
-        self._title_is_auto = False
-        self._title_llm_attempted = False
-        self._title_task = None
+        # A fresh session starts untitled: drop the one-shot title state.
+        self.titles.reset()
         # Back to "not created yet": the header hides the session until the
         # next message starts a run.
         self._session_started = False
@@ -2267,9 +1934,7 @@ class SessionController:
             # A loaded session carries its own stored title (or none): never
             # auto-generate one for it, and drop any pending state from the
             # session we just left. A resumed session counts as created.
-            self._title_is_auto = False
-            self._title_llm_attempted = False
-            self._title_task = None
+            self.titles.reset()
             self._session_started = True
             self.sink.set_session(candidate.tree.session_id)
             if len(path) > MAX_RESUME_REPLAY_MESSAGES:
@@ -2497,7 +2162,6 @@ class SessionController:
           at least one ``TextBlock`` — tool-result-only (and any other
           block-only) nodes are excluded.
         """
-        from phoson_llm.schemas import TextBlock
 
         targets: list[tuple[str, str]] = []
         # Reverse walk → newest first (issue #109).
@@ -2602,6 +2266,5 @@ class SessionController:
 
 def _text_block(text: str) -> "ContentBlock":
     """Create a TextBlock inline."""
-    from phoson_llm.schemas import TextBlock
 
     return TextBlock(text=text)
