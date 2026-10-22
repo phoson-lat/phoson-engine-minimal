@@ -22,7 +22,7 @@ from phoson_agent.models import (
     AgentReasoningEvent,
     AgentToolStartEvent,
 )
-from phoson_cli.fullscreen.sink import FullScreenSink
+from phoson_cli.fullscreen.sink import FullScreenSink, _ToolCard, _ToolGroup
 from phoson_cli.fullscreen.render import render_chat
 
 UTC = datetime.UTC
@@ -55,8 +55,9 @@ def test_reset_session_view_clears_transcript_and_transient_state() -> None:
     sink._last_reasoning = "stale"
     sink._reasoning_blocks.append((block, "stale", False))
     sink._expanded_reasoning_nodes.add("stale-node")
-    sink._pending_tool_calls["call"] = ({}, block)
-    sink._tool_calls.append((object(), {}, block))  # type: ignore[arg-type]
+    sink._pending_tool_calls["call"] = ({}, block)  # type: ignore[assignment]
+    sink._tool_groups.append(_ToolGroup(cards=[], closed=True))
+    sink._open_tool_group = _ToolGroup(cards=[])
 
     sink.reset_session_view()
 
@@ -67,7 +68,8 @@ def test_reset_session_view_clears_transcript_and_transient_state() -> None:
     assert sink._reasoning_blocks == []
     assert sink._expanded_reasoning_nodes == set()
     assert sink._pending_tool_calls == {}
-    assert sink._tool_calls == []
+    assert sink._tool_groups == []
+    assert sink._open_tool_group is None
     assert resets == [1]
 
 
@@ -461,13 +463,13 @@ def test_clear_transcript_bookkeeping_keeps_live_turn_and_pending_calls() -> Non
         )
     )
     sink.publish_plugin_block("todo", object())
-    finished = object()
-    sink._tool_calls.append((object(), {}, finished, DARK))  # type: ignore[arg-type]
+    finished = _ToolCard(args={}, theme=DARK, block=object())
+    sink._tool_groups.append(_ToolGroup(cards=[finished], closed=True))
 
     sink.clear_transcript_bookkeeping()
 
     assert sink._plugin_blocks == {}
-    assert sink._tool_calls == []
+    assert sink._tool_groups == []
     # Live turn state is untouched.
     assert sink.current_turn is not None
     assert "read-1" in sink._pending_tool_calls
@@ -923,13 +925,13 @@ def test_tool_details_toggle_collapse_then_expand() -> None:
     _finish_patch_call(sink)
 
     ticks.clear()
-    assert sink.set_tool_details() is False  # first toggle collapses
+    assert sink.set_tool_details() == "headers"  # first step collapses
     collapsed = _transcript_text(sink)
     assert "-b" not in collapsed  # body hidden
     assert "+c" not in collapsed
     assert len(ticks) == 1  # the re-render invalidates
 
-    assert sink.set_tool_details() is True  # and back
+    assert sink.set_tool_details("full") == "full"  # and back
     expanded = _transcript_text(sink)
     assert "-b" in expanded
     assert "+c" in expanded
@@ -949,7 +951,7 @@ def test_t12_bash_card_renders_command_and_output() -> None:
     assert "ls -la" in text
     assert "total 42" in text
     # It is recorded so /details can re-collapse it like any tool call.
-    assert sink._tool_calls, "bash card not remembered for /details"
+    assert sink._tool_groups, "bash card not remembered for /details"
 
 
 def test_t12_bash_card_error_renders_refusal_not_output() -> None:

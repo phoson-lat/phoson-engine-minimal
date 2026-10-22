@@ -387,7 +387,9 @@ class _RunSink:
         return r
 
     def set_session(self, session_id) -> None: ...
-    def print_history(self, path, tail=None, timestamps=None) -> None: ...
+    def print_history(
+        self, path, tail=None, timestamps=None, tool_durations=None
+    ) -> None: ...
 
     def notify(self, kind, message) -> None:
         self.notifications.append((kind, message))

@@ -15,6 +15,7 @@ import difflib
 import logging
 import datetime
 from typing import TYPE_CHECKING, Any, Final
+from dataclasses import field, dataclass
 
 from rich import box
 from rich.rule import Rule
@@ -811,7 +812,9 @@ def render_tool_done_line(
         footer_bits.append((f"✗ {first_line}", theme.err))
     else:
         footer_bits.append(("✓", theme.ok))
-    footer_bits.append((f"{event.duration_ms}ms", theme.muted))
+    # 0 = unknown: replayed calls recorded before durations were persisted.
+    if event.duration_ms:
+        footer_bits.append((f"{event.duration_ms}ms", theme.muted))
     footer = Text("  │ ", style=theme.accent_soft)
     for i, (bit, style) in enumerate(footer_bits):
         if i:
@@ -820,6 +823,78 @@ def render_tool_done_line(
     parts.append(footer)
 
     return Group(*parts)
+
+
+#: A finished tool call as the transcript remembers it: the done event plus
+#: the args captured from its start event (done events don't carry them).
+ToolCallRecord = tuple[AgentToolDoneEvent, dict[str, Any]]
+
+#: Distinct tool names listed on a summary line before eliding the rest.
+_SUMMARY_MAX_NAMES: Final[int] = 4
+
+
+def render_tool_group_summary(
+    calls: "list[ToolCallRecord]",
+    theme: Theme,
+    registry: ToolRenderRegistry | None = None,  # noqa: ARG001 - API symmetry
+) -> Text:
+    """One line standing for a whole run of consecutive tool calls.
+
+    ``│ ⚙ 7 tools used · read_file ×4, grep ×2, bash · 1 error · 3.2s``.
+    Errors are always counted so a failure never hides inside the fold;
+    the total duration is omitted when no call has a known one.
+    """
+    from .tools.subagent_panel import _format_duration  # local: import cycle
+
+    counts: dict[str, int] = {}
+    for event, _args in calls:
+        counts[event.tool_name] = counts.get(event.tool_name, 0) + 1
+    names = [
+        f"{name} ×{count}" if count > 1 else name
+        for name, count in list(counts.items())[:_SUMMARY_MAX_NAMES]
+    ]
+    if len(counts) > _SUMMARY_MAX_NAMES:
+        names.append("…")
+    errors = sum(1 for event, _args in calls if event.error)
+    total_ms = sum(event.duration_ms for event, _args in calls)
+
+    line = Text("  │ ", style=theme.accent_soft)
+    line.append("⚙ ", style=theme.accent_soft)
+    noun = "tool" if len(calls) == 1 else "tools"
+    line.append(f"{len(calls)} {noun} used", style=f"bold {theme.accent}")
+    line.append("  ·  ", style=theme.muted)
+    line.append(", ".join(names), style=theme.muted)
+    if errors:
+        line.append("  ·  ", style=theme.muted)
+        line.append(f"✗ {errors} {'error' if errors == 1 else 'errors'}", theme.err)
+    if total_ms:
+        line.append("  ·  ", style=theme.muted)
+        line.append(_format_duration(total_ms), style=theme.muted)
+    line.append("  ·  /details", style=theme.muted_deep)
+    return line
+
+
+def render_tool_group(
+    calls: "list[ToolCallRecord]",
+    theme: Theme,
+    mode: str,
+    registry: ToolRenderRegistry | None = None,
+) -> list[RenderableType]:
+    """Render a finished run of tool calls at a ``/details`` level.
+
+    ``summary`` folds the run into one line; ``headers`` keeps one
+    collapsed card per call; ``full`` restores every card's body.
+    """
+    if not calls:
+        return []
+    if mode == "summary":
+        return [render_tool_group_summary(calls, theme, registry)]
+    return [
+        render_tool_done_line(
+            event, theme, args=args, registry=registry, collapsed=mode != "full"
+        )
+        for event, args in calls
+    ]
 
 
 def _outcome_body(
@@ -945,22 +1020,42 @@ def _bash_output_body(result: str, theme: Theme) -> list[RenderableType]:
     return rendered
 
 
-def render_history(
+@dataclass
+class ReplayToolGroup:
+    """A run of consecutive tool calls in a replayed history (one "tramo").
+
+    :func:`history_blocks` yields these unrendered so a front end that can
+    re-render the transcript (the full-screen ``/details``) keeps the calls;
+    :func:`render_history` renders them in place at a fixed level.
+    """
+
+    calls: "list[ToolCallRecord]" = field(default_factory=list)
+
+
+def history_blocks(
     messages: "list[Message]",
     theme: Theme,
     tail: int | None = None,
     timestamps: "list[datetime.datetime | None] | None" = None,
-) -> Group:
-    """Re-render a list of Message objects as a conversation replay.
+    tool_durations: "dict[str, int] | None" = None,
+) -> "list[RenderableType | ReplayToolGroup]":
+    """Replay a list of Message objects as transcript blocks.
 
     ``timestamps`` (#212) is an optional per-message parallel list of local
     datetimes (``None`` entries = no stamp). When given, each user message's
     gutter and each assistant message is stamped with its time, matching the
     live turn. It must align with *messages* **before** any tail trim.
+
+    Tool calls are paired with their results by ``tool_call_id`` and
+    grouped into :class:`ReplayToolGroup` runs: assistant text or a user
+    turn closes the current run, so each group is exactly what the live
+    transcript showed between two pieces of text. ``tool_durations`` maps
+    ``tool_call_id`` to the persisted duration (absent = unknown).
     """
     from phoson_llm.schemas import TextBlock, ToolUseBlock, ToolResultBlock
 
-    items: list[RenderableType] = []
+    items: list[RenderableType | ReplayToolGroup] = []
+    durations = tool_durations or {}
 
     if tail is not None and len(messages) > tail:
         above = len(messages) - tail
@@ -971,13 +1066,48 @@ def render_history(
 
     items.append(Text(" session history ", style=theme.muted))
 
+    results: dict[str, ToolResultBlock] = {
+        block.tool_call_id: block
+        for msg in messages
+        if not isinstance(getattr(msg, "content", ""), str)
+        for block in msg.content
+        if isinstance(block, ToolResultBlock)
+    }
+    group: ReplayToolGroup | None = None
+
     def _stamp(idx: int) -> Text | None:
         if timestamps is None or idx >= len(timestamps):
             return None
         ts = timestamps[idx]
         if ts is None:
             return None
-        return Text(f" ·  {format_timestamp(ts)}", style=theme.muted_deep)
+        return Text(f"   ·  {format_timestamp(ts)}", style=theme.muted_deep)
+
+    def _markdown(text: str) -> RenderableType:
+        # Lazy import: only assistant turns need the Markdown renderer, so
+        # keep rich.markdown (and markdown_it) out of the module import
+        # graph for front ends that never render a conversation history.
+        from rich.markdown import Markdown
+
+        # T-2: bare Markdown, no " assistant " badge or Rule separator
+        # (matches render_streaming_panel, which no longer labels).
+        # hyperlinks=True: see render_streaming_panel above (IMPROVEMENTS.md
+        # G4, #58) — the full-screen render path carries OSC 8 through.
+        return Markdown(
+            text, code_theme=theme.code_theme, style=theme.text, hyperlinks=True
+        )
+
+    def _done_event(use: ToolUseBlock) -> AgentToolDoneEvent:
+        result = results.get(use.tool_call_id)
+        text = result.result if result is not None else ""
+        failed = result is not None and result.error
+        return AgentToolDoneEvent(
+            tool_call_id=use.tool_call_id,
+            tool_name=use.tool_name,
+            result="" if failed else text,
+            error=(text or "error") if failed else None,
+            duration_ms=durations.get(use.tool_call_id, 0),
+        )
 
     for idx, msg in enumerate(messages):
         role = getattr(msg, "role", "?")
@@ -991,6 +1121,7 @@ def render_history(
                 isinstance(b, ToolResultBlock) for b in content
             ):
                 continue
+            group = None  # a user turn closes the tool run
             # Same speaker header + body as the live turn (render_user_turn),
             # so history replay reuses the live primitives — including the
             # monitor-wake card when the replay hits an injected wake turn.
@@ -1009,50 +1140,57 @@ def render_history(
                     items.append(render_user_turn("\n".join(text_parts), theme, at=at))
 
         elif role == "assistant":
-            # Lazy import: only assistant turns need the Markdown renderer, so
-            # keep rich.markdown (and markdown_it) out of the module import
-            # graph for front ends that never render a conversation history.
-            from rich.markdown import Markdown
-
-            stamp = _stamp(idx)
-            if stamp is not None:
-                items.append(Text("  " + stamp.plain, style=theme.muted_deep))
-            # T-2: bare Markdown, no " assistant " badge or Rule separator
-            # (matches render_streaming_panel, which no longer labels).
-            if isinstance(content, str) and content.strip():
-                items.append(
-                    Markdown(
-                        content.strip(),
-                        code_theme=theme.code_theme,
-                        style=theme.text,
-                        # hyperlinks=True: see render_streaming_panel above
-                        # (IMPROVEMENTS.md G4, #58) — the full-screen render
-                        # path carries the OSC 8 sequence through intact.
-                        hyperlinks=True,
-                    )
-                )
-            elif not isinstance(content, str):
-                text_parts = [b.text for b in content if isinstance(b, TextBlock)]
+            if isinstance(content, str):
+                text = content.strip()
+                tool_uses: list[ToolUseBlock] = []
+            else:
+                text = "\n".join(
+                    b.text for b in content if isinstance(b, TextBlock)
+                ).strip()
                 tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
-                combined = "\n".join(text_parts).strip()
-                if combined:
-                    items.append(
-                        Markdown(
-                            combined,
-                            code_theme=theme.code_theme,
-                            style=theme.text,
-                            hyperlinks=True,
-                        )
-                    )
-                for b in tool_uses:
-                    t = Text()
-                    t.append("  │ ", style=theme.accent_soft)
-                    t.append("⚙ ", style=theme.accent_soft)
-                    t.append(b.tool_name, style=f"bold {theme.accent}")
-                    items.append(t)
+            # A tool-only message continuing the current run is not stamped:
+            # the stamp line would split the run the live view showed as one.
+            if text or group is None:
+                stamp = _stamp(idx)
+                if stamp is not None:
+                    items.append(stamp)
+            if text:
+                group = None
+                items.append(_markdown(text))
+            for use in tool_uses:
+                if group is None:
+                    group = ReplayToolGroup()
+                    items.append(group)
+                group.calls.append((_done_event(use), dict(use.args)))
 
     items.append(Rule(style=theme.muted_deep))
-    return Group(*items)
+    return items
+
+
+def render_history(
+    messages: "list[Message]",
+    theme: Theme,
+    tail: int | None = None,
+    timestamps: "list[datetime.datetime | None] | None" = None,
+    tool_durations: "dict[str, int] | None" = None,
+    tool_detail: str = "full",
+    registry: ToolRenderRegistry | None = None,
+) -> Group:
+    """Re-render a conversation replay as one renderable.
+
+    Same content as :func:`history_blocks`, with every tool run rendered at
+    the ``tool_detail`` level (``full`` / ``headers`` / ``summary``) — the
+    form for append-only front ends that cannot re-render it later.
+    """
+    rendered: list[RenderableType] = []
+    for item in history_blocks(
+        messages, theme, tail=tail, timestamps=timestamps, tool_durations=tool_durations
+    ):
+        if isinstance(item, ReplayToolGroup):
+            rendered.extend(render_tool_group(item.calls, theme, tool_detail, registry))
+        else:
+            rendered.append(item)
+    return Group(*rendered)
 
 
 def subagent_tasks_from_args(tool_name: str, args: dict) -> list[str]:

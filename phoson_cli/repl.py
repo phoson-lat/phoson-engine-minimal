@@ -114,6 +114,7 @@ class PhosonRepl(SessionFrontend):
         self.renderer = Renderer(
             theme=theme,
             show_reasoning=getattr(config, "show_reasoning", True),
+            tool_detail=getattr(config, "tool_detail", "full"),
         )
         self.picker_capable = stream_is_tty(sys.stdin) and cursor_output_capable(
             self.renderer.console.file

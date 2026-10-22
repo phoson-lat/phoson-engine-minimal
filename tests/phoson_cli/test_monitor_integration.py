@@ -83,7 +83,9 @@ class FakeSink:
     def capture_partial_reasoning(self) -> None:
         self.partial_captures += 1
 
-    def print_history(self, path, tail=None, timestamps=None) -> None:
+    def print_history(
+        self, path, tail=None, timestamps=None, tool_durations=None
+    ) -> None:
         self.history_calls.append((path, tail))
 
 

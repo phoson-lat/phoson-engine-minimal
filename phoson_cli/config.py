@@ -23,6 +23,8 @@ from collections.abc import Mapping, Callable
 from phoson_llm.retry import with_retry
 from phoson_llm.chats.base import BaseLLMChat
 
+from .tool_history import DEFAULT_TOOL_DETAIL, is_valid_tool_detail
+
 if TYPE_CHECKING:
     from .theme import Theme, ThemeRegistry
 
@@ -91,6 +93,11 @@ class PhosonConfig:
     subagent_model: str | None = "google/gemini-3.1-flash-lite-preview"
     reasoning_effort: str | None = None
     show_reasoning: bool = True
+    # Tool-call detail level in the transcript: "full" (cards with diffs /
+    # output), "headers" (one line per call) or "summary" (each run of
+    # consecutive calls folds into "N tools used"). Cycled with /details;
+    # persisted as ``tool_detail`` (env PHOSON_TOOL_DETAIL).
+    tool_detail: str = DEFAULT_TOOL_DETAIL
     # Reasoning sandwich (#145): per-phase reasoning-effort scheduling.
     # ``reasoning_sandwich`` gates the feature (default ``False`` = off, so
     # behaviour is unchanged unless opted in).  When on, the agent derives the
@@ -966,6 +973,9 @@ def load_config() -> PhosonConfig:
         show_reasoning=_resolve_bool(
             "PHOSON_SHOW_REASONING", "show_reasoning", fd, d.show_reasoning
         ),
+        tool_detail=_resolve_str(
+            "PHOSON_TOOL_DETAIL", "tool_detail", fd, d.tool_detail
+        ).lower(),
         reasoning_sandwich=_resolve_bool(
             "PHOSON_REASONING_SANDWICH", "reasoning_sandwich", fd, d.reasoning_sandwich
         ),
@@ -1319,6 +1329,15 @@ def load_config() -> PhosonConfig:
         )
         cfg.compact_mode = "balanced"
 
+    if not is_valid_tool_detail(cfg.tool_detail):
+        warnings.warn(
+            f"Ignoring invalid tool_detail {cfg.tool_detail!r}; "
+            f"using default {DEFAULT_TOOL_DETAIL!r}.",
+            UserWarning,
+            stacklevel=2,
+        )
+        cfg.tool_detail = DEFAULT_TOOL_DETAIL
+
     # #167: a typo'd notify_on_completion falls back to the default (off)
     # rather than an unknown mode.
     from phoson_cli.notify import is_valid_mode
@@ -1600,6 +1619,7 @@ def save_config(
         ("subagent_model", getattr(config, "subagent_model", None)),
         ("reasoning_effort", getattr(config, "reasoning_effort", None)),
         ("show_reasoning", getattr(config, "show_reasoning", True)),
+        ("tool_detail", getattr(config, "tool_detail", None)),
         ("preserve_thinking", getattr(config, "preserve_thinking", None)),
         ("reasoning_sandwich", getattr(config, "reasoning_sandwich", None)),
         ("reasoning_effort_profile", getattr(config, "reasoning_effort_profile", None)),

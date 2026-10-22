@@ -30,6 +30,7 @@ from phoson_agent import (
     AgentMiddleware,
     AgentStartEvent,
     AgentStepDoneEvent,
+    AgentToolDoneEvent,
     AgentToolStartEvent,
 )
 from phoson_llm.schemas import (
@@ -71,6 +72,7 @@ from ._session import SessionState, SessionMetrics
 from .plugin_ui import SinkPluginUiService
 from .attachments import AttachmentManager
 from .tool_render import ToolRenderRegistry, build_tool_render_registry
+from .tool_history import stamp_tool_durations, tool_durations_from_nodes
 from .ui_protocols import (
     AgentEventSink,
     ConfirmationService,
@@ -258,6 +260,10 @@ class SessionController:
         # right away, so a hard kill (crash, ``taskkill``, power loss) keeps
         # every step that finished instead of losing the whole turn.
         self._synced_history_count = 0
+        # Durations of this turn's tool calls (tool_call_id → ms). Results
+        # carry none in the message schema, so mirroring stamps them on the
+        # node holding the ToolResultBlock for session replays.
+        self._tool_durations: dict[str, int] = {}
         self._turn_owner_task: asyncio.Task | None = None
         self._operation_starter: (
             Callable[[Coroutine[Any, Any, Any], str], asyncio.Task | None] | None
@@ -821,6 +827,8 @@ class SessionController:
                 # header reads these, so cost and tokens track the run.
                 if isinstance(event, AgentStepDoneEvent):
                     self._update_live_metrics(event.step, config)
+                if isinstance(event, AgentToolDoneEvent) and event.tool_call_id:
+                    self._tool_durations[event.tool_call_id] = event.duration_ms
                 self.sink.on_event(event)
                 if isinstance(event, (AgentDoneEvent, AgentErrorEvent)):
                     terminal = event
@@ -920,6 +928,7 @@ class SessionController:
         if not new_messages:
             return False
         created = self.tree.append_many(self.current_node_id, new_messages)
+        stamp_tool_durations(created, self._tool_durations)
         self.current_node_id = created[-1].id
         return True
 
@@ -972,6 +981,7 @@ class SessionController:
         if not history:
             return False
         created = self.tree.append_many(None, _drop_env_context(history))
+        stamp_tool_durations(created, self._tool_durations)
         self.current_node_id = created[-1].id
         self._context_tokens = self.estimate_active_path()
         self.sink.notify(
@@ -1153,6 +1163,7 @@ class SessionController:
         # The engine survives /new and session loads. Its partial history
         # belongs to an earlier run until this turn observes AgentStartEvent.
         self._turn_history_initialized = False
+        self._tool_durations = {}
         # The session is created the moment the first message starts a run:
         # from here on it is real (shown in the header, persisted on save).
         self._session_started = True
@@ -1937,14 +1948,16 @@ class SessionController:
             self.titles.reset()
             self._session_started = True
             self.sink.set_session(candidate.tree.session_id)
-            if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-                self.sink.print_history(
-                    path,
-                    tail=MAX_RESUME_REPLAY_MESSAGES,
-                    timestamps=timestamps,
-                )
-            else:
-                self.sink.print_history(path, timestamps=timestamps)
+            self.sink.print_history(
+                path,
+                tail=(
+                    MAX_RESUME_REPLAY_MESSAGES
+                    if len(path) > MAX_RESUME_REPLAY_MESSAGES
+                    else None
+                ),
+                timestamps=timestamps,
+                tool_durations=tool_durations_from_nodes(node_path),
+            )
 
             # #129: the user should know the history was repaired — the
             # interrupted tool call(s) were answered with a synthetic error

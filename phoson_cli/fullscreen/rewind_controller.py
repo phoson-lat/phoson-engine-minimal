@@ -14,6 +14,7 @@ the test suite are untouched.
 """
 
 from ..controller import MAX_RESUME_REPLAY_MESSAGES
+from ..tool_history import tool_durations_from_nodes
 
 
 def one_line(text: str) -> str:
@@ -87,16 +88,8 @@ class RewindController:
         except (ValueError, AttributeError, TypeError):
             app.sink.notify("error", "Could not redraw after rewind — cursor lost.")
             return
-        path = [n.message for n in node_path]
-        timestamps = [n.created_at for n in node_path]
-
         self.reset_transcript()
-        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            app.sink.print_history(
-                path, tail=MAX_RESUME_REPLAY_MESSAGES, timestamps=timestamps
-            )
-        else:
-            app.sink.print_history(path, timestamps=timestamps)
+        self._replay(node_path)
         app.session.controller.refresh_context_estimate()
         app._auto_scroll = True
         app._chat_scroll_top = 0
@@ -113,6 +106,20 @@ class RewindController:
             f"Rewound to just before “{one_line(turn_text)[:40]}” "
             f"(cursor → {info[:8]}) — Ctrl+Z to restore, "
             "edit and Enter to re-send.",
+        )
+
+    def _replay(self, node_path: list) -> None:
+        """Redraw *node_path* into the freshly reset transcript."""
+        path = [n.message for n in node_path]
+        self.app.sink.print_history(
+            path,
+            tail=(
+                MAX_RESUME_REPLAY_MESSAGES
+                if len(path) > MAX_RESUME_REPLAY_MESSAGES
+                else None
+            ),
+            timestamps=[n.created_at for n in node_path],
+            tool_durations=tool_durations_from_nodes(node_path),
         )
 
     def undo_jump(self) -> None:
@@ -146,15 +153,8 @@ class RewindController:
             app.sink.notify("error", "Could not redraw — the node no longer exists.")
             app._rewind_stack = []
             return
-        path = [n.message for n in node_path]
-        timestamps = [n.created_at for n in node_path]
         self.reset_transcript()
-        if len(path) > MAX_RESUME_REPLAY_MESSAGES:
-            app.sink.print_history(
-                path, tail=MAX_RESUME_REPLAY_MESSAGES, timestamps=timestamps
-            )
-        else:
-            app.sink.print_history(path, timestamps=timestamps)
+        self._replay(node_path)
         app.session.controller.refresh_context_estimate()
         app._auto_scroll = True
         app._chat_scroll_top = 0

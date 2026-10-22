@@ -1366,23 +1366,32 @@ class CommandHandler:
         r.print_info(f"{tool} → {level} · saved{note}")
         return True
 
-    async def _cmd_details(self, cmd: Command) -> bool:  # noqa: ARG002
-        """Toggle tool-card bodies (T-7): collapsed vs expanded.
+    async def _cmd_details(self, cmd: Command) -> bool:
+        """Set the tool-call detail level (T-7): full · headers · summary.
 
-        Re-renders every finished tool card in the transcript in place.
-        The full-screen sink owns the remembered calls and the toggle
-        state; the classic front end has no such store and gets a
-        plain notice.
+        A bare ``/details`` cycles the levels; ``/details <level>`` jumps
+        to one. The full-screen sink re-renders every tool run in place;
+        the classic front end (append-only) applies it to new output and
+        replays. The level is saved as the next session's default.
         """
-        sink = getattr(self.session, "sink", None)
-        toggler = getattr(sink, "set_tool_details", None)
-        if toggler is None:
-            self._r.print_warn(
-                "Tool-card details are a full-screen TUI feature — "
-                "run phoson-cli without --classic."
+        from .tool_history import TOOL_DETAIL_MODES
+
+        r = self._r
+        arg = cmd.args.strip().lower()
+        if arg and arg not in TOOL_DETAIL_MODES:
+            r.print_error(
+                f"Unknown detail level: {arg!r}  ·  use {', '.join(TOOL_DETAIL_MODES)}"
             )
             return True
-        toggler()
+        sink = getattr(self.session, "sink", None)
+        setter = getattr(sink, "set_tool_details", None)
+        if setter is None:
+            r.print_warn("This front end cannot change tool-card details.")
+            return True
+        mode = setter(arg or None)
+        self.session.config.tool_detail = mode
+        save_config(self.session.config, only_fields={"tool_detail"})
+        r.print_info(f"Tool details → {mode}  ·  saved")
         return True
 
     async def _cmd_notify(self, cmd: Command) -> bool:
