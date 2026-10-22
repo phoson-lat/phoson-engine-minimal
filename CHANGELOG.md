@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.55.0 (2026-10-22)
+
+### Feat
+
+- **cli**: resumed sessions (and rewind redraws) replay every tool call as the same card the live
+  view shows — args, result, error and duration — instead of a bare `│ ⚙ tool_name` line. Calls are
+  paired with their results by `tool_call_id`
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+- **cli**: `/details` now has three levels — `full` (cards with diffs / bash output), `headers` (one
+  card per call, no body) and `summary`, which folds each run of consecutive tool calls between two
+  pieces of text into one `N tools used · read_file ×2, bash · ✗ 1 error · 2.1s` line. A bare
+  `/details` cycles the levels, `/details <level>` jumps to one. The full-screen TUI re-renders live
+  and replayed runs in place (the run in flight keeps its cards; user `!` commands never fold); the
+  classic REPL applies the level to new output and replays. Saved as `tool_detail` (default
+  `summary`, env `PHOSON_TOOL_DETAIL`)
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+- **cli**: tool durations are persisted on the tool-result node (`metadata["tool_durations"]`) as
+  the history is mirrored into the tree, so replays show them; sessions saved before this release
+  omit the duration instead of showing `0ms`
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+
+### Fix
+
+- **cli**: the classic REPL's live panel streams plain text at Live's own refresh rate and renders
+  Markdown once for the final frame — it used to re-parse the whole reply and force a repaint on
+  every token (O(n²) on long replies)
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+- **cli**: the sessions table marks only the exact current session as active (a 4-character prefix
+  match flagged sibling sessions, and every row when no session was set)
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+- **cli**: the full-screen error notice is tracked by block identity, so folding tool runs before
+  it can no longer make a successful retry remove the wrong block
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+
+### Changed
+
+- **cli**: `AgentEventSink.print_history` takes an optional `tool_durations` mapping; out-of-tree
+  sinks must accept the new keyword
+  ([#285](https://github.com/phoson-lat/phoson-engine-minimal/pull/285))
+
 ## v0.54.0 (2026-10-22)
 
 ### Fix
