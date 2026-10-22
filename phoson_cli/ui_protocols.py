@@ -64,11 +64,13 @@ class AgentEventSink(Protocol):
         path: list[Message],
         tail: int | None = None,
         timestamps: "list | None" = None,
+        tool_durations: "dict[str, int] | None" = None,
     ) -> None:
         """Replay the tail of a loaded session.
 
         ``timestamps`` (#212) optionally carries each message's local time so
-        the replay shows a date/time per message.
+        the replay shows a date/time per message. ``tool_durations`` maps
+        ``tool_call_id`` to each tool call's persisted duration in ms.
         """
 
     def notify(self, kind: str, message: str) -> None:

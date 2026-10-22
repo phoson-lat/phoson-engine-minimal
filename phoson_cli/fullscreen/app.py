@@ -359,6 +359,7 @@ class PhosonApp:
             on_invalidate=self.app.invalidate,
             theme=self.theme,
             show_reasoning=getattr(config, "show_reasoning", True),
+            tool_detail=getattr(config, "tool_detail", "full"),
             on_session_snapshot=self._snapshot_session_view,
             on_session_reset=self._reset_session_view,
             on_session_restore=self._restore_session_view,

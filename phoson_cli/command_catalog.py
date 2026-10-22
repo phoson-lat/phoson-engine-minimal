@@ -236,7 +236,7 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(
         ("/details", "/tool-cards"),
-        "Toggle tool-card bodies (diffs, write summaries, bash output)",
+        "Tool-call detail: /details [full|headers|summary] (bare cycles)",
         "_cmd_details",
     ),
     CommandSpec(

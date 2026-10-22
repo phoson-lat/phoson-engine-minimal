@@ -361,7 +361,7 @@ class FakeSink:
     def set_session(self, session_id):
         pass
 
-    def print_history(self, path, tail=None, timestamps=None):
+    def print_history(self, path, tail=None, timestamps=None, tool_durations=None):
         pass
 
     def notify(self, kind, message):

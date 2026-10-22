@@ -34,11 +34,12 @@ from phoson_llm.schemas import Message
 from ..theme import Theme
 from ..animations import SPINNER_FRAMES
 from ..formatting import (
+    ReplayToolGroup,
     ToolRenderRegistry,
     tool_icon,
     tool_verb,
     render_notice,
-    render_history,
+    history_blocks,
     render_done_line,
     render_user_turn,
     render_error_notice,
@@ -47,9 +48,11 @@ from ..formatting import (
     render_tool_start_line,
     subagent_tasks_from_args,
     render_reasoning_expanded,
+    render_tool_group_summary,
     render_reasoning_collapsed,
     render_subagent_start_line,
 )
+from ..tool_history import next_tool_detail, is_valid_tool_detail
 from ..tools.subagent_panel import (
     parse_subagent_metrics,
     render_subagent_summary,
@@ -95,6 +98,43 @@ class CurrentTurn:
     thinking_since: float | None = None
 
 
+@dataclass(eq=False)
+class _ToolCard:
+    """One regular tool call inside a :class:`_ToolGroup`.
+
+    ``event`` stays ``None`` while the call runs; ``block`` is the object
+    currently standing for it (the start line, then its done card). While
+    the group is folded into a summary the card block is off-transcript.
+    """
+
+    args: dict[str, Any]
+    theme: Theme
+    block: object
+    event: AgentToolDoneEvent | None = None
+    #: False for user ``!`` commands: their output is what was asked for,
+    #: so ``summary`` shows them in full instead of folding them.
+    foldable: bool = True
+
+
+@dataclass(eq=False)
+class _ToolGroup:
+    """A run of consecutive tool calls between two pieces of text (a tramo).
+
+    ``/details`` re-renders every group in place: ``full``/``headers`` show
+    one card per call, ``summary`` folds a *closed* group into one line.
+    The open (in-flight) group always shows cards so live progress stays
+    visible. ``foldable=False`` groups (user ``!`` commands) never fold.
+    """
+
+    cards: list[_ToolCard]
+    closed: bool = False
+    foldable: bool = True
+    summary: object | None = None
+
+    def finished(self) -> list[_ToolCard]:
+        return [card for card in self.cards if card.event is not None]
+
+
 @dataclass
 class _SessionViewSnapshot:
     blocks: list[object]
@@ -103,9 +143,10 @@ class _SessionViewSnapshot:
     last_reasoning: str
     reasoning_blocks: list[tuple[object, str, bool, Theme]]
     expanded_reasoning_nodes: set[str]
-    pending_tool_calls: dict[str, tuple[dict, object, Theme]]
-    tool_calls: list[tuple[AgentToolDoneEvent, dict[str, Any], object, Theme]]
-    error_notice_idx: int | None
+    pending_tool_calls: dict[str, _ToolCard]
+    tool_groups: list[_ToolGroup]
+    open_tool_group: _ToolGroup | None
+    error_notice: object | None
     stream_event: bool
     dirty: bool
     app_state: object | None
@@ -130,6 +171,7 @@ class FullScreenSink:
         on_session_restore=None,
         on_persistence_required=None,
         on_persistence_released=None,
+        tool_detail: str = "full",
     ) -> None:
         self._on_invalidate = on_invalidate
         self._on_session_snapshot = on_session_snapshot
@@ -157,11 +199,11 @@ class FullScreenSink:
         # is not unique: resumed and live nodes may legitimately contain the
         # same content and must remain independently expandable.
         self._expanded_reasoning_nodes: set[str] = set()
-        # Args + transcript block of in-flight regular tool calls, keyed by
-        # tool_call_id (C1). Done events don't carry args, and the done card
-        # REPLACES the start line so each call renders as exactly one card
-        # (appending would duplicate the header).
-        self._pending_tool_calls: dict[str, tuple[dict, object, Theme]] = {}
+        # In-flight regular tool calls keyed by tool_call_id (C1). Done
+        # events don't carry args, and the done card REPLACES the start
+        # line so each call renders as exactly one card (appending would
+        # duplicate the header).
+        self._pending_tool_calls: dict[str, _ToolCard] = {}
         # Streaming repaint throttle state (see touch_streaming).
         self._last_stream_repaint: float = 0.0
         self._stream_repaint_pending: asyncio.TimerHandle | None = None
@@ -170,19 +212,19 @@ class FullScreenSink:
         # touch_streaming() instead of the unconditional _touch() at the end
         # of on_event, which would otherwise defeat the throttle.
         self._stream_event: bool = False
-        # Index in ``blocks`` of the pending single-line error notice
-        # (I-83). Repeated failures overwrite it in place instead of
-        # stacking panels; the next successful run start drops it.
-        self._error_notice_idx: int | None = None
-        # T-7: every finished regular tool call, remembered so
-        # ``/details`` can re-expand a collapsed done card (event + its
-        # start args + the exact block object currently in ``blocks``).
-        self._tool_calls: list[
-            tuple[AgentToolDoneEvent, dict[str, Any], object, Theme]
-        ] = []
-        # /details toggle state: cards render expanded until the user
-        # collapses them (T-7).
-        self.tool_details_shown: bool = True
+        # The pending single-line error notice block (I-83). Repeated
+        # failures overwrite it in place instead of stacking panels; the
+        # next successful run drops it. Tracked by identity, not index:
+        # /details folding inserts and removes blocks before it.
+        self._error_notice: object | None = None
+        # T-7: every run of tool calls (live and replayed), so /details can
+        # re-render them in place; the in-flight run is ``_open_tool_group``.
+        self._tool_groups: list[_ToolGroup] = []
+        self._open_tool_group: _ToolGroup | None = None
+        # /details level: full · headers · summary (see tool_history).
+        self.tool_detail: str = (
+            tool_detail if is_valid_tool_detail(tool_detail) else "full"
+        )
 
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Apply the active controller's isolated plugin visual specs."""
@@ -198,40 +240,104 @@ class FullScreenSink:
         """
         self.theme = theme
 
-    def set_tool_details(self) -> bool:
-        """T-7: toggle collapsed tool cards, returning the new state.
+    @property
+    def _error_notice_idx(self) -> int | None:
+        """Current index of the pending error notice, if still shown."""
+        notice = self._error_notice
+        if notice is None:
+            return None
+        for index, block in enumerate(self.blocks):
+            if block is notice:
+                return index
+        return None
 
-        Every finished tool call remembered so far (see the done branch
-        of :meth:`on_event`) is re-rendered in place — collapsed keeps
-        just the header + ✓/✗ · duration line, expanded restores the
-        diff/write-summary/bash-output body. Blocks are replaced by
-        identity, so only the done card objects change.
+    def set_tool_details(self, mode: str | None = None) -> str:
+        """T-7: switch the tool-call detail level, returning the new one.
+
+        ``None`` cycles ``full → headers → summary``. Every tool run in the
+        transcript — live or replayed — is re-rendered in place: blocks are
+        replaced by identity, so nothing else in the transcript moves.
         """
-        self.tool_details_shown = not self.tool_details_shown
-        show = self.tool_details_shown
-        for i, (event, start_args, block, originating_theme) in enumerate(
-            self._tool_calls
-        ):
-            if event.tool_name in {"agent", "agents"}:
-                continue  # subagent lines keep their own layout
-            rebuilt = render_tool_done_line(
-                event,
-                originating_theme,
-                args=start_args,
-                registry=self._tool_render_registry,
-                collapsed=not show,
-            )
-            try:
-                index = self.blocks.index(block)
-            except ValueError:
-                continue  # transcript cleared while the call was remembered
-            self.blocks[index] = rebuilt
-            # Keep the record pointing at the *current* block object: the
-            # next toggle replaces by identity, so a stale reference would
-            # make the card un-expandable.
-            self._tool_calls[i] = (event, start_args, rebuilt, originating_theme)
+        if mode is None:
+            mode = next_tool_detail(self.tool_detail)
+        if not is_valid_tool_detail(mode):
+            raise ValueError(f"unknown tool detail level {mode!r}")
+        self.tool_detail = mode
+        for group in self._tool_groups:
+            self._render_tool_group(group)
         self._touch()
-        return show
+        return mode
+
+    # ── Tool runs (/details) ──────────────────────────────────────────────
+
+    def _card_block(self, card: _ToolCard) -> object:
+        assert card.event is not None
+        return render_tool_done_line(
+            card.event,
+            card.theme,
+            args=card.args,
+            registry=self._tool_render_registry,
+            collapsed=self.tool_detail == "headers"
+            or (self.tool_detail == "summary" and card.foldable),
+        )
+
+    def _index_of(self, block: object) -> int | None:
+        for index, candidate in enumerate(self.blocks):
+            if candidate is block:
+                return index
+        return None
+
+    def _render_tool_group(self, group: _ToolGroup) -> None:
+        """Re-render *group* at the current level, in place."""
+        finished = group.finished()
+        if not finished:
+            return
+        fold = group.closed and group.foldable and self.tool_detail == "summary"
+        if fold:
+            summary = render_tool_group_summary(
+                [(card.event, card.args) for card in finished],  # type: ignore[misc]
+                finished[0].theme,
+                self._tool_render_registry,
+            )
+            anchor = group.summary if group.summary is not None else finished[0].block
+            position = self._index_of(anchor)
+            if position is None:
+                return  # transcript cleared while the run was remembered
+            if group.summary is None:
+                card_blocks = {id(card.block) for card in finished}
+                before = sum(1 for b in self.blocks[:position] if id(b) in card_blocks)
+                self.blocks = [b for b in self.blocks if id(b) not in card_blocks]
+                position -= before
+                self.blocks.insert(position, summary)
+            else:
+                self.blocks[position] = summary
+            group.summary = summary
+            return
+        if group.summary is not None:
+            # Unfold: the cards take the summary's place, in call order.
+            position = self._index_of(group.summary)
+            group.summary = None
+            if position is None:
+                return
+            for card in finished:
+                card.block = self._card_block(card)
+            self.blocks[position : position + 1] = [card.block for card in finished]
+            return
+        for card in finished:
+            position = self._index_of(card.block)
+            card.block = self._card_block(card)
+            if position is not None:
+                self.blocks[position] = card.block
+
+    def _close_tool_group(self) -> None:
+        """End the current tool run (text, a user turn or the turn's end)."""
+        group = self._open_tool_group
+        if group is None:
+            return
+        self._open_tool_group = None
+        group.closed = True
+        if self.tool_detail == "summary":
+            self._render_tool_group(group)
 
     def publish_plugin_block(self, block_id: str, block: object) -> None:
         """Append a plugin block, namespaced by the caller's stable id."""
@@ -272,9 +378,9 @@ class FullScreenSink:
 
         Reuses :func:`render_tool_done_line` with a synthetic
         ``AgentToolDoneEvent`` so the card looks exactly like a real bash
-        tool call. The call is also recorded in ``_tool_calls`` so
-        ``/details`` can re-collapse/expand it like any other finished
-        tool.
+        tool call. It is recorded as its own tool run so ``/details`` can
+        re-collapse/expand it like any other finished tool; unlike agent
+        runs it never folds into a summary line.
 
         Args:
             command: The shell command that was run (shown in the header).
@@ -283,26 +389,23 @@ class FullScreenSink:
             error: Set to a non-None string to render an ✗ card (e.g.
                 "denied by the user"). When set, ``result`` is ignored.
         """
-        from phoson_agent.models import AgentToolDoneEvent
-
         event = AgentToolDoneEvent(
             tool_name="bash",
             result=result,
             error=error,
             duration_ms=duration_ms,
         )
-        args = {"command": command}
-        block = render_tool_done_line(
-            event,
-            self.theme,
-            args=args,
-            registry=self._tool_render_registry,
-            collapsed=not self.tool_details_shown,
+        self._close_tool_group()
+        card = _ToolCard(
+            args={"command": command},
+            theme=self.theme,
+            block=None,
+            event=event,
+            foldable=False,
         )
-        self.blocks.append(block)
-        # Remember it so /details can re-render this card like any other
-        # finished tool call.
-        self._tool_calls.append((event, args, block, self.theme))
+        card.block = self._card_block(card)
+        self.blocks.append(card.block)
+        self._tool_groups.append(_ToolGroup(cards=[card], closed=True, foldable=False))
         self._touch()
 
     def _touch(self) -> None:
@@ -362,16 +465,13 @@ class FullScreenSink:
         Called when a run completes successfully: the warning should not
         leave a ghost line behind once the retry worked. Also called by
         the app after transcript resets (``clear()`` / rewind re-draws)
-        to drop the index together with the blocks. The index is
-        self-healing anyway: a stale index (``>= len(blocks)``) is
-        treated as "no notice".
+        to drop the reference together with the blocks. A notice no
+        longer in ``blocks`` is treated as "no notice".
         """
         idx = self._error_notice_idx
-        if idx is None or idx >= len(self.blocks):
-            self._error_notice_idx = None
-            return
-        del self.blocks[idx]
-        self._error_notice_idx = None
+        self._error_notice = None
+        if idx is not None:
+            del self.blocks[idx]
 
     # ── Transient in-chat activity indicator ──────────────────────────────
 
@@ -481,6 +581,7 @@ class FullScreenSink:
     # ── AgentEventSink ───────────────────────────────────────────────────
 
     def on_user_message(self, text: str, message: Message) -> None:
+        self._close_tool_group()
         # #212: stamp the message with its send time (local).
         self.blocks.append(
             render_user_turn(text, self.theme, at=datetime.datetime.now())
@@ -545,6 +646,8 @@ class FullScreenSink:
                     # the tool) counts from 0.
                     turn.thinking_since = None
                 if event.tool_name in {"agent", "agents"}:
+                    # Subagent lines keep their own layout, outside any run.
+                    self._close_tool_group()
                     self.blocks.append(render_subagent_start_line(event, self.theme))
                     tasks = subagent_tasks_from_args(event.tool_name, event.args)
                     if turn is not None and tasks:
@@ -560,12 +663,17 @@ class FullScreenSink:
                         event, self.theme, self._tool_render_registry
                     )
                     self.blocks.append(start_block)
-                    key = event.tool_call_id or f"index:{event.index}"
-                    self._pending_tool_calls[key] = (
-                        dict(event.args),
-                        start_block,
-                        self.theme,
+                    card = _ToolCard(
+                        args=dict(event.args), theme=self.theme, block=start_block
                     )
+                    group = self._open_tool_group
+                    if group is None:
+                        group = _ToolGroup(cards=[])
+                        self._open_tool_group = group
+                        self._tool_groups.append(group)
+                    group.cards.append(card)
+                    key = event.tool_call_id or f"index:{event.index}"
+                    self._pending_tool_calls[key] = card
 
             case AgentToolDoneEvent():
                 turn = self.current_turn
@@ -584,43 +692,31 @@ class FullScreenSink:
                     if turn is not None:
                         turn.running_tool = False
                     key = event.tool_call_id or f"index:{event.index}"
-                    pending = self._pending_tool_calls.pop(key, None)
-                    start_args, start_block, originating_theme = (
-                        pending if pending is not None else ({}, None, self.theme)
+                    card = self._pending_tool_calls.pop(key, None)
+                    if card is None:
+                        # Done without a start (defensive): file it under
+                        # the current run like any other call.
+                        card = _ToolCard(args={}, theme=self.theme, block=None)
+                        group = self._open_tool_group
+                        if group is None:
+                            group = _ToolGroup(cards=[])
+                            self._open_tool_group = group
+                            self._tool_groups.append(group)
+                        group.cards.append(card)
+                    start_block = card.block
+                    card.event = event
+                    card.block = self._card_block(card)
+                    # Replace by identity: multiple parallel calls may share
+                    # the same tool name and detail, but never the same
+                    # start-block object. Not found = the transcript was
+                    # cleared while the tool ran (or there was no start).
+                    position = (
+                        self._index_of(start_block) if start_block is not None else None
                     )
-                    done_block = render_tool_done_line(
-                        event,
-                        originating_theme,
-                        args=start_args,
-                        registry=self._tool_render_registry,
-                        collapsed=not self.tool_details_shown,
-                    )
-                    if start_block is not None:
-                        # Replace by identity: multiple parallel calls may
-                        # share the same tool name and detail, but never the
-                        # same start-block object.
-                        position = next(
-                            (
-                                i
-                                for i, block in enumerate(self.blocks)
-                                if block is start_block
-                            ),
-                            None,
-                        )
-                        if position is None:
-                            # Defensive fallback for a transcript cleared
-                            # while a tool was running.
-                            self.blocks.append(done_block)
-                        else:
-                            self.blocks[position] = done_block
+                    if position is None:
+                        self.blocks.append(card.block)
                     else:
-                        self.blocks.append(done_block)
-                    # T-7: remember the finished call (event + args + the
-                    # exact block object) so /details can re-render it
-                    # uncollapsed later in the session.
-                    self._tool_calls.append(
-                        (event, start_args, done_block, originating_theme)
-                    )
+                        self.blocks[position] = card.block
 
             case AgentStepDoneEvent():
                 if self.current_turn is not None:
@@ -636,6 +732,7 @@ class FullScreenSink:
             case AgentDoneEvent():
                 self.protect_persistence()
                 self.cancel_stream_throttle()
+                self._close_tool_group()
                 turn = self.current_turn
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
@@ -652,6 +749,7 @@ class FullScreenSink:
             case AgentErrorEvent():
                 self.protect_persistence()
                 self.cancel_stream_throttle()
+                self._close_tool_group()
                 turn = self.current_turn
                 if turn is not None:
                     self._last_reasoning = turn.reasoning
@@ -662,12 +760,11 @@ class FullScreenSink:
                 # retry instead of stacking a panel per attempt (I-83).
                 notice = render_error_notice(event, self.theme)
                 idx = self._error_notice_idx
-                if idx is not None and idx < len(self.blocks):
+                if idx is not None:
                     self.blocks[idx] = notice
                 else:
                     self.blocks.append(notice)
-                    idx = len(self.blocks) - 1
-                self._error_notice_idx = idx
+                self._error_notice = notice
 
         # I-84: this used to be an unconditional _touch() that defeated the
         # touch_streaming() throttle — every token invalidated regardless
@@ -695,6 +792,8 @@ class FullScreenSink:
         """
         if turn is None or not turn.content:
             return
+        # Text after tool calls ends their run (the "tramo" /details folds).
+        self._close_tool_group()
         self.blocks.append(render_streaming_panel(turn.content, "", False, self.theme))
         turn.content = ""
         # T-5: the waiting episode ended — streaming takes over the label,
@@ -739,6 +838,7 @@ class FullScreenSink:
         # its bookkeeping before the early return — a turn already cleared
         # by ``AgentErrorEvent`` must not pin those blocks forever.
         self._release_pending_tool_calls()
+        self._close_tool_group()
         turn = self.current_turn
         if turn is None:
             return
@@ -751,8 +851,8 @@ class FullScreenSink:
     def _release_pending_tool_calls(self) -> None:
         """Forget in-flight tool-call bookkeeping once the turn is over.
 
-        ``_pending_tool_calls`` holds the start args and transcript block of
-        each regular tool call so its done event can replace the live start
+        ``_pending_tool_calls`` holds the card (start args and transcript
+        block) of each regular tool call so its done event can replace the live start
         line in place. A call that is cancelled before its done event leaves
         that entry behind, pinning a block that can never be replaced. The
         visible start line stays in the transcript as the partial-progress
@@ -834,12 +934,14 @@ class FullScreenSink:
         left intact. What is released here is the *finished* state that
         would otherwise keep the deleted blocks alive for the rest of the
         session: the published plugin blocks and the remembered
-        ``/details`` tool cards. Reasoning records are dropped by
+        ``/details`` tool runs (the in-flight run included: its blocks are
+        gone, and late done cards append on their own). Reasoning records are dropped by
         :meth:`clear_reasoning_state` and the error-notice index by
         :meth:`drop_error_notice`.
         """
         self._plugin_blocks.clear()
-        self._tool_calls.clear()
+        self._tool_groups.clear()
+        self._open_tool_group = None
 
     def protect_persistence(self) -> None:
         """Mark the current app operation's remaining save as required."""
@@ -875,8 +977,9 @@ class FullScreenSink:
             reasoning_blocks=list(self._reasoning_blocks),
             expanded_reasoning_nodes=set(self._expanded_reasoning_nodes),
             pending_tool_calls=dict(self._pending_tool_calls),
-            tool_calls=list(self._tool_calls),
-            error_notice_idx=self._error_notice_idx,
+            tool_groups=list(self._tool_groups),
+            open_tool_group=self._open_tool_group,
+            error_notice=self._error_notice,
             stream_event=self._stream_event,
             dirty=self.dirty,
             app_state=app_state,
@@ -892,8 +995,9 @@ class FullScreenSink:
         self._reasoning_blocks.clear()
         self._expanded_reasoning_nodes.clear()
         self._pending_tool_calls.clear()
-        self._tool_calls.clear()
-        self._error_notice_idx = None
+        self._tool_groups.clear()
+        self._open_tool_group = None
+        self._error_notice = None
         self._stream_event = False
         self.dirty = True
         if self._on_session_reset is not None:
@@ -912,8 +1016,9 @@ class FullScreenSink:
         self._reasoning_blocks = snapshot.reasoning_blocks
         self._expanded_reasoning_nodes = snapshot.expanded_reasoning_nodes
         self._pending_tool_calls = snapshot.pending_tool_calls
-        self._tool_calls = snapshot.tool_calls
-        self._error_notice_idx = snapshot.error_notice_idx
+        self._tool_groups = snapshot.tool_groups
+        self._open_tool_group = snapshot.open_tool_group
+        self._error_notice = snapshot.error_notice
         self._stream_event = snapshot.stream_event
         self.dirty = snapshot.dirty
         if self._on_session_restore is not None:
@@ -938,6 +1043,7 @@ class FullScreenSink:
         path: list[Message],
         tail: int | None = None,
         timestamps: "list[datetime.datetime | None] | None" = None,
+        tool_durations: "dict[str, int] | None" = None,
     ) -> None:
         """Replay conversation history into the chat pane.
 
@@ -948,11 +1054,41 @@ class FullScreenSink:
 
         ``timestamps`` (#212) optionally carries each message's local time so
         the replay shows a date/time per message (aligned with *path* before
-        any tail trim).
+        any tail trim). ``tool_durations`` maps ``tool_call_id`` to the
+        persisted duration of each call.
+
+        Each message lands as its own block and every tool run is
+        registered like a live one, so ``/details`` re-renders replayed
+        tool calls in place too.
         """
-        self.blocks.append(
-            render_history(path, self.theme, tail=tail, timestamps=timestamps)
-        )
+        self._close_tool_group()
+        for item in history_blocks(
+            path,
+            self.theme,
+            tail=tail,
+            timestamps=timestamps,
+            tool_durations=tool_durations,
+        ):
+            if not isinstance(item, ReplayToolGroup):
+                self.blocks.append(item)
+                continue
+            group = _ToolGroup(
+                cards=[
+                    _ToolCard(args=args, theme=self.theme, block=None, event=event)
+                    for event, args in item.calls
+                ],
+                closed=True,
+            )
+            if self.tool_detail == "summary":
+                group.summary = render_tool_group_summary(
+                    item.calls, self.theme, self._tool_render_registry
+                )
+                self.blocks.append(group.summary)
+            for card in group.cards:
+                card.block = self._card_block(card)
+                if group.summary is None:
+                    self.blocks.append(card.block)
+            self._tool_groups.append(group)
         self._touch()
 
     def notify(self, kind: str, message: str) -> None:

@@ -366,7 +366,9 @@ class _FakeSink:
     def set_session(self, session_id) -> None:
         self.session_ids.append(session_id)
 
-    def print_history(self, path, tail=None, timestamps=None) -> None:
+    def print_history(
+        self, path, tail=None, timestamps=None, tool_durations=None
+    ) -> None:
         self.history_calls.append((path, tail))
 
     def notify(self, kind, message) -> None:

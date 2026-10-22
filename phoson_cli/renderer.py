@@ -39,6 +39,7 @@ from phoson_cli.theme import Theme, load_theme
 from phoson_cli.terminal import animation_capable
 from phoson_cli.animations import SPINNER_FRAMES
 from phoson_cli.formatting import (
+    ToolCallRecord,
     ToolRenderRegistry,
     render_notice,
     render_history,
@@ -49,6 +50,7 @@ from phoson_cli.formatting import (
     render_tool_done_line,
     render_reasoning_panel,
     render_streaming_panel,
+    render_tool_group_summary,
     render_subagent_start_line,
 )
 from phoson_cli.formatting import (
@@ -67,6 +69,7 @@ from phoson_cli.formatting import (
     subagent_tasks_from_args as _subagent_tasks_from_args,
 )
 from phoson_cli.command_host import HelpEntry, HelpEntries, is_grouped_help
+from phoson_cli.tool_history import next_tool_detail, is_valid_tool_detail
 from phoson_cli.tools.subagent_panel import (
     parse_subagent_metrics,
     render_subagent_summary,
@@ -284,6 +287,7 @@ class Renderer:
         console: Console | None = None,
         theme: Theme | None = None,
         show_reasoning: bool = True,
+        tool_detail: str = "full",
     ) -> None:
         """Initialize the renderer.
 
@@ -296,6 +300,8 @@ class Renderer:
                 so the classic front end honors the same setting as the
                 full-screen TUI (``_live_show_reasoning``, toggled by
                 Ctrl+T).
+            tool_detail: Tool-call detail level (``full`` / ``headers`` /
+                ``summary``), mirroring ``config.tool_detail``.
         """
         self.console = console or Console(highlight=False)
         self.theme = theme or load_theme()
@@ -328,6 +334,12 @@ class Renderer:
         # the done card pops them to render path/command detail + diffs.
         self._pending_tool_args: dict[str, dict] = {}
         self._tool_render_registry = ToolRenderRegistry({})
+        # /details level. The terminal is append-only, so it shapes what is
+        # printed from now on: ``summary`` holds each run's done cards here
+        # and prints one "N tools used" line when the run ends (the spinner
+        # still names the tool in flight).
+        self._tool_detail = tool_detail if is_valid_tool_detail(tool_detail) else "full"
+        self._tool_group: list[ToolCallRecord] = []
 
         # ── Run-time context (reset on AgentStartEvent) ───────────────
         self._current_step: int = 0
@@ -377,8 +389,33 @@ class Renderer:
         """Stop the subagent panel animation."""
         self._subagent_spinner.stop()
 
+    def set_tool_details(self, mode: str | None = None) -> str:
+        """Set (``None`` = cycle) the tool-call detail level for new output."""
+        if mode is None:
+            mode = next_tool_detail(self._tool_detail)
+        if not is_valid_tool_detail(mode):
+            raise ValueError(f"unknown tool detail level {mode!r}")
+        self._flush_tool_group()
+        self._tool_detail = mode
+        return mode
+
+    def _flush_tool_group(self) -> None:
+        """Print the held run of tool calls as one summary line (``summary``)."""
+        if not self._tool_group:
+            return
+        calls, self._tool_group = self._tool_group, []
+        self.stop_waiting()
+        self.console.print(
+            render_tool_group_summary(calls, self.theme, self._tool_render_registry)
+        )
+
     def flush_line(self) -> None:
-        """Ensure we're on a fresh line after any raw-streamed tokens."""
+        """Ensure we're on a fresh line and every held tool run is printed."""
+        self._end_stream_line()
+        self._flush_tool_group()
+
+    def _end_stream_line(self) -> None:
+        """Stop animations and end any raw-streamed line (run continues)."""
         self.stop_waiting()
         self.stop_subagent_waiting()
         self._stop_live_streaming()
@@ -413,7 +450,7 @@ class Renderer:
         """
         self._live_show_reasoning = not self._live_show_reasoning
         if self._live is not None:
-            self._update_live_streaming()
+            self._update_live_streaming(refresh=True)
         return self._live_show_reasoning
 
     def render_reasoning_panel(self, reasoning: str) -> Panel:
@@ -440,15 +477,23 @@ class Renderer:
         )
         self._live.start()
 
-    def _update_live_streaming(self) -> None:
-        """Update the Live panel with current buffer content."""
+    def _update_live_streaming(self, *, refresh: bool = False) -> None:
+        """Update the Live panel with current buffer content.
+
+        Token updates don't force a refresh: Live's own refresh thread
+        repaints at ``refresh_per_second``, so a burst of tokens costs one
+        frame instead of one terminal repaint per token.
+        """
         if self._live is None:
             return
-        self._live.update(self._render_live_panel(), refresh=True)
+        self._live.update(self._render_live_panel(), refresh=refresh)
 
     def _stop_live_streaming(self) -> None:
         """Stop the Live panel and render final Markdown."""
         if self._live is not None:
+            # Swap the plain-text streaming frame for the full Markdown
+            # render; Live.stop() paints it as the panel's final frame.
+            self._live.update(self._render_live_panel(final=True), refresh=False)
             self._live.stop()
             self._live = None
         # The panel is non-transient, so its last frame stays on screen.
@@ -458,13 +503,19 @@ class Renderer:
         self._live_content = ""
         self._live_reasoning = ""
 
-    def _render_live_panel(self) -> Group:
-        """Render the current stream: a label, then thinking/answer blocks."""
+    def _render_live_panel(self, *, final: bool = False) -> Group:
+        """Render the current stream: a label, then thinking/answer blocks.
+
+        While tokens arrive the answer renders as plain text: re-parsing the
+        ever-growing Markdown on every token is O(n²) over a long reply.
+        ``final=True`` builds the one-off Markdown frame left on screen.
+        """
         return render_streaming_panel(
             self._live_content,
             self._live_reasoning,
             self._live_show_reasoning,
             self.theme,
+            stream_plain=not final,
         )
 
     def finish_turn(self) -> None:
@@ -539,6 +590,8 @@ class Renderer:
 
             case AgentTokenEvent():
                 self.stop_waiting()
+                # Text after tool calls ends their run.
+                self._flush_tool_group()
                 self._token_buf.append(event.content)
                 self._live_content += event.content
                 self._streaming = True
@@ -564,8 +617,8 @@ class Renderer:
                 self._on_tool_composing(event)
 
             case AgentToolStartEvent():
-                self._stop_live_streaming()
-                self.flush_line()
+                # Not flush_line(): consecutive calls stay one held run.
+                self._end_stream_line()
                 self._on_tool_start(event)
 
             case AgentToolDoneEvent():
@@ -584,6 +637,8 @@ class Renderer:
                 )
 
             case AgentDoneEvent():
+                self.stop_waiting()
+                self._flush_tool_group()
                 self.finish_turn()
                 self._on_done(event)
                 self._stream_had_tokens = False
@@ -620,6 +675,8 @@ class Renderer:
     def _on_tool_start(self, event: AgentToolStartEvent) -> None:
         """Handle tool start: update spinner for regular tools, start subagent panel."""
         if event.tool_name in {"agent", "agents"}:
+            # Subagent lines keep their own layout, outside any held run.
+            self._flush_tool_group()
             self.console.print(render_subagent_start_line(event, self.theme))
             tasks = _subagent_tasks_from_args(event.tool_name, event.args)
             if tasks:
@@ -652,12 +709,16 @@ class Renderer:
                 return
 
         start_args = self._pending_tool_args.pop(event.tool_call_id or "", None)
+        if self._tool_detail == "summary":
+            self._tool_group.append((event, start_args or {}))
+            return
         self.console.print(
             render_tool_done_line(
                 event,
                 self.theme,
                 args=start_args,
                 registry=self._tool_render_registry,
+                collapsed=self._tool_detail != "full",
             )
         )
 
@@ -680,6 +741,7 @@ class Renderer:
 
     def print_user_turn(self, text: str) -> None:
         """Render a user message with a lightweight badge + plain text."""
+        self._flush_tool_group()
         # #212: stamp the message with its send time (local).
         self.console.print(
             render_user_turn(text, self.theme, at=datetime.datetime.now())
@@ -712,6 +774,7 @@ class Renderer:
         messages: "list[Message]",
         tail: int | None = None,
         timestamps: "list[datetime.datetime | None] | None" = None,
+        tool_durations: "dict[str, int] | None" = None,
     ) -> None:
         """Re-render a list of Message objects as a conversation replay.
 
@@ -721,9 +784,18 @@ class Renderer:
                   a ``"N messages above"`` rule when the list is longer.
             timestamps: Optional per-message local times (#212), aligned with
                   *messages* before any tail trim.
+            tool_durations: Persisted ``tool_call_id → duration_ms``.
         """
         self.console.print(
-            render_history(messages, self.theme, tail=tail, timestamps=timestamps)
+            render_history(
+                messages,
+                self.theme,
+                tail=tail,
+                timestamps=timestamps,
+                tool_durations=tool_durations,
+                tool_detail=self._tool_detail,
+                registry=self._tool_render_registry,
+            )
         )
 
     def print_sessions_table(self, sessions: "list[SessionMeta]") -> None:
@@ -742,11 +814,7 @@ class Renderer:
         table.add_column("State", style=self.theme.accent_soft)
         for i, s in enumerate(sessions, start=1):
             updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
-            state = (
-                "active"
-                if str(s.id).startswith((self.session_id or "")[:4])
-                else "saved"
-            )
+            state = "active" if str(s.id) == self.session_id else "saved"
             table.add_row(str(i), s.id, str(s.message_count), updated, state)
         self.console.print(table)
 
@@ -854,8 +922,15 @@ class ClassicSink:
         path: list["Message"],
         tail: int | None = None,
         timestamps: "list[datetime.datetime | None] | None" = None,
+        tool_durations: "dict[str, int] | None" = None,
     ) -> None:
-        self._renderer.print_history(path, tail=tail, timestamps=timestamps)
+        self._renderer.print_history(
+            path, tail=tail, timestamps=timestamps, tool_durations=tool_durations
+        )
+
+    def set_tool_details(self, mode: str | None = None) -> str:
+        """Set the tool-call detail level for output printed from now on."""
+        return self._renderer.set_tool_details(mode)
 
     def notify(self, kind: str, message: str) -> None:
         method = getattr(self._renderer, f"print_{kind}", None)

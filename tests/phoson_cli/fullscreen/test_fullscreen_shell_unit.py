@@ -772,7 +772,10 @@ def test_ctrl_l_releases_derived_caches_and_stale_bookkeeping(app: PhosonApp) ->
     assert app._block_ansi_cache._entries
     assert app._block_ft_cache._entries
     app.sink.publish_plugin_block("todo", Text("todo"))
-    app.sink._tool_calls.append((object(), {}, Text("card"), app.theme))  # type: ignore[arg-type]
+    from phoson_cli.fullscreen.sink import _ToolCard, _ToolGroup
+
+    card = _ToolCard(args={}, theme=app.theme, block=Text("card"))
+    app.sink._tool_groups.append(_ToolGroup(cards=[card], closed=True))
 
     _trigger(app, "c-l")
 
@@ -780,7 +783,7 @@ def test_ctrl_l_releases_derived_caches_and_stale_bookkeeping(app: PhosonApp) ->
     assert app._block_ansi_cache._entries == {}
     assert app._block_ft_cache._entries == {}
     assert app.sink._plugin_blocks == {}
-    assert app.sink._tool_calls == []
+    assert app.sink._tool_groups == []
 
 
 def test_ctrl_l_preserves_active_stream_state(app: PhosonApp) -> None:
