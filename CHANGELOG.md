@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.54.0 (2026-10-22)
+
+### Fix
+
+- **cli**: one-shot runs (`phoson-cli -p ...`, piped stdin) now build their engine through the same
+  `phoson_cli.runtime.build_engine_runtime` as the interactive session, which closes two gaps the
+  separate copy had drifted into: `reasoning_sandwich` was ignored (no per-phase effort scheduler)
+  and the auto-compaction gate did not count the tool schemas sent with every request (I-91). A
+  parity test now pins the middleware chain of both hosts to the same sequence
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+- **cli**: the startup theme registry/theme and the deferred `--theme` flag are declared
+  `PhosonConfig` fields instead of attributes attached with `setattr`, so a
+  `dataclasses.replace(config, ...)` copy (model selector) no longer drops them
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+
+### Changed
+
+- **cli**: `SessionController` is UI-free again — importing it no longer loads `prompt_toolkit` or
+  any of the CLI's Rich renderers. The command catalog (`command_catalog`), the tool render registry
+  (`tool_render`) and the sub-agent metrics wire format (`tools/subagent_metrics`) moved into
+  UI-free modules (the old import paths re-export them), and `theme` / `plugin_ui` import their
+  style libraries lazily. Guarded by `test_lazy_cli_imports.py`
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+- **cli**: the full-screen TUI no longer runs on top of the classic REPL. Both front ends share a
+  new `SessionFrontend` (controller + view state), and slash commands are written against the
+  `SessionPort` protocol instead of reaching into controller internals; importing the TUI no longer
+  loads `phoson_cli.repl` or the classic renderer
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+- **cli**: the official plugins (MCP, monitors, background jobs, peers, SSH, Computer Use, OTel,
+  swarm, questions) are resolved from one table in `phoson_cli.official_plugins` instead of nine
+  copy-pasted builders; load order, warnings and the in-tree path fallback are unchanged and the
+  `build_*_plugins` helpers keep working
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+- **cli**: session-title handling (heuristic seed + one-shot LLM title) moved out of the
+  controller into `phoson_cli.session_titles.SessionTitler`
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+- **cli** (breaking for out-of-tree callers): `PhosonApp.repl` → `PhosonApp.session`,
+  `CommandHandler.repl` → `CommandHandler.session`, `PluginCommandContext(repl=...)` →
+  `PluginCommandContext(session=...)`; the unused re-exports from `phoson_cli.repl` and the
+  `phoson_cli.fullscreen.session_cache` / `model_cache` shims were removed. Plugins are unaffected:
+  the context they receive keeps the same public surface
+  ([#284](https://github.com/phoson-lat/phoson-engine-minimal/pull/284))
+
 ## v0.53.0 (2026-10-19)
 
 ### Add
