@@ -210,3 +210,41 @@ class TestWakeQueue:
         )
         q = WakeQueue(tmp_path)
         assert q.pending()[0].payload == {}
+
+
+# ── Working-directory scope ───────────────────────────────────────────────────
+
+
+def test_legacy_registry_keyed_by_name_loads(tmp_path: Path) -> None:
+    (tmp_path / "monitors.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "monitors": {
+                    "old": {"name": "old", "kind": "interval", "spec": {}},
+                },
+            }
+        )
+    )
+    store = MonitorStore(tmp_path)
+    monitor = store.get("old")
+    assert monitor is not None and monitor.cwd == ""
+
+
+def test_same_name_in_two_directories(tmp_path: Path) -> None:
+    store = MonitorStore(tmp_path)
+    store.add(MonitorDef(name="m", kind="interval", cwd="/a"))
+    store.add(MonitorDef(name="m", kind="interval", cwd="/b"))
+    store.mark_fired("m@/a")
+    reloaded = MonitorStore(tmp_path)
+    assert reloaded.get("m@/a").fire_count == 1
+    assert reloaded.get("m@/a").cwd == "/a"
+    assert reloaded.get("m@/b").fire_count == 0
+
+
+def test_wake_dedupe_is_per_directory(tmp_path: Path) -> None:
+    queue = WakeQueue(tmp_path)
+    assert queue.append(WakeEvent.create("m", "interval", "s", {"x": 1}, cwd="/a"))
+    assert queue.append(WakeEvent.create("m", "interval", "s", {"x": 1}, cwd="/b"))
+    duplicate = WakeEvent.create("m", "interval", "s", {"x": 1}, cwd="/a")
+    assert queue.append(duplicate) is None

@@ -146,7 +146,11 @@ def _controller(turns: int, **cfg) -> SessionController:
             model="test-model",
             reasoning_effort=None,
             preserve_thinking=None,
+            enable_monitors=False,
+            enable_bgjobs=False,
         )
+        controller._wake_resume_pending = False
+        controller._monitor_wake_task = None
         controller.chat = MagicMock()
         controller.chat.complete = AsyncMock(
             return_value=LLMDoneEvent(content="Structured summary.")

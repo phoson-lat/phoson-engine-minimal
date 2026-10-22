@@ -272,6 +272,11 @@ class SessionController:
         # points once an event loop exists (None until then / when the
         # monitor plugin is disabled).
         self._monitor_wake_task: asyncio.Task | None = None
+        # True while the wake providers still need ``ensure_started()``: a
+        # controller built off the event loop (e.g. in a worker thread, as
+        # the desktop bridge does) cannot schedule it, so it is retried on
+        # the first ``start_monitor_wake_loop()``/``run_turn()``.
+        self._wake_resume_pending = False
         # Session title: heuristic seed + one-shot LLM upgrade (#55).
         self.titles = SessionTitler(self)
         # Poll interval for the autonomous wake loop; tests shorten it.
@@ -658,33 +663,59 @@ class SessionController:
         self.engine.context.extra["session_id_provider"] = lambda: (
             self._session.tree.session_id
         )
+        # Same idea for the working directory: monitors are scoped to the
+        # session's cwd (a front end may move a built session elsewhere).
+        cwd_provider = self._session_cwd
+        self.engine.context.extra["cwd_provider"] = cwd_provider
+        wake_plugins = find_wake_plugins(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        )
+        for plugin in wake_plugins:
+            set_cwd = getattr(plugin, "set_cwd_provider", None)
+            if callable(set_cwd):
+                set_cwd(cwd_provider)
 
         # (Re)start any running providers from disk: engine rebuilds
         # (/model, /provider, /mcp) kill the previous instance's tasks,
         # and a crash leaves them running on disk. Duck-typed so this
         # stays a no-op when no wake plugin is enabled. Option B (#217):
         # every provider (monitors, background jobs, ...) is resumed.
-        wake_plugins = find_wake_plugins(
-            list(getattr(self.engine, "_loaded_plugins", []))
-        )
-        for plugin in wake_plugins:
-            ensure = getattr(plugin, "ensure_started", None)
-            if ensure is None:
-                continue
-            try:
-                asyncio.get_running_loop().create_task(
-                    ensure(),
-                    name=f"wakes:{getattr(plugin, 'name', 'plugin')}:ensure_started",
-                )
-            except RuntimeError:
-                # No running loop (sync test/one-shot bootstrap): the
-                # tools start tasks lazily on first use.
-                pass
+        self._wake_resume_pending = True
+        self._resume_wake_providers()
 
         # Record what the runtime now reflects, so a later pure model switch
         # can be applied in place (see ``set_model``) instead of rebuilding.
         self._engine_provider = self.config.provider
         self._engine_model = self.current_model
+
+    def _session_cwd(self) -> str:
+        """Working directory of the active session (scopes the monitors)."""
+        return str(self._session.tree.cwd or Path.cwd())
+
+    def _resume_wake_providers(self) -> None:
+        """Schedule ``ensure_started()`` on every wake provider, once.
+
+        Needs a running loop; without one (controller built in a worker
+        thread or a sync bootstrap) the flag stays set and the next call
+        from the loop does the work.
+        """
+        if not self._wake_resume_pending:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._wake_resume_pending = False
+        for plugin in find_wake_plugins(
+            list(getattr(self.engine, "_loaded_plugins", []))
+        ):
+            ensure = getattr(plugin, "ensure_started", None)
+            if ensure is None:
+                continue
+            loop.create_task(
+                ensure(),
+                name=f"wakes:{getattr(plugin, 'name', 'plugin')}:ensure_started",
+            )
 
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
@@ -1099,6 +1130,9 @@ class SessionController:
         Serialized against autonomous monitor-wake turns via
         ``_turn_lock`` (the engine is single-flight).
         """
+        # A front end that never started the wake loop (or built this
+        # controller off the loop) still gets autonomous wakes from here on.
+        self.start_monitor_wake_loop()
         async with self._turn_lock:
             owner = asyncio.current_task()
             self._turn_owner_task = owner
@@ -1311,8 +1345,11 @@ class SessionController:
         a turn of their own — no user message required. Front end entry
         points call this once the event loop is running (the controller's
         ``__init__`` runs before the loop in the classic REPL, where
-        tasks cannot be created yet).
+        tasks cannot be created yet); ``run_turn`` also calls it, so a
+        front end that forgets still recovers on its first turn. It also
+        resumes the providers a loop-less build could not start.
         """
+        self._resume_wake_providers()
         if not (
             self.config.enable_monitors
             or self.config.enable_bgjobs
@@ -1363,6 +1400,12 @@ class SessionController:
     async def _wake_loop_tick(self) -> None:
         """One poll of the autonomous wake loop (see the loop's docstring)."""
         plugins = list(getattr(self.engine, "_loaded_plugins", []))
+        # Follow a working-directory change: scoped providers swap their
+        # running watchers to the session's current cwd.
+        for plugin in find_wake_plugins(plugins):
+            reconcile = getattr(plugin, "reconcile_scope", None)
+            if reconcile is not None:
+                await reconcile()
         if self.is_running:
             return
         if not has_pending_wakes(plugins, self._session.tree.session_id):
@@ -1396,8 +1439,13 @@ class SessionController:
             if owner is not None and owner.cancelling():
                 raise
 
-    async def _run_wake_turn(self, plugins: list[Plugin]) -> None:
-        """Drain and execute one autonomous wake while holding the turn lock."""
+    async def _run_wake_turn(self, plugins: list[Plugin]) -> RunOutcome | None:
+        """Drain and execute one autonomous wake while holding the turn lock.
+
+        Returns the turn's outcome, or ``None`` when a user turn consumed
+        the wakes first (nothing ran). Front ends that wrap wake turns via
+        ``set_operation_starter`` use it to close their own turn UI.
+        """
         async with self._turn_lock:
             owner = asyncio.current_task()
             self._turn_owner_task = owner
@@ -1411,7 +1459,7 @@ class SessionController:
                     event for _plugin, events in wake_batches for event in events
                 ]
                 if not wake_events:
-                    return  # a user turn consumed them in the meantime
+                    return None  # a user turn consumed them in the meantime
                 self.sink.notify(
                     "info",
                     "Message(s) from other agents — waking the agent."
@@ -1422,6 +1470,7 @@ class SessionController:
                 outcome = await self._execute_turn(
                     "", wake_events, source="monitor", wake_header=wake_header
                 )
+                return outcome
             finally:
                 # Always close the turn for plugins (a no-op drain still
                 # resets their per-turn state, e.g. the peers presence).

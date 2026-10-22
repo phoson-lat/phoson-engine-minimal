@@ -55,6 +55,17 @@ def _require_number(
     return float(value)
 
 
+def _base_cwd(defn: MonitorDef) -> str:
+    """Directory a monitor resolves against: its own cwd, else the host's.
+
+    A scoped monitor whose directory was deleted falls back to the host cwd
+    rather than crashing every tick.
+    """
+    if defn.cwd and os.path.isdir(defn.cwd):
+        return defn.cwd
+    return os.getcwd()
+
+
 class IntervalKind:
     """Fire after N seconds (``once: true``) or every N seconds."""
 
@@ -124,8 +135,8 @@ class FileKind:
             raise ValueError("spec.poll_seconds must be a number")
         if poll_seconds < 0.2:
             raise ValueError("spec.poll_seconds must be >= 0.2")
-        # A plain path that exists or could exist resolves relative to the
-        # host cwd; globs are used as-is (they may be absolute).
+        # A relative path or glob resolves against the monitor's cwd (the
+        # host cwd for unscoped monitors); absolute ones are used as-is.
         return {"path": path, "event": event, "poll_seconds": float(poll_seconds)}
 
     @staticmethod
@@ -143,7 +154,7 @@ class FileKind:
         # pathlib supports wildcards in the parent (e.g. "logs/*/app.log").
         resolved = Path(path_spec)
         if not resolved.is_absolute():
-            resolved = Path(os.getcwd()) / resolved
+            resolved = Path(_base_cwd(defn)) / resolved
         base_dir = str(resolved.parent) or "."
         pattern = resolved.name
 
@@ -236,6 +247,7 @@ class CommandKind:
                 }
                 if new_session:
                     subprocess_kw["start_new_session"] = True
+                subprocess_kw["cwd"] = _base_cwd(defn)
                 proc = await asyncio.create_subprocess_shell(command, **subprocess_kw)
                 try:
                     out, err = await asyncio.wait_for(
