@@ -65,6 +65,17 @@ monitors still say `running` on disk and the next `initialize()` +
 by whichever host takes over. One writer per `data_dir` is assumed
 (multi-process locking is a follow-up).
 
+## Working-directory scope
+
+Every monitor records the working directory it was registered in (from
+the `cwd_provider` in the tool context, else the host's, else the process
+cwd). `command` monitors run there and relative `file` paths resolve
+against it. A host that sets a `cwd_provider` only lists, runs and stops
+the monitors of its current directory, so the monitors of `A/` are
+invisible from `B/`. Names are unique per directory (registry key
+`name@cwd`). Monitors registered before scoping have no cwd and stay
+visible everywhere, so they can still be stopped.
+
 ## Configuration
 
 ```python
@@ -78,6 +89,7 @@ engine = AgentEngine(
                 "on_wake": my_wake_callback,       # optional, live hosts
                 "max_pending_wakes": 5,            # per-monitor anti-storm cap
                 "default_session_id": "",          # when the host injects none
+                "cwd_provider": lambda: session_cwd, # optional: scope to a dir
             },
         }
     ],
@@ -86,8 +98,12 @@ engine = AgentEngine(
 
 Host integration (duck-typed, optional):
 
-- `await plugin.ensure_started()` — (re)spawn tasks for running monitors;
-  call after building/rebuilding the engine.
+- `await plugin.ensure_started()` — (re)spawn tasks for the running
+  monitors in scope (and stop the out-of-scope ones); call after
+  building/rebuilding the engine.
+- `plugin.set_cwd_provider(fn)` / `await plugin.reconcile_scope()` — scope
+  the plugin to a directory and follow changes to it (the CLI wake loop
+  calls `reconcile_scope()` every tick).
 - `plugin.drain_pending_wakes(session_id)` — consume pending wakes before a
   run (the CLI does this in `run_turn`).
 - `plugin.get_commands()` — contributes the `/monitors` slash command

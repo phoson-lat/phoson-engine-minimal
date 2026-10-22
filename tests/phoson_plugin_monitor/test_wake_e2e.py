@@ -5,6 +5,7 @@ No real LLM (FakeToolChat), no real timers except one 1-second interval
 monitor (integration test; skipped under --fast).
 """
 
+import os
 import asyncio
 from typing import Any
 from pathlib import Path
@@ -27,7 +28,12 @@ from phoson_llm.schemas import (
 from phoson_agent.sessions import JsonlStorage, ConversationTree
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_plugin_monitor import MonitorPlugin, render_wake_message
-from phoson_plugin_monitor.storage import WakeQueue
+from phoson_plugin_monitor.storage import WakeQueue, monitor_key, normalize_cwd
+
+
+def _key(name: str) -> str:
+    """Registry/task key of a monitor registered from the test's cwd."""
+    return monitor_key(name, normalize_cwd(os.getcwd()))
 
 
 def _is_fast() -> bool:
@@ -121,10 +127,10 @@ class TestMonitorWakeE2E:
 
         # The fake LLM saw the monitor tool and called it; the monitor is
         # registered and running.
-        monitor = plugin._store.get("build-watcher")
+        monitor = plugin._store.get(_key("build-watcher"))
         assert monitor is not None
         assert monitor.session_id == "sess-e2e"
-        assert "build-watcher" in plugin._tasks
+        assert _key("build-watcher") in plugin._tasks
 
         # ── The run ends; the host goes idle. The monitor fires once. ──
         await asyncio.sleep(1.4)
@@ -177,5 +183,5 @@ class TestMonitorWakeE2E:
         revived.initialize()
         pending = revived._queue.pending("sess-restart")
         assert len(pending) == 1
-        assert revived._store.get("crash-proof").state == "stopped"
+        assert revived._store.get(_key("crash-proof")).state == "stopped"
         await revived.aclose()

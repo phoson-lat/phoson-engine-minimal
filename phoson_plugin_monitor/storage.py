@@ -29,7 +29,7 @@ import uuid
 import logging
 import datetime
 from pathlib import Path
-from dataclasses import field, asdict, dataclass
+from dataclasses import field, asdict, replace, dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,23 @@ def _parse_iso(value: str) -> datetime.datetime:
     return datetime.datetime.fromisoformat(value)
 
 
+def normalize_cwd(cwd: str | None) -> str:
+    """Canonical form of a working directory ("" stays "" = unscoped)."""
+    if not cwd:
+        return ""
+    return os.path.realpath(os.path.expanduser(str(cwd)))
+
+
+def monitor_key(name: str, cwd: str) -> str:
+    """Registry key: names are unique *per working directory*.
+
+    Unscoped (legacy) monitors keep their bare name as key, so registries
+    written before cwd scoping load unchanged. ``@`` cannot appear in a
+    monitor name, so the composite key is unambiguous.
+    """
+    return f"{name}@{cwd}" if cwd else name
+
+
 @dataclass
 class MonitorDef:
     """One registered monitor (definition + runtime state).
@@ -58,6 +75,10 @@ class MonitorDef:
         session_id: Session that registered the monitor; wakes carry it so
             a host can resume the same conversation tree. Empty when the
             host did not provide one.
+        cwd: Working directory the monitor belongs to (normalized). Only
+            hosts scoped to that directory see and run it; the ``command``
+            and ``file`` kinds also resolve against it. Empty for legacy
+            monitors registered before scoping (visible everywhere).
         created_at: ISO-8601 UTC registration time.
         last_fired_at: ISO-8601 UTC of the last fire (or None).
         last_check_at: ISO-8601 UTC of the last poll/check (or None).
@@ -69,6 +90,7 @@ class MonitorDef:
     spec: dict = field(default_factory=dict)
     state: str = "running"
     session_id: str = ""
+    cwd: str = ""
     created_at: str = field(default_factory=_utc_now_iso)
     last_fired_at: str | None = None
     last_check_at: str | None = None
@@ -77,6 +99,11 @@ class MonitorDef:
     @property
     def is_running(self) -> bool:
         return self.state == "running"
+
+    @property
+    def key(self) -> str:
+        """Registry key (see :func:`monitor_key`)."""
+        return monitor_key(self.name, self.cwd)
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -102,6 +129,7 @@ class WakeEvent:
         fired_at: ISO-8601 UTC fire time.
         payload: Kind-specific fire data (free JSON object).
         consumed: True once a host has turned it into input.
+        cwd: Working directory of the monitor that fired.
     """
 
     id: str
@@ -111,10 +139,19 @@ class WakeEvent:
     fired_at: str
     payload: dict = field(default_factory=dict)
     consumed: bool = False
+    #: Working directory of the monitor that fired ("" = unscoped). Names
+    #: are only unique per directory, so dedupe and the pending cap key on
+    #: ``(monitor, cwd)``.
+    cwd: str = ""
 
     @classmethod
     def create(
-        cls, monitor: str, kind: str, session_id: str, payload: dict | None = None
+        cls,
+        monitor: str,
+        kind: str,
+        session_id: str,
+        payload: dict | None = None,
+        cwd: str = "",
     ) -> "WakeEvent":
         return cls(
             id=uuid.uuid4().hex[:12],
@@ -124,6 +161,7 @@ class WakeEvent:
             fired_at=_utc_now_iso(),
             payload=dict(payload or {}),
             consumed=False,
+            cwd=cwd or "",
         )
 
     def to_dict(self) -> dict:
@@ -188,9 +226,9 @@ class MonitorStore:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def get(self, name: str) -> MonitorDef | None:
-        """Return the monitor with ``name`` or None."""
-        return self._monitors.get(name)
+    def get(self, key: str) -> MonitorDef | None:
+        """Return the monitor with registry ``key`` (see ``MonitorDef.key``)."""
+        return self._monitors.get(key)
 
     def list(self) -> list[MonitorDef]:
         """All monitors, newest registration first."""
@@ -201,74 +239,57 @@ class MonitorStore:
         )
 
     def add(self, monitor: MonitorDef) -> None:
-        """Insert a new monitor. Raises ValueError on duplicate name."""
-        if monitor.name in self._monitors:
+        """Insert a new monitor. Raises ValueError on a duplicate key."""
+        if monitor.key in self._monitors:
             raise ValueError(f"Monitor {monitor.name!r} already exists.")
-        self._monitors[monitor.name] = monitor
+        self._monitors[monitor.key] = monitor
         self._save()
 
     def replace(self, monitor: MonitorDef) -> None:
-        """Replace a monitor by name (state transitions, stop/start).
+        """Replace a monitor by key (state transitions, stop/start).
 
-        Raises KeyError when the name is unknown.
+        Raises KeyError when the key is unknown.
         """
-        if monitor.name not in self._monitors:
+        if monitor.key not in self._monitors:
             raise KeyError(f"Monitor {monitor.name!r} does not exist.")
-        self._monitors[monitor.name] = monitor
+        self._monitors[monitor.key] = monitor
         self._save()
 
-    def remove(self, name: str) -> MonitorDef:
-        """Delete a monitor by name. Raises KeyError when unknown."""
-        monitor = self._monitors.pop(name, None)
+    def remove(self, key: str) -> MonitorDef:
+        """Delete a monitor by key. Raises KeyError when unknown."""
+        monitor = self._monitors.pop(key, None)
         if monitor is None:
-            raise KeyError(f"Monitor {name!r} does not exist.")
+            raise KeyError(f"Monitor {key!r} does not exist.")
         self._save()
         return monitor
 
-    def mark_fired(self, name: str, when: str | None = None) -> MonitorDef | None:
+    def mark_fired(self, key: str, when: str | None = None) -> MonitorDef | None:
         """Bump ``last_fired_at``/``fire_count`` and persist.
 
         Returns the updated monitor, or None when unknown.
         """
-        monitor = self._monitors.get(name)
+        monitor = self._monitors.get(key)
         if monitor is None:
             return None
-        updated = MonitorDef(
-            name=monitor.name,
-            kind=monitor.kind,
-            spec=monitor.spec,
-            state=monitor.state,
-            session_id=monitor.session_id,
-            created_at=monitor.created_at,
+        updated = replace(
+            monitor,
             last_fired_at=when or _utc_now_iso(),
-            last_check_at=monitor.last_check_at,
             fire_count=monitor.fire_count + 1,
         )
-        self._monitors[name] = updated
+        self._monitors[key] = updated
         self._save()
         return updated
 
-    def mark_checked(self, name: str, when: str | None = None) -> None:
+    def mark_checked(self, key: str, when: str | None = None) -> None:
         """Bump ``last_check_at`` without persisting (hot path).
 
         Callers should persist periodically (``flush``) or on stop; a lost
         ``last_check_at`` is cosmetic, never data loss.
         """
-        monitor = self._monitors.get(name)
+        monitor = self._monitors.get(key)
         if monitor is None:
             return
-        updated = MonitorDef(
-            name=monitor.name,
-            kind=monitor.kind,
-            spec=monitor.spec,
-            state=monitor.state,
-            session_id=monitor.session_id,
-            created_at=monitor.created_at,
-            last_fired_at=monitor.last_fired_at,
-            last_check_at=when or _utc_now_iso(),
-            fire_count=monitor.fire_count,
-        )
-        self._monitors[name] = updated
+        self._monitors[key] = replace(monitor, last_check_at=when or _utc_now_iso())
 
     def flush(self) -> None:
         """Persist the in-memory registry (e.g. after hot-path updates)."""
@@ -297,14 +318,17 @@ class MonitorStore:
             return
         for name, entry in (data.get("monitors") or {}).items():
             try:
-                self._monitors[name] = MonitorDef.from_dict(entry)
+                monitor = MonitorDef.from_dict(entry)
             except (TypeError, ValueError) as exc:
                 logger.warning("Skipping corrupt registry entry %r: %s", name, exc)
+                continue
+            # Re-key from the definition (legacy files keyed by bare name).
+            self._monitors[monitor.key] = monitor
 
     def _save(self) -> None:
         data = {
             "version": _FORMAT_VERSION,
-            "monitors": {name: m.to_dict() for name, m in self._monitors.items()},
+            "monitors": {key: m.to_dict() for key, m in self._monitors.items()},
         }
         _atomic_write_json(self._registry_path, data)
 
@@ -348,6 +372,7 @@ class WakeQueue:
             if (
                 not existing.consumed
                 and existing.monitor == event.monitor
+                and existing.cwd == event.cwd
                 and existing.payload == event.payload
             ):
                 logger.debug(
@@ -358,7 +383,9 @@ class WakeQueue:
 
         dropped = 0
         pending = [
-            e for e in self._events if not e.consumed and e.monitor == event.monitor
+            e
+            for e in self._events
+            if not e.consumed and e.monitor == event.monitor and e.cwd == event.cwd
         ]
         while len(pending) + 1 > self.max_pending_per_monitor:
             oldest = pending.pop(0)
@@ -366,13 +393,8 @@ class WakeQueue:
             self._events.remove(oldest)
 
         if dropped:
-            event = WakeEvent(
-                id=event.id,
-                monitor=event.monitor,
-                kind=event.kind,
-                session_id=event.session_id,
-                fired_at=event.fired_at,
-                payload={**event.payload, "dropped_previous": dropped},
+            event = replace(
+                event, payload={**event.payload, "dropped_previous": dropped}
             )
         self._events.append(event)
         # Rewrite the whole queue atomically: the per-monitor cap may have
@@ -472,4 +494,6 @@ __all__ = [
     "MonitorStore",
     "WakeEvent",
     "WakeQueue",
+    "monitor_key",
+    "normalize_cwd",
 ]

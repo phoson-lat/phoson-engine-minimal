@@ -4,6 +4,7 @@ Async tests use short real timers where the point is persistence semantics;
 everything else runs against temp dirs and fakes (no network).
 """
 
+import os
 import asyncio
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,17 @@ from phoson_plugin_monitor import (
     MonitorPlugin,
     render_wake_message,
 )
-from phoson_plugin_monitor.storage import WakeQueue
+from phoson_plugin_monitor.storage import (
+    WakeQueue,
+    MonitorDef,
+    monitor_key,
+    normalize_cwd,
+)
+
+
+def _key(name: str) -> str:
+    """Registry/task key of a monitor registered from the test's cwd."""
+    return monitor_key(name, normalize_cwd(os.getcwd()))
 
 
 def _make_plugin(tmp_path: Path, **config) -> MonitorPlugin:
@@ -75,17 +86,17 @@ class TestRegister:
             )
             assert "registered" in result
             assert "sess-1" in result
-            monitor = plugin._store.get("build")
+            monitor = plugin._store.get(_key("build"))
             assert monitor is not None
             assert monitor.kind == "interval"
             assert monitor.spec == {"seconds": 1.0, "once": False}
             assert monitor.session_id == "sess-1"
-            assert "build" in plugin._tasks
+            assert _key("build") in plugin._tasks
             # On-disk immediately (a crash right now must not lose it).
             reloaded = MonitorPlugin()
             reloaded.configure({"data_dir": str(tmp_path)})
             reloaded.initialize()
-            assert reloaded._store.get("build") is not None
+            assert reloaded._store.get(_key("build")) is not None
         finally:
             await plugin.aclose()
 
@@ -149,7 +160,7 @@ class TestRegister:
                 {"name": "m", "kind": "interval", "spec": {"seconds": 5}},
                 {},
             )
-            assert plugin._store.get("m").session_id == "fallback-sess"
+            assert plugin._store.get(_key("m")).session_id == "fallback-sess"
         finally:
             await plugin.aclose()
 
@@ -161,16 +172,16 @@ class TestRegister:
                 {"name": "m", "kind": "interval", "spec": {"seconds": 5}},
                 _session_ctx(),
             )
-            assert "m" in plugin._tasks
+            assert _key("m") in plugin._tasks
             result = await tools["stop_monitor"].handler({"name": "m"})
             assert "stopped" in result
-            assert plugin._store.get("m") is None
+            assert plugin._store.get(_key("m")) is None
             # Re-registering the same name works again.
             await tools["register_monitor"].handler(
                 {"name": "m", "kind": "interval", "spec": {"seconds": 5}},
                 _session_ctx(),
             )
-            assert plugin._store.get("m") is not None
+            assert plugin._store.get(_key("m")) is not None
         finally:
             await plugin.aclose()
 
@@ -186,7 +197,7 @@ class TestRegister:
         plugin = _make_plugin(tmp_path)
         try:
             result = await _tools(plugin)["list_monitors"].handler({})
-            assert result == "No monitors registered."
+            assert result == "No monitors registered in this working directory."
         finally:
             await plugin.aclose()
 
@@ -313,10 +324,10 @@ class TestWakePath:
                 _session_ctx(),
             )
             await asyncio.sleep(1.3)
-            monitor = plugin._store.get("once")
+            monitor = plugin._store.get(_key("once"))
             assert monitor is not None
             assert monitor.state == "stopped"
-            assert "once" not in plugin._tasks
+            assert _key("once") not in plugin._tasks
             assert len(plugin.drain_pending_wakes("sess-1")) == 1
         finally:
             await plugin.aclose()
@@ -352,7 +363,7 @@ class TestWakePath:
         reloaded = MonitorPlugin()
         reloaded.configure({"data_dir": str(tmp_path)})
         reloaded.initialize()
-        assert reloaded._store.get("long").state == "running"
+        assert reloaded._store.get(_key("long")).state == "running"
 
     async def test_resurrection_after_restart(self, tmp_path: Path) -> None:
         plugin = _make_plugin(tmp_path)
@@ -367,8 +378,8 @@ class TestWakePath:
         revived.configure({"data_dir": str(tmp_path)})
         revived.initialize()
         await revived.ensure_started()
-        assert "long" in revived._tasks
-        assert not revived._tasks["long"].done()
+        assert _key("long") in revived._tasks
+        assert not revived._tasks[_key("long")].done()
         await revived.aclose()
 
     async def test_ensure_started_is_idempotent(self, tmp_path: Path) -> None:
@@ -377,9 +388,9 @@ class TestWakePath:
             {"name": "m", "kind": "interval", "spec": {"seconds": 60}},
             _session_ctx(),
         )
-        first_task = plugin._tasks["m"]
+        first_task = plugin._tasks[_key("m")]
         await plugin.ensure_started()
-        assert plugin._tasks["m"] is first_task
+        assert plugin._tasks[_key("m")] is first_task
         await plugin.aclose()
 
     async def test_double_configure_does_not_reset(self, tmp_path: Path) -> None:
@@ -518,3 +529,121 @@ class TestRenderWakeMessage:
         assert "[watcher] kind=file" in message
         assert 'changed: ["a.log"]' in message
         assert "note: hello" in message
+
+
+# ── Working-directory scope ───────────────────────────────────────────────────
+
+
+class _Scope:
+    """Mutable cwd provider: lets a test move the host between directories."""
+
+    def __init__(self, cwd: Path) -> None:
+        self.cwd = str(cwd)
+
+    def __call__(self) -> str:
+        return self.cwd
+
+
+def _scoped(tmp_path: Path, scope: _Scope) -> MonitorPlugin:
+    return _make_plugin(tmp_path / "state", cwd_provider=scope)
+
+
+class TestCwdScope:
+    async def test_monitors_are_isolated_per_directory(self, tmp_path: Path) -> None:
+        dir_a, dir_b = tmp_path / "a", tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        scope = _Scope(dir_a)
+        plugin = _scoped(tmp_path, scope)
+        tools = _tools(plugin)
+        spec = {"name": "watch", "kind": "interval", "spec": {"seconds": 60}}
+        try:
+            assert "registered" in await tools["register_monitor"].handler(
+                spec, _session_ctx()
+            )
+            scope.cwd = str(dir_b)
+            listing = await tools["list_monitors"].handler({}, {})
+            assert "watch" not in listing
+            assert plugin.monitor_status() is None
+            # Same name is free in B: names are unique per directory.
+            assert "registered" in await tools["register_monitor"].handler(
+                spec, _session_ctx()
+            )
+            assert "stopped" in await tools["stop_monitor"].handler(
+                {"name": "watch"}, {}
+            )
+            scope.cwd = str(dir_a)
+            listing = await tools["list_monitors"].handler({}, {})
+            assert "watch" in listing  # B's stop never touched A's monitor
+            assert plugin._store.get(monitor_key("watch", normalize_cwd(dir_a)))
+        finally:
+            await plugin.aclose()
+
+    async def test_reconcile_follows_directory_change(self, tmp_path: Path) -> None:
+        dir_a, dir_b = tmp_path / "a", tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        scope = _Scope(dir_a)
+        plugin = _scoped(tmp_path, scope)
+        key = monitor_key("long", normalize_cwd(dir_a))
+        try:
+            await _tools(plugin)["register_monitor"].handler(
+                {"name": "long", "kind": "interval", "spec": {"seconds": 60}},
+                _session_ctx(),
+            )
+            task = plugin._tasks[key]
+            scope.cwd = str(dir_b)
+            await plugin.reconcile_scope()
+            assert key not in plugin._tasks and task.cancelled()
+            # Leaving the directory pauses the watcher; disk keeps it running.
+            assert plugin._store.get(key).state == "running"
+            scope.cwd = str(dir_a)
+            await plugin.reconcile_scope()
+            assert not plugin._tasks[key].done()
+        finally:
+            await plugin.aclose()
+
+    async def test_registration_uses_tool_context_cwd(self, tmp_path: Path) -> None:
+        plugin = _make_plugin(tmp_path / "state")
+        try:
+            await _tools(plugin)["register_monitor"].handler(
+                {"name": "m", "kind": "interval", "spec": {"seconds": 60}},
+                _session_ctx(cwd_provider=lambda: str(tmp_path)),
+            )
+            monitor = plugin._store.get(monitor_key("m", normalize_cwd(tmp_path)))
+            assert monitor is not None and monitor.cwd == normalize_cwd(tmp_path)
+        finally:
+            await plugin.aclose()
+
+    async def test_legacy_unscoped_monitor_visible_everywhere(
+        self, tmp_path: Path
+    ) -> None:
+        scope = _Scope(tmp_path)
+        plugin = _scoped(tmp_path, scope)
+        plugin._store.add(
+            MonitorDef(name="old", kind="interval", spec={"seconds": 60.0})
+        )
+        try:
+            assert "old" in await _tools(plugin)["list_monitors"].handler({}, {})
+            assert "stopped" in await _tools(plugin)["stop_monitor"].handler(
+                {"name": "old"}, {}
+            )
+        finally:
+            await plugin.aclose()
+
+    async def test_fire_is_tagged_with_cwd(self, tmp_path: Path) -> None:
+        scope = _Scope(tmp_path)
+        plugin = _scoped(tmp_path, scope)
+        try:
+            await _tools(plugin)["register_monitor"].handler(
+                {"name": "tick", "kind": "interval", "spec": {"seconds": 60}},
+                _session_ctx(),
+            )
+            key = monitor_key("tick", normalize_cwd(tmp_path))
+            await plugin._fire(key, "interval", {"n": 1})
+            (event,) = plugin.pending_wakes("sess-1")
+            assert event.monitor == "tick" and event.cwd == normalize_cwd(tmp_path)
+            assert plugin._store.get(key).cwd == normalize_cwd(tmp_path)
+            assert plugin._store.get(key).fire_count == 1
+        finally:
+            await plugin.aclose()

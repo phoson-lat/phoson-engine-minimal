@@ -5,6 +5,7 @@ session_id_provider injection, wake draining into the next user turn,
 and resurrection across engine rebuilds.
 """
 
+import os
 import sys
 import asyncio
 from pathlib import Path
@@ -23,7 +24,17 @@ from phoson_cli.session_utils import (
     find_monitor_plugin,
     build_monitor_plugins,
 )
-from phoson_plugin_monitor.storage import WakeEvent
+from phoson_plugin_monitor.storage import (
+    WakeEvent,
+    MonitorDef,
+    monitor_key,
+    normalize_cwd,
+)
+
+
+def _key(name: str) -> str:
+    """Registry/task key of a monitor registered from the test's cwd."""
+    return monitor_key(name, normalize_cwd(os.getcwd()))
 
 
 def _done_event(answer="hello") -> AgentDoneEvent:
@@ -294,7 +305,7 @@ class TestControllerWiring:
             },
         )
         assert "registered" in result
-        assert "long" in plugin._tasks
+        assert _key("long") in plugin._tasks
 
         # Rebuild the engine (what /model does): old plugin is closed and
         # a new one must resurrect the monitor from disk.
@@ -302,8 +313,8 @@ class TestControllerWiring:
         await asyncio.sleep(0)  # let the ensure_started task run
         new_plugin = find_monitor_plugin(controller.engine._loaded_plugins)
         assert new_plugin is not plugin
-        assert "long" in new_plugin._tasks
-        assert not new_plugin._tasks["long"].done()
+        assert _key("long") in new_plugin._tasks
+        assert not new_plugin._tasks[_key("long")].done()
 
         await controller.shutdown()
 
@@ -512,6 +523,58 @@ class TestAutonomousWake:
         # After the run ends, the pending wake triggers an autonomous turn.
         await _poll_until(lambda: len(paths) >= 2)
         assert "[MONITOR EVENTS]" in _content_text(paths[-1][-1])
+        await controller.shutdown()
+
+    async def test_built_off_loop_resumes_on_wake_loop_start(self, tmp_path) -> None:
+        """A controller built in a worker thread (desktop bridge) cannot
+        schedule ``ensure_started``; starting the wake loop catches up."""
+        data_dir = tmp_path / "mon"
+        seed = MonitorPlugin()
+        seed.configure({"data_dir": str(data_dir)})
+        seed.initialize()
+        seed._store.add(
+            MonitorDef(
+                name="persisted",
+                kind="interval",
+                spec={"seconds": 60.0},
+                cwd=normalize_cwd(os.getcwd()),
+            )
+        )
+        controller, _ = await asyncio.to_thread(
+            _make_controller,
+            tmp_path,
+            enable_monitors=True,
+            monitors_data_dir=data_dir,
+        )
+        plugin = find_monitor_plugin(controller.engine._loaded_plugins)
+        assert plugin._tasks == {}  # nothing could be scheduled off-loop
+        controller.start_monitor_wake_loop()
+        await _poll_until(lambda: _key("persisted") in plugin._tasks)
+        await controller.shutdown()
+
+    async def test_monitors_scoped_to_session_cwd(self, tmp_path) -> None:
+        """Monitors follow ``tree.cwd``: another directory hides them."""
+        other = tmp_path / "other"
+        other.mkdir()
+        controller, _ = _make_controller(
+            tmp_path, enable_monitors=True, monitors_data_dir=tmp_path / "mon"
+        )
+        cwd_provider = controller.engine.context.extra["cwd_provider"]
+        assert cwd_provider() == controller.tree.cwd
+        tools = {t.name: t for t in controller.engine.tools}
+        await tools["register_monitor"].handler(
+            {"name": "here", "kind": "interval", "spec": {"seconds": 60}},
+            dict(controller.engine.context.extra),
+        )
+        plugin = find_monitor_plugin(controller.engine._loaded_plugins)
+        key = _key("here")
+        assert key in plugin._tasks
+
+        controller.tree.cwd = str(other)
+        listing = await tools["list_monitors"].handler({}, {})
+        assert "here" not in listing
+        await controller._wake_loop_tick()  # reconciles the scope
+        assert key not in plugin._tasks
         await controller.shutdown()
 
 
