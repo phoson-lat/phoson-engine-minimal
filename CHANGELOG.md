@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.56.0 (2026-10-22)
+
+### Feat
+
+- **monitor**: monitors are scoped to the working directory they were registered in. A host with a
+  `cwd_provider` (the CLI passes the session's `tree.cwd`) only lists, runs and stops the monitors
+  of its current directory, so monitors of `A/` are invisible from `B/`. Names are unique per
+  directory (registry key `name@cwd`); `command` monitors run in their cwd and relative `file`
+  paths resolve against it. The wake loop calls `reconcile_scope()` every tick, so a session that
+  changes directory pauses the old directory's watchers and starts the new one's. Monitors
+  registered before this release have no cwd and stay visible everywhere
+  ([#286](https://github.com/phoson-lat/phoson-engine-minimal/pull/286))
+
+### Fix
+
+- **cli**: hosts that build the controller off the event loop (the desktop bridge builds it in a
+  worker thread) no longer skip resuming persisted monitors and background jobs: the resume is
+  retried from `start_monitor_wake_loop()`/`run_turn()`, and `run_turn()` starts the wake loop
+  itself, so a front end that never started it still reactivates the agent. `_run_wake_turn`
+  returns the turn outcome for front ends that wrap wake turns via `set_operation_starter`
+  ([#286](https://github.com/phoson-lat/phoson-engine-minimal/pull/286))
+- **monitor**: `mark_fired`/`mark_checked` copy the monitor definition instead of rebuilding it
+  field by field, which dropped newly added fields
+  ([#286](https://github.com/phoson-lat/phoson-engine-minimal/pull/286))
+
 ## v0.55.0 (2026-10-22)
 
 ### Feat
