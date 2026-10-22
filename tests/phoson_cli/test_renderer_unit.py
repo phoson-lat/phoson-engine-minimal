@@ -653,3 +653,131 @@ def test_print_history_lightweight() -> None:
 
     output = cap.get()
     assert "│" not in output
+
+
+# ── Live streaming: plain text per token, Markdown once at the end ────────────
+
+
+class _RecordingLive:
+    """Stand-in for ``rich.live.Live`` that records update/stop calls."""
+
+    def __init__(self) -> None:
+        self.updates: list[tuple[object, bool]] = []
+        self.stopped = False
+
+    def update(self, renderable: object, *, refresh: bool = False) -> None:
+        self.updates.append((renderable, refresh))
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def test_live_panel_streams_plain_text_and_finalizes_as_markdown() -> None:
+    """Streaming frames skip the Markdown parse; the final frame uses it."""
+    from rich.text import Text
+    from rich.markdown import Markdown
+
+    renderer, _ = _renderer_with_capture()
+    renderer._live_content = "**bold** reply"
+
+    streaming = renderer._render_live_panel().renderables
+    assert isinstance(streaming[-1], Text)
+
+    final = renderer._render_live_panel(final=True).renderables
+    assert isinstance(final[-1], Markdown)
+
+
+def test_token_updates_do_not_force_refresh() -> None:
+    """Regression: every token forced a repaint (``refresh=True``), bypassing
+    Live's refresh rate, and re-parsed the whole reply as Markdown."""
+    from rich.text import Text
+    from rich.markdown import Markdown
+
+    renderer, _ = _renderer_with_capture()
+    renderer.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    renderer.stop_waiting()
+    live = _RecordingLive()
+    renderer._live = live  # type: ignore[assignment]
+
+    for chunk in ("**bo", "ld** ", "reply"):
+        renderer.on_event(AgentTokenEvent(content=chunk))
+
+    assert len(live.updates) == 3
+    assert all(refresh is False for _, refresh in live.updates)
+    assert all(isinstance(r.renderables[-1], Text) for r, _ in live.updates)
+
+    renderer._stop_live_streaming()
+
+    final, _ = live.updates[-1]
+    assert isinstance(final.renderables[-1], Markdown)
+    assert live.stopped
+    assert renderer._live is None
+
+
+def test_streamed_reply_is_left_on_screen_as_markdown() -> None:
+    """End to end: the persisted frame shows rendered Markdown, not raw marks."""
+    console = Console(record=True, width=80, highlight=False)
+    renderer = Renderer(console=console)
+    renderer._spinner._enabled = False
+
+    renderer.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    renderer.on_event(AgentTokenEvent(content="**bold** reply"))
+    renderer.finish_turn()
+
+    output = console.export_text()
+    assert "bold reply" in output
+    assert "**bold**" not in output
+
+
+def test_toggle_live_reasoning_repaints_immediately() -> None:
+    renderer, _ = _renderer_with_capture()
+    live = _RecordingLive()
+    renderer._live = live  # type: ignore[assignment]
+
+    renderer.toggle_live_reasoning()
+
+    assert live.updates[-1][1] is True
+    renderer._live = None
+
+
+# ── print_sessions_table: active marker ───────────────────────────────────────
+
+
+def _session_meta(session_id: str):
+    from phoson_agent.sessions.models import SessionMeta
+
+    now = datetime.datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    return SessionMeta(id=session_id, created_at=now, updated_at=now, message_count=1)
+
+
+def _session_states(renderer: Renderer, sessions: list) -> dict[str, str]:
+    console = Console(record=True, width=200, highlight=False)
+    renderer.console = console
+    renderer.print_sessions_table(sessions)
+    states: dict[str, str] = {}
+    for line in console.export_text().splitlines():
+        for s in sessions:
+            if s.id in line:
+                states[s.id] = "active" if "active" in line else "saved"
+    return states
+
+
+def test_sessions_table_marks_only_the_exact_current_session() -> None:
+    """Regression: a 4-char prefix match flagged sibling sessions as active."""
+    renderer, _ = _renderer_with_capture()
+    renderer.set_session("abcd-1111")
+
+    states = _session_states(
+        renderer, [_session_meta("abcd-1111"), _session_meta("abcd-2222")]
+    )
+
+    assert states == {"abcd-1111": "active", "abcd-2222": "saved"}
+
+
+def test_sessions_table_without_current_session_marks_none_active() -> None:
+    """Regression: with no session set, the empty prefix matched every row."""
+    renderer, _ = _renderer_with_capture()
+
+    states = _session_states(renderer, [_session_meta("s-1"), _session_meta("s-2")])
+
+    assert states == {"s-1": "saved", "s-2": "saved"}

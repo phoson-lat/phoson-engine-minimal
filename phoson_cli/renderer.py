@@ -413,7 +413,7 @@ class Renderer:
         """
         self._live_show_reasoning = not self._live_show_reasoning
         if self._live is not None:
-            self._update_live_streaming()
+            self._update_live_streaming(refresh=True)
         return self._live_show_reasoning
 
     def render_reasoning_panel(self, reasoning: str) -> Panel:
@@ -440,15 +440,23 @@ class Renderer:
         )
         self._live.start()
 
-    def _update_live_streaming(self) -> None:
-        """Update the Live panel with current buffer content."""
+    def _update_live_streaming(self, *, refresh: bool = False) -> None:
+        """Update the Live panel with current buffer content.
+
+        Token updates don't force a refresh: Live's own refresh thread
+        repaints at ``refresh_per_second``, so a burst of tokens costs one
+        frame instead of one terminal repaint per token.
+        """
         if self._live is None:
             return
-        self._live.update(self._render_live_panel(), refresh=True)
+        self._live.update(self._render_live_panel(), refresh=refresh)
 
     def _stop_live_streaming(self) -> None:
         """Stop the Live panel and render final Markdown."""
         if self._live is not None:
+            # Swap the plain-text streaming frame for the full Markdown
+            # render; Live.stop() paints it as the panel's final frame.
+            self._live.update(self._render_live_panel(final=True), refresh=False)
             self._live.stop()
             self._live = None
         # The panel is non-transient, so its last frame stays on screen.
@@ -458,13 +466,19 @@ class Renderer:
         self._live_content = ""
         self._live_reasoning = ""
 
-    def _render_live_panel(self) -> Group:
-        """Render the current stream: a label, then thinking/answer blocks."""
+    def _render_live_panel(self, *, final: bool = False) -> Group:
+        """Render the current stream: a label, then thinking/answer blocks.
+
+        While tokens arrive the answer renders as plain text: re-parsing the
+        ever-growing Markdown on every token is O(n²) over a long reply.
+        ``final=True`` builds the one-off Markdown frame left on screen.
+        """
         return render_streaming_panel(
             self._live_content,
             self._live_reasoning,
             self._live_show_reasoning,
             self.theme,
+            stream_plain=not final,
         )
 
     def finish_turn(self) -> None:
@@ -742,11 +756,7 @@ class Renderer:
         table.add_column("State", style=self.theme.accent_soft)
         for i, s in enumerate(sessions, start=1):
             updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
-            state = (
-                "active"
-                if str(s.id).startswith((self.session_id or "")[:4])
-                else "saved"
-            )
+            state = "active" if str(s.id) == self.session_id else "saved"
             table.add_row(str(i), s.id, str(s.message_count), updated, state)
         self.console.print(table)
 
