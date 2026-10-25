@@ -15,6 +15,7 @@ from phoson_cli.updater import (
     get_current_version,
     is_update_available,
     perform_self_update,
+    upgrade_failure_hint,
 )
 
 # ── Version comparison ────────────────────────────────────────────────────────
@@ -270,6 +271,39 @@ async def test_perform_self_update_failure_shows_manual_hint(monkeypatch) -> Non
     assert "Update failed (exit 1)" in summary
     assert "boom: uv not found" in summary
     assert "Try manually: uv tool upgrade" in summary
+
+
+@pytest.mark.asyncio
+async def test_perform_self_update_orphaned_receipt_hint(monkeypatch) -> None:
+    """A deleted `uv tool install <tmp-checkout>` source needs --force."""
+    monkeypatch.setattr(updater, "get_current_version", lambda: "0.3.0")
+    monkeypatch.setattr(updater, "get_latest_version", AsyncMock(return_value="0.4.0"))
+    monkeypatch.setattr(updater, "detect_install_mode", lambda: InstallMode.UV_TOOL)
+    monkeypatch.setattr(
+        updater,
+        "run_upgrade_command",
+        AsyncMock(
+            return_value=(
+                1,
+                "error: Failed to upgrade phoson-engine-minimal\n"
+                "  cause: Distribution not found at: "
+                "file:///tmp/tmp.OZHZhIKKOU/phoson-engine-minimal",
+            )
+        ),
+    )
+
+    summary = await perform_self_update(assume_yes=True)
+
+    assert "uv tool install --force phoson-engine-minimal" in summary
+
+
+def test_upgrade_failure_hint_only_for_uv_tool() -> None:
+    output = "Distribution not found at: file:///tmp/tmp.x/pkg"
+    assert "uv tool install --force" in upgrade_failure_hint(
+        InstallMode.UV_TOOL, output
+    )
+    assert upgrade_failure_hint(InstallMode.PIP, output) == ""
+    assert upgrade_failure_hint(InstallMode.UV_TOOL, "boom") == ""
 
 
 # ── Command + flag wiring ─────────────────────────────────────────────────────
