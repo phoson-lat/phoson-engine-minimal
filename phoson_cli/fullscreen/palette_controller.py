@@ -32,14 +32,19 @@ class PaletteController:
         if app._palette_open:
             return  # a palette is already scheduled/animating open
         app._palette_open = True
-        coro = self._run()
-        if app._is_run_in_flight():
+        # Decided here, before the palette becomes an operation itself: once
+        # it is the app's ``_run_task``, ``_is_run_in_flight()`` is always
+        # True inside it and an idle palette would offer only run-safe
+        # commands.
+        running = app._is_run_in_flight()
+        coro = self._run(running=running)
+        if running:
             app._start_concurrent_operation(coro, "palette")
             return
         if app._start_operation(coro, "palette") is None:
             app._palette_open = False
 
-    async def _run(self) -> None:
+    async def _run(self, *, running: bool) -> None:
         """Host the palette as a background task with a synchronous guard.
 
         ``_active_float`` is only set when the task actually runs (the
@@ -51,11 +56,11 @@ class PaletteController:
         """
         app = self._app
         try:
-            await self._run_inner()
+            await self._run_inner(running=running)
         finally:
             app._palette_open = False
 
-    async def _run_inner(self) -> None:
+    async def _run_inner(self, *, running: bool) -> None:
         from ..commands import Command, is_run_safe_command
         from ..palette_picker import (
             PaletteEntry,
@@ -64,7 +69,6 @@ class PaletteController:
         )
 
         app = self._app
-        running = app._is_run_in_flight()
         catalog = app.session.controller.command_catalog
         entries: list[PaletteEntry] = []
         for spec in catalog.specs:

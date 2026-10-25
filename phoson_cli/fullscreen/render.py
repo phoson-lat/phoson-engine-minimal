@@ -258,12 +258,15 @@ def render_chat_split(
     buf = io.StringIO()
 
     if not sink.blocks and sink.current_turn is None:
-        # T-1: real empty state — a one-line hint, no ASCII-art mascot
-        # (the banner is no longer injected into the sink). Both features
-        # work today: @file mentions and / commands.
-        _make_console(buf, width).print(
-            "  @ files  ·  / commands", style=sink.theme.muted_deep
-        )
+        # Empty state: the compact welcome screen (identity, recent sessions
+        # here, key tips) when the app provides one, else a one-line hint.
+        # No ASCII-art mascot (T-1); that lives in /about.
+        console = _make_console(buf, width)
+        welcome = sink.welcome_provider() if sink.welcome_provider else None
+        if welcome is not None:
+            console.print(welcome)
+        else:
+            console.print("  @ files  ·  / commands", style=sink.theme.muted_deep)
         return buf.getvalue(), 0
 
     for block in sink.blocks:

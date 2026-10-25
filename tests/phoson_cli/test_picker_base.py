@@ -135,14 +135,26 @@ def test_on_done_takes_priority_over_owned_app() -> None:
     assert results == ["chosen"]
 
 
-def test_as_float_wraps_window_without_title() -> None:
+def test_as_float_frames_window_even_without_title() -> None:
+    """A picker Float is always a framed, content-sized modal (never a bare
+    full-screen window painted over the composer)."""
+    from prompt_toolkit.layout.layout import walk
     from prompt_toolkit.layout.containers import Float
 
     picker: BasePicker[str] = BasePicker(render=lambda: [])
     float_ = picker.as_float()
 
     assert isinstance(float_, Float)
-    assert float_.content is picker._window
+    # Float stores the Frame's container: the picker window sits inside it,
+    # surrounded by the Frame's border windows.
+    assert float_.content is not picker._window
+    assert picker._window in list(walk(float_.content))
+    assert (float_.left, float_.right, float_.top, float_.bottom) == (
+        None,
+        None,
+        None,
+        None,
+    )
 
 
 def test_as_float_wraps_window_in_a_frame_with_title() -> None:

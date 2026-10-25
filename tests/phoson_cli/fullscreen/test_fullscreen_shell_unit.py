@@ -600,14 +600,12 @@ def test_composer_is_wrapped_in_a_single_frame_not_two_rules(
     # The Frame's internal container (an HSplit) is a direct child.
     assert any(isinstance(c, HSplit) for c in main_hsplit._all_children)
 
-    # The old bottom ``—`` rule is gone: among the main HSplit's direct
-    # Window children, exactly one rule-style Window remains — the single
-    # header separator. (The Frame's border windows are nested one level
-    # down, inside the Frame's internal HSplit, so they are not counted.)
+    # No rule-style Window remains among the main HSplit's direct children:
+    # the composer Frame's own border separates it from the chat. (The
+    # Frame's border windows are nested one level down, so not counted.)
     direct_windows = [c for c in main_hsplit._all_children if isinstance(c, Window)]
     rule_windows = [c for c in direct_windows if getattr(c, "char", None) in ("─", "—")]
-    assert len(rule_windows) == 1
-    assert rule_windows[0].char == "─"  # the header separator, not ``—``
+    assert rule_windows == []
 
 
 def test_composer_placeholder_shows_when_empty_and_hides_when_typed(
@@ -1220,22 +1218,16 @@ def test_scroll_home_jumps_to_top(app: PhosonApp) -> None:
     assert app._chat_scroll_top == 0
 
 
-def test_render_chat_shows_empty_state_on_startup(app: PhosonApp) -> None:
-    """T-1: the chat pane is seeded with a one-line empty-state hint, not
-    the 17-line ASCII banner (which is now available via /about). The
-    provider/model/session/command-hint lines are NOT part of it — that
-    info lives in the header/footer instead (see
-    ``test_header_shows_cwd_and_token_cost`` and
-    ``test_footer_pairs_model_with_contextual_hints``), not duplicated in
-    the scrollback.
-    """
+def test_render_chat_shows_welcome_screen_on_startup(app: PhosonApp) -> None:
+    """The idle pane shows the compact welcome screen — identity, version
+    and key tips — not the 17-line ASCII banner (that lives in /about)."""
+    from phoson_cli._views import _PHOS_ART
+
     text = app._render_chat().value
-    # No ASCII-art wordmark in the idle pane.
-    assert "phoson" not in text.lower()
-    assert "Type a message" not in text
-    # The one-line hint instead.
-    assert "/ commands" in text
-    assert "provider" not in text
+    assert "terminal agent" in text
+    assert "shell command, shared with agent" in text
+    assert "ctrl+p palette" in text
+    assert _PHOS_ART.splitlines()[1].strip() not in text
 
 
 def test_render_chat_shows_transcript_blocks(app: PhosonApp) -> None:
@@ -1916,10 +1908,10 @@ async def test_bash_card_always_is_one_shot_while_persisting(
 
 def test_transcript_is_empty_on_init(app: PhosonApp) -> None:
     """T-1: no banner block is injected at startup — the sink starts empty
-    and the chat pane renders the one-line empty-state hint."""
+    and the chat pane renders the welcome screen from its provider."""
     assert app.sink.blocks == []
     text = app._render_chat().value
-    assert "/ commands" in text
+    assert "terminal agent" in text
 
 
 def test_slash_completer_only_completes_the_command_word() -> None:
@@ -2142,6 +2134,33 @@ async def test_t12_ctrl_p_opens_palette_and_dispatches_selected_command(
     await started.wait()
     await asyncio.sleep(0)
     assert dispatched == ["/help"]
+
+
+async def test_idle_palette_offers_every_command(app: PhosonApp, monkeypatch) -> None:
+    """Regression: the palette runs as an operation itself, so it used to see
+    a "turn in flight" and hide every non-run-safe command while idle."""
+    from phoson_cli.commands import CommandSpec, CommandCatalog
+
+    app.session._controller.command_catalog = CommandCatalog(
+        specs=(
+            CommandSpec(("/help",), "Show this help", "_cmd_help"),
+            CommandSpec(("/model",), "Pick a model", "_cmd_model"),
+        ),
+        plugin_commands={},
+    )
+    offered: list[str] = []
+
+    def fake_build(entries, theme):
+        offered.extend(entry.name for entry in entries)
+        return object()
+
+    monkeypatch.setattr("phoson_cli.palette_picker.build_command_palette", fake_build)
+    monkeypatch.setattr(app, "run_float_picker", AsyncMock(return_value=None))
+    monkeypatch.setattr(app.app, "create_background_task", asyncio.ensure_future)
+
+    _trigger(app, "c-p")
+    await app._run_task
+    assert offered == ["/help", "/model"]
 
 
 async def test_palette_dispatched_command_remains_single_flight(

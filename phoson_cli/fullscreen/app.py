@@ -12,6 +12,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 """
 
 import os
+import time
 import asyncio
 import logging
 from typing import Any, cast
@@ -21,6 +22,7 @@ from dataclasses import dataclass
 from collections.abc import Callable, Sequence, Coroutine
 
 from prompt_toolkit import Application
+from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import FileHistory
@@ -74,6 +76,7 @@ from .floats import FloatsController
 # :func:`phoson_cli.fullscreen.floats.bash_card_rows` in #187).
 from .floats import bash_card_rows as _bash_card_rows  # noqa: F401
 from .render import BlockAnsiCache, BlockFormattedTextCache
+from ..banner import banner_frame_key, animations_enabled
 
 # render_banner is no longer imported here (T-1: the banner is not injected
 # into the sink). It is used by the /about command in commands.py.
@@ -259,6 +262,22 @@ class _ComposerPlaceholderProcessor(Processor):
         return Transformation(fragments=transformation_input.fragments)
 
 
+def _detect_color_depth() -> ColorDepth | None:
+    """24-bit color when the terminal advertises it, else ptk's default.
+
+    prompt_toolkit only looks at ``TERM`` (and ``PROMPT_TOOLKIT_COLOR_DEPTH``)
+    and otherwise renders in 256 colors — even in kitty, Ghostty, WezTerm or
+    iTerm2, which announce truecolor through ``COLORTERM``. The themes'
+    subtle hex tones (panel backgrounds, the welcome banner's shine) were
+    being quantized to the nearest of 256 colors.
+    """
+    if os.environ.get("PROMPT_TOOLKIT_COLOR_DEPTH"):
+        return None  # ptk honors the explicit override itself
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit"):
+        return ColorDepth.DEPTH_24_BIT
+    return None
+
+
 def _tie_kitty_keyboard_to_alternate_screen(output: Any) -> None:
     """Enable the kitty keyboard protocol only while on the alternate screen.
 
@@ -282,6 +301,12 @@ def _tie_kitty_keyboard_to_alternate_screen(output: Any) -> None:
 
     output.enter_alternate_screen = enter_with_kitty_keyboard
     output.quit_alternate_screen = quit_with_kitty_keyboard
+
+
+#: Welcome-banner animation tick (s) while a shine/blink may be under way,
+#: and the poll interval once the conversation has started.
+_WELCOME_TICK = 0.06
+_WELCOME_IDLE_POLL = 0.5
 
 
 # Default persistent input-history file — the *same* file the classic REPL
@@ -377,6 +402,11 @@ class PhosonApp:
         self._shell_mode = False
         # Monotonic time of the last unconfirmed Ctrl+C (0 = not armed).
         self._interrupt_armed_at = 0.0
+        # Installed version for the welcome screen, resolved on first paint.
+        self._version: str | None = None
+        # Monotonic start of the welcome banner's animation clock (None while
+        # the welcome is not shown).
+        self._banner_started: float | None = None
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -437,6 +467,8 @@ class PhosonApp:
         self._rewind = RewindController(self)
         # Command palette controller (#187); see palette_controller.py.
         self._palette = PaletteController(self)
+        # Empty-state welcome screen (identity, recent sessions, key tips).
+        self.sink.welcome_provider = self._render_welcome
 
         # T-1: the banner is no longer injected into the sink. The header
         # already carries provider/model/session; the art is available via
@@ -467,7 +499,6 @@ class PhosonApp:
         header_window = Window(
             content=FormattedTextControl(self._get_header_text), height=1
         )
-        separator_line = Window(height=1, char="─", style="class:separator")
 
         self._prompt_input = TextArea(
             height=D(min=1, max=_INPUT_MAX_LINES),
@@ -540,7 +571,7 @@ class PhosonApp:
             style="class:prompt_text",
         )
         # T-4: the composer is an *object*, not a shell prompt. A single
-        # rounded Frame (one separator — the top rule above) replaces the
+        # rounded Frame (its own border is the only separator) replaces the
         # old two-rule ``─``/``—`` sandwich; the ``❯`` stays *inside* the
         # box as an in-composer cue, not a leading shell glyph. The same
         # Frame the picker Floats use, so the chrome is one visual language.
@@ -561,7 +592,6 @@ class PhosonApp:
             [
                 header_window,
                 self._chat_window,
-                separator_line,
                 self._composer_frame,
                 footer_window,  # Now contains only keyboard hints
             ]
@@ -609,6 +639,7 @@ class PhosonApp:
             # paint on the first available frame — navigation stays
             # event-driven and fluid.
             min_redraw_interval=0.035,
+            color_depth=_detect_color_depth(),
         )
 
     def _apply_style(self) -> None:
@@ -1239,6 +1270,59 @@ class PhosonApp:
         else:
             self._start_operation(paste_image_from_clipboard(self), "clipboard")
 
+    # ── Welcome screen ───────────────────────────────────────────────────
+
+    def _render_welcome(self) -> object:
+        """The empty-state welcome renderable (see ``_views.render_welcome``)."""
+        from .._views import render_welcome
+        from .._version import get_current_version
+
+        if self._version is None:
+            self._version = get_current_version()
+        banner_time = None
+        if animations_enabled(self.theme.name):
+            if self._banner_started is None:
+                self._banner_started = time.monotonic()
+            banner_time = time.monotonic() - self._banner_started
+        return render_welcome(
+            version=self._version,
+            cwd=_short_cwd_impl(Path.cwd()),
+            model=f"{self.session.current_model} ({self.session.config.provider})",
+            sessions=self.session_cache.sessions,
+            theme=self.theme,
+            banner_time=banner_time,
+        )
+
+    async def _animate_welcome(self) -> None:
+        """Drive the welcome banner's shine/blink while the welcome is shown.
+
+        Repaints only when :func:`~phoson_cli.banner.banner_frame_key`
+        changes — during a sweep or a blink — and idles otherwise; once the
+        conversation starts the banner clock resets and the loop just polls.
+        """
+        last_key: tuple[object, ...] | None = None
+        while True:
+            showing = not self.sink.blocks and self.sink.current_turn is None
+            if not showing or not animations_enabled(self.theme.name):
+                self._banner_started = None
+                last_key = None
+                await asyncio.sleep(_WELCOME_IDLE_POLL)
+                continue
+            if self._banner_started is None:
+                self._banner_started = time.monotonic()
+            key = banner_frame_key(time.monotonic() - self._banner_started)
+            if key != last_key:
+                last_key = key
+                self.sink.dirty = True
+                self.app.invalidate()
+            await asyncio.sleep(_WELCOME_TICK)
+
+    async def _refresh_sessions_and_welcome(self) -> None:
+        """Prefetch the session list, then repaint the welcome screen with it."""
+        await self.session_cache.refresh(self.session.storage, cwd=str(Path.cwd()))
+        self.sink.dirty = True
+        self.app.invalidate()
+
     # ── Lifecycle ────────────────────────────────────────────────────────
 
     async def run_async(self) -> None:
@@ -1246,9 +1330,8 @@ class PhosonApp:
         # delaying first paint. Plain create_task (not create_background_task)
         # since the Application isn't running yet for it to track this against.
         asyncio.create_task(self.model_cache.refresh(self.session.config))
-        asyncio.create_task(
-            self.session_cache.refresh(self.session.storage, cwd=str(Path.cwd()))
-        )
+        asyncio.create_task(self._refresh_sessions_and_welcome())
+        welcome_animation = asyncio.create_task(self._animate_welcome())
         # Autonomous monitor wake loop (I-126): the full-screen front end
         # has its own event loop entry point (no PhosonRepl.run), so it
         # starts the loop here. No-op when enable_monitors is off.
@@ -1284,6 +1367,7 @@ class PhosonApp:
         try:
             await self.app.run_async()
         finally:
+            welcome_animation.cancel()
             if extended_keys:
                 self.app.output.write_raw(RESET_MODIFY_OTHER_KEYS)
                 self.app.output.flush()

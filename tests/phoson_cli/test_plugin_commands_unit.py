@@ -150,3 +150,23 @@ def test_catalog_rejects_collision_between_plugins() -> None:
 
     with pytest.raises(ValueError, match="conflicts with another plugin"):
         build_command_catalog([_Plugin(), OtherPlugin()])
+
+
+def test_slash_completer_lists_each_command_once() -> None:
+    """Aliases are offered only when the prefix matches them, not the primary."""
+    from prompt_toolkit.document import Document
+
+    from phoson_cli.commands import SlashCompleter
+
+    def names(text: str) -> list[str]:
+        doc = Document(text, len(text))
+        return [c.text for c in SlashCompleter().get_completions(doc, None)]
+
+    everything = names("/")
+    assert "/attach" in everything and "/attachments" not in everything
+    assert names("/attachm") == ["/attachments"]
+    meta = next(
+        c.display_meta_text
+        for c in SlashCompleter().get_completions(Document("/attachm", 8), None)
+    )
+    assert meta.startswith("→ /attach")

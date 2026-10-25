@@ -189,15 +189,26 @@ class SlashCompleter(Completer):
             return
 
         word = text.lower()
-        metadata = {name: spec.help for spec in self._specs() for name in spec.names}
-        for cmd in sorted(metadata):
-            if cmd.startswith(word):
-                yield Completion(
-                    cmd,
-                    start_position=-len(text),
-                    display=cmd,
-                    display_meta=metadata[cmd],
-                )
+        # One row per command: an alias is offered only when the typed prefix
+        # matches it but not the primary name (``/attachm`` → ``/attachments``),
+        # so ``/`` no longer lists ``/attach`` and ``/attachments`` twice.
+        rows: dict[str, str] = {}
+        for spec in self._specs():
+            primary, *aliases = spec.names
+            if primary.startswith(word):
+                rows[primary] = spec.help
+                continue
+            for alias in aliases:
+                if alias.startswith(word):
+                    rows[alias] = f"→ {primary} · {spec.help}"
+                    break
+        for cmd in sorted(rows):
+            yield Completion(
+                cmd,
+                start_position=-len(text),
+                display=cmd,
+                display_meta=rows[cmd],
+            )
 
 
 class PathCompleter(Completer):

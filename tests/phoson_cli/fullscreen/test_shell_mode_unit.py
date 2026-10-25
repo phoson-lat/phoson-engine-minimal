@@ -231,3 +231,28 @@ def test_kitty_keyboard_is_tied_to_the_alternate_screen() -> None:
     output.enter_alternate_screen()
     output.quit_alternate_screen()
     assert written == ["<enter>", KITTY_KEYBOARD_PUSH, KITTY_KEYBOARD_POP, "<quit>"]
+
+
+def test_truecolor_terminals_get_24_bit_color(monkeypatch) -> None:
+    from prompt_toolkit.output import ColorDepth
+
+    from phoson_cli.fullscreen.app import _detect_color_depth
+
+    monkeypatch.delenv("PROMPT_TOOLKIT_COLOR_DEPTH", raising=False)
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    assert _detect_color_depth() is ColorDepth.DEPTH_24_BIT
+    monkeypatch.setenv("COLORTERM", "")
+    assert _detect_color_depth() is None
+    monkeypatch.setenv("COLORTERM", "24bit")
+    monkeypatch.setenv("PROMPT_TOOLKIT_COLOR_DEPTH", "DEPTH_8_BIT")
+    assert _detect_color_depth() is None  # explicit override wins (ptk reads it)
+
+
+def test_welcome_screen_stays_anchored_at_the_top(app: PhosonApp) -> None:
+    """On a pane shorter than the welcome screen the banner stays in view."""
+    pane = app._chat_pane
+    app._render_chat()
+    pane._total_chat_lines = 500
+    assert pane.get_effective_scroll() == 0
+    app.sink.blocks.append("a block")
+    assert pane.get_effective_scroll() > 0

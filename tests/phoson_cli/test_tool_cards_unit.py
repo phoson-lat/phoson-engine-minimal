@@ -307,3 +307,30 @@ def test_error_hint_known_codes() -> None:
 def test_error_hint_unknown_code_returns_none() -> None:
     assert error_hint("mystery") is None
     assert error_hint(None) is None
+
+
+def test_done_card_is_one_line_with_status_and_duration() -> None:
+    from rich.console import Console
+
+    from phoson_agent import AgentToolDoneEvent
+    from phoson_cli.theme import DARK
+    from phoson_cli.formatting import render_tool_done_line
+
+    event = AgentToolDoneEvent(
+        tool_call_id="t1", tool_name="read_file", result="x", duration_ms=1234
+    )
+    console = Console(width=100, highlight=False)
+    with console.capture() as capture:
+        console.print(render_tool_done_line(event, DARK, {"path": "a.py"}))
+    lines = [line for line in capture.get().splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0].lstrip(" │").startswith("✓")
+    assert lines[0].rstrip().endswith("1.2s")
+
+
+def test_format_duration_ms() -> None:
+    from phoson_cli.formatting import format_duration_ms
+
+    assert format_duration_ms(850) == "850ms"
+    assert format_duration_ms(1234) == "1.2s"
+    assert format_duration_ms(125_000) == "2m05s"

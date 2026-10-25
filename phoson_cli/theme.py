@@ -788,6 +788,18 @@ def build_prompt_style(theme: Theme) -> dict[str, str]:
             "completion-menu.meta.current": (
                 f"bg:{theme.completion_current_bg} {theme.completion_meta_fg}"
             ),
+            # prompt_toolkit's own defaults style the meta column through the
+            # more specific ``meta.completion`` classes (grey #999/#aaa), which
+            # beat the two keys above — restate the theme colors on them.
+            "completion-menu.meta.completion": (
+                f"bg:{theme.completion_meta_bg} {theme.completion_meta_fg}"
+            ),
+            "completion-menu.meta.completion.current": (
+                f"bg:{theme.completion_current_bg} {theme.completion_meta_fg}"
+            ),
+            "completion-menu.multi-column-meta": (
+                f"bg:{theme.completion_meta_bg} {theme.completion_meta_fg}"
+            ),
             "scrollbar.background": f"bg:{theme.scrollbar_bg}",
             "scrollbar.button": f"bg:{theme.scrollbar_button}",
         },

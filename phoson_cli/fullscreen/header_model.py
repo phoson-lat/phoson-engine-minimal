@@ -309,8 +309,12 @@ class HeaderModel:
         chat (the key map is always available via ``/keys``).
         """
         app = self.app
+        below = app._chat_pane.lines_below() if not app._auto_scroll else 0
         if exit_armed(app):
             hint = _FOOTER_HINT_EXIT_ARMED
+        elif below and app._active_float is None:
+            # Scrolled up: say how much is below and how to get back.
+            hint = f"↓ {below} more lines  ·  end to follow"
         elif app._active_float is not None:
             hint = _FOOTER_HINT_PICKER
         elif getattr(app, "_shell_mode", False):

@@ -58,6 +58,37 @@ applicable — the line vanishes when the turn settles.
 While idle, press `Esc` twice to **rewind** the conversation to an
 earlier message (see [rewind.md](rewind.md)).
 
+## Welcome screen, cards and scrolling
+
+Until the first message the chat pane shows a compact welcome screen: the
+phoson-cli banner (the phoson face beside a block-letter `phoson-cli`
+wordmark), the cwd and model, the three most recent sessions started in this
+directory (resume one with `/resume <id>`) and the key gestures (`!`, `@`,
+`/`, `Ctrl+P`, `Esc Esc`, `Shift+Tab`, `Ctrl+E`). The banner is lightly
+animated — a shine sweeps the wordmark every few seconds and the face
+blinks — repainting only while something moves; `NO_COLOR`,
+`PHOSON_NO_ANIMATION=1` or the `no-color` theme keep it still. On a narrow
+terminal the wordmark is dropped; on a short one the welcome stays anchored
+at the top. The classic REPL starts with the same banner, static.
+
+The TUI renders in 24-bit color when the terminal advertises it through
+`COLORTERM=truecolor` (kitty, Ghostty, WezTerm, iTerm2…); prompt_toolkit
+alone would fall back to 256 colors. `PROMPT_TOOLKIT_COLOR_DEPTH` still
+overrides.
+
+A finished tool call is a single line — `│ ✓ 📖 reading file · src/app.py ·
+120ms` — with `✗` and the error on a second line when it failed; bash output
+and diffs follow the line in `full` detail mode. Each assistant turn ends
+with one `· ended HH:MM` stamp (live and on resume). Fenced code blocks are
+set apart by their background band, without extra blank lines.
+
+When you scroll up (`PgUp`, wheel), the footer shows how much is below
+(`↓ 30 more lines · end to follow`); the scrollbar only appears when the
+transcript is taller than the pane. Pickers and the `Ctrl+P` palette open as
+framed, centered modals sized to their content; the palette lists every
+command when idle and only the run-safe ones mid-turn. The `/` menu lists
+each command once (an alias appears only when you type it).
+
 ## Header and footer
 
 The header (top line) carries only durable session facts — `* phoson · title

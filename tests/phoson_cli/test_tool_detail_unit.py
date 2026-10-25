@@ -172,7 +172,12 @@ def test_render_history_full_shows_real_tool_cards() -> None:
 
     assert "reading file" in out and "a.py" in out
     assert "running command" in out and "pytest" in out
-    assert "✗ 1 failed" in out
+    # Outcome inline on the header line; the error text on the next one.
+    assert any(
+        line.lstrip("│ ").startswith("✗") and "running command" in line
+        for line in out.splitlines()
+    )
+    assert "│   1 failed" in out
     # Unknown durations render no "0ms" placeholder.
     assert "0ms" not in out
 
