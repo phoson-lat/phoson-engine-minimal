@@ -475,10 +475,10 @@ def test_chat_scrollbar_thumb_tracks_scroll() -> None:
     assert bottom[-1] >= 25 - len(top) - 1
 
 
-def test_chat_scrollbar_fills_for_short_transcript() -> None:
-    # A transcript no taller than the window: the thumb fills the bar.
-    rows = _thumb_rows(lambda: (10, 0), height=25)
-    assert len(rows) == 25
+def test_chat_scrollbar_hidden_for_short_transcript() -> None:
+    # A transcript no taller than the window has nothing to scroll: no bar.
+    assert _thumb_rows(lambda: (10, 0), height=25) == []
+    assert _thumb_rows(lambda: (25, 0), height=25) == []
 
 
 def test_chat_scrollbar_empty_when_nothing_to_show() -> None:

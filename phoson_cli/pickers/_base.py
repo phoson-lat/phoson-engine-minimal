@@ -275,8 +275,11 @@ class BasePicker[TResult]:
         before using this — :meth:`run` is not called in Float mode, so
         :meth:`done`/:meth:`refresh` have nothing else to report to.
         """
-        content = Frame(self._window, title=title) if title else self._window
-        return Float(content=content, left=2, right=2, top=1, bottom=1)
+        # Always framed and sized to the picker's content (prompt_toolkit
+        # centers an unpositioned Float): a bare full-screen Float painted
+        # over the whole UI, composer border included, with no edge of its
+        # own to read as a modal.
+        return Float(content=Frame(self._window, title=title or ""))
 
     def _is_empty(self) -> bool:
         """Subclasses can override to short-circuit run() on empty input."""

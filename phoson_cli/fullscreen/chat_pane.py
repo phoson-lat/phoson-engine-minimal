@@ -168,7 +168,9 @@ class ChatScrollbarMargin(Margin):
         self, window_render_info: Any, width: int, height: int
     ) -> list[tuple[str, str]]:
         total, scroll = self._callback()
-        if total <= 0 or height <= 0:
+        # Nothing to scroll (empty chat, short transcript): no bar at all,
+        # rather than a full-height thumb that reads as a stray grey column.
+        if total <= height or height <= 0:
             return []
         # Mirror ScrollbarMargin's thumb math, but against the *transcript*
         # (total/scroll from the callback) rather than the windowed content
@@ -279,6 +281,15 @@ class ChatPane:
         visible_height = self.get_visible_window_height()
         max_scroll = max(0, self._total_chat_lines - visible_height)
         if self._auto_scroll:
+            sink = self.sink
+            if (
+                getattr(sink, "welcome_provider", None) is not None
+                and not sink.blocks
+                and sink.current_turn is None
+            ):
+                # The welcome screen reads top-down (banner first): on a short
+                # pane keep its top in view instead of following the bottom.
+                return 0
             return max_scroll
         return max(0, min(self._chat_scroll_top, max_scroll))
 
@@ -484,6 +495,11 @@ class ChatPane:
                 render_ms=render_ms,
             )
         return self._windowed_ansi
+
+    def lines_below(self) -> int:
+        """Transcript lines below the visible window (0 when following)."""
+        visible = self.get_visible_window_height()
+        return max(0, self._total_chat_lines - self.get_effective_scroll() - visible)
 
     def scrollbar_state(self) -> tuple[int, int]:
         """(total_lines, scroll_top) for :class:`ChatScrollbarMargin`.

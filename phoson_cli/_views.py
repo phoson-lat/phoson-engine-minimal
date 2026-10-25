@@ -6,6 +6,9 @@ console) to do their work. Lifting them out keeps ``repl.py`` focused
 on the input loop and makes the rendering trivially testable.
 """
 
+import datetime
+from typing import Any
+
 from rich.rule import Rule
 from rich.text import Text
 from rich.columns import Columns
@@ -191,6 +194,80 @@ def render_tree_rich(
 # ─── Banner ──────────────────────────────────────────────────────────────────
 
 
+#: Recent sessions listed on the full-screen welcome screen.
+_WELCOME_SESSIONS = 3
+#: Key hints on the welcome screen: (key, what it does), two per row.
+_WELCOME_TIPS: tuple[tuple[str, str], ...] = (
+    ("!", "shell command, shared with agent"),
+    ("@", "attach a file"),
+    ("/", "commands  ·  ctrl+p palette"),
+    ("esc esc", "rewind the conversation"),
+    ("shift+tab", "permission mode"),
+    ("ctrl+e", "reasoning effort"),
+)
+
+
+def render_welcome(
+    *,
+    version: str,
+    cwd: str,
+    model: str,
+    sessions: "list[Any]",
+    theme: Theme,
+    now: "datetime.datetime | None" = None,
+    banner_time: float | None = None,
+) -> Group:
+    """The full-screen empty state: identity, recent sessions here, key tips.
+
+    Shown in the chat pane until the first message: the animated phoson-cli
+    banner (a compact face, not the 17-line mascot that lives in /about),
+    then cwd/model, recent sessions and key tips. *sessions* are
+    ``SessionMeta``-like objects (``id``, ``title``, ``updated_at``), most
+    recent first. *banner_time* (seconds since the banner appeared) animates
+    the :class:`~phoson_cli.banner.PhosonBanner`; ``None`` draws it static.
+    """
+    from phoson_cli.banner import PhosonBanner
+    from phoson_cli.formatting import format_timestamp
+
+    items: list[RenderableType] = [
+        Text(""),
+        PhosonBanner(theme, version, banner_time),
+        Text(""),
+        Text(f"  {cwd}  ·  {model}", style=theme.muted),
+    ]
+
+    recent = sessions[:_WELCOME_SESSIONS]
+    if recent:
+        items.append(Text(""))
+        items.append(Text("  Recent here", style=f"bold {theme.text}".strip()))
+        for meta in recent:
+            row = Text("    ")
+            row.append(str(meta.id)[:8], style=theme.accent_soft)
+            title = (getattr(meta, "title", None) or "untitled").strip()
+            if len(title) > 48:
+                title = title[:47] + "…"
+            row.append(f"  {title}", style=theme.text)
+            updated = getattr(meta, "updated_at", None)
+            if updated is not None:
+                row.append(f"  ·  {format_timestamp(updated, now)}", style=theme.muted)
+            items.append(row)
+        items.append(
+            Text(
+                "    /resume <id> to continue  ·  /sessions for all",
+                style=theme.muted_deep,
+            )
+        )
+
+    items.append(Text(""))
+    for i in range(0, len(_WELCOME_TIPS), 2):
+        row = Text("  ")
+        for key, label in _WELCOME_TIPS[i : i + 2]:
+            row.append(f"{key:>9} ", style=f"bold {theme.accent_soft}".strip())
+            row.append(f"{label:<34}", style=theme.muted)
+        items.append(row)
+    return Group(*items)
+
+
 def render_banner(
     *,
     provider: str,
@@ -198,6 +275,7 @@ def render_banner(
     session_id: str,
     theme: Theme | None = None,
     show_meta: bool = True,
+    compact: bool = False,
 ) -> Group:
     """Build the welcome banner as a single renderable (no console I/O).
 
@@ -215,6 +293,9 @@ def render_banner(
             header/footer bar, so it needs this here; the full-screen
             front end shows the same info in its header instead and
             passes ``False`` to avoid showing it twice.
+        compact: Draw the 7-line :class:`~phoson_cli.banner.PhosonBanner`
+            (face + ``phoson-cli`` wordmark, static) instead of the 17-line
+            mascot — the classic REPL's startup; ``/about`` keeps the mascot.
     """
     from phoson_cli.theme import load_theme
 
@@ -232,11 +313,14 @@ def render_banner(
     wordmark.highlight_words(["phoson"], style=f"bold {theme.accent}")
     wordmark.highlight_words(["terminal agent"], style=theme.muted)
 
-    items: list[RenderableType] = [
-        Text(""),
-        Columns([art, wordmark], padding=(0, 4)),
-        Text(""),
-    ]
+    if compact:
+        from phoson_cli.banner import PhosonBanner
+        from phoson_cli._version import get_current_version
+
+        hero: RenderableType = PhosonBanner(theme, get_current_version())
+    else:
+        hero = Columns([art, wordmark], padding=(0, 4))
+    items: list[RenderableType] = [Text(""), hero, Text("")]
     if show_meta:
         items.extend(
             [
@@ -266,9 +350,13 @@ def print_banner(
     session_id: str,
     theme: Theme | None = None,
 ) -> None:
-    """Print the welcome banner with the active provider/model/session."""
+    """Print the classic REPL's compact startup banner (provider/model/session)."""
     console.print(
         render_banner(
-            provider=provider, model=model, session_id=session_id, theme=theme
+            provider=provider,
+            model=model,
+            session_id=session_id,
+            theme=theme,
+            compact=True,
         )
     )

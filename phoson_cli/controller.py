@@ -98,6 +98,7 @@ from .session_utils import (
     engine_prompt_tools,
     engine_visible_tools,
 )
+from .shell_context import ShellContext, format_shell_context
 from .tools.compact import compact_context
 from .session_titles import SessionTitler
 from .command_catalog import build_command_catalog
@@ -241,6 +242,9 @@ class SessionController:
         # own recorded cwd, so they are never re-stamped here.
         self._session.tree.cwd = str(Path.cwd())
         self.attachments = AttachmentManager()
+        # Output of commands the user ran in shell mode (``!``), delivered
+        # to the model with the next message (see ``shell_context``).
+        self._pending_shell: list[ShellContext] = []
         self.current_model = config.model
         # Provider/model the *live* runtime (chat client, tool registry,
         # plugins, middleware chain) was last built for. ``set_model`` uses
@@ -749,6 +753,19 @@ class SessionController:
 
     # ── Run lifecycle ─────────────────────────────────────────────────────
 
+    def add_shell_context(
+        self, command: str, output: str, *, error: str | None = None
+    ) -> None:
+        """Queue a user-run shell command for the model's next message."""
+        self._pending_shell.append(
+            ShellContext(command=command, output=output, error=error)
+        )
+
+    @property
+    def pending_shell_count(self) -> int:
+        """Shell outputs waiting to be sent with the next message."""
+        return len(self._pending_shell)
+
     def _build_user_message(self, user_input: str) -> Message:
         """Flush pending attachments, expand ``@file`` mentions, build the Message.
 
@@ -757,7 +774,8 @@ class SessionController:
         each mention resolved to — inlined text for code/data files, native
         media blocks for images/audio/video/pdf (same blocks ``/attach``
         builds). Mentions that do not resolve are left as literal text and
-        reported to the user, never silently dropped.
+        reported to the user, never silently dropped. Queued shell-mode
+        outputs follow as one text block per command.
         """
         pending_blocks: list[ContentBlock] = []
         if self.attachments:
@@ -788,6 +806,13 @@ class SessionController:
                     f"Only the first {MAX_MENTIONS_PER_MESSAGE} @mentions were "
                     "attached.",
                 )
+
+        if self._pending_shell:
+            mention_blocks.extend(
+                _text_block(format_shell_context(entry))
+                for entry in self._pending_shell
+            )
+            self._pending_shell.clear()
 
         content: str | list[ContentBlock] = (
             pending_blocks + mention_blocks
@@ -1527,6 +1552,7 @@ class SessionController:
         self._session.reset()
         self._session.tree.cwd = str(Path.cwd())
         self.attachments.clear()
+        self._pending_shell.clear()
         self._context_tokens = 0
         # A fresh session starts untitled: drop the one-shot title state.
         self.titles.reset()
@@ -2019,6 +2045,7 @@ class SessionController:
                 )
 
             self.attachments.clear()
+            self._pending_shell.clear()
             return LoadOutcome(ok=True)
         except FileNotFoundError:
             rollback()

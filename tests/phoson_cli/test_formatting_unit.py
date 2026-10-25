@@ -21,7 +21,6 @@ from phoson_cli.formatting import (
     format_hhmm,
     render_notice,
     render_history,
-    format_full_date,
     format_timestamp,
     render_done_line,
     render_user_turn,
@@ -224,8 +223,8 @@ def test_bash_body_truncated_csi_stays_plain() -> None:
 
 
 def test_render_done_line_shows_cost_and_end_time() -> None:
-    """#212: the done line reports when the turn ended (full local date +
-    ``HH:MM``), not the step count (the latter stays available via ``/steps``)."""
+    """#212: the done line reports when the turn ended (the shared
+    timestamp format), not the step count (still available via ``/steps``)."""
     import datetime
 
     ended = datetime.datetime(2026, 9, 7, 14, 32)
@@ -239,8 +238,7 @@ def test_render_done_line_shows_cost_and_end_time() -> None:
     line = render_done_line(AgentDoneEvent(result=result), DARK, ended_at=ended)
     output = _render(line)
     assert "0.01234" in output
-    # Full date (weekday, day, month, year) + local time, not just the hour.
-    assert "ended Monday 7 September 2026 14:32" in output
+    assert f"ended {format_timestamp(ended)}" in output
     assert "steps" not in output
 
 
@@ -252,7 +250,7 @@ def test_render_done_line_always_shows_end_time() -> None:
     result = AgentRunResult(final_content="", history=[], input_messages=[])
     line = render_done_line(AgentDoneEvent(result=result), DARK, ended_at=ended)
     assert line is not None
-    assert "ended Monday 7 September 2026 09:05" in _render(line)
+    assert f"ended {format_timestamp(ended)}" in _render(line)
 
 
 def test_format_hhmm_24h() -> None:
@@ -262,30 +260,24 @@ def test_format_hhmm_24h() -> None:
     assert format_hhmm(datetime.datetime(2026, 9, 7, 9, 5)) == "09:05"
 
 
-def test_format_full_date_day_month_year() -> None:
-    """#212: the done-line date is weekday + day (no zero-pad) + month + year,
-    in local time. Uses real calendar weekdays (2026-07-07 = Tuesday,
-    2026-07-12 = Sunday)."""
-    import datetime
-
-    assert (
-        format_full_date(datetime.datetime(2026, 7, 7, 9, 5)) == "Tuesday 7 July 2026"
-    )
-    assert (
-        format_full_date(datetime.datetime(2026, 7, 12, 0, 0)) == "Sunday 12 July 2026"
-    )
-
-
-def test_format_timestamp_same_day_vs_other_day() -> None:
-    """#212: today → ``HH:MM``; a different calendar day → ``MM-DD HH:MM``
-    (sessions spanning midnight/days stay unambiguous)."""
+def test_format_timestamp_is_contextual_and_unambiguous() -> None:
+    """#212: today → ``HH:MM``; yesterday, this year and older stamps carry
+    a month *name* so DD-MM vs MM-DD can never be confused."""
     import datetime
 
     now = datetime.datetime(2026, 9, 7, 14, 32)
-    today = datetime.datetime(2026, 9, 7, 8, 5)
-    other_day = datetime.datetime(2026, 9, 6, 23, 58)
-    assert format_timestamp(today, now=now) == "08:05"
-    assert format_timestamp(other_day, now=now) == "09-06 23:58"
+    assert format_timestamp(datetime.datetime(2026, 9, 7, 8, 5), now=now) == "08:05"
+    assert (
+        format_timestamp(datetime.datetime(2026, 9, 6, 23, 58), now=now)
+        == "yesterday 23:58"
+    )
+    assert (
+        format_timestamp(datetime.datetime(2026, 3, 1, 9, 0), now=now) == "Mar 1 09:00"
+    )
+    assert (
+        format_timestamp(datetime.datetime(2025, 12, 31, 18, 0), now=now)
+        == "Dec 31 2025 18:00"
+    )
 
 
 def test_format_timestamp_converts_utc_to_local() -> None:
@@ -455,8 +447,6 @@ def test_render_user_turn_is_full_width_highlighted_band() -> None:
 
     from rich.console import Console
 
-    from phoson_cli.formatting import format_day_time
-
     at = datetime.datetime(2026, 9, 17, 14, 32)
     console = Console(highlight=False, width=40)
     with console.capture() as cap:
@@ -465,7 +455,7 @@ def test_render_user_turn_is_full_width_highlighted_band() -> None:
     lines = output.splitlines()
     assert "You" not in output
     assert lines[0].startswith("›  hello there")
-    assert lines[0].rstrip().endswith(format_day_time(at))
+    assert lines[0].rstrip().endswith(format_timestamp(at))
     # Full-width highlight band: the line is padded to the console width.
     assert len(lines[0]) == 40
 
@@ -477,7 +467,6 @@ def test_render_monitor_wake_is_one_notice_line() -> None:
 
     from rich.text import Text
 
-    from phoson_cli.formatting import format_day_time
     from phoson_plugin_monitor import render_wake_message
     from phoson_plugin_monitor.storage import WakeEvent
 
@@ -493,7 +482,7 @@ def test_render_monitor_wake_is_one_notice_line() -> None:
     line = render_monitor_wake_turn(original, DARK, at=at).renderables[0]
     assert isinstance(line, Text)
     assert line.plain == (
-        f"⚡ Message from Monitor (loop_free_sweep) at {format_day_time(at)}"
+        f"⚡ Message from Monitor (loop_free_sweep) at {format_timestamp(at)}"
     )
     # The prompt payload is not leaked into the rendered notice.
     assert "returncode" not in line.plain

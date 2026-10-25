@@ -16,6 +16,7 @@ import asyncio
 import datetime
 from typing import Any
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from phoson_agent import (
     AgentEvent,
@@ -186,6 +187,9 @@ class FullScreenSink:
         self._tool_render_registry = ToolRenderRegistry({})
 
         self.blocks: list[object] = []
+        # Builds the empty-state welcome screen (set by the app, which owns
+        # the version/model/session-list facts); ``None`` = one-line hint.
+        self.welcome_provider: Callable[[], object] | None = None
         self._plugin_blocks: dict[str, object] = {}
         self.current_turn: CurrentTurn | None = None
         self._last_reasoning: str = ""

@@ -52,7 +52,8 @@ def test_default_key_bindings_match_the_historical_hardcoded_set() -> None:
     assert DEFAULT_KEY_BINDINGS["ctrl_d"] == ["c-d"]
     assert DEFAULT_KEY_BINDINGS["paste_image"] == ["c-v"]
     assert DEFAULT_KEY_BINDINGS["escape"] == ["escape"]
-    assert set(DEFAULT_KEY_BINDINGS["exit"]) == {"c-q", "c-c"}
+    assert DEFAULT_KEY_BINDINGS["exit"] == ["c-q"]
+    assert DEFAULT_KEY_BINDINGS["interrupt"] == ["c-c"]
 
 
 def test_every_default_sequence_is_parseable() -> None:
@@ -265,7 +266,8 @@ def test_listing_shows_every_action_in_default_order() -> None:
     assert display["toggle_reasoning"] == "Ctrl+T"
     assert display["line_up"] == "Shift+Up, Ctrl+Up"
     assert display["escape"] == "Esc"
-    assert display["exit"] == "Ctrl+Q, Ctrl+C"
+    assert display["exit"] == "Ctrl+Q"
+    assert display["interrupt"] == "Ctrl+C"
 
 
 def test_listing_reflects_overrides_and_unbinds(tmp_path) -> None:

@@ -550,7 +550,7 @@ class Renderer:
             # Lazy import: the fallback Markdown render is only reached when a
             # turn produced tokens that were never streamed, so keep
             # rich.markdown (and markdown_it) out of the module import graph.
-            from rich.markdown import Markdown
+            from .markdown_render import Markdown
 
             self.console.print(Rule(style=self.theme.muted_deep))
             self.console.print(

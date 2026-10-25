@@ -122,3 +122,17 @@ def test_print_banner_handles_unsegmented_model_id() -> None:
     output = buf.getvalue()
     assert "ollama" in output
     assert "llama3" in output
+
+
+def test_print_banner_is_the_compact_phoson_cli_banner() -> None:
+    from phoson_cli._views import _PHOS_ART
+    from phoson_cli.banner import wordmark_rows
+
+    buf = StringIO()
+    console = Console(file=buf, width=120, force_terminal=False, color_system=None)
+    print_banner(console, provider="ollama", model="llama3", session_id="zzz")
+    output = buf.getvalue()
+    assert wordmark_rows()[0].rstrip() in output
+    assert "terminal agent" in output
+    # Not the 17-line mascot (that stays in /about).
+    assert _PHOS_ART.splitlines()[1].strip() not in output

@@ -40,6 +40,7 @@ from .tool_render import (  # noqa: F401
     ToolRenderRegistry,
     build_tool_render_registry,
 )
+from .shell_context import parse_shell_context
 
 if TYPE_CHECKING:
     from phoson_llm.schemas import Message
@@ -148,7 +149,7 @@ def render_streaming_panel(
                 # plain-text streaming fast path above. Keeping it out of the
                 # module import graph lets front ends that never freeze a turn
                 # (e.g. a full-screen app import) skip it entirely.
-                from rich.markdown import Markdown
+                from .markdown_render import Markdown
 
                 # "none" (Markdown's default) emits no ANSI color at all for
                 # plain paragraph text, so inside the full-screen app it falls
@@ -234,45 +235,29 @@ def format_hhmm(dt: datetime.datetime) -> str:
     return _to_local(dt).strftime("%H:%M")
 
 
-def format_full_date(dt: datetime.datetime) -> str:
-    """Full local date as ``Monday 12 July 2026`` (#212 turn-end stamp).
-
-    Weekday, day (no zero-pad), full month name and year — the human-friendly
-    "when did this happen" label the done line shows alongside the time. An
-    aware *dt* (node ``created_at`` is stored UTC) is converted to local first.
-    """
-    dt = _to_local(dt)
-    return f"{dt.strftime('%A')} {dt.day} {dt.strftime('%B')} {dt.year}"
-
-
 def format_timestamp(
     dt: datetime.datetime, now: "datetime.datetime | None" = None
 ) -> str:
-    """Compact local timestamp for a message (#212).
+    """The one local timestamp format for every stamp in the transcript (#212).
 
-    ``HH:MM`` when *dt* falls on the same calendar day as *now* (the common
-    case for a live session), else ``MM-DD HH:MM`` so a session that spans
-    midnight or several days stays unambiguous (a #212 acceptance criterion).
-    Aware datetimes (node ``created_at`` is stored UTC) are converted to local
-    first so the stamp is the user's wall-clock time. *now* is injectable for
+    Contextual, so the common case stays short and an older stamp is never
+    ambiguous: ``14:32`` today, ``yesterday 14:32``, ``Sep 6 14:32`` earlier
+    this year, ``Sep 6 2025 14:32`` before that. Month names (not numbers)
+    avoid the DD-MM vs MM-DD trap. Aware datetimes (node ``created_at`` is
+    stored UTC) are converted to local first; *now* is injectable for
     deterministic tests.
     """
     now = _to_local(now) if now is not None else datetime.datetime.now()
     dt = _to_local(dt)
+    clock = dt.strftime("%H:%M")
     if dt.date() == now.date():
-        return dt.strftime("%H:%M")
-    return dt.strftime("%m-%d %H:%M")
-
-
-def format_day_time(dt: datetime.datetime) -> str:
-    """Local ``DD-MM-YYYY HH:MM`` stamp (#212): always carries the day.
-
-    Used as the trailing stamp on user turns, where the date matters more than
-    the compact live ``HH:MM`` (a turn may be reloaded days later). Aware
-    datetimes are converted to local first.
-    """
-    dt = _to_local(dt)
-    return dt.strftime("%d-%m-%Y %H:%M")
+        return clock
+    if dt.date() == now.date() - datetime.timedelta(days=1):
+        return f"yesterday {clock}"
+    day = f"{dt.strftime('%b')} {dt.day}"
+    if dt.year == now.year:
+        return f"{day} {clock}"
+    return f"{day} {dt.year} {clock}"
 
 
 def render_done_line(
@@ -297,7 +282,7 @@ def render_done_line(
     parts: list[str] = []
     if r.total_cost_usd > 0:
         parts.append(f"${r.total_cost_usd:.5f}")
-    parts.append(f"ended {format_full_date(ended)} {format_hhmm(ended)}")
+    parts.append(f"ended {format_timestamp(ended)}")
     line = Text()
     if r.truncated:
         line.append("  ⚠ truncated", style=theme.warn)
@@ -415,17 +400,17 @@ class _HighlightedBlock:
 
 
 def _user_line(text: str, theme: Theme, at: "datetime.datetime | None" = None) -> Text:
-    """Build the user turn: ``›  <message>  ·  DD-MM-YYYY HH:MM``.
+    """Build the user turn: ``›  <message>  ·  <timestamp>``.
 
     No speaker label (``You`` was removed) — the ``›`` marker and the
-    full-width highlight are enough to identify a typed turn. The date always
-    carries the day and sits at the end of the message.
+    full-width highlight are enough to identify a typed turn. The stamp
+    (:func:`format_timestamp`) sits at the end of the message.
     """
     line = Text(style=theme.badge_user)
     line.append("›  ", style=f"bold {theme.accent_soft}".strip())
     line.append(text, style=theme.text)
     if at is not None:
-        line.append(f"  ·  {format_day_time(at)}", style=theme.muted_deep)
+        line.append(f"  ·  {format_timestamp(at)}", style=theme.muted_deep)
     return line
 
 
@@ -434,7 +419,7 @@ def render_user_turn(
 ) -> Group:
     """Render a user message as a full-width highlighted band (T-2).
 
-    The message reads inline — ``›  hello  ·  17-09-2026 14:32`` — with no
+    The message reads inline — ``›  hello  ·  14:32`` — with no
     speaker label, and the ``badge_user`` highlight fills the whole width of
     every line so the user's own turns stand out from the assistant's plain
     Markdown at a glance.
@@ -515,7 +500,7 @@ def render_monitor_wake_turn(
     if names:
         line.append(f" ({', '.join(names)})", style=f"bold {color}".strip())
     if at is not None:
-        line.append(f" at {format_day_time(at)}", style=theme.muted_deep)
+        line.append(f" at {format_timestamp(at)}", style=theme.muted_deep)
     return Group(line)
 
 
@@ -569,7 +554,7 @@ def render_peer_wake_turn(
         line.append(f"@{sender}", style=f"bold {theme.accent}".strip())
         line.append(f" {_PEER_KIND_LABEL.get(kind, kind)}", style=theme.muted)
         if at is not None:
-            line.append(f" · {format_day_time(at)}", style=theme.muted_deep)
+            line.append(f" · {format_timestamp(at)}", style=theme.muted_deep)
         preview = _peer_preview(body)
         if preview:
             line.append(": ", style=theme.muted)
@@ -720,17 +705,24 @@ def _card_header(
     registry: ToolRenderRegistry | None = None,
     *,
     expandable: bool = False,
+    status: tuple[str, str] | None = None,
+    duration_ms: int = 0,
 ) -> Text:
-    """The ``│ ⚙ <verb> · <detail>`` headline shared by start/done cards.
+    """The ``│ [✓] ⚙ <verb> · <detail> [· 12ms]`` headline of a tool card.
 
     File paths double as OSC 8 ``file://`` links (T-7): Rich emits the
     real hyperlink escape (``link <uri>`` in its style grammar), which
     the full-screen bridge carries through via ``osc8_passthrough`` and
     classic terminals receive natively. ``expandable`` marks cards whose
-    done body was collapsed (``/details`` re-renders them).
+    done body was collapsed (``/details`` re-renders them). A finished
+    card carries its outcome inline — *status* (glyph, style) leads and
+    the duration trails — so it costs one line, not two.
     """
     header = Text()
     header.append("  │ ", style=theme.accent_soft)
+    if status is not None:
+        glyph, glyph_style = status
+        header.append(f"{glyph} ", style=glyph_style)
     header.append(f"{tool_icon(tool_name, registry)} ", style=theme.accent_soft)
     header.append(tool_verb(tool_name, registry), style=f"bold {theme.accent}")
     detail = tool_detail(tool_name, args)
@@ -744,9 +736,23 @@ def _card_header(
 
             detail_style = f"{theme.muted} link {file_uri(args['path'])}"
         header.append(detail, style=detail_style)
+    # 0 = unknown: replayed calls recorded before durations were persisted.
+    if duration_ms:
+        header.append(f"  ·  {format_duration_ms(duration_ms)}", style=theme.muted)
     if expandable:
         header.append("  ·  /details", style=theme.muted_deep)
     return header
+
+
+def format_duration_ms(duration_ms: int) -> str:
+    """``850ms`` under a second, ``1.2s`` under a minute, ``2m05s`` after."""
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    seconds = duration_ms / 1000
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(round(seconds), 60)
+    return f"{minutes}m{secs:02d}s"
 
 
 def render_tool_start_line(
@@ -783,6 +789,8 @@ def render_tool_done_line(
     """
     call_args: dict[str, Any] = args or {}
     has_body = event.tool_name in _BODY_TOOLS and not event.error
+    subagent = not event.error and event.tool_name in {"agent", "agents"}
+    status = None if subagent else ("✗", theme.err) if event.error else ("✓", theme.ok)
     parts: list[RenderableType] = [
         _card_header(
             event.tool_name,
@@ -790,12 +798,14 @@ def render_tool_done_line(
             theme,
             registry,
             expandable=has_body and not collapsed,
+            status=status,
+            duration_ms=0 if subagent else event.duration_ms,
         )
     ]
 
     # Subagent tools without parseable metrics keep their dedicated
     # "✓ spawned" outcome line instead of a generic check.
-    if not event.error and event.tool_name in {"agent", "agents"}:
+    if subagent:
         label = tool_label(event)
         spawned = Text("  │ ", style=theme.accent_soft)
         spawned.append("✓ ", style=theme.ok)
@@ -803,24 +813,13 @@ def render_tool_done_line(
         spawned.append(f"  ·  {event.duration_ms}ms", style=theme.muted)
         return Group(*parts, spawned)
 
-    if not event.error and not collapsed:
-        parts.extend(_outcome_body(event.tool_name, call_args, event.result, theme))
-
-    footer_bits: list[tuple[str, str]] = []
     if event.error:
-        first_line = event.error.splitlines()[0][:72]
-        footer_bits.append((f"✗ {first_line}", theme.err))
-    else:
-        footer_bits.append(("✓", theme.ok))
-    # 0 = unknown: replayed calls recorded before durations were persisted.
-    if event.duration_ms:
-        footer_bits.append((f"{event.duration_ms}ms", theme.muted))
-    footer = Text("  │ ", style=theme.accent_soft)
-    for i, (bit, style) in enumerate(footer_bits):
-        if i:
-            footer.append("  ·  ", style=theme.muted)
-        footer.append(bit, style=style)
-    parts.append(footer)
+        lines = event.error.splitlines() or [""]
+        failure = Text("  │   ", style=theme.accent_soft)
+        failure.append(lines[0][:72], style=theme.err)
+        parts.append(failure)
+    elif not collapsed:
+        parts.extend(_outcome_body(event.tool_name, call_args, event.result, theme))
 
     return Group(*parts)
 
@@ -1042,9 +1041,10 @@ def history_blocks(
     """Replay a list of Message objects as transcript blocks.
 
     ``timestamps`` (#212) is an optional per-message parallel list of local
-    datetimes (``None`` entries = no stamp). When given, each user message's
-    gutter and each assistant message is stamped with its time, matching the
-    live turn. It must align with *messages* **before** any tail trim.
+    datetimes (``None`` entries = no stamp). When given, each user message is
+    stamped with its time and each assistant turn ends with ``· ended HH:MM``
+    (its last message's time), matching the live done line. It must align
+    with *messages* **before** any tail trim.
 
     Tool calls are paired with their results by ``tool_call_id`` and
     grouped into :class:`ReplayToolGroup` runs: assistant text or a user
@@ -1075,19 +1075,28 @@ def history_blocks(
     }
     group: ReplayToolGroup | None = None
 
-    def _stamp(idx: int) -> Text | None:
-        if timestamps is None or idx >= len(timestamps):
-            return None
-        ts = timestamps[idx]
-        if ts is None:
-            return None
-        return Text(f"   ·  {format_timestamp(ts)}", style=theme.muted_deep)
+    # Index of the last assistant message of the turn being replayed: its
+    # time closes the turn as ``· ended HH:MM``, mirroring the live done line
+    # (one stamp per turn instead of one before every message).
+    turn_end: int | None = None
+
+    def _close_turn() -> None:
+        nonlocal turn_end
+        if turn_end is not None and timestamps is not None:
+            ts = timestamps[turn_end] if turn_end < len(timestamps) else None
+            if ts is not None:
+                items.append(
+                    Text(
+                        f"  {chr(183)} ended {format_timestamp(ts)}", style=theme.muted
+                    )
+                )
+        turn_end = None
 
     def _markdown(text: str) -> RenderableType:
         # Lazy import: only assistant turns need the Markdown renderer, so
         # keep rich.markdown (and markdown_it) out of the module import
         # graph for front ends that never render a conversation history.
-        from rich.markdown import Markdown
+        from .markdown_render import Markdown
 
         # T-2: bare Markdown, no " assistant " badge or Rule separator
         # (matches render_streaming_panel, which no longer labels).
@@ -1122,6 +1131,7 @@ def history_blocks(
             ):
                 continue
             group = None  # a user turn closes the tool run
+            _close_turn()
             # Same speaker header + body as the live turn (render_user_turn),
             # so history replay reuses the live primitives — including the
             # monitor-wake card when the replay hits an injected wake turn.
@@ -1133,9 +1143,31 @@ def history_blocks(
             if isinstance(content, str):
                 items.append(render_user_turn(content, theme, at=at))
             else:
-                text_parts = [
-                    block.text for block in content if isinstance(block, TextBlock)
-                ]
+                text_parts: list[str] = []
+                shell_group: ReplayToolGroup | None = None
+                for block in content:
+                    if not isinstance(block, TextBlock):
+                        continue
+                    shell = parse_shell_context(block.text)
+                    if shell is None:
+                        text_parts.append(block.text)
+                        continue
+                    # Shell-mode (``!``) output that rode along with this
+                    # message: replay it as the bash card the user saw, run
+                    # just before they sent the message.
+                    if shell_group is None:
+                        shell_group = ReplayToolGroup()
+                        items.append(shell_group)
+                    shell_group.calls.append(
+                        (
+                            AgentToolDoneEvent(
+                                tool_name="bash",
+                                result=shell.output,
+                                error=shell.error,
+                            ),
+                            {"command": shell.command},
+                        )
+                    )
                 if text_parts:
                     items.append(render_user_turn("\n".join(text_parts), theme, at=at))
 
@@ -1148,12 +1180,7 @@ def history_blocks(
                     b.text for b in content if isinstance(b, TextBlock)
                 ).strip()
                 tool_uses = [b for b in content if isinstance(b, ToolUseBlock)]
-            # A tool-only message continuing the current run is not stamped:
-            # the stamp line would split the run the live view showed as one.
-            if text or group is None:
-                stamp = _stamp(idx)
-                if stamp is not None:
-                    items.append(stamp)
+            turn_end = idx
             if text:
                 group = None
                 items.append(_markdown(text))
@@ -1163,6 +1190,7 @@ def history_blocks(
                     items.append(group)
                 group.calls.append((_done_event(use), dict(use.args)))
 
+    _close_turn()
     items.append(Rule(style=theme.muted_deep))
     return items
 
@@ -1286,6 +1314,5 @@ __all__ = [
     "format_token_indicator",
     "abbr_tokens",
     "format_hhmm",
-    "format_full_date",
     "format_timestamp",
 ]

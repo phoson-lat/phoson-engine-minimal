@@ -60,8 +60,8 @@ async def test_pipe_input_typing_and_ctrl_j_inserts_multiline_text(tmp_path) -> 
                 await asyncio.sleep(0.02)
                 pipe.send_text("line two")
                 await asyncio.sleep(0.02)
-                # Ctrl+C to exit
-                pipe.send_text("\x03")
+                # Ctrl+Q to exit (Ctrl+C would only clear the draft)
+                pipe.send_text("\x11")
 
             driver = asyncio.create_task(drive_app())
             await app.app.run_async()
@@ -93,7 +93,7 @@ async def test_pipe_input_ctrl_l_clears_transcript(tmp_path) -> None:
                 # Ctrl+L (\x0c)
                 pipe.send_text("\x0c")
                 await asyncio.sleep(0.02)
-                pipe.send_text("\x03")
+                pipe.send_text("\x11")  # Ctrl+Q to exit
 
             driver = asyncio.create_task(drive_app())
             await app.app.run_async()
@@ -166,9 +166,9 @@ async def test_pipe_input_escape_cancels_inflight_run(tmp_path) -> None:
                     pipe.send_text("\x1b")
                     # A lone Esc is delayed by prompt_toolkit's VT100 parser;
                     # wait for the outer task cancellation to settle before
-                    # the next Ctrl+C takes the now-idle exit path.
+                    # Ctrl+Q takes the now-idle exit path.
                     await asyncio.sleep(0.65)
-                    pipe.send_text("\x03")
+                    pipe.send_text("\x11")
 
                 driver = asyncio.create_task(drive_app())
                 await app.app.run_async()
@@ -290,7 +290,7 @@ async def test_pipe_input_remapped_keys_dispatch(tmp_path) -> None:
                     await asyncio.sleep(0.10)
                     pipe.send_text("\x0b")  # Ctrl+K — remapped clear
                     await asyncio.sleep(0.02)
-                    pipe.send_text("\x03")  # Ctrl+C to exit
+                    pipe.send_text("\x11")  # Ctrl+Q to exit
 
                 driver = asyncio.create_task(drive_app())
                 await app.app.run_async()
