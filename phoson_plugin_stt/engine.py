@@ -260,6 +260,7 @@ class SttEngine:
         stop: threading.Event | None = None,
         on_partial: Callable[[str], None] | None = None,
         on_line: Callable[[str], None] | None = None,
+        on_ready: Callable[[], None] | None = None,
     ) -> str:
         """Listen to the default microphone and return the text.
 
@@ -271,7 +272,10 @@ class SttEngine:
 
         Runs blocking work; call it off the event loop (e.g.
         ``asyncio.to_thread``). Passing *stop* lets a caller cut the capture
-        short (e.g. the user pressing the push-to-talk key again). Returns the
+        short (e.g. the user pressing the push-to-talk key again). *on_ready*
+        is called once the microphone is actually capturing, so a UI can show
+        "listening" only when speech will be heard. An error reported by the
+        audio worker is raised here as ``RuntimeError``. Returns the
         finalized lines joined by newlines.
         """
         lines: list[str] = []
@@ -295,17 +299,28 @@ class SttEngine:
             _ensure_portaudio()
             moonshine = _moonshine()
 
+            # The runtime's audio worker reports failures through a callback
+            # instead of raising on this thread: collect and re-raise them.
+            capture_errors: list[BaseException] = []
             mic = moonshine.MicTranscriber().language(language)
             mic = self._apply_arch(mic, moonshine)
             if on_partial is not None:
                 mic = mic.on_text(on_partial)
             mic = mic.on_line(_handle_line)
+            mic = mic.on_error(capture_errors.append)
 
             mic.load()
             mic.start()
+            if on_ready is not None:
+                on_ready()
             try:
                 deadline = None if duration is None else time.monotonic() + duration
                 while True:
+                    if capture_errors:
+                        error = capture_errors[0]
+                        raise RuntimeError(
+                            f"Dictation audio failed: {error}"
+                        ) from error
                     if stop is not None and stop.is_set():
                         break
                     if deadline is not None and time.monotonic() >= deadline:
