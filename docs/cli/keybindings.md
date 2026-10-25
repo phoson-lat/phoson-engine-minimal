@@ -17,6 +17,14 @@ an unknown action, or a sequence bound to two actions is a clear error
 before the UI opens — never a silent fallback. Remaps apply on the next
 start. The classic REPL's single global key (Ctrl+T) is fixed.
 
+## Ctrl+C and Ctrl+Q
+
+`Ctrl+C` (action `interrupt`) never loses work: while a turn runs it
+cancels it (like `Esc`), otherwise it clears the composer. Pressing it
+**again within 2 seconds** quits — the footer shows
+`press ctrl+c again to exit` meanwhile. `Ctrl+Q` (action `exit`) quits
+right away; either way a session save in progress finishes first.
+
 ## Newline: Shift/Ctrl/Alt+Enter
 
 `Ctrl+J` inserts a newline on every terminal. **Shift+Enter**, **Ctrl+Enter**

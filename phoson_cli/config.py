@@ -833,6 +833,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "command_palette",
     "dictate",
     "exit",
+    "interrupt",
 )
 
 

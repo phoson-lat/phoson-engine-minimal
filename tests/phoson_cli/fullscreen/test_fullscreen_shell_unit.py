@@ -82,6 +82,14 @@ def _trigger_if_enabled(app: PhosonApp, key: str) -> bool:
 
 
 @pytest.fixture
+def wide_header(monkeypatch) -> None:
+    """A terminal wide enough that the header drops nothing."""
+    from phoson_cli.fullscreen.header_model import HeaderModel
+
+    monkeypatch.setattr(HeaderModel, "_footer_width", lambda self: 300)
+
+
+@pytest.fixture
 def app(tmp_path) -> PhosonApp:
     with patch("phoson_cli.controller.build_chat") as mock_build:
         mock_build.return_value = MagicMock()
@@ -825,14 +833,40 @@ def test_theme_after_clear_does_not_crash_on_stale_banner(app: PhosonApp) -> Non
     assert app.sink.blocks == []
 
 
-def test_ctrl_q_and_ctrl_c_request_exit_when_idle(app: PhosonApp) -> None:
+def test_ctrl_q_exits_and_ctrl_c_needs_a_second_press_when_idle(
+    app: PhosonApp,
+) -> None:
     with patch.object(app.app, "exit") as mock_exit:
         _trigger(app, "c-q")
     mock_exit.assert_called_once()
 
     with patch.object(app.app, "exit") as mock_exit:
         _trigger(app, "c-c")
+        mock_exit.assert_not_called()
+        assert "press ctrl+c again to exit" in app._get_footer_text().value
+        _trigger(app, "c-c")
     mock_exit.assert_called_once()
+
+
+def test_ctrl_c_clears_the_draft_instead_of_exiting(app: PhosonApp) -> None:
+    app._prompt_input.text = "half-written thought"
+    with patch.object(app.app, "exit") as mock_exit:
+        _trigger(app, "c-c")
+    mock_exit.assert_not_called()
+    assert app._prompt_input.text == ""
+
+
+def test_ctrl_c_confirmation_window_expires(app: PhosonApp, monkeypatch) -> None:
+    from phoson_cli.fullscreen import lifecycle_controller
+
+    clock = [100.0]
+    monkeypatch.setattr(lifecycle_controller.time, "monotonic", lambda: clock[0])
+    with patch.object(app.app, "exit") as mock_exit:
+        _trigger(app, "c-c")
+        clock[0] += lifecycle_controller.EXIT_CONFIRM_WINDOW_SECONDS + 1
+        assert "press ctrl+c again" not in app._get_footer_text().value
+        _trigger(app, "c-c")  # re-arms instead of quitting
+    mock_exit.assert_not_called()
 
 
 async def test_ctrl_c_cancels_during_pre_provider_thinking_feedback(
@@ -1013,7 +1047,7 @@ async def test_ctrl_c_defers_exit_until_real_session_save_settles(
         task = app._run_task
         assert task is not None
 
-        _trigger(app, "c-c")
+        _trigger(app, "c-q")
         await asyncio.sleep(0)
         assert not task.cancelled()
         assert not task.done()
@@ -1046,7 +1080,7 @@ async def test_deferred_exit_is_not_honored_when_real_session_save_fails(
         task = app._run_task
         assert task is not None
 
-        _trigger(app, "c-c")
+        _trigger(app, "c-q")
         release_save.set()
         result = await task
         await asyncio.sleep(0)
@@ -1547,7 +1581,7 @@ async def test_delayed_ctrl_v_cannot_cross_session_or_outlive_exit(
     assert "[image" not in app._prompt_input.text
 
 
-def test_header_shows_cwd_and_token_cost(app: PhosonApp) -> None:
+def test_header_shows_cwd_and_token_cost(app: PhosonApp, wide_header) -> None:
     app.session._controller._context_window = 128_000
     app.session._controller._context_tokens = 12_400
     app.session.session_metrics.total_cost_usd = 0.0123
@@ -2018,7 +2052,7 @@ def test_header_shows_effort_off_chip_by_default(app: PhosonApp) -> None:
 def test_header_shows_effort_level_when_set(app: PhosonApp) -> None:
     app.session.config.reasoning_effort = "high"
     header = app._get_header_text().value
-    assert "effort: high" in header
+    assert "effort high" in header
     assert "effort off" not in header
 
 
@@ -2033,7 +2067,7 @@ def test_ctrl_e_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
 
     _trigger(app, "c-e")  # off → low
     assert app.session.config.reasoning_effort == "low"
-    assert "effort: low" in app._get_header_text().value
+    assert "effort low" in app._get_header_text().value
     assert saved and saved[-1][1].get("only_fields") == {"reasoning_effort"}
 
     for expected in ("medium", "high", "xhigh", "max"):
@@ -2265,7 +2299,7 @@ async def test_wake_save_failure_denies_deferred_exit_and_reaches_owner(
     with patch.object(app.app, "exit") as mock_exit:
         tick = asyncio.create_task(app.session._controller._wake_loop_tick())
         await saving.wait()
-        _trigger(app, "c-c")
+        _trigger(app, "c-q")
         release_save.set()
 
         with pytest.raises(OSError, match="wake save failed"):

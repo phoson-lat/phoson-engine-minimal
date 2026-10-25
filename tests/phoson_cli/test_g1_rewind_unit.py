@@ -580,7 +580,7 @@ async def test_pipe_input_esc_esc_idle_opens_rewind_picker(tmp_path) -> None:
                 await asyncio.sleep(0.05)
                 pipe.send_text("\x1b")  # second Esc — rewind
                 await asyncio.sleep(0.2)
-                pipe.send_text("\x03")  # exit
+                pipe.send_text("\x11")  # Ctrl+Q exit
 
             asyncio.create_task(drive())
             await app.app.run_async()
@@ -606,7 +606,7 @@ async def test_pipe_input_lone_esc_idle_does_nothing(tmp_path) -> None:
                 await asyncio.sleep(0.02)
                 pipe.send_text("\x1b")  # lone idle Esc
                 await asyncio.sleep(0.3)
-                pipe.send_text("\x03")  # exit
+                pipe.send_text("\x11")  # Ctrl+Q exit
 
             asyncio.create_task(drive())
             await app.app.run_async()
@@ -633,7 +633,7 @@ async def test_pipe_input_ctrl_z_without_rewind_notifies(tmp_path) -> None:
             await asyncio.sleep(0.02)
             pipe.send_text("\x1a")  # Ctrl+Z
             await asyncio.sleep(0.1)
-            pipe.send_text("\x03")  # exit
+            pipe.send_text("\x11")  # Ctrl+Q exit
 
         asyncio.create_task(drive())
         await app.app.run_async()
@@ -672,7 +672,7 @@ async def test_pipe_input_alt_backspace_idle_does_not_rewind(tmp_path) -> None:
                 await asyncio.sleep(0.05)
                 pipe.send_text("\x1b\x7f")  # second Alt+Backspace
                 await asyncio.sleep(0.3)
-                pipe.send_text("\x03")  # exit
+                pipe.send_text("\x11")  # Ctrl+Q exit
 
             asyncio.create_task(drive())
             await app.app.run_async()
@@ -716,7 +716,7 @@ async def test_pipe_input_alt_backspace_mid_run_does_not_cancel(tmp_path) -> Non
             await asyncio.sleep(0.2)
             release.set()
             await asyncio.sleep(0.2)
-            pipe.send_text("\x03")  # exit
+            pipe.send_text("\x11")  # Ctrl+Q exit
 
         asyncio.create_task(drive())
         await app.app.run_async()
@@ -761,7 +761,7 @@ async def test_pipe_input_clean_esc_still_cancels_mid_run(tmp_path) -> None:
             await asyncio.sleep(0.65)
             release.set()
             await asyncio.sleep(0.2)
-            pipe.send_text("\x03")  # exit
+            pipe.send_text("\x11")  # Ctrl+Q exit
 
         asyncio.create_task(drive())
         await app.app.run_async()
@@ -792,7 +792,7 @@ async def test_pipe_input_alt_x_idle_does_not_rewind(tmp_path) -> None:
                 await asyncio.sleep(0.05)
                 pipe.send_text("\x1bx")  # second Alt+X
                 await asyncio.sleep(0.3)
-                pipe.send_text("\x03")  # exit
+                pipe.send_text("\x11")  # Ctrl+Q exit
 
             asyncio.create_task(drive())
             await app.app.run_async()

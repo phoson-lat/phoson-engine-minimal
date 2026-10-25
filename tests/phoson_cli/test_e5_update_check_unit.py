@@ -396,17 +396,26 @@ def test_tui_header_without_hint(tmp_path) -> None:
     assert "⬆" not in html
 
 
-def test_tui_header_with_hint(tmp_path) -> None:
+def _wide_header(monkeypatch) -> None:
+    """A terminal wide enough that the header drops nothing."""
+    from phoson_cli.fullscreen.header_model import HeaderModel
+
+    monkeypatch.setattr(HeaderModel, "_footer_width", lambda self: 300)
+
+
+def test_tui_header_with_hint(tmp_path, monkeypatch) -> None:
+    _wide_header(monkeypatch)
     app = _make_app(tmp_path)
     app.session.update_hint = "⬆ v0.8.1 available — /update"
     html = str(app._get_header_text())
     assert "⬆ v0.8.1 available — /update" in html
     # Rendered dim (header_dim), not bold accent.
-    assert '<style class="header_dim"> | ⬆ v0.8.1 available — /update</style>' in html
+    assert '<style class="header_dim">⬆ v0.8.1 available — /update</style>' in html
 
 
 @pytest.mark.asyncio
 async def test_tui_run_async_starts_update_check(tmp_path, monkeypatch) -> None:
+    _wide_header(monkeypatch)
     app = _make_app(tmp_path)
     check = AsyncMock(return_value="0.8.1")
     monkeypatch.setattr("phoson_cli.updater.check_for_startup_update", check)

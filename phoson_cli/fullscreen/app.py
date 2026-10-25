@@ -61,6 +61,7 @@ from .keys import (
 from .sink import FullScreenSink
 from ..theme import (
     Theme,
+    pt_color,
     load_theme,
     build_prompt_style,
     resolve_runtime_theme,
@@ -147,6 +148,9 @@ from .lifecycle_controller import (
 )
 from .lifecycle_controller import (
     handle_ctrl_d as _handle_ctrl_d_impl,
+)
+from .lifecycle_controller import (
+    handle_interrupt as _handle_interrupt_impl,
 )
 
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
@@ -371,6 +375,8 @@ class PhosonApp:
         # switches the next submit to a shell command whose output is shared
         # with the agent; Backspace on the empty composer or Esc leaves it.
         self._shell_mode = False
+        # Monotonic time of the last unconfirmed Ctrl+C (0 = not armed).
+        self._interrupt_armed_at = 0.0
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -612,6 +618,9 @@ class PhosonApp:
                 **build_picker_style_dict(self.theme),
                 "header": f"{self.theme.pt_accent} bold",
                 "header_dim": self.theme.pt_muted,
+                # Context gauge tones (header): filling up, then critical.
+                "header_warn": pt_color(self.theme.warn),
+                "header_err": f"{self.theme.pt_err} bold",
                 "separator": self.theme.pt_muted_deep,
                 "footer": self.theme.pt_muted_deep,
                 # The active model/provider moved to the footer; give it a
@@ -1194,8 +1203,15 @@ class PhosonApp:
         self._block_ft_cache = snapshot.ft_cache
         self.app.invalidate()
 
+    def handle_interrupt(self) -> None:
+        """Ctrl+C: cancel the turn or clear the draft; twice quits.
+
+        Body in :mod:`phoson_cli.fullscreen.lifecycle_controller`.
+        """
+        _handle_interrupt_impl(self)
+
     def request_exit(self) -> None:
-        """Ctrl+C/Ctrl+Q: interrupt a visible turn, or quit.
+        """Ctrl+Q (or a confirmed Ctrl+C): interrupt a visible turn, or quit.
 
         Body in :mod:`phoson_cli.fullscreen.lifecycle_controller` (#187).
         """

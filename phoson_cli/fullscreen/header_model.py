@@ -20,12 +20,15 @@ import time
 import shutil
 from html import escape
 from pathlib import Path
+from dataclasses import dataclass
 
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.formatted_text import HTML
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from ..formatting import format_token_indicator
+from .lifecycle_controller import exit_armed
 
 _AGENTS_MD_CACHE_SECONDS = 5.0
 _FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
@@ -34,12 +37,126 @@ _FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
 _FOOTER_HINT_RUNNING = "esc cancel  ·  enter queue  ·  ctrl+p commands"
 _FOOTER_HINT_PICKER = "enter  ·  esc"
 _FOOTER_HINT_SHELL = "enter run  ·  esc / ⌫ exit shell"
+_FOOTER_HINT_EXIT_ARMED = "press ctrl+c again to exit"
 
 
 def short_cwd(cwd: Path) -> str:
-    """Compact display path for the fixed-width header."""
+    """Compact display path for the header: ``~`` for home, last two parts."""
+    home = Path.home()
+    if cwd == home:
+        return "~"
+    if cwd.parent == home:
+        return f"~/{cwd.name}"
     parts = cwd.parts
     return str(Path(*parts[-2:])) if len(parts) > 2 else str(cwd)
+
+
+_HEADER_BRAND = (
+    '<style class="header_dim">* </style><style class="header">phoson</style>'
+)
+_HEADER_BRAND_WIDTH = len("* phoson")
+_HEADER_SEP = " · "
+#: Segments dropped first when the header does not fit, least important
+#: first. The context gauge, permission mode and effort are never dropped.
+_HEADER_DROP_ORDER = (
+    "agents_md",
+    "update",
+    "monitors",
+    "cwd",
+    "cost",
+    "id",
+    "attach",
+    "title",
+)
+#: A long title is shortened to this many cells before anything else goes.
+_HEADER_TITLE_MAX = 40
+#: …and, once lower-priority segments are gone, down to this before dropping.
+_HEADER_TITLE_MIN = 12
+#: Context-gauge thresholds (% of the window): warn tone, then error tone
+#: with a ``/compact`` nudge.
+_CONTEXT_WARN_PCT = 70
+_CONTEXT_CRITICAL_PCT = 90
+
+
+@dataclass
+class _Segment:
+    key: str
+    text: str
+    style: str
+    #: Joined to the previous segment with a space instead of `` · ``.
+    glue: bool = False
+    #: Can be shortened with an ellipsis (the session title).
+    shrink: bool = False
+
+
+def _context_segment(used: int, window: int) -> _Segment:
+    """``38K/128K 30%``, toned by how full the context window is."""
+    indicator = format_token_indicator(used, window)
+    if window <= 0:
+        return _Segment("context", f"{indicator} tok", "header_dim")
+    pct = round(100 * used / window)
+    if pct >= _CONTEXT_CRITICAL_PCT:
+        return _Segment("context", f"{indicator} {pct}% /compact", "header_err")
+    style = "header_warn" if pct >= _CONTEXT_WARN_PCT else "header_dim"
+    return _Segment("context", f"{indicator} {pct}%", style)
+
+
+def _shorten(text: str, cells: int) -> str:
+    if get_cwidth(text) <= cells:
+        return text
+    out = ""
+    for char in text:
+        if get_cwidth(out + char) > cells - 1:
+            break
+        out += char
+    return out.rstrip() + "…"
+
+
+def _segments_width(segments: list[_Segment]) -> int:
+    width = _HEADER_BRAND_WIDTH
+    for segment in segments:
+        width += (1 if segment.glue else len(_HEADER_SEP)) + get_cwidth(segment.text)
+    return width
+
+
+def _fit_segments(segments: list[_Segment], width: int) -> list[_Segment]:
+    """Shorten/drop segments by priority until the header fits *width*.
+
+    The title is first capped at :data:`_HEADER_TITLE_MAX`; then segments
+    go in :data:`_HEADER_DROP_ORDER`, except that the title is squeezed to
+    :data:`_HEADER_TITLE_MIN` before it is dropped. Whatever still overflows
+    (a very narrow terminal) is clipped by the window, as before.
+    """
+    fitted = [
+        _Segment(s.key, _shorten(s.text, _HEADER_TITLE_MAX), s.style, s.glue, s.shrink)
+        if s.shrink
+        else s
+        for s in segments
+    ]
+    for key in _HEADER_DROP_ORDER:
+        if _segments_width(fitted) <= width:
+            break
+        if key == "title":
+            for segment in fitted:
+                if segment.shrink:
+                    overflow = _segments_width(fitted) - width
+                    room = max(_HEADER_TITLE_MIN, get_cwidth(segment.text) - overflow)
+                    segment.text = _shorten(segment.text, room)
+            if _segments_width(fitted) <= width:
+                break
+        fitted = [s for s in fitted if s.key != key]
+    return fitted
+
+
+def _segments_html(segments: list[_Segment]) -> str:
+    parts = [_HEADER_BRAND]
+    for segment in segments:
+        sep = " " if segment.glue else _HEADER_SEP
+        parts.append(f'<style class="header_dim">{sep}</style>')
+        parts.append(
+            f'<style class="{segment.style}">{escape(segment.text, quote=True)}</style>'
+        )
+    return "".join(parts)
 
 
 class HeaderModel:
@@ -64,6 +181,11 @@ class HeaderModel:
         status is shown exclusively by the in-chat activity line — the header
         carries no transient state, so it stays stable during a turn.
 
+        It is fitted to the terminal width by priority (:func:`_fit_segments`)
+        instead of being clipped on the right, so the permission mode and
+        effort — the facts that change what the agent will do — are the
+        last to go.
+
         I-84: the HTML string is cached and only rebuilt when one of its
         inputs changes — repainting the chat for a spinner glyph must not
         re-stat the filesystem or reformat the header on every frame.
@@ -71,106 +193,86 @@ class HeaderModel:
         app = self.app
         session = app.session
         cost = session.session_metrics.total_cost_usd
-        cwd = short_cwd(Path.cwd())
-        # Session identity (title + short id): the header is the single
-        # location for session facts, so the auto/LLM title and the session
-        # id live here. It is only shown once the session has actually begun
-        # (first message / resume) — a fresh controller has an in-memory id
-        # but no session yet, so nothing is displayed. The title is truncated
-        # so a long name cannot push the model/token segments off a narrow
-        # terminal.
+        # Session identity (title + short id) is only shown once the session
+        # has actually begun (first message / resume) — a fresh controller
+        # has an in-memory id but no session yet.
         if session.controller.session_started:
             short_id = (session.tree.session_id or "")[:8] or "—"
-            title = (session.tree.title or "").strip()
-            if len(title) > 40:
-                title = title[:39] + "…"
-            if title:
-                session_html = (
-                    '<style class="header_dim"> | </style>'
-                    f'<style class="header">{escape(title, quote=True)}</style>'
-                    '<style class="header_dim"> '
-                    f"({escape(short_id, quote=True)})</style>"
-                )
-                session_part = f"{title} ({short_id})"
-            else:
-                session_html = (
-                    '<style class="header_dim"> | </style>'
-                    '<style class="header_dim">untitled '
-                    f"({escape(short_id, quote=True)})</style>"
-                )
-                session_part = f"untitled ({short_id})"
+            title = (session.tree.title or "").strip() or "untitled"
         else:
-            session_html = ""
-            session_part = ""
-        # T-2: cost only when > 0 — an idle/fresh session shows just the
-        # token count, not a $0.0000 that reads as noise.
-        token_cost = (
-            f"{self.token_indicator()} tok · ${cost:.4f}"
-            if cost > 0
-            else f"{self.token_indicator()} tok"
-        )
-
-        attachments = len(session.attachments)
-        attach_part = f" · 📎{attachments}" if attachments else ""
-        memory_part = " · 📄 agents.md" if self.has_agents_md() else ""
-        # Active-monitors indicator (I-126): the plugin reports it via a
-        # duck-typed hook; the header is the single place for session
-        # facts, so it lives here (in-memory, safe on every paint).
-        monitors = session.controller.monitor_status()
-        monitors_part = f" · {monitors}" if monitors else ""
-        # Update-available hint (IMPROVEMENTS.md E5): a dim segment at the
-        # very end of the header, shown as soon as the background PyPI
-        # check lands and never blocking the paint. The shared REPL is
-        # the single source of truth for the check result in both
-        # front ends (the TUI starts it in ``run_async``).
-        update_part = f" | {session.update_hint}" if session.update_hint else ""
-        # Permission-mode chip (T-6): always visible; the accent word for
-        # the *ask* state (confirmations are coming), dim for auto.
+            short_id = title = ""
         perm_mode = self.permission_mode()
-        mode_part = (
-            ' <style class="header">ask</style>'
-            if perm_mode == "ask"
-            else ' <style class="header_dim">· auto</style>'
-        )
-        # Reasoning-effort chip (Ctrl+E): dim when off, accent with the
-        # level when set. Read straight from the in-memory config (the
-        # cycle mutates it before invalidating the cache below), so no
-        # throttle like the permission policy file read is needed.
         effort = session.config.reasoning_effort
-        effort_part = (
-            f' <style class="header">effort: {escape(effort, quote=True)}</style>'
-            if effort in REASONING_EFFORTS
-            else ' <style class="header_dim">· effort off</style>'
-        )
-
         key = (
-            cwd,
-            session_part,
-            token_cost,
-            attach_part,
-            memory_part,
-            monitors_part,
-            update_part,
+            short_cwd(Path.cwd()),
+            title,
+            short_id,
+            session.context_tokens,
+            session.context_window,
+            f"{cost:.4f}",
+            len(session.attachments),
+            self.has_agents_md(),
+            session.controller.monitor_status() or "",
+            session.update_hint or "",
             perm_mode,
-            effort or "",  # None (off) and "" hash identically for cache-key purposes
+            effort or "",  # None (off) and "" hash identically
+            self._footer_width(),
         )
         if app._header_cache_key != key:
             app._header_cache_key = key
-            extras = f"{attach_part}{memory_part}{monitors_part}"
-            app._header_cache = HTML(
-                '<style class="header_dim">* </style>'
-                '<style class="header">phoson </style>'
-                f"{session_html}"
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{escape(cwd, quote=True)}</style>'
-                '<style class="header_dim"> | </style>'
-                f'<style class="header_dim">{escape(token_cost, quote=True)}</style>'
-                f"{mode_part}"
-                f"{effort_part}"
-                f'<style class="header_dim">{escape(extras, quote=True)}</style>'
-                f'<style class="header_dim">{escape(update_part, quote=True)}</style>'
-            )
+            app._header_cache = HTML(self._build_header(*key))
         return app._header_cache
+
+    def _build_header(
+        self,
+        cwd: str,
+        title: str,
+        short_id: str,
+        used: int,
+        window: int,
+        cost: str,
+        attachments: int,
+        agents_md: bool,
+        monitors: str,
+        update_hint: str,
+        perm_mode: str,
+        effort: str,
+        width: int,
+    ) -> str:
+        """The header HTML for these inputs, fitted to *width* columns."""
+        segments: list[_Segment] = []
+        if short_id:
+            segments.append(_Segment("title", title, "header", shrink=True))
+            segments.append(_Segment("id", f"({short_id})", "header_dim", glue=True))
+        segments.append(_Segment("cwd", cwd, "header_dim"))
+        segments.append(_context_segment(used, window))
+        # T-2: cost only when > 0 — a fresh session shows no $0.0000 noise.
+        if float(cost) > 0:
+            segments.append(_Segment("cost", f"${cost}", "header_dim"))
+        # Permission-mode chip (T-6): accent for *ask* (confirmations are
+        # coming), dim for auto. Effort chip (Ctrl+E): accent when set.
+        segments.append(
+            _Segment(
+                "mode", perm_mode, "header" if perm_mode == "ask" else "header_dim"
+            )
+        )
+        segments.append(
+            _Segment("effort", f"effort {effort}", "header")
+            if effort in REASONING_EFFORTS
+            else _Segment("effort", "effort off", "header_dim")
+        )
+        if attachments:
+            segments.append(_Segment("attach", f"📎{attachments}", "header_dim"))
+        if agents_md:
+            segments.append(_Segment("agents_md", "📄 agents.md", "header_dim"))
+        # Active-monitors indicator (I-126), reported by the plugin.
+        if monitors:
+            segments.append(_Segment("monitors", monitors, "header_dim"))
+        # Update-available hint (IMPROVEMENTS.md E5), set by the background
+        # PyPI check.
+        if update_hint:
+            segments.append(_Segment("update", update_hint, "header_dim"))
+        return _segments_html(_fit_segments(segments, width))
 
     def permission_mode(self) -> str:
         """Current permission mode for the header chip (T-6).
@@ -207,7 +309,9 @@ class HeaderModel:
         chat (the key map is always available via ``/keys``).
         """
         app = self.app
-        if app._active_float is not None:
+        if exit_armed(app):
+            hint = _FOOTER_HINT_EXIT_ARMED
+        elif app._active_float is not None:
             hint = _FOOTER_HINT_PICKER
         elif getattr(app, "_shell_mode", False):
             hint = _FOOTER_HINT_SHELL

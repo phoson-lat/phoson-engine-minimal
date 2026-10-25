@@ -66,9 +66,11 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # every slash command. Ctrl+P is free of the classic in-chat bindings
     # (Ctrl+L clear, Ctrl+T reasoning, Ctrl+Z undo, …).
     "command_palette": ["c-p"],
-    # Ctrl+Q and Ctrl+C share the exit action — both sequences keep their
-    # classic roles (Ctrl+C also keeps its SIGINT handling elsewhere).
-    "exit": ["c-q", "c-c"],
+    # Ctrl+Q quits at once. Ctrl+C interrupts: it cancels the turn or
+    # clears the draft, and only a second press within a short window quits
+    # (``lifecycle_controller.handle_interrupt``).
+    "exit": ["c-q"],
+    "interrupt": ["c-c"],
     # Ctrl+O: push-to-talk dictation. It does NOT touch the existing prompt
     # text — the transcript is inserted at the cursor (and streamed live),
     # so it can be used repeatedly on the same message.
@@ -206,6 +208,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "command_palette": "open_command_palette",
     "dictate": "handle_dictate",
     "exit": "request_exit",
+    "interrupt": "handle_interrupt",
 }
 
 

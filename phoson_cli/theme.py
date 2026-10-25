@@ -738,6 +738,24 @@ def build_wizard_prompt_style(theme: Theme) -> dict[str, str]:
     )
 
 
+def pt_color(rich_color: str) -> str:
+    """A Rich color name/hex as a prompt_toolkit color (``""`` stays ``""``).
+
+    Theme state tones (``warn``…) use Rich names such as ``gold3`` that
+    prompt_toolkit rejects. The 16 ANSI names map to ptk's ``ansi*`` names
+    (keeping terminal-native tiers terminal-native); anything else resolves
+    to its truecolor hex.
+    """
+    if not rich_color:
+        return ""
+    from rich.color import Color, ColorType
+
+    color = Color.parse(rich_color)
+    if color.type in (ColorType.STANDARD, ColorType.DEFAULT) and color.name:
+        return "ansi" + color.name.replace("_", "")
+    return color.get_truecolor().hex
+
+
 def build_prompt_style(theme: Theme) -> dict[str, str]:
     """Build the ``prompt_toolkit`` style dict for a theme.
 

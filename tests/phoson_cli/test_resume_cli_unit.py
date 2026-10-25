@@ -8,8 +8,10 @@ import pytest
 from phoson_cli.__main__ import _resume_session, _print_resume_hint
 
 
-def _meta(session_id: str, title: str | None = None) -> SimpleNamespace:
-    return SimpleNamespace(id=session_id, title=title)
+def _meta(
+    session_id: str, title: str | None = None, cwd: str | None = None
+) -> SimpleNamespace:
+    return SimpleNamespace(id=session_id, title=title, cwd=cwd)
 
 
 def _repl(
@@ -18,11 +20,17 @@ def _repl(
     started: bool = False,
     title: str | None = None,
     metas: list | None = None,
+    all_metas: list | None = None,
     load_ok: bool = True,
 ):
     tree = SimpleNamespace(session_id=session_id, title=title)
     controller = SimpleNamespace(session_started=started)
-    storage = SimpleNamespace(list_meta=AsyncMock(return_value=metas or []))
+
+    async def list_meta(cwd: str | None = None) -> list:
+        # cwd-scoped listing vs. every session (``list_meta()``).
+        return (metas or []) if cwd is not None else (all_metas or metas or [])
+
+    storage = SimpleNamespace(list_meta=list_meta)
     load_session = AsyncMock(return_value=load_ok)
     return SimpleNamespace(
         tree=tree,
@@ -61,33 +69,39 @@ def test_resume_hint_silent_without_session_id(capsys) -> None:
 @pytest.mark.asyncio
 async def test_resume_session_prefix_match_loads() -> None:
     repl = _repl(metas=[_meta("abcdef1234567890", "A title")])
-    assert await _resume_session(repl, "abcdef") is True
+    assert await _resume_session(repl, "abcdef") is None
     repl.load_session.assert_awaited_once_with("abcdef1234567890")
 
 
 @pytest.mark.asyncio
-async def test_resume_session_not_found_reports(capsys) -> None:
+async def test_resume_session_not_found_reports() -> None:
     repl = _repl(metas=[_meta("abcdef1234567890")])
-    assert await _resume_session(repl, "zzz") is False
-    assert "no session matching" in capsys.readouterr().err
+    assert "no session matching" in await _resume_session(repl, "zzz")
     repl.load_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resume_session_ambiguous_lists_candidates(capsys) -> None:
+async def test_resume_session_in_another_directory_says_where() -> None:
+    repl = _repl(metas=[], all_metas=[_meta("ac6c0ab0ffff", cwd="/home/me/proj")])
+    error = await _resume_session(repl, "ac6c0ab0")
+    assert "belongs to /home/me/proj" in error
+    assert "cd /home/me/proj && phoson-cli --session ac6c0ab0" in error
+    repl.load_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_session_ambiguous_lists_candidates() -> None:
     repl = _repl(metas=[_meta("abcd0000"), _meta("abcd1111", "other")])
-    assert await _resume_session(repl, "abcd") is False
-    err = capsys.readouterr().err
-    assert "2 sessions match" in err
-    assert "abcd0000" in err
+    error = await _resume_session(repl, "abcd")
+    assert "2 sessions match" in error
+    assert "abcd0000" in error
     repl.load_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resume_session_load_failure_reports(capsys) -> None:
+async def test_resume_session_load_failure_reports() -> None:
     repl = _repl(metas=[_meta("abcdef1234567890")], load_ok=False)
-    assert await _resume_session(repl, "abcdef") is False
-    assert "could not load session" in capsys.readouterr().err
+    assert "could not load session" in await _resume_session(repl, "abcdef")
 
 
 # ── front-end runners: resume then run, one event loop ───────────────────────
@@ -100,7 +114,7 @@ async def test_run_fullscreen_resumes_then_runs() -> None:
     repl = _repl(metas=[_meta("abcdef1234567890")])
     app = SimpleNamespace(session=repl, run_async=AsyncMock())
 
-    assert await _run_fullscreen(app, "abcdef") is True
+    assert await _run_fullscreen(app, "abcdef") is None
     repl.load_session.assert_awaited_once_with("abcdef1234567890")
     app.run_async.assert_awaited_once()
 
@@ -113,7 +127,7 @@ async def test_run_fullscreen_aborts_when_session_missing() -> None:
     repl.shutdown = AsyncMock()
     app = SimpleNamespace(session=repl, run_async=AsyncMock())
 
-    assert await _run_fullscreen(app, "nope") is False
+    assert "no session matching" in await _run_fullscreen(app, "nope")
     repl.shutdown.assert_awaited_once()
     app.run_async.assert_not_awaited()
 
@@ -125,7 +139,7 @@ async def test_run_classic_resumes_then_runs() -> None:
     repl = _repl(metas=[_meta("abcdef1234567890")])
     repl.run = AsyncMock()
 
-    assert await _run_classic(repl, "abcdef") is True
+    assert await _run_classic(repl, "abcdef") is None
     repl.load_session.assert_awaited_once()
     repl.run.assert_awaited_once()
 
@@ -138,6 +152,6 @@ async def test_run_classic_aborts_when_session_missing() -> None:
     repl.run = AsyncMock()
     repl.shutdown = AsyncMock()
 
-    assert await _run_classic(repl, "nope") is False
+    assert "no session matching" in await _run_classic(repl, "nope")
     repl.shutdown.assert_awaited_once()
     repl.run.assert_not_awaited()

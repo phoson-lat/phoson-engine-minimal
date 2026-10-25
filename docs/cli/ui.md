@@ -66,6 +66,19 @@ transient state**, so it stays stable while a turn runs. The live agent
 activity (`Streaming…`, `Composing tool…`, `Running tool…`, `Thinking Ns`)
 is shown exclusively by the transient in-chat activity line described above.
 
+The context gauge reads `used/window pct%`: dim below 70 %, in the warning
+tone from 70 %, and in the error tone with a `/compact` nudge from 90 % (it
+can exceed 100 % after switching to a model with a smaller window). When the
+header does not fit the terminal it is shortened by priority instead of
+being clipped: the title is capped, then agents.md, the update hint,
+monitors, cwd, cost, session id and attachments are dropped in that order,
+and the title is squeezed before it goes. The context gauge, permission mode
+and reasoning effort are always kept.
+
+Every timestamp in the transcript uses one local, contextual format: `14:32`
+today, `yesterday 14:32`, `Sep 6 14:32` earlier this year and
+`Sep 6 2025 14:32` before that.
+
 The footer (bottom line) shows the active **model/provider on the left** and
 the contextual key hints on the right; on a terminal too narrow for both it
 degrades to a single left-aligned, `·`-separated line.

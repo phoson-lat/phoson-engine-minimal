@@ -9,6 +9,7 @@ the "minimal" philosophy.
 
 import os
 import sys
+import shlex
 import shutil
 import asyncio
 import subprocess
@@ -360,36 +361,46 @@ class _CliThemeError(ValueError):
     pass
 
 
-async def _resume_session(repl, query: str) -> bool:
+async def _resume_session(repl, query: str) -> str | None:
     """Resolve *query* (session-id prefix) and load that session.
 
-    Mirrors ``/resume``: prefix match, ambiguity reported. Returns True when a
-    session was loaded; on failure prints a friendly error to stderr.
+    Mirrors ``/resume``: prefix match, ambiguity reported. Returns ``None``
+    when a session was loaded, else the friendly error to show. The caller
+    prints it once the output guard has handed stderr back — printing here
+    would land in the guard's log, and the CLI would exit 1 silently.
     """
     sessions = await repl.storage.list_meta(cwd=str(Path.cwd()))
     matches = [s for s in sessions if str(s.id).startswith(query)]
     if not matches:
-        print(
-            f"Error: no session matching {query!r}. "
-            "Resume interactively and run /sessions to list them.",
-            file=sys.stderr,
+        # Sessions are scoped to the directory they started in: point at the
+        # right one instead of claiming the session does not exist.
+        elsewhere = [
+            s
+            for s in await repl.storage.list_meta()
+            if str(s.id).startswith(query) and getattr(s, "cwd", None)
+        ]
+        if len(elsewhere) == 1:
+            other = elsewhere[0]
+            return (
+                f"Error: session {str(other.id)[:8]} belongs to {other.cwd}. "
+                f"Resume it from there:\n  cd {shlex.quote(other.cwd)} "
+                f"&& phoson-cli --session {str(other.id)[:8]}"
+            )
+        return (
+            f"Error: no session matching {query!r} in this directory. "
+            "Resume interactively and run /sessions to list them."
         )
-        return False
     if len(matches) > 1:
-        print(
-            f"Error: {len(matches)} sessions match {query!r}; be more specific:",
-            file=sys.stderr,
-        )
+        lines = [f"Error: {len(matches)} sessions match {query!r}; be more specific:"]
         for session in matches[:10]:
             title = getattr(session, "title", None) or "(untitled)"
-            print(f"  {str(session.id)[:8]}  [{title}]", file=sys.stderr)
-        return False
+            lines.append(f"  {str(session.id)[:8]}  [{title}]")
+        return "\n".join(lines)
     session_id = str(matches[0].id)
     ok = await repl.load_session(session_id)
     if not ok:
-        print(f"Error: could not load session {session_id[:8]}.", file=sys.stderr)
-        return False
-    return True
+        return f"Error: could not load session {session_id[:8]}."
+    return None
 
 
 def _print_resume_hint(repl) -> None:
@@ -410,27 +421,28 @@ def _print_resume_hint(repl) -> None:
     print(f"\nTo resume run: phoson-cli --session {session_id[:8]}")
 
 
-async def _run_classic(repl, session: str | None) -> bool:
+async def _run_classic(repl, session: str | None) -> str | None:
     """Resume *session* (when given) then run the classic REPL, one event loop.
 
     Loading and running must share a loop: the controller holds asyncio
     primitives that would otherwise bind to a throwaway loop and fail on the
-    real one. Returns False when the requested session could not be loaded.
+    real one. Returns the resume error when the requested session could not
+    be loaded, else ``None``.
     """
-    if session and not await _resume_session(repl, session):
+    if session and (error := await _resume_session(repl, session)):
         await repl.shutdown()
-        return False
+        return error
     await repl.run()
-    return True
+    return None
 
 
-async def _run_fullscreen(app, session: str | None) -> bool:
+async def _run_fullscreen(app, session: str | None) -> str | None:
     """Resume *session* (when given) then run the full-screen app, one loop."""
-    if session and not await _resume_session(app.session, session):
+    if session and (error := await _resume_session(app.session, session)):
         await app.session.shutdown()
-        return False
+        return error
     await app.run_async()
-    return True
+    return None
 
 
 def _prepare_cli_theme(config: PhosonConfig):
@@ -1011,11 +1023,12 @@ def _run_cli() -> None:
         guard = OutputGuard()
         guard.install()
         try:
-            ran = asyncio.run(_run_classic(repl, options.session))
+            error = asyncio.run(_run_classic(repl, options.session))
         finally:
             guard.restore()
             warnings_hook.reset_notice_printer()
-        if not ran:
+        if error:
+            print(error, file=sys.stderr)
             sys.exit(1)
         _print_resume_hint(repl)
         return
@@ -1042,10 +1055,11 @@ def _run_cli() -> None:
     guard = OutputGuard()
     guard.install()
     try:
-        ran = asyncio.run(_run_fullscreen(app, options.session))
+        error = asyncio.run(_run_fullscreen(app, options.session))
     finally:
         guard.restore()
-    if not ran:
+    if error:
+        print(error, file=sys.stderr)
         sys.exit(1)
     _print_resume_hint(getattr(app, "repl", None))
 

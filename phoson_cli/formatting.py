@@ -235,45 +235,29 @@ def format_hhmm(dt: datetime.datetime) -> str:
     return _to_local(dt).strftime("%H:%M")
 
 
-def format_full_date(dt: datetime.datetime) -> str:
-    """Full local date as ``Monday 12 July 2026`` (#212 turn-end stamp).
-
-    Weekday, day (no zero-pad), full month name and year — the human-friendly
-    "when did this happen" label the done line shows alongside the time. An
-    aware *dt* (node ``created_at`` is stored UTC) is converted to local first.
-    """
-    dt = _to_local(dt)
-    return f"{dt.strftime('%A')} {dt.day} {dt.strftime('%B')} {dt.year}"
-
-
 def format_timestamp(
     dt: datetime.datetime, now: "datetime.datetime | None" = None
 ) -> str:
-    """Compact local timestamp for a message (#212).
+    """The one local timestamp format for every stamp in the transcript (#212).
 
-    ``HH:MM`` when *dt* falls on the same calendar day as *now* (the common
-    case for a live session), else ``MM-DD HH:MM`` so a session that spans
-    midnight or several days stays unambiguous (a #212 acceptance criterion).
-    Aware datetimes (node ``created_at`` is stored UTC) are converted to local
-    first so the stamp is the user's wall-clock time. *now* is injectable for
+    Contextual, so the common case stays short and an older stamp is never
+    ambiguous: ``14:32`` today, ``yesterday 14:32``, ``Sep 6 14:32`` earlier
+    this year, ``Sep 6 2025 14:32`` before that. Month names (not numbers)
+    avoid the DD-MM vs MM-DD trap. Aware datetimes (node ``created_at`` is
+    stored UTC) are converted to local first; *now* is injectable for
     deterministic tests.
     """
     now = _to_local(now) if now is not None else datetime.datetime.now()
     dt = _to_local(dt)
+    clock = dt.strftime("%H:%M")
     if dt.date() == now.date():
-        return dt.strftime("%H:%M")
-    return dt.strftime("%m-%d %H:%M")
-
-
-def format_day_time(dt: datetime.datetime) -> str:
-    """Local ``DD-MM-YYYY HH:MM`` stamp (#212): always carries the day.
-
-    Used as the trailing stamp on user turns, where the date matters more than
-    the compact live ``HH:MM`` (a turn may be reloaded days later). Aware
-    datetimes are converted to local first.
-    """
-    dt = _to_local(dt)
-    return dt.strftime("%d-%m-%Y %H:%M")
+        return clock
+    if dt.date() == now.date() - datetime.timedelta(days=1):
+        return f"yesterday {clock}"
+    day = f"{dt.strftime('%b')} {dt.day}"
+    if dt.year == now.year:
+        return f"{day} {clock}"
+    return f"{day} {dt.year} {clock}"
 
 
 def render_done_line(
@@ -298,7 +282,7 @@ def render_done_line(
     parts: list[str] = []
     if r.total_cost_usd > 0:
         parts.append(f"${r.total_cost_usd:.5f}")
-    parts.append(f"ended {format_full_date(ended)} {format_hhmm(ended)}")
+    parts.append(f"ended {format_timestamp(ended)}")
     line = Text()
     if r.truncated:
         line.append("  ⚠ truncated", style=theme.warn)
@@ -416,17 +400,17 @@ class _HighlightedBlock:
 
 
 def _user_line(text: str, theme: Theme, at: "datetime.datetime | None" = None) -> Text:
-    """Build the user turn: ``›  <message>  ·  DD-MM-YYYY HH:MM``.
+    """Build the user turn: ``›  <message>  ·  <timestamp>``.
 
     No speaker label (``You`` was removed) — the ``›`` marker and the
-    full-width highlight are enough to identify a typed turn. The date always
-    carries the day and sits at the end of the message.
+    full-width highlight are enough to identify a typed turn. The stamp
+    (:func:`format_timestamp`) sits at the end of the message.
     """
     line = Text(style=theme.badge_user)
     line.append("›  ", style=f"bold {theme.accent_soft}".strip())
     line.append(text, style=theme.text)
     if at is not None:
-        line.append(f"  ·  {format_day_time(at)}", style=theme.muted_deep)
+        line.append(f"  ·  {format_timestamp(at)}", style=theme.muted_deep)
     return line
 
 
@@ -435,7 +419,7 @@ def render_user_turn(
 ) -> Group:
     """Render a user message as a full-width highlighted band (T-2).
 
-    The message reads inline — ``›  hello  ·  17-09-2026 14:32`` — with no
+    The message reads inline — ``›  hello  ·  14:32`` — with no
     speaker label, and the ``badge_user`` highlight fills the whole width of
     every line so the user's own turns stand out from the assistant's plain
     Markdown at a glance.
@@ -516,7 +500,7 @@ def render_monitor_wake_turn(
     if names:
         line.append(f" ({', '.join(names)})", style=f"bold {color}".strip())
     if at is not None:
-        line.append(f" at {format_day_time(at)}", style=theme.muted_deep)
+        line.append(f" at {format_timestamp(at)}", style=theme.muted_deep)
     return Group(line)
 
 
@@ -570,7 +554,7 @@ def render_peer_wake_turn(
         line.append(f"@{sender}", style=f"bold {theme.accent}".strip())
         line.append(f" {_PEER_KIND_LABEL.get(kind, kind)}", style=theme.muted)
         if at is not None:
-            line.append(f" · {format_day_time(at)}", style=theme.muted_deep)
+            line.append(f" · {format_timestamp(at)}", style=theme.muted_deep)
         preview = _peer_preview(body)
         if preview:
             line.append(": ", style=theme.muted)
@@ -1309,6 +1293,5 @@ __all__ = [
     "format_token_indicator",
     "abbr_tokens",
     "format_hhmm",
-    "format_full_date",
     "format_timestamp",
 ]
