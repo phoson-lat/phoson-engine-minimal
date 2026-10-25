@@ -66,6 +66,12 @@ def is_prefixed_escape(app: Any) -> bool:
             code = ord(kp.data[0])
             if 0x20 <= code <= 0x7F:
                 return True
+        elif kp.key != "<cpr-response>":
+            # An empty payload only comes from a multi-key decode (the
+            # kitty protocol's Alt+key CSI-u → ``escape`` + key, see
+            # ``keys._kitty_sequences``): prompt_toolkit hands the data to
+            # the first key only, so the follower is the Alt payload.
+            return True
     return False
 
 
@@ -80,6 +86,7 @@ def handle_escape(app: Any) -> None:
       cancel role (the binding is registered ``eager`` in ``keys.py``
       so a double tap mid-run can never be swallowed as a chord) and
       no double-tap state is recorded.
+    - While idle in shell mode (``!``), Esc leaves shell mode.
     - While idle, a lone clean Esc still does nothing here (inside
       Float pickers they bind Esc themselves and take precedence). A
       second clean Esc within ``_REWIND_DOUBLE_ESC_WINDOW_SECONDS``
@@ -98,6 +105,11 @@ def handle_escape(app: Any) -> None:
             )
         elif result == "cancelled":
             app.sink.notify("info", "Cancelling current operation (Esc)...")
+        return
+    if app._shell_mode:
+        # Idle Esc in shell mode only leaves the mode (keeps the text); it
+        # does not arm the double-tap rewind.
+        app.exit_shell_mode()
         return
     now = time.monotonic()
     if now - app._last_escape_at <= _REWIND_DOUBLE_ESC_WINDOW_SECONDS:

@@ -265,7 +265,9 @@ class FullScreenCommandHost:
         The command is gated by the same bash permission policy the agent's
         bash tool uses (allow → run, ask → the T-6 confirmation card, deny →
         refused). The result is rendered as a normal bash tool card, so the
-        transcript reads identically whether the agent or the user ran it.
+        transcript reads identically whether the agent or the user ran it,
+        and is queued on the controller so the model receives it with the
+        next message (shell mode, see ``phoson_cli.shell_context``).
         """
         from ..tools.bash import _run_bash
         from ..permissions_store import (
@@ -307,6 +309,7 @@ class FullScreenCommandHost:
         self.app.sink.add_bash_card(
             command, result, duration_ms=elapsed_ms, error=error
         )
+        self.app.session.controller.add_shell_context(command, result, error=error)
         self.app.app.invalidate()
 
 

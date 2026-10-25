@@ -133,6 +133,7 @@ def _controller(turns: int, **cfg) -> SessionController:
         controller.attachments = MagicMock()
         controller.attachments.__bool__ = lambda self: False
         controller.attachments.__len__ = lambda self: 0
+        controller._pending_shell = []
         controller._turn_lock = asyncio.Lock()
         controller.summarizer = MagicMock()
         controller.summarizer.min_keep_messages = 4

@@ -11,6 +11,7 @@ cross-thread marshaling, and ``Ctrl+C`` cancellation is a plain
 ``task.cancel()`` on that same loop.
 """
 
+import os
 import asyncio
 import logging
 from typing import Any, cast
@@ -24,7 +25,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.widgets import Frame, TextArea
-from prompt_toolkit.completion import merge_completers
+from prompt_toolkit.completion import ConditionalCompleter, merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent
 from prompt_toolkit.layout.layout import Layout, FocusableElement
@@ -49,7 +50,14 @@ from phoson_agent import Choice, Question, FormField, QuestionsResult
 from phoson_llm.schemas import REASONING_EFFORTS
 
 from .. import warnings_hook
-from .keys import build_key_bindings, listing_for_config
+from .keys import (
+    KITTY_KEYBOARD_POP,
+    KITTY_KEYBOARD_PUSH,
+    RESET_MODIFY_OTHER_KEYS,
+    ENABLE_MODIFY_OTHER_KEYS,
+    build_key_bindings,
+    listing_for_config,
+)
 from .sink import FullScreenSink
 from ..theme import (
     Theme,
@@ -226,7 +234,7 @@ class _ComposerPlaceholderProcessor(Processor):
     changes and would never populate the initial empty buffer.
     """
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str | Callable[[], str]) -> None:
         self._text = text
 
     def apply_transformation(
@@ -239,11 +247,37 @@ class _ComposerPlaceholderProcessor(Processor):
             and transformation_input.lineno
             == transformation_input.document.line_count - 1
         ):
+            text = self._text() if callable(self._text) else self._text
             return Transformation(
                 fragments=transformation_input.fragments
-                + [("class:auto-suggestion", self._text)]
+                + [("class:auto-suggestion", text)]
             )
         return Transformation(fragments=transformation_input.fragments)
+
+
+def _tie_kitty_keyboard_to_alternate_screen(output: Any) -> None:
+    """Enable the kitty keyboard protocol only while on the alternate screen.
+
+    The flags are pushed right after prompt_toolkit enters the alternate
+    screen and popped right before it leaves — including on a crash exit —
+    so the user's shell (main screen) never inherits them and the next
+    full-screen program starts from a clean stack.
+    """
+    enter = getattr(output, "enter_alternate_screen", None)
+    quit_ = getattr(output, "quit_alternate_screen", None)
+    if enter is None or quit_ is None:
+        return
+
+    def enter_with_kitty_keyboard() -> None:
+        enter()
+        output.write_raw(KITTY_KEYBOARD_PUSH)
+
+    def quit_with_kitty_keyboard() -> None:
+        output.write_raw(KITTY_KEYBOARD_POP)
+        quit_()
+
+    output.enter_alternate_screen = enter_with_kitty_keyboard
+    output.quit_alternate_screen = quit_with_kitty_keyboard
 
 
 # Default persistent input-history file — the *same* file the classic REPL
@@ -333,6 +367,10 @@ class PhosonApp:
         # window between two fast Ctrl+P presses so only one palette can
         # be scheduled.
         self._palette_open = False
+        # Shell mode (Claude Code's ``!`` gesture): ``!`` on an empty composer
+        # switches the next submit to a shell command whose output is shared
+        # with the agent; Backspace on the empty composer or Esc leaves it.
+        self._shell_mode = False
 
         # Backs inline /model autocomplete (see .completer.ModelArgCompleter)
         # — refreshed in the background, not fetched synchronously while
@@ -427,7 +465,11 @@ class PhosonApp:
 
         self._prompt_input = TextArea(
             height=D(min=1, max=_INPUT_MAX_LINES),
-            prompt="❯ ",
+            # The ``❯`` (or ``!`` in shell mode) is a line prefix, not a
+            # BeforeInput prompt: continuation lines — wrapped or Ctrl+J —
+            # get a matching blank indent so the text block never runs
+            # under the glyph.
+            get_line_prefix=self._composer_line_prefix,
             multiline=True,
             # Long lines must wrap (not scroll horizontally off-screen) —
             # the default is True; an earlier port set it to False and
@@ -442,37 +484,43 @@ class PhosonApp:
             # survives restarts and is consistent across front ends
             # (IMPROVEMENTS.md A2). Overridable via config (tests).
             history=FileHistory(str(self._history_file)),
-            completer=merge_completers(
-                [
-                    SlashCompleter(lambda: self.session.controller.command_catalog),
-                    ModelArgCompleter(self.model_cache),
-                    StaticArgCompleter(
-                        ("/reasoning-effort ", "/effort "),
-                        [*REASONING_EFFORTS, "off"],
-                    ),
-                    # /provider <name> — small static set, same inline
-                    # autocomplete pattern as /reasoning-effort (#55).
-                    StaticArgCompleter(
-                        ("/provider ",),
-                        lambda: enabled_providers_from_config(self.session.config),
-                    ),
-                    # /theme <tier> — includes tiers contributed by plugins.
-                    StaticArgCompleter(
-                        ("/theme ",),
-                        lambda: list(self.session.theme_registry.valid_names()),
-                    ),
-                    # /skills <name> — discovered lazily per completion
-                    # pass so a skill added mid-session shows up (G5).
-                    StaticArgCompleter(("/skills ",), _skill_names),
-                    SessionsArgCompleter(self.session_cache),
-                    ResumeArgCompleter(self.session_cache),
-                    # @file mentions in free text (E3) — completes repo
-                    # paths after a trailing "@"; the controller expands
-                    # the picked path into the file's content on send.
-                    # Rooted at Path.cwd() (same as the controller
-                    # resolves mentions) — the session doesn't exist yet here.
-                    PathCompleter(Path.cwd()),
-                ]
+            # Slash/@file completions mean nothing to a shell command
+            # (``/usr/bin/…`` would pop the command menu), so they are off
+            # in shell mode.
+            completer=ConditionalCompleter(
+                merge_completers(
+                    [
+                        SlashCompleter(lambda: self.session.controller.command_catalog),
+                        ModelArgCompleter(self.model_cache),
+                        StaticArgCompleter(
+                            ("/reasoning-effort ", "/effort "),
+                            [*REASONING_EFFORTS, "off"],
+                        ),
+                        # /provider <name> — small static set, same inline
+                        # autocomplete pattern as /reasoning-effort (#55).
+                        StaticArgCompleter(
+                            ("/provider ",),
+                            lambda: enabled_providers_from_config(self.session.config),
+                        ),
+                        # /theme <tier> — includes tiers contributed by plugins.
+                        StaticArgCompleter(
+                            ("/theme ",),
+                            lambda: list(self.session.theme_registry.valid_names()),
+                        ),
+                        # /skills <name> — discovered lazily per completion
+                        # pass so a skill added mid-session shows up (G5).
+                        StaticArgCompleter(("/skills ",), _skill_names),
+                        SessionsArgCompleter(self.session_cache),
+                        ResumeArgCompleter(self.session_cache),
+                        # @file mentions in free text (E3) — completes repo
+                        # paths after a trailing "@"; the controller expands
+                        # the picked path into the file's content on send.
+                        # Rooted at Path.cwd() (same as the controller
+                        # resolves mentions) — the session doesn't exist yet here.
+                        PathCompleter(Path.cwd()),
+                    ]
+                ),
+                filter=Condition(lambda: not self._shell_mode),
             ),
             complete_while_typing=True,
             # T-4: the empty composer shows a dim placeholder ("Ask
@@ -481,7 +529,7 @@ class PhosonApp:
             # so a synchronous input processor renders it while the buffer
             # is empty (see _ComposerPlaceholderProcessor).
             input_processors=[
-                _ComposerPlaceholderProcessor("Ask anything  ·  @ files  ·  / commands")
+                _ComposerPlaceholderProcessor(self._composer_placeholder)
             ],
             style="class:prompt_text",
         )
@@ -491,6 +539,10 @@ class PhosonApp:
         # box as an in-composer cue, not a leading shell glyph. The same
         # Frame the picker Floats use, so the chrome is one visual language.
         self._composer_frame = Frame(body=self._prompt_input)
+        # Shell mode recolors the composer border (``frame.shell`` style).
+        self._composer_frame.container.style = lambda: (
+            "class:frame class:frame.shell" if self._shell_mode else "class:frame"
+        )
         # The footer is intentionally keyboard hints only — and contextual
         # (T-9): three hints for the current state, never a truncated
         # cheatsheet. Stable runtime facts live in the compact header,
@@ -572,6 +624,10 @@ class PhosonApp:
                 "frame": f"bg:{self.theme.completion_bg}",
                 "frame.border": self.theme.pt_accent,
                 "frame.label": f"bold {self.theme.pt_accent}",
+                # Shell mode (``!``): the composer border and glyph switch
+                # to the "ok" tone so the mode change is unmissable.
+                "frame.shell frame.border": self.theme.pt_ok,
+                "composer.shell": f"bold {self.theme.pt_ok}",
                 # T-4: the empty-composer placeholder is a prompt_toolkit
                 # auto-suggestion, styled in a muted tone so it reads as a
                 # hint, not real content.
@@ -731,12 +787,37 @@ class PhosonApp:
     def insert_newline(self) -> None:
         """Ctrl+J: insert a newline in the multiline input (IMPROVEMENTS.md A2).
 
-        Shift+Enter is not portable (terminals emit CSI-u sequences that
-        prompt_toolkit's VT100 parser does not map, so it arrives as literal
-        garbage), so ``Ctrl+J`` — a single universal byte — is the newline
-        key. It overrides prompt_toolkit's default ``c-j``→Enter remap.
+        ``Ctrl+J`` — a single universal byte — is the newline key that works
+        on every terminal. It overrides prompt_toolkit's default
+        ``c-j``→Enter remap. Shift/Ctrl/Alt+Enter decode to ``c-j`` too where
+        the terminal reports them (``keys.NEWLINE_ENTER_SEQUENCES``).
         """
         self._prompt_input.buffer.newline(copy_margin=False)
+
+    # ── Shell mode (``!``) ───────────────────────────────────────────────
+
+    def enter_shell_mode(self) -> None:
+        """``!`` on an empty composer: the next submit runs a shell command."""
+        self._shell_mode = True
+        self.app.invalidate()
+
+    def exit_shell_mode(self) -> None:
+        """Backspace on an empty composer, Esc, or a submit: back to chat."""
+        self._shell_mode = False
+        self.app.invalidate()
+
+    def _composer_line_prefix(self, lineno: int, wrap_count: int) -> list:
+        """``❯``/``!`` on the first visual line, a hanging indent elsewhere."""
+        if lineno == 0 and wrap_count == 0:
+            if self._shell_mode:
+                return [("class:composer.shell", "! ")]
+            return [("class:text-area.prompt", "❯ ")]
+        return [("", "  ")]
+
+    def _composer_placeholder(self) -> str:
+        if self._shell_mode:
+            return "shell command  ·  output is shared with the agent  ·  esc exit"
+        return "Ask anything  ·  @ files  ·  ! shell  ·  / commands"
 
     def _is_run_in_flight(self) -> bool:
         """True from the moment Enter is pressed until the turn fully settles.
@@ -1177,9 +1258,19 @@ class PhosonApp:
             True, lambda message: self.sink.notify("warn", message)
         )
         restore_warning_capture = warnings_hook.capture_warnings()
+        # Ask the terminal to tell Shift/Ctrl+Enter apart from Enter so they
+        # can insert a newline (see keys.NEWLINE_ENTER_SEQUENCES).
+        extended_keys = os.environ.get("PHOSON_EXTENDED_KEYS", "1") != "0"
+        if extended_keys:
+            self.app.output.write_raw(ENABLE_MODIFY_OTHER_KEYS)
+            self.app.output.flush()
+            _tie_kitty_keyboard_to_alternate_screen(self.app.output)
         try:
             await self.app.run_async()
         finally:
+            if extended_keys:
+                self.app.output.write_raw(RESET_MODIFY_OTHER_KEYS)
+                self.app.output.flush()
             try:
                 await self.session.shutdown()
             finally:

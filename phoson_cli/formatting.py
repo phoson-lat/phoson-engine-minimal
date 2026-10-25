@@ -40,6 +40,7 @@ from .tool_render import (  # noqa: F401
     ToolRenderRegistry,
     build_tool_render_registry,
 )
+from .shell_context import parse_shell_context
 
 if TYPE_CHECKING:
     from phoson_llm.schemas import Message
@@ -1133,9 +1134,31 @@ def history_blocks(
             if isinstance(content, str):
                 items.append(render_user_turn(content, theme, at=at))
             else:
-                text_parts = [
-                    block.text for block in content if isinstance(block, TextBlock)
-                ]
+                text_parts: list[str] = []
+                shell_group: ReplayToolGroup | None = None
+                for block in content:
+                    if not isinstance(block, TextBlock):
+                        continue
+                    shell = parse_shell_context(block.text)
+                    if shell is None:
+                        text_parts.append(block.text)
+                        continue
+                    # Shell-mode (``!``) output that rode along with this
+                    # message: replay it as the bash card the user saw, run
+                    # just before they sent the message.
+                    if shell_group is None:
+                        shell_group = ReplayToolGroup()
+                        items.append(shell_group)
+                    shell_group.calls.append(
+                        (
+                            AgentToolDoneEvent(
+                                tool_name="bash",
+                                result=shell.output,
+                                error=shell.error,
+                            ),
+                            {"command": shell.command},
+                        )
+                    )
                 if text_parts:
                     items.append(render_user_turn("\n".join(text_parts), theme, at=at))
 

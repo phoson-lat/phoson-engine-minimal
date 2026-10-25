@@ -33,6 +33,7 @@ _FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
 # run-safe commands (and Ctrl+P) remain available — see `turn_controller`.
 _FOOTER_HINT_RUNNING = "esc cancel  ·  enter queue  ·  ctrl+p commands"
 _FOOTER_HINT_PICKER = "enter  ·  esc"
+_FOOTER_HINT_SHELL = "enter run  ·  esc / ⌫ exit shell"
 
 
 def short_cwd(cwd: Path) -> str:
@@ -208,6 +209,8 @@ class HeaderModel:
         app = self.app
         if app._active_float is not None:
             hint = _FOOTER_HINT_PICKER
+        elif getattr(app, "_shell_mode", False):
+            hint = _FOOTER_HINT_SHELL
         elif app._is_run_in_flight():
             hint = _FOOTER_HINT_RUNNING
         else:
@@ -221,6 +224,11 @@ class HeaderModel:
         queued = len(getattr(app, "_pending_turns", ()))
         if queued:
             left = f"{left} · {queued} queued"
+        # Shell-mode outputs ride along with the next message (``!``).
+        shell = getattr(session.controller, "pending_shell_count", 0)
+        if shell:
+            noun = "output" if shell == 1 else "outputs"
+            left = f"{left} · {shell} shell {noun} → next message"
 
         gap = self._footer_width() - len(left) - len(hint) - 1
         spacer = " " * gap if gap >= 1 else "  ·  "

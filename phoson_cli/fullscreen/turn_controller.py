@@ -44,6 +44,9 @@ def submit(app: Any) -> None:
     text = app._prompt_input.text
     if not text.strip():
         return
+    if app._shell_mode:
+        _submit_shell(app, text)
+        return
     if app._is_run_in_flight():
         _submit_while_running(app, text)
         return
@@ -56,6 +59,31 @@ def submit(app: Any) -> None:
         app._start_operation(app._run_bash_line(text[1:].strip()), "bash")
         return
     app._start_operation(app._dispatch(text), "input")
+
+
+def _submit_shell(app: Any, text: str) -> None:
+    """Enter in shell mode: run the composer text as a shell command.
+
+    The output is rendered as a bash card and shared with the agent on the
+    next message (``FullScreenCommandHost.run_bash_line``). History keeps
+    the ``!`` prefix so a recalled entry still runs as a shell line; a
+    recalled ``!cmd`` submitted while already in shell mode drops it.
+    """
+    command = text.strip().removeprefix("!").strip()
+    if not command:
+        return
+    if app._is_run_in_flight():
+        app.sink.notify(
+            "warn",
+            "Shell commands cannot run while a turn is running — "
+            "press Esc to cancel it first. Your text is kept.",
+        )
+        return
+    app._prompt_input.buffer.history.append_string(f"!{command}")
+    app._prompt_input.text = ""
+    app.exit_shell_mode()
+    app._auto_scroll = True
+    app._start_operation(app._run_bash_line(command), "bash")
 
 
 def _submit_while_running(app: Any, text: str) -> None:

@@ -2,7 +2,7 @@
 
 The full-screen `prompt_toolkit` front end is the default interactive
 experience; it offers a persistent scrollable chat pane, multiline input
-(`Ctrl+J` inserts a newline, `Enter` sends), persistent input history
+(`Ctrl+J` — or Shift/Ctrl/Alt+Enter where the terminal reports them, see [keybindings.md](keybindings.md) — inserts a newline, `Enter` sends), persistent input history
 (`~/.phoson/history.txt`, shared with the retained classic REPL), and
 `/model`/`/provider`/`/sessions` pickers and bash confirmation as
 overlay floats. The multiline composer wraps long pasted lines, takes
@@ -28,6 +28,27 @@ The composer stays usable **while a turn is running**:
   effort) are all live mid-turn.
 
 `Esc` still cancels the active turn.
+
+## Shell mode (`!`)
+
+Typing `!` into an **empty** composer switches it to shell mode (the same
+gesture as Claude Code): the `❯` becomes a `!`, the composer border changes
+color and slash/`@file` completion is off. `Enter` runs the text as a shell
+command — gated by the same bash permission policy as the agent's tool —
+and shows the result as a bash card, then returns to the normal composer.
+`Backspace` on the empty composer or `Esc` leaves shell mode without
+running anything. A `!` typed anywhere else is just a character.
+
+The command's output is **shared with the agent**, but without starting a
+turn: it is queued (the footer shows `N shell outputs → next message`) and
+attached to the next message you send, one block per command, so the model
+sees exactly what you saw. Starting a new session or loading another one
+drops the queue. On resume, those blocks replay as bash cards rather than
+as part of your message. Typing a `!command` line directly (e.g. recalled
+from history) behaves the same way.
+
+Wrapped and `Ctrl+J` continuation lines in the composer are indented to
+line up after the `❯`/`!` glyph.
 
 While a run is in flight the chat shows a transient animated activity
 line: `Thinking…` with rotating phrases, then `Composing tool…` while

@@ -606,7 +606,7 @@ def test_composer_placeholder_shows_when_empty_and_hides_when_typed(
     app: PhosonApp,
 ) -> None:
     """T-4: the empty composer renders the dim placeholder
-    ``Ask anything · @ files · / commands``; typing removes it."""
+    ``Ask anything · @ files · ! shell · / commands``; typing removes it."""
     from types import SimpleNamespace
 
     from phoson_cli.fullscreen.app import _ComposerPlaceholderProcessor
@@ -622,7 +622,7 @@ def test_composer_placeholder_shows_when_empty_and_hides_when_typed(
     )
     assert placeholder is not None
 
-    placeholder_text = "Ask anything  ·  @ files  ·  / commands"
+    placeholder_text = "Ask anything  ·  @ files  ·  ! shell  ·  / commands"
 
     def _render(text: str, cursor: int) -> str:
         """Run the placeholder processor on a synthetic transformation input."""

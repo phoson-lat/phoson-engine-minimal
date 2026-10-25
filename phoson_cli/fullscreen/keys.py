@@ -21,7 +21,10 @@ passed into :func:`build_key_bindings` as ``overrides``.
 
 from typing import TYPE_CHECKING
 
+from prompt_toolkit.keys import Keys
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 
 if TYPE_CHECKING:
     from .app import PhosonApp
@@ -71,6 +74,114 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # so it can be used repeatedly on the same message.
     "dictate": ["c-o"],
 }
+
+#: Modified-Enter encodings that insert a newline, decoded as ``c-j`` (the
+#: ``newline`` action's key — Ctrl+Enter is ``\n`` on many terminals anyway).
+#: A plain Enter is ``\r`` everywhere; these only arrive when the terminal
+#: reports modifiers:
+#:
+#: - CSI-u (kitty / WezTerm / foot / iTerm2 "Report keys using CSI u").
+#: - xterm ``modifyOtherKeys``, which :data:`ENABLE_MODIFY_OTHER_KEYS` asks
+#:   for. prompt_toolkit decodes these as plain Enter, so Shift+Enter used
+#:   to *submit* the draft on such terminals.
+#: - ``ESC`` + ``CR``: Alt+Enter, and what Shift+Enter is commonly remapped
+#:   to send (iTerm2 / VS Code key mappings).
+NEWLINE_ENTER_SEQUENCES: tuple[str, ...] = (
+    "\x1b[13;2u",  # Shift+Enter (CSI-u)
+    "\x1b[13;5u",  # Ctrl+Enter
+    "\x1b[13;6u",  # Ctrl+Shift+Enter
+    "\x1b[27;2;13~",  # Shift+Enter (modifyOtherKeys)
+    "\x1b[27;5;13~",  # Ctrl+Enter
+    "\x1b[27;6;13~",  # Ctrl+Shift+Enter
+    "\x1b\r",  # Alt+Enter / remapped Shift+Enter
+)
+
+#: xterm ``modifyOtherKeys`` level 1: report modifiers only on keys that
+#: are otherwise ambiguous (Shift/Ctrl+Enter), leaving Ctrl+letters, Tab,
+#: Esc and Alt+keys untouched. Terminals without support ignore it.
+ENABLE_MODIFY_OTHER_KEYS = "\x1b[>4;1m"
+#: Back to the terminal's default ``modifyOtherKeys`` level on exit.
+RESET_MODIFY_OTHER_KEYS = "\x1b[>4m"
+
+
+#: kitty keyboard protocol, flag 1 ("disambiguate escape codes"): the only
+#: way to get a distinct Shift/Ctrl+Enter out of kitty (it ignores
+#: ``modifyOtherKeys``); Ghostty, WezTerm, foot and Alacritty speak it too.
+#: Pushed on entering the alternate screen and popped before leaving it, so
+#: the shell never inherits it. Terminals without support ignore both.
+KITTY_KEYBOARD_PUSH = "\x1b[>1u"
+KITTY_KEYBOARD_POP = "\x1b[<u"
+
+# CSI-u modifier parameter = 1 + bitmask (shift 1, alt 2, ctrl 4).
+_SHIFT, _ALT, _ALT_SHIFT, _CTRL, _CTRL_SHIFT, _CTRL_ALT = 2, 3, 4, 5, 6, 7
+
+_CTRL_PUNCTUATION: dict[str, Keys] = {
+    " ": Keys.ControlAt,
+    "@": Keys.ControlAt,
+    "\\": Keys.ControlBackslash,
+    "]": Keys.ControlSquareClose,
+    "^": Keys.ControlCircumflex,
+    "_": Keys.ControlUnderscore,
+    "/": Keys.ControlUnderscore,  # legacy Ctrl+/ is 0x1f
+}
+
+
+def _kitty_sequences() -> dict[str, Keys | tuple[Keys | str, ...]]:
+    """CSI-u encodings that flag 1 turns legacy keys into → ptk keys.
+
+    With flag 1 kitty reports Esc, and any key held with Ctrl or Alt, as
+    ``CSI code ; mods u`` instead of a control byte / ``ESC`` prefix; plain
+    text, Enter, Tab and Backspace stay legacy. Every such combination is
+    mapped back to what the legacy encoding produced, so all existing
+    bindings keep working. Combinations with no legacy meaning (Ctrl+1, …)
+    map to ``Keys.Ignore`` rather than leaking the raw sequence into the
+    composer as text.
+    """
+    table: dict[str, Keys | tuple[Keys | str, ...]] = {}
+    for code in range(32, 127):
+        char = chr(code)
+        for mods in range(_SHIFT, 9):
+            table[f"\x1b[{code};{mods}u"] = Keys.Ignore
+        # Alt+key: legacy ``ESC`` + key.
+        table[f"\x1b[{code};{_ALT}u"] = (Keys.Escape, char)
+        table[f"\x1b[{code};{_ALT_SHIFT}u"] = (Keys.Escape, char.upper())
+        control: Keys | None = None
+        if "a" <= char <= "z":
+            control = Keys[f"Control{char.upper()}"]
+        elif char in _CTRL_PUNCTUATION:
+            control = _CTRL_PUNCTUATION[char]
+        if control is not None:
+            table[f"\x1b[{code};{_CTRL}u"] = control
+            table[f"\x1b[{code};{_CTRL_SHIFT}u"] = control
+            table[f"\x1b[{code};{_CTRL_ALT}u"] = (Keys.Escape, control)
+    table.update(
+        {
+            "\x1b[27u": Keys.Escape,
+            f"\x1b[27;{_ALT}u": (Keys.Escape, Keys.Escape),
+            f"\x1b[9;{_SHIFT}u": Keys.BackTab,
+            f"\x1b[9;{_CTRL}u": Keys.ControlI,
+            f"\x1b[127;{_SHIFT}u": Keys.ControlH,
+            f"\x1b[127;{_CTRL}u": Keys.ControlH,
+            f"\x1b[127;{_ALT}u": (Keys.Escape, Keys.ControlH),
+            f"\x1b[13;{_ALT}u": Keys.ControlJ,
+        }
+    )
+    return table
+
+
+def register_newline_enter_sequences() -> None:
+    """Teach prompt_toolkit's decoder the modified-Enter and kitty encodings.
+
+    :data:`NEWLINE_ENTER_SEQUENCES` decode as ``c-j``; the kitty protocol's
+    CSI-u keys decode as their legacy equivalents (see
+    :func:`_kitty_sequences`). Idempotent. Patches prompt_toolkit's
+    process-wide VT100 table, so it must run before the input parser sees
+    the first byte.
+    """
+    ANSI_SEQUENCES.update(_kitty_sequences())  # type: ignore[arg-type]
+    for sequence in NEWLINE_ENTER_SEQUENCES:
+        ANSI_SEQUENCES[sequence] = Keys.ControlJ
+
 
 #: Action → no-arg method on ``PhosonApp`` that performs it. The single
 #: place where an action is wired to its handler; ``build_key_bindings``
@@ -146,6 +257,7 @@ def build_key_bindings(
     ``overrides`` (IMPROVEMENTS.md E6) remaps individual actions; when
     absent the built-in :data:`DEFAULT_KEY_BINDINGS` are used unchanged.
     """
+    register_newline_enter_sequences()
     kb = KeyBindings()
     try:
         bindings = resolve_key_bindings(overrides=overrides)
@@ -174,7 +286,28 @@ def build_key_bindings(
                 kb.add(*sequence.split(), eager=True)(_handler)  # type: ignore[call-overload]
             else:
                 kb.add(*sequence.split())(_handler)  # type: ignore[call-overload]
+    _add_shell_mode_bindings(app, kb)
     return kb
+
+
+def _add_shell_mode_bindings(app: "PhosonApp", kb: KeyBindings) -> None:
+    """Fixed (non-remappable) shell-mode gestures, as in Claude Code.
+
+    ``!`` typed into an empty composer enters shell mode instead of being
+    inserted; Backspace on an empty composer leaves it. Anywhere else both
+    keys keep their normal editing behavior.
+    """
+
+    def composer_empty() -> bool:
+        return app._prompt_input.text == ""
+
+    @kb.add("!", filter=Condition(lambda: composer_empty() and not app._shell_mode))
+    def _enter_shell(event: object) -> None:  # noqa: ARG001
+        app.enter_shell_mode()
+
+    @kb.add("c-h", filter=Condition(lambda: composer_empty() and app._shell_mode))
+    def _leave_shell(event: object) -> None:  # noqa: ARG001
+        app.exit_shell_mode()
 
 
 def key_bindings_for_config(
