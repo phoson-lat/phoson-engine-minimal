@@ -118,6 +118,48 @@ def test_transcribe_wav_missing_file_before_runtime(monkeypatch):
         SttEngine().transcribe_wav("/does/not/exist.wav", "es")
 
 
+def test_microphone_reports_ready_and_worker_error(monkeypatch):
+    import threading
+
+    class FakeMic:
+        def language(self, _language):
+            return self
+
+        def on_line(self, _callback):
+            return self
+
+        def on_error(self, callback):
+            self.on_error_callback = callback
+            return self
+
+        def load(self):
+            return self
+
+        def start(self):
+            return self
+
+        def stop(self):
+            return self
+
+        def close(self):
+            return self
+
+    fake = FakeMic()
+    monkeypatch.setattr(engine_mod, "_ensure_portaudio", lambda: None)
+    moonshine = type("Moonshine", (), {"MicTranscriber": lambda: fake})
+    monkeypatch.setattr(engine_mod, "_moonshine", lambda: moonshine)
+    ready = []
+    stopped = threading.Event()
+
+    def signal_ready():
+        ready.append(True)
+        fake.on_error_callback(ValueError("audio worker failed"))
+
+    with pytest.raises(RuntimeError, match="audio worker failed"):
+        SttEngine().transcribe_microphone("es", stop=stopped, on_ready=signal_ready)
+    assert ready == [True]
+
+
 # ── Fakes ───────────────────────────────────────────────────────────────
 
 

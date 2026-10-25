@@ -128,40 +128,24 @@ install_with_pipx() {
 install_package() {
     info "Installing $PACKAGE_NAME..."
 
-    # Create a temporary directory for the installation
-    TEMP_DIR=$(mktemp -d)
-    info "Downloading phoson-engine-minimal from GitHub..."
-    cd "$TEMP_DIR"
+    # Install straight from the git URL instead of cloning into a temporary
+    # directory. `uv tool install <local-path>` records that directory as the
+    # tool's requirement, so deleting the checkout afterwards leaves a dangling
+    # receipt and every later `uv tool upgrade` fails with
+    # "Distribution not found at: file:///.../tmp.XXXXXXXX/phoson-engine-minimal".
+    # A direct git requirement stays resolvable and upgrades normally.
+    REQUIREMENT="$PACKAGE_NAME @ git+https://github.com/phoson-lat/phoson-engine-minimal.git"
 
-    # Download the package from GitHub releases or repository
-    # Using the main branch as source
-    if command -v git >/dev/null 2>&1; then
-        git clone --depth 1 https://github.com/phoson-lat/phoson-engine-minimal.git "$TEMP_DIR/phoson-engine-minimal" 2>/dev/null || {
-            # Fallback: download as zip
-            curl -sL https://github.com/phoson-lat/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
-            unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
-            mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
-        }
-    else
-        # Fallback: download as zip
-        curl -sL https://github.com/phoson-lat/phoson-engine-minimal/archive/refs/heads/main.zip -o "$TEMP_DIR/package.zip"
-        unzip -q "$TEMP_DIR/package.zip" -d "$TEMP_DIR"
-        mv "$TEMP_DIR/phoson-engine-minimal-main" "$TEMP_DIR/phoson-engine-minimal"
-    fi
-
-    cd "$TEMP_DIR/phoson-engine-minimal"
-
-    info "Running: uv tool install --python 3.12 ."
-    if ! uv tool install --python 3.12 .; then
+    info "Running: uv tool install --python 3.12 $REQUIREMENT"
+    if ! uv tool install --python 3.12 "$REQUIREMENT"; then
         error "Failed to install $PACKAGE_NAME"
-        # Show the actual error
-        uv tool install --python 3.12 . 2>&1 || true
-        rm -rf "$TEMP_DIR"
-        exit 1
+        # Offer the PyPI release as a fallback (stable, and always resumable).
+        warn "Retrying from PyPI instead..."
+        if ! uv tool install --python 3.12 "$PACKAGE_NAME"; then
+            error "Failed to install $PACKAGE_NAME from PyPI"
+            exit 1
+        fi
     fi
-
-    # Cleanup
-    rm -rf "$TEMP_DIR"
 
     info "Package installed successfully"
 }

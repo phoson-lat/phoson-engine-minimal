@@ -346,6 +346,22 @@ async def get_installed_version() -> str | None:
     return output
 
 
+def upgrade_failure_hint(mode: str, output: str) -> str:
+    """Extra guidance for failure modes ``uv tool upgrade`` cannot recover from.
+
+    Installers that ran ``uv tool install <temporary-checkout>`` and then deleted
+    the checkout leave a receipt pointing at a missing directory; uv reports
+    "Distribution not found at: file:///..." and no upgrade can ever succeed.
+    Reinstalling with ``--force`` rewrites the receipt from an index/git ref.
+    """
+    if mode == InstallMode.UV_TOOL and "Distribution not found at:" in output:
+        return (
+            "\nThe installed tool references a deleted source directory. "
+            f"Reinstall it with: uv tool install --force {PACKAGE}"
+        )
+    return ""
+
+
 def manual_hint(mode: str) -> str:
     """How a human can update themselves, per install mode."""
     if mode == InstallMode.FROZEN:
@@ -453,7 +469,8 @@ async def perform_self_update(
         detail = "\n".join(output.splitlines()[-6:])
         return UpdateResult(
             f"Update failed (exit {code}).\n{detail}\n"
-            f"Try manually: {manual_hint(mode)}",
+            f"Try manually: {manual_hint(mode)}"
+            f"{upgrade_failure_hint(mode, output)}",
             "error",
             1,
         )
