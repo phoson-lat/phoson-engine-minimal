@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.57.0 (2026-10-25)
+
+### Feat
+
+- **cli**: shell mode — `!` on an empty full-screen composer switches it to a shell prompt (`!`
+  glyph, recolored border, completions off). Enter runs the command as a bash card under the bash
+  permission policy; Backspace on the empty composer or Esc leaves. The output is not a turn of its
+  own: it is queued (footer: `N shell outputs → next message`) and attached to the next message,
+  one block per command, and replays as bash cards on resume
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: Shift/Ctrl/Alt+Enter insert a newline in the full-screen composer. CSI-u, xterm
+  `modifyOtherKeys` and `ESC`+`CR` decode to the newline key, and the TUI requests
+  `modifyOtherKeys` level 1 and the kitty keyboard protocol (flag 1, tied to the alternate screen,
+  its CSI-u keys decoded back to the legacy ones so every binding and `[keys]` remap behaves the
+  same). `PHOSON_EXTENDED_KEYS=0` opts out. Continuation lines hang-indent under the `❯`
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: animated welcome screen — a phoson-cli banner (compact phoson face and a block-letter
+  wordmark; a shine sweeps it and the face blinks, repainting only while something moves, still
+  under `NO_COLOR`, `PHOSON_NO_ANIMATION` or the no-color theme), then cwd and model, the recent
+  sessions of this directory and the key gestures. The classic REPL starts with the same banner,
+  static; `/about` keeps the mascot
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: the full-screen TUI renders in 24-bit color when `COLORTERM=truecolor` (kitty, Ghostty,
+  WezTerm, iTerm2…); prompt_toolkit alone fell back to 256 colors
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: the header is fitted to the terminal width by priority instead of clipped (permission
+  mode, effort and context are never dropped) and the context gauge shows a percentage, toned at
+  70 % and, from 90 %, with a `/compact` nudge
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: one-line tool cards (`│ ✓ 📖 reading file · src/app.py · 1.2s`, the error on a second
+  line), one `· ended HH:MM` stamp per replayed assistant turn, framed and centered pickers and
+  palette, a `↓ N more lines` footer hint while scrolled up, the scrollbar only when the transcript
+  overflows, and fenced code blocks without extra blank lines
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+
+### Fix
+
+- **cli**: Ctrl+C (new `interrupt` key action) cancels a running turn or clears the draft; a second
+  press within 2 s quits. A single Ctrl+C used to quit and lose the draft. Ctrl+Q (`exit`) still
+  quits at once ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: `--session` errors are shown (they were printed while the output guard owned stderr, so
+  the CLI exited 1 silently); a session started in another directory is named with a ready
+  `cd … && phoson-cli --session …` command
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: one contextual timestamp format everywhere (`14:32`, `yesterday 14:32`, `Sep 6 14:32`,
+  `Sep 6 2025 14:32`) instead of DD-MM, MM-DD and a long English date on the done line
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **cli**: the idle Ctrl+P palette listed only the run-safe commands; the `/` menu's description
+  column was grey in every theme and listed aliases twice
+  ([#287](https://github.com/phoson-lat/phoson-engine-minimal/pull/287))
+- **installer**: install from the git URL instead of a deleted temporary checkout, which left a
+  dangling uv receipt so every later `uv tool upgrade` and `/update` failed with
+  "Distribution not found at: file:///…". `/update` now explains how to repair an existing broken
+  install (`uv tool install --force phoson-engine-minimal`)
+  ([#288](https://github.com/phoson-lat/phoson-engine-minimal/pull/288))
+- **stt**: microphone capture errors reported by moonshine's worker thread are raised instead of
+  ending as a silent, empty dictation, and `transcribe_microphone` gains an `on_ready` callback
+  ([#288](https://github.com/phoson-lat/phoson-engine-minimal/pull/288))
+
 ## v0.56.0 (2026-10-22)
 
 ### Feat
