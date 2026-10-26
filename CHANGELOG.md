@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.57.1 (2026-10-25)
+
+### Fix
+
+- **cli**: the autonomous wake loop starts whenever a wake provider is loaded, not only when
+  `enable_monitors`/`enable_bgjobs`/`peer_name` is set. A monitor plugin loaded from
+  `[defaults].plugins` (the setup wizard and the desktop app load it that way, with
+  `enable_monitors = false`) fired, but the agent was only reactivated by the next user message
+  ([#289](https://github.com/phoson-lat/phoson-engine-minimal/pull/289))
+
 ## v0.57.0 (2026-10-25)
 
 ### Feat
