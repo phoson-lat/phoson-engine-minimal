@@ -1375,11 +1375,11 @@ class SessionController:
         resumes the providers a loop-less build could not start.
         """
         self._resume_wake_providers()
-        if not (
-            self.config.enable_monitors
-            or self.config.enable_bgjobs
-            or getattr(self.config, "peer_name", "")
-        ):
+        # Gate on the providers actually loaded, not on the ``enable_*``
+        # flags: a wake plugin listed in ``[defaults].plugins`` (the wizard
+        # and the desktop app load it that way) has its flag off, and the
+        # loop never started — its wakes waited for the next user message.
+        if not find_wake_plugins(list(getattr(self.engine, "_loaded_plugins", []))):
             return
         if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
             return

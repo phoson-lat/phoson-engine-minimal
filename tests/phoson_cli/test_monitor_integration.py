@@ -427,6 +427,45 @@ class TestAutonomousWake:
         controller.start_monitor_wake_loop()
         assert controller._monitor_wake_task is None
 
+    async def test_wake_loop_starts_for_listed_plugin(self, tmp_path) -> None:
+        """A monitor plugin loaded from ``plugins`` (flag off) still wakes."""
+        controller, sink = _make_controller(
+            tmp_path,
+            enable_monitors=False,
+            plugins=[
+                {
+                    "name": "phoson-plugin-monitor",
+                    "config": {"data_dir": str(tmp_path / "mon")},
+                }
+            ],
+        )
+        plugin = find_monitor_plugin(controller.engine._loaded_plugins)
+        assert plugin is not None
+        paths: list = []
+
+        async def stream(path, config):
+            paths.append(path)
+            yield AgentStartEvent(model="m", message_count=1, max_iterations=50)
+            yield _done_event("ok")
+
+        controller.engine.stream = stream
+        plugin._queue.append(
+            WakeEvent.create(
+                "listed",
+                "interval",
+                controller.tree.session_id,
+                {"interval_seconds": 5.0},
+            )
+        )
+        controller._wake_poll_seconds = 0.02
+        controller.start_monitor_wake_loop()
+        try:
+            assert controller._monitor_wake_task is not None
+            await _poll_until(lambda: len(paths) >= 1)
+            assert "[MONITOR EVENTS]" in _content_text(paths[-1][-1])
+        finally:
+            await controller.shutdown()
+
     async def test_wake_loop_noop_when_no_wakes(self, tmp_path) -> None:
         controller, _ = _make_controller(
             tmp_path, enable_monitors=True, monitors_data_dir=tmp_path / "mon"
