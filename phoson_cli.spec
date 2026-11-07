@@ -4,6 +4,7 @@
 Build (from the repo root):
     uv pip install pyinstaller
     PHOSON_VERSION=0.15.0 pyinstaller phoson_cli.spec
+    # -> dist/phoson-cli/ (launcher + _internal/), a one-folder bundle
 
 The spec does two things on top of a bare entry-point build:
 
@@ -128,17 +129,31 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# One-folder ("onedir") bundle: dist/phoson-cli/ holds the launcher plus an
+# _internal/ directory with the interpreter, libraries and data. A onefile
+# build re-extracts ~65 MB to a temp dir on EVERY launch (measured 1.9-3.9 s
+# for `--version` vs ~0.2 s installed) and keeps a second bootloader process
+# alive on Unix; onedir is unpacked once, at install time. The release
+# workflow archives this folder (.tar.gz / .zip) for the installers.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name=DIST_NAME,
     debug=False,
     strip=False,
     upx=False,
     console=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name=DIST_NAME,
 )
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
