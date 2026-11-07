@@ -114,9 +114,10 @@ Options:
   --self-update        Check for and install CLI updates
   --uninstall          Uninstall phoson-cli
   --install-plugin <source>  Install and enable a community plugin (alias)
-  -y, --yes            Skip the install confirmation (plugin install only)
-  plugin <command>     Manage plugins: install, list, enable, disable,
-                       remove, update, doctor
+  -y, --yes            Skip the confirmations (plugin install/update only)
+  plugin <command>     Manage plugins (see `phoson-cli plugin help`):
+                       install, uninstall, update, list, info, enable,
+                       disable, doctor, new, validate
   bg list              List saved sessions with run status (read-only)
   -h, --help           Show this help and exit
 """
@@ -512,83 +513,193 @@ def _maybe_offer_theme_suggestion(config: PhosonConfig, options: CliOptions) -> 
     return
 
 
+_PLUGIN_HELP = """\
+phoson-cli plugin <command>
+
+Install and manage community plugins (each in ~/.phoson/plugins/<id>/):
+  install <source>     Install from PyPI (name[==ver]), a Git source
+                       (github:owner/repo@tag, git:https://...@ref) or a
+                       local directory; shows the manifest for review first
+  uninstall <id>       Remove the plugin's files, config and lock entry
+                       (alias: remove)
+  update <id>          Reinstall from the recorded source (re-resolves Git refs)
+  list                 Configured plugins with version and description
+  info <id>            Manifest, capabilities, source and install location
+  enable <id> / disable <id>
+  doctor <id>          Load without initializing; check it against its manifest
+
+Author plugins:
+  new <id> [--dir D]   Scaffold a plugin project (manifest, tool, command, tests)
+  validate [path] [--load]
+                       Check a plugin source tree; --load also imports it
+
+Options:
+  -y, --yes            Skip install/update confirmations
+"""
+
+
+def _confirm(prompt: str, *, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    if not stream_is_tty(sys.stdin):
+        print("Cancelled. Re-run with --yes to proceed non-interactively.")
+        return False
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("Cancelled.")
+        return False
+    if answer not in {"y", "yes"}:
+        print("Cancelled.")
+        return False
+    return True
+
+
+def _review_callback(assume_yes: bool):
+    def confirm(review) -> bool:
+        print()
+        for line in review.lines():
+            print(line)
+        print()
+        return _confirm("Install this plugin?", assume_yes=assume_yes)
+
+    return confirm
+
+
+def _pop_option(args: list[str], name: str) -> tuple[list[str], str | None]:
+    """Remove ``name <value>`` from *args*; return the rest and the value."""
+    if name not in args:
+        return args, None
+    index = args.index(name)
+    if index + 1 >= len(args):
+        _fail(f"{name} requires a value")
+    return args[:index] + args[index + 2 :], args[index + 1]
+
+
 def _run_plugin_command(
     args: list[str], config: PhosonConfig, *, assume_yes: bool = False
 ) -> int:
-    """Run a non-interactive community-plugin management command."""
+    """Run a non-interactive plugin management or authoring command."""
+    from phoson_cli.plugin_dev import (
+        scaffold_plugin,
+        validate_plugin_source,
+    )
     from phoson_cli.plugin_manager import (
+        plugin_info,
         doctor_plugin,
         enable_plugin,
-        remove_plugin,
         update_plugin,
         disable_plugin,
         install_plugin,
+        uninstall_plugin,
         configured_plugins,
     )
 
-    if not args:
-        _fail(
-            "plugin requires one of: install, list, enable, disable, "
-            "remove, update, doctor"
-        )
+    if not args or args[0] in {"help", "-h", "--help"}:
+        print(_PLUGIN_HELP, end="")
+        return 0 if args else 2
     command, *rest = args
-    if command == "list" and not rest:
-        entries = configured_plugins(config)
-        if not entries:
-            print("No community plugins configured.")
-        for entry in entries:
-            status = "enabled" if entry.enabled else "disabled"
-            print(f"{status:8} {entry.name}")
-        return 0
-    if command == "install" and len(rest) == 1:
-        source = rest[0]
-        print(f"Installing plugin from {source!r}. Plugins execute Python code as you.")
-        if not assume_yes:
-            if not stream_is_tty(sys.stdin):
-                print("Cancelled. Re-run with --yes to install non-interactively.")
+    try:
+        if command == "list" and not rest:
+            entries = configured_plugins(config)
+            if not entries:
+                print("No community plugins configured.")
+            for entry in entries:
+                status = "enabled" if entry.enabled else "disabled"
+                manifest = entry.manifest
+                version = manifest.version if manifest else ""
+                about = manifest.description if manifest else ""
+                if entry.manifest_error:
+                    about = "invalid manifest (see `plugin info`)"
+                line = f"{status:8} {entry.name}"
+                if version:
+                    line += f" {version}"
+                if about:
+                    line += f"  — {about}"
+                print(line)
+            return 0
+        if command == "install" and len(rest) == 1:
+            source = rest[0]
+            print(
+                f"Installing plugin from {source!r}. Building and running a plugin "
+                "executes its Python code as you."
+            )
+            if not _confirm("Continue?", assume_yes=assume_yes):
                 return 0
-            try:
-                answer = input("Continue? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("Cancelled.")
+            name = install_plugin(source, config, confirm=_review_callback(assume_yes))
+            if name is None:
                 return 0
-            if answer not in {"y", "yes"}:
-                print("Cancelled.")
+            print(f"Installed and enabled plugin: {name}")
+            return 0
+        if command in {"uninstall", "remove"} and len(rest) == 1:
+            result = uninstall_plugin(rest[0], config)
+            print(f"Uninstalled plugin: {result.plugin_id}")
+            if result.deleted is not None:
+                print(f"  deleted {result.deleted}")
+            if result.note:
+                print(f"  note: {result.note}")
+            return 0
+        if command == "update" and len(rest) == 1:
+            updated = update_plugin(
+                rest[0], config, confirm=_review_callback(assume_yes)
+            )
+            if updated is not None:
+                print(f"Updated plugin: {updated}")
+            return 0
+        if command == "info" and len(rest) == 1:
+            for line in plugin_info(rest[0], config).lines():
+                print(line)
+            return 0
+        if command == "enable" and len(rest) == 1:
+            enable_plugin(rest[0], config)
+            print(f"Enabled plugin: {rest[0]}")
+            return 0
+        if command == "disable" and len(rest) == 1:
+            disable_plugin(rest[0], config)
+            print(f"Disabled plugin: {rest[0]}")
+            return 0
+        if command == "doctor" and len(rest) == 1:
+            report = doctor_plugin(rest[0], config)
+            plugin = report.plugin
+            if report.problems:
+                print(f"Plugin {plugin.name} {plugin.version} loaded with problems:")
+                for problem in report.problems:
+                    print(f"  - {problem}")
+                return 1
+            print(f"Plugin OK: {plugin.name} {plugin.version}")
+            return 0
+        if command == "new" and rest:
+            rest, directory = _pop_option(rest, "--dir")
+            if len(rest) != 1:
+                _fail("usage: phoson-cli plugin new <id> [--dir DIR]")
+            root = scaffold_plugin(rest[0], Path(directory or ".").expanduser())
+            print(f"Created {root}")
+            print("Next: cd into it, `uv sync`, `uv run pytest`, then")
+            print(
+                "      `phoson-cli plugin validate .` and `phoson-cli plugin install .`"
+            )
+            return 0
+        if command == "validate" and len(rest) <= 2:
+            load = "--load" in rest
+            paths = [value for value in rest if value != "--load"]
+            if len(paths) > 1:
+                _fail("usage: phoson-cli plugin validate [path] [--load]")
+            report = validate_plugin_source(Path(paths[0] if paths else "."), load=load)
+            if report.manifest is not None:
+                for line in report.manifest.summary_lines():
+                    print(line)
+            for warning in report.warnings:
+                print(f"warning: {warning}")
+            for error in report.errors:
+                print(f"error: {error}", file=sys.stderr)
+            if report.ok:
+                print("Plugin source is valid.")
                 return 0
-        try:
-            name = install_plugin(source, config)
-        except Exception as exc:  # noqa: BLE001 - operational CLI boundary
-            print(f"Error: {exc}", file=sys.stderr)
             return 1
-        print(f"Installed and enabled plugin: {name}")
-        return 0
-    if (
-        command in {"enable", "disable", "remove", "update", "doctor"}
-        and len(rest) == 1
-    ):
-        plugin_id = rest[0]
-        try:
-            if command == "enable":
-                enable_plugin(plugin_id, config)
-                print(f"Enabled plugin: {plugin_id}")
-            elif command == "disable":
-                disable_plugin(plugin_id, config)
-                print(f"Disabled plugin: {plugin_id}")
-            elif command == "remove":
-                remove_plugin(plugin_id, config)
-                print(f"Removed plugin from configuration: {plugin_id}")
-            elif command == "update":
-                update_plugin(plugin_id, config)
-                print(f"Updated plugin: {plugin_id}")
-            else:
-                plugin = doctor_plugin(plugin_id, config)
-                print(f"Plugin OK: {plugin.name} {plugin.version}")
-                plugin.cleanup()
-        except Exception as exc:  # noqa: BLE001 - operational CLI boundary
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        return 0
-    _fail(f"invalid plugin command: {' '.join(args)}")
+    except Exception as exc:  # noqa: BLE001 - CLI boundary (PluginDevError, ...)
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    _fail(f"invalid plugin command: {' '.join(args)} (see `phoson-cli plugin help`)")
 
 
 def self_update() -> None:
