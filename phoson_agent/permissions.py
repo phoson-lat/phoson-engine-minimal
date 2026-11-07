@@ -42,7 +42,7 @@ from collections.abc import Callable, Iterable, Awaitable
 from phoson_llm.schemas import Message, ModelConfig, ToolCallEvent
 
 from .models import AgentTool
-from .intents import VALID_INTENTS, infer_intents
+from .intents import VALID_INTENTS, DEFAULT_INTENT_LEVELS, infer_intents
 from .exceptions import PhosonAgentError
 from .middleware import AgentMiddleware
 from .intent_guard import (
@@ -360,7 +360,13 @@ class PermissionPolicy:
             only ever harden each other. A call whose intents are not listed
             (or a tool that yields no intents) is unaffected, which keeps a
             policy written only with ``levels``/``allow_patterns`` working
-            unchanged during the migration.
+            unchanged during the migration. Exception: the protective path
+            intents (writes outside the workspace, reads of credential
+            stores) default to ``ask`` via
+            :data:`~phoson_agent.intents.DEFAULT_INTENT_LEVELS`; configure
+            them here to change that. Like any intent rule they combine with
+            the tool level and win over the ``"*"`` auto mode; an
+            allow-pattern on the tool's path still short-circuits.
     """
 
     levels: dict[str, str] = field(default_factory=dict)
@@ -382,11 +388,16 @@ class PermissionPolicy:
 
     def intent_level(self, intents: tuple[str, ...]) -> str | None:
         """Strictest configured level across ``intents`` (None when unset)."""
-        configured = [
-            self.intent_levels[intent]
-            for intent in intents
-            if self.intent_levels.get(intent) in VALID_LEVELS
-        ]
+        configured = []
+        for intent in intents:
+            level = self.intent_levels.get(intent)
+            if level not in VALID_LEVELS:
+                # Protective path intents ask by default (see
+                # DEFAULT_INTENT_LEVELS); every other intent is unaffected
+                # unless the policy configures it.
+                level = DEFAULT_INTENT_LEVELS.get(intent)
+            if level in VALID_LEVELS:
+                configured.append(level)
         return strictest_level(*configured)
 
     def evaluate(

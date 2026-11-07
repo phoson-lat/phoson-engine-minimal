@@ -40,6 +40,7 @@ This module is pure and dependency-free so it can be reused by any front end
 import os
 import re
 from typing import Any
+from pathlib import Path
 from collections.abc import Iterable
 
 # ── Intent vocabulary ────────────────────────────────────────────────────────
@@ -50,6 +51,13 @@ INTENT_FILESYSTEM_DELETE = "filesystem_delete"
 INTENT_NETWORK_OUTBOUND = "network_outbound"
 INTENT_PROCESS_SPAWN = "process_spawn"
 INTENT_LANG_EXEC = "lang_exec"
+#: Protective, path-derived intents. They are added *on top of* the plain
+#: read/write intent when a file tool targets a path outside the workspace
+#: (process cwd, resolved through symlinks) or a credential store. Unlike the
+#: other intents they carry a built-in default level
+#: (:data:`DEFAULT_INTENT_LEVELS`), so the gate asks even with an empty policy.
+INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE = "filesystem_write_outside_workspace"
+INTENT_FILESYSTEM_READ_SENSITIVE = "filesystem_read_sensitive"
 
 #: Every valid intent, in a stable display order.
 VALID_INTENTS: tuple[str, ...] = (
@@ -59,7 +67,17 @@ VALID_INTENTS: tuple[str, ...] = (
     INTENT_NETWORK_OUTBOUND,
     INTENT_PROCESS_SPAWN,
     INTENT_LANG_EXEC,
+    INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE,
+    INTENT_FILESYSTEM_READ_SENSITIVE,
 )
+
+#: Levels applied to an intent when the policy does not configure it. Only
+#: the protective path intents have one; set the intent explicitly in
+#: ``intent_levels`` (e.g. to ``"allow"``) to override.
+DEFAULT_INTENT_LEVELS: dict[str, str] = {
+    INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE: "ask",
+    INTENT_FILESYSTEM_READ_SENSITIVE: "ask",
+}
 
 _VALID_INTENTS = frozenset(VALID_INTENTS)
 
@@ -487,11 +505,103 @@ def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...
             intents = set(intents) | {INTENT_PROCESS_SPAWN}
         return tuple(sorted(intents))
 
-    return tuple(sorted(_TOOL_INTENTS.get(tool_name, frozenset())))
+    intents = set(_TOOL_INTENTS.get(tool_name, frozenset()))
+    intents |= _path_intents(tool_name, args)
+    return tuple(sorted(intents))
+
+
+# ── Path-derived protective intents ──────────────────────────────────────────
+#
+# Each built-in file tool resolves its ``path`` argument its own way; the gate
+# must resolve it *identically* or it would judge a different file than the
+# one the tool touches. ``read_file``/``write_file``/``patch_file``/
+# ``list_dir`` use ``Path(path)`` verbatim (``~`` is a literal directory
+# name); ``grep``/``glob``/``view_image`` expand ``~`` first.
+
+_WRITE_PATH_TOOLS: frozenset[str] = frozenset({"write_file", "patch_file"})
+_READ_PATH_TOOLS: dict[str, bool] = {
+    # tool -> expands "~"
+    "read_file": False,
+    "list_dir": False,
+    "grep": True,
+    "glob": True,
+    "view_image": True,
+}
+
+#: Credential stores under the home directory a read should not touch
+#: silently (an injected "print ~/.ssh/id_rsa" is the classic exfiltration).
+SENSITIVE_HOME_PATHS: tuple[str, ...] = (
+    ".phoson",
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".netrc",
+    ".config/gh",
+    ".config/gcloud",
+    ".docker/config.json",
+    ".kube/config",
+)
+
+
+def _resolve_tool_path(raw: str, *, expand_user: bool) -> Path | None:
+    try:
+        path = Path(raw).expanduser() if expand_user else Path(raw)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _path_intents(tool_name: str, args: dict[str, Any]) -> set[str]:
+    """Protective intents for a file tool's resolved ``path`` argument."""
+    if tool_name in _WRITE_PATH_TOOLS:
+        raw = args.get("path")
+        if not isinstance(raw, str) or not raw:
+            return set()
+        resolved = _resolve_tool_path(raw, expand_user=False)
+        try:
+            workspace = Path.cwd().resolve()
+        except OSError:
+            return {INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE}
+        if resolved is None or not _is_within(resolved, workspace):
+            return {INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE}
+        return set()
+
+    expand = _READ_PATH_TOOLS.get(tool_name)
+    if expand is None:
+        return set()
+    raw = args.get("path", ".")
+    if not isinstance(raw, str) or not raw:
+        return set()
+    resolved = _resolve_tool_path(raw, expand_user=expand)
+    if resolved is None:
+        return set()
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        return set()
+    for rel in SENSITIVE_HOME_PATHS:
+        target = home / rel
+        # Reading the store itself or anything inside it — or listing/grepping
+        # a directory that *contains* it (``grep -r token ~``) — reveals it.
+        if _is_within(resolved, target) or (
+            tool_name in {"list_dir", "grep", "glob"} and _is_within(target, resolved)
+        ):
+            return {INTENT_FILESYSTEM_READ_SENSITIVE}
+    return set()
 
 
 __all__ = [
+    "DEFAULT_INTENT_LEVELS",
     "INTENT_FILESYSTEM_DELETE",
+    "INTENT_FILESYSTEM_READ_SENSITIVE",
+    "INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE",
+    "SENSITIVE_HOME_PATHS",
     "INTENT_FILESYSTEM_READ",
     "INTENT_FILESYSTEM_WRITE",
     "INTENT_LANG_EXEC",
