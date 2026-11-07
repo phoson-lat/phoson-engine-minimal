@@ -291,7 +291,7 @@ def _list_dir(path: str = ".") -> str:
     return "\n".join(lines)
 
 
-@tool
+@tool(parallel_safe=True)
 def read_file(
     path: str, start_line: int | None = None, end_line: int | None = None
 ) -> str:
@@ -345,7 +345,7 @@ def patch_file(
     return _patch_file(path, old_content, new_content, replace_all)
 
 
-@tool
+@tool(parallel_safe=True)
 def list_dir(path: str = ".") -> str:
     """List a directory tree (max 3 levels deep, max 500 entries).
 

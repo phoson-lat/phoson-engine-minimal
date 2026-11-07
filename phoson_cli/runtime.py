@@ -159,14 +159,19 @@ def build_engine_runtime(
     extra["subagent_max_parallel"] = config.subagent_max_parallel
     extra["subagent_timeout_seconds"] = config.subagent_timeout_seconds
     # The middleware chain, handed to sub-agents so the permission gate
-    # applies to their tool calls too (#174/F-01).
-    extra["middlewares"] = middlewares
+    # applies to their tool calls too (#174/F-01). ``engine.middlewares``
+    # (not the local list): the engine copies its input and appends plugin
+    # middlewares to its own list, and sub-agents must share those instances
+    # too — the OTel plugin relies on its middleware reaching sub-engines.
+    # ``engine_factory`` may return any engine-like object, hence getattr.
+    engine_middlewares = getattr(engine, "middlewares", middlewares)
+    extra["middlewares"] = engine_middlewares
 
     return EngineRuntime(
         engine=engine,
         tools=tools,
         tools_dict=tools_dict,
-        middlewares=middlewares,
+        middlewares=engine_middlewares,
     )
 
 

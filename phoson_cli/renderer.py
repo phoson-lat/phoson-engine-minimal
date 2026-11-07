@@ -27,6 +27,7 @@ from phoson_agent import (
     AgentEvent,
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentRetryEvent,
     AgentStartEvent,
     AgentTokenEvent,
     AgentStepDoneEvent,
@@ -46,6 +47,7 @@ from phoson_cli.formatting import (
     render_done_line,
     render_user_turn,
     render_start_line,
+    retry_notice_text,
     render_error_notice,
     render_tool_done_line,
     render_reasoning_panel,
@@ -642,6 +644,19 @@ class Renderer:
                 self.finish_turn()
                 self._on_done(event)
                 self._stream_had_tokens = False
+
+            case AgentRetryEvent():
+                # The classic terminal is append-only: the partial answer
+                # already printed stays, so close it and say it was dropped.
+                self._end_stream_line()
+                self._token_buf.clear()
+                self._reasoning_buf.clear()
+                self.console.print(
+                    render_notice("warn", retry_notice_text(event), self.theme)
+                )
+                self.start_waiting(
+                    f"retrying  ·  step {self._current_step} / {self._max_steps}"
+                )
 
             case AgentErrorEvent():
                 self.flush_line()

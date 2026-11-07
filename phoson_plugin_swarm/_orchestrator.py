@@ -33,6 +33,7 @@ from phoson_agent.models import (
     AgentTool,
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentRetryEvent,
     AgentTokenEvent,
     AgentStepDoneEvent,
 )
@@ -315,6 +316,9 @@ class SwarmRuntime:
         )
 
         text_parts: list[str] = []
+        # Where the current LLM turn's text starts in ``text_parts``: a
+        # retried turn (AgentRetryEvent) drops everything after it.
+        turn_start = 0
         tokens_in = 0
         tokens_out = 0
         cost = 0.0
@@ -324,8 +328,12 @@ class SwarmRuntime:
                 if isinstance(event, AgentTokenEvent):
                     if event.content:
                         text_parts.append(event.content)
+                elif isinstance(event, AgentRetryEvent):
+                    del text_parts[turn_start:]
                 elif isinstance(event, AgentStepDoneEvent):
                     step = event.step
+                    if step.kind == "tool":
+                        turn_start = len(text_parts)
                     if step.kind == "llm" and step.usage is not None:
                         used = int(step.usage.input or 0) + int(step.usage.output or 0)
                         # Enforce the per-agent cap (role or plugin floor) AND

@@ -40,7 +40,7 @@ def _view_image(path: str) -> str | ImageToolResult:
     )
 
 
-@tool
+@tool(parallel_safe=True)
 def view_image(path: str) -> str | ImageToolResult:
     """View an image file's actual contents (screenshot, diagram, photo)."""
     return _view_image(path)

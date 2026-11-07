@@ -27,6 +27,7 @@ from rich.console import Group, RenderableType
 from phoson_agent import (
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentRetryEvent,
     AgentStartEvent,
     AgentToolDoneEvent,
     AgentToolStartEvent,
@@ -574,6 +575,18 @@ def render_notice(kind: str, message: str, theme: Theme) -> Text:
     if kind == "error":
         return Text(f"  ✗ {message}", style=theme.err)
     return Text(f"  {message}", style=theme.muted)
+
+
+def retry_notice_text(event: AgentRetryEvent) -> str:
+    """One-line notice for a turn the engine discarded and is retrying."""
+    reason = " ".join(event.reason.split())
+    if len(reason) > 80:
+        reason = reason[:79] + "…"
+    detail = f": {reason}" if reason else ""
+    return (
+        f"Response interrupted{detail} — partial output discarded, retrying "
+        f"({event.attempt}/{event.max_attempts})…"
+    )
 
 
 def tool_args_preview(tool_name: str, args: dict) -> str:

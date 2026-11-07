@@ -12,8 +12,11 @@ directly.
 """
 
 import asyncio
+import inspect
 import logging
-from collections.abc import Callable, Awaitable, AsyncIterator
+import datetime
+from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Awaitable, AsyncIterator
 
 from phoson_llm.schemas import (
     Message,
@@ -51,6 +54,9 @@ TRUNCATED_TOOL_CALL_RESULT = (
     "tool with shorter, complete arguments, or split the work across multiple "
     "smaller calls."
 )
+
+# Result recorded when a middleware's ``on_before_tool`` returned ``None``.
+BLOCKED_TOOL_RESULT = "Tool execution blocked by middleware."
 
 # Default message recorded for tool calls left unrun by an abnormal exit
 # (user cancellation or an unhandled exception escaping the runner).
@@ -127,84 +133,85 @@ class ToolRunner:
         history: list[Message],
         steps: list[RunStep],
     ) -> AsyncIterator[AgentEvent]:
-        """Execute every tool call in order with backfill on cancellation.
+        """Execute every tool call of one LLM turn, keeping history well-formed.
 
-        A ``tool_use`` block the model put in the history must be answered
-        with a matching ``tool_result`` before the next LLM turn, or the
-        provider rejects the conversation. Handler/middleware exceptions are
-        already converted to paired error results inside
-        :meth:`_execute_single` (F-14), so the only remaining abnormal exit
-        that can leave later calls unrun is ``CancelledError`` (user
-        interrupt) — we backfill synthetic results for those and preserve the
-        cancel.
+        Calls are processed in *batches*: a maximal run of consecutive calls
+        to :attr:`~phoson_agent.models.AgentTool.parallel_safe` tools forms
+        one batch whose handlers run concurrently; every other call is a
+        batch of one. Within a batch the middleware ``on_before_tool`` hooks
+        still run one at a time in call order (permission prompts never
+        overlap) and results are committed to ``history`` in call order.
+
+        Invariants:
+
+        * every ``tool_use`` gets exactly one matching ``tool_result`` before
+          this generator exits — on success, on handler/middleware errors
+          (converted to error results, F-14) and on any abnormal exit
+          (cancellation, a consumer closing the stream), where unanswered
+          calls are backfilled with :data:`CANCELLED_TOOL_RESULT`;
+        * image results are appended only after *all* tool results of the
+          turn: providers require the tool results to directly follow the
+          assistant turn (OpenAI rejects a user message between ``tool``
+          messages; Anthropic requires ``tool_result`` blocks to lead the
+          user turn).
         """
-        for call_idx, original_call in enumerate(tool_calls):
-            committed = False
-            try:
-                async for agent_event, did_commit in self._execute_single(
-                    original_call, history, steps
+        progress = _Progress()
+        images: list[ImageBlock] = []
+        try:
+            for batch in self._batches(tool_calls):
+                async for event in self._execute_batch(
+                    batch, history, steps, images, progress
                 ):
-                    yield agent_event
-                    if did_commit:
-                        committed = True
-            except asyncio.CancelledError:
-                start_idx = call_idx + 1 if committed else call_idx
-                self._fill_cancelled_results(history, tool_calls[start_idx:])
-                raise
+                    yield event
+        except BaseException:
+            self._fill_cancelled_results(history, tool_calls[progress.answered :])
+            raise
+        finally:
+            for image in images:
+                # ToolResultBlock.result is a plain string — an image cannot
+                # live inside it, so it rides in its own user message, after
+                # the last tool result of the turn.
+                history.append(Message(role="user", content=[image]))
 
-    async def _execute_single(
+    def _is_parallel_safe(self, call: ToolCallEvent) -> bool:
+        # getattr: duck-typed tool objects (not AgentTool) are accepted
+        # elsewhere in the runner and simply run sequentially.
+        tool = self._tools_by_name.get(call.tool_name)
+        return getattr(tool, "parallel_safe", False) is True
+
+    def _batches(
+        self, tool_calls: list[ToolCallEvent]
+    ) -> Iterator[list[ToolCallEvent]]:
+        """Group consecutive parallel-safe calls; everything else runs alone."""
+        batch: list[ToolCallEvent] = []
+        for call in tool_calls:
+            if self._is_parallel_safe(call):
+                batch.append(call)
+                continue
+            if batch:
+                yield batch
+                batch = []
+            yield [call]
+        if batch:
+            yield batch
+
+    async def _execute_batch(
         self,
-        original_call: ToolCallEvent,
+        batch: list[ToolCallEvent],
         history: list[Message],
         steps: list[RunStep],
-    ) -> AsyncIterator[tuple[AgentEvent, bool]]:
-        """Execute a single tool call.
+        images: list[ImageBlock],
+        progress: "_Progress",
+    ) -> AsyncIterator[AgentEvent]:
+        """Admit, run and commit one batch of tool calls (see :meth:`execute`)."""
+        # 1. Admission: middleware hooks, one call at a time, in order.
+        admissions: list[ToolCallEvent | _Rejected] = []
+        for original in batch:
+            admissions.append(await self._admit(original))
+        admitted = [a for a in admissions if isinstance(a, ToolCallEvent)]
 
-        Yields ``(event, committed)`` pairs. ``committed`` is True for
-        the event that follows a successful append to ``history``; the
-        cancellation handler in :meth:`execute` uses this flag to know
-        whether to re-emit a cancellation result for this tool.
-        """
-        call: ToolCallEvent | None
-        try:
-            call = await self._apply_before_tool(original_call)
-        except PhosonAgentError as exc:
-            # Permission refusals (ToolBlockedError) surface as an
-            # actionable tool result — the model sees *why* the call was
-            # refused and how to proceed — instead of the generic
-            # "blocked by middleware" text. The structured decision (when
-            # the middleware attached one) rides along in the step payload
-            # so the OTel plugin can export the intents (#227).
-            async for event in self._handle_refused(
-                original_call,
-                history,
-                steps,
-                str(exc),
-                decision=getattr(exc, "decision", None),
-            ):
-                yield event, True
-            return
-
-        if call is None:
-            async for event in self._handle_blocked(original_call, history, steps):
-                yield event, True
-            return
-
-        # F-13: a tool call whose argument JSON is incomplete — either the
-        # adapter marked it ``_truncated`` (cut by max_tokens mid-call) or
-        # fell back to ``_raw`` (unparseable JSON) — must NOT be dispatched to
-        # its handler: that would either raise an opaque ``TypeError`` or act
-        # on partial args. Answer the tool_use with an actionable error result
-        # instead (no Start, no handler) so the model can retry smaller.
-        if _is_unusable_args(original_call.args):
-            async for event in self._handle_unusable_args(
-                original_call, history, steps
-            ):
-                yield event, True
-            return
-
-        yield (
-            await self._prepare_event(
+        for call in admitted:
+            yield await self._prepare_event(
                 AgentToolStartEvent(
                     index=call.index,
                     tool_call_id=call.tool_call_id,
@@ -212,55 +219,141 @@ class ToolRunner:
                     args=call.args,
                     label=subagent_label(call.tool_name),
                 )
-            ),
-            False,
-        )
-
-        tool_started = now_utc()
-        try:
-            (
-                result_text,
-                error_text,
-                error_flag,
-                result_image,
-            ) = await self._invoke_handler(call)
-            result_text = await self._apply_after_tool(call, result_text, error_flag)
-        except Exception as exc:  # noqa: BLE001 - F-14, deliberate catch-all
-            # An unhandled exception in the handler or a middleware hook must
-            # NOT escape the loop: it would leave this tool_use without a
-            # matching tool_result and corrupt the persisted session, and a
-            # single misbehaving hook would kill the whole run. Convert it to
-            # an error result (exception type included) so the step and
-            # history record *why* the call failed and the model can adapt on
-            # the next turn — mirroring the existing handler-error path.
-            error_text = TOOL_HANDLER_ERROR_TEMPLATE.format(
-                name=call.tool_name, exc_type=type(exc).__name__, detail=str(exc)
             )
-            result_text = error_text
-            error_flag = True
-            result_image = None
+
+        # 2. Run the handlers — concurrently only when every admitted call
+        # (after middleware rewrites) is still parallel-safe.
+        concurrent = len(admitted) > 1 and all(
+            self._is_parallel_safe(call) for call in admitted
+        )
+        if concurrent:
+            runs = list(
+                await asyncio.gather(
+                    *(self._run_handler(call, threaded=True) for call in admitted)
+                )
+            )
+        else:
+            runs = [await self._run_handler(call, threaded=False) for call in admitted]
+
+        # 3. Commit in call order: after-hooks, history, steps, events.
+        pending_runs = iter(runs)
+        for admission in admissions:
+            if isinstance(admission, _Rejected):
+                async for event in self._commit_rejected(
+                    admission, history, steps, progress
+                ):
+                    yield event
+            else:
+                async for event in self._commit_run(
+                    next(pending_runs), history, steps, images, progress
+                ):
+                    yield event
+
+    async def _admit(self, original_call: ToolCallEvent) -> "ToolCallEvent | _Rejected":
+        """Run the ``on_before_tool`` chain and decide whether to dispatch.
+
+        Returns the (possibly rewritten) call to run, or a :class:`_Rejected`
+        describing the result to record instead.
+        """
+        try:
+            call = await self._apply_before_tool(original_call)
+        except PhosonAgentError as exc:
+            # Permission refusals (ToolBlockedError) surface as an actionable
+            # tool result — the model sees *why* the call was refused — and
+            # the structured decision rides along in the step payload so the
+            # OTel plugin can export the intents (#227).
+            return _Rejected(
+                call=original_call,
+                result=str(exc),
+                code="permission_denied",
+                decision=getattr(exc, "decision", None),
+            )
+        except Exception as exc:  # noqa: BLE001 - F-14, a buggy hook must not kill the run
             logger.error(
-                "Unhandled exception executing tool %s: %r",
-                call.tool_name,
+                "Unhandled exception in on_before_tool for %s: %r",
+                original_call.tool_name,
                 exc,
             )
+            return _Rejected(
+                call=original_call,
+                result=TOOL_HANDLER_ERROR_TEMPLATE.format(
+                    name=original_call.tool_name,
+                    exc_type=type(exc).__name__,
+                    detail=str(exc),
+                ),
+                code="middleware_error",
+            )
 
-        tool_ended = now_utc()
+        if call is None:
+            return _Rejected(
+                call=original_call,
+                result=BLOCKED_TOOL_RESULT,
+                code="blocked_by_middleware",
+            )
+
+        # F-13: a tool call whose argument JSON is incomplete — either the
+        # adapter marked it ``_truncated`` (cut by max_tokens mid-call) or
+        # fell back to ``_raw`` (unparseable JSON) — must NOT be dispatched:
+        # that would raise an opaque ``TypeError`` or act on partial args.
+        if _is_unusable_args(original_call.args):
+            return _Rejected(
+                call=original_call,
+                result=TRUNCATED_TOOL_CALL_RESULT,
+                code="tool_call_truncated",
+            )
+        return call
+
+    async def _run_handler(self, call: ToolCallEvent, *, threaded: bool) -> "_Run":
+        """Invoke one handler, timing it; never raises (except cancellation)."""
+        started = now_utc()
+        try:
+            result_text, error_text, error_flag, image = await self._invoke_handler(
+                call, threaded=threaded
+            )
+        except Exception as exc:  # noqa: BLE001 - F-14, deliberate catch-all
+            result_text, error_text, error_flag, image = _internal_error(call, exc)
+        return _Run(
+            call=call,
+            result_text=result_text,
+            error_text=error_text,
+            error_flag=error_flag,
+            image=image,
+            started=started,
+            ended=now_utc(),
+        )
+
+    async def _commit_run(
+        self,
+        run: "_Run",
+        history: list[Message],
+        steps: list[RunStep],
+        images: list[ImageBlock],
+        progress: "_Progress",
+    ) -> AsyncIterator[AgentEvent]:
+        """Apply ``on_after_tool`` and record an executed call."""
+        call = run.call
+        result_text, error_text, error_flag, image = (
+            run.result_text,
+            run.error_text,
+            run.error_flag,
+            run.image,
+        )
+        try:
+            result_text = await self._apply_after_tool(call, result_text, error_flag)
+        except Exception as exc:  # noqa: BLE001 - F-14, deliberate catch-all
+            result_text, error_text, error_flag, image = _internal_error(call, exc)
+
         tool_step = RunStep(
             kind="tool",
-            started_at=tool_started,
-            ended_at=tool_ended,
-            duration_ms=duration_ms(tool_started, tool_ended),
+            started_at=run.started,
+            ended_at=run.ended,
+            duration_ms=duration_ms(run.started, run.ended),
             tool_name=call.tool_name,
             tool_call_id=call.tool_call_id,
             error=error_text,
-            payload={
-                "args": call.args,
-                "result": result_text,
-            },
+            payload={"args": call.args, "result": result_text},
         )
         steps.append(tool_step)
-
         history.append(
             Message(
                 role="user",
@@ -273,42 +366,90 @@ class ToolRunner:
                 ],
             )
         )
-        if result_image is not None:
-            # ToolResultBlock.result is a plain string — an image cannot
-            # live inside it. Append it as its own user-role message
-            # right after the tool result so vision-capable models see
-            # the picture, reusing the same content-block path /attach
-            # already uses for user-supplied images.
-            history.append(Message(role="user", content=[result_image]))
+        progress.answered += 1
+        if image is not None:
+            images.append(image)
 
-        yield (
-            await self._prepare_event(
-                AgentToolDoneEvent(
-                    index=call.index,
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
-                    result=result_text,
-                    error=error_text,
-                    duration_ms=tool_step.duration_ms,
-                    label=subagent_label(call.tool_name),
-                )
-            ),
-            True,
+        yield await self._prepare_event(
+            AgentToolDoneEvent(
+                index=call.index,
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                result=result_text,
+                error=error_text,
+                duration_ms=tool_step.duration_ms,
+                label=subagent_label(call.tool_name),
+            )
         )
-        yield (
-            await self._prepare_event(AgentStepDoneEvent(step=tool_step)),
-            False,
+        yield await self._prepare_event(AgentStepDoneEvent(step=tool_step))
+
+    async def _commit_rejected(
+        self,
+        rejected: "_Rejected",
+        history: list[Message],
+        steps: list[RunStep],
+        progress: "_Progress",
+    ) -> AsyncIterator[AgentEvent]:
+        """Record a call that was not dispatched (blocked, refused, truncated
+        or failed admission) as an error result with a stable step code."""
+        call = rejected.call
+        history.append(
+            Message(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_call_id=call.tool_call_id,
+                        result=rejected.result,
+                        error=True,
+                    )
+                ],
+            )
         )
+        progress.answered += 1
+
+        payload: dict[str, object] = {"args": call.args, "result": rejected.result}
+        to_dict = getattr(rejected.decision, "to_dict", None)
+        if callable(to_dict):
+            payload["permission"] = to_dict()
+
+        now = now_utc()
+        step = RunStep(
+            kind="tool",
+            started_at=now,
+            ended_at=now,
+            duration_ms=0,
+            tool_name=call.tool_name,
+            tool_call_id=call.tool_call_id,
+            error=rejected.code,
+            payload=payload,
+        )
+        steps.append(step)
+
+        yield await self._prepare_event(
+            AgentToolDoneEvent(
+                index=call.index,
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                result=rejected.result,
+                error=rejected.code,
+                duration_ms=0,
+            )
+        )
+        yield await self._prepare_event(AgentStepDoneEvent(step=step))
 
     async def _invoke_handler(
         self,
         call: ToolCallEvent,
+        *,
+        threaded: bool = False,
     ) -> tuple[str, str | None, bool, ImageBlock | None]:
         """Invoke a tool handler.
 
-        Returns ``(result_text, error_text, error_flag, image)``.
-        Catches every exception raised by the handler and surfaces it as a
+        Returns ``(result_text, error_text, error_flag, image)``. Catches
+        every exception raised by the handler and surfaces it as a
         tool-level error so the agent loop can inform the LLM and continue.
+        With ``threaded=True`` a synchronous handler runs in a worker thread
+        so concurrent (parallel-safe) calls do not serialize on the loop.
         """
         tool = self._tools_by_name.get(call.tool_name)
         if tool is None:
@@ -316,7 +457,12 @@ class ToolRunner:
             return error_text, error_text, True, None
 
         try:
-            tool_result = tool.handler(call.args, self._context)
+            if threaded and not inspect.iscoroutinefunction(tool.handler):
+                tool_result = await asyncio.to_thread(
+                    tool.handler, call.args, self._context
+                )
+            else:
+                tool_result = tool.handler(call.args, self._context)
             if asyncio.iscoroutine(tool_result):
                 tool_result = await tool_result
 
@@ -333,169 +479,6 @@ class ToolRunner:
         except Exception as exc:
             error_text = str(exc)
             return error_text, error_text, True, None
-
-    async def _handle_blocked(
-        self,
-        original_call: ToolCallEvent,
-        history: list[Message],
-        steps: list[RunStep],
-    ) -> AsyncIterator[AgentEvent]:
-        """Handle a tool call that was rejected by middleware."""
-        cancelled_result = "Tool execution blocked by middleware."
-        history.append(
-            Message(
-                role="user",
-                content=[
-                    ToolResultBlock(
-                        tool_call_id=original_call.tool_call_id,
-                        result=cancelled_result,
-                        error=True,
-                    )
-                ],
-            )
-        )
-
-        now = now_utc()
-        blocked_step = RunStep(
-            kind="tool",
-            started_at=now,
-            ended_at=now,
-            duration_ms=0,
-            tool_name=original_call.tool_name,
-            tool_call_id=original_call.tool_call_id,
-            error="blocked_by_middleware",
-            payload={
-                "args": original_call.args,
-                "result": cancelled_result,
-            },
-        )
-        steps.append(blocked_step)
-
-        yield await self._prepare_event(
-            AgentToolDoneEvent(
-                index=original_call.index,
-                tool_call_id=original_call.tool_call_id,
-                tool_name=original_call.tool_name,
-                result=cancelled_result,
-                error="blocked_by_middleware",
-                duration_ms=0,
-            )
-        )
-        yield await self._prepare_event(AgentStepDoneEvent(step=blocked_step))
-
-    async def _handle_refused(
-        self,
-        original_call: ToolCallEvent,
-        history: list[Message],
-        steps: list[RunStep],
-        message: str,
-        decision: object | None = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """Handle a call refused by the permission middleware.
-
-        The refusal ``message`` becomes the tool result so the model can
-        adapt (and the user sees an actionable explanation), while the
-        step records a stable ``permission_denied`` error code. When the
-        middleware attached a structured decision, it is stored in the step
-        payload under ``permission`` for observability (#227).
-        """
-        history.append(
-            Message(
-                role="user",
-                content=[
-                    ToolResultBlock(
-                        tool_call_id=original_call.tool_call_id,
-                        result=message,
-                        error=True,
-                    )
-                ],
-            )
-        )
-
-        payload: dict[str, object] = {
-            "args": original_call.args,
-            "result": message,
-        }
-        to_dict = getattr(decision, "to_dict", None)
-        if callable(to_dict):
-            payload["permission"] = to_dict()
-
-        now = now_utc()
-        refused_step = RunStep(
-            kind="tool",
-            started_at=now,
-            ended_at=now,
-            duration_ms=0,
-            tool_name=original_call.tool_name,
-            tool_call_id=original_call.tool_call_id,
-            error="permission_denied",
-            payload=payload,
-        )
-        steps.append(refused_step)
-
-        yield await self._prepare_event(
-            AgentToolDoneEvent(
-                index=original_call.index,
-                tool_call_id=original_call.tool_call_id,
-                tool_name=original_call.tool_name,
-                result=message,
-                error="permission_denied",
-                duration_ms=0,
-            )
-        )
-        yield await self._prepare_event(AgentStepDoneEvent(step=refused_step))
-
-    async def _handle_unusable_args(
-        self,
-        original_call: ToolCallEvent,
-        history: list[Message],
-        steps: list[RunStep],
-    ) -> AsyncIterator[AgentEvent]:
-        """Handle a tool call whose argument JSON is incomplete or unparseable
-        (cut by max_tokens, or the adapter's ``_raw`` fallback). The args are
-        NOT passed to the handler — the tool_use is answered with an
-        actionable error result so the model can retry with a smaller call
-        (#178/F-13)."""
-        history.append(
-            Message(
-                role="user",
-                content=[
-                    ToolResultBlock(
-                        tool_call_id=original_call.tool_call_id,
-                        result=TRUNCATED_TOOL_CALL_RESULT,
-                        error=True,
-                    )
-                ],
-            )
-        )
-
-        now = now_utc()
-        truncated_step = RunStep(
-            kind="tool",
-            started_at=now,
-            ended_at=now,
-            duration_ms=0,
-            tool_name=original_call.tool_name,
-            tool_call_id=original_call.tool_call_id,
-            error="tool_call_truncated",
-            payload={
-                "args": original_call.args,
-                "result": TRUNCATED_TOOL_CALL_RESULT,
-            },
-        )
-        steps.append(truncated_step)
-
-        yield await self._prepare_event(
-            AgentToolDoneEvent(
-                index=original_call.index,
-                tool_call_id=original_call.tool_call_id,
-                tool_name=original_call.tool_name,
-                result=TRUNCATED_TOOL_CALL_RESULT,
-                error="tool_call_truncated",
-                duration_ms=0,
-            )
-        )
-        yield await self._prepare_event(AgentStepDoneEvent(step=truncated_step))
 
     def _fill_cancelled_results(
         self,
@@ -516,3 +499,52 @@ class ToolRunner:
                     ],
                 )
             )
+
+
+def _internal_error(
+    call: ToolCallEvent, exc: Exception
+) -> tuple[str, str | None, bool, ImageBlock | None]:
+    """Error result for an exception escaping a handler or middleware hook.
+
+    The exception type name is included so the model (and the user) can tell
+    a genuine bug from a provider hiccup (#178/F-14).
+    """
+    logger.error("Unhandled exception executing tool %s: %r", call.tool_name, exc)
+    text = TOOL_HANDLER_ERROR_TEMPLATE.format(
+        name=call.tool_name, exc_type=type(exc).__name__, detail=str(exc)
+    )
+    return text, text, True, None
+
+
+@dataclass
+class _Progress:
+    """How many calls of the turn already have a result in history.
+
+    Results are committed strictly in call order, so this index is exactly
+    where the cancellation backfill must start.
+    """
+
+    answered: int = 0
+
+
+@dataclass
+class _Rejected:
+    """A call answered without running its handler."""
+
+    call: ToolCallEvent
+    result: str
+    code: str
+    decision: object | None = None
+
+
+@dataclass
+class _Run:
+    """The raw outcome of one handler invocation, before ``on_after_tool``."""
+
+    call: ToolCallEvent
+    result_text: str
+    error_text: str | None
+    error_flag: bool
+    image: ImageBlock | None
+    started: datetime.datetime
+    ended: datetime.datetime

@@ -244,7 +244,7 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> tuple[bytes,
     return body, hit_cap
 
 
-@tool
+@tool(parallel_safe=True)
 async def web_fetch(url: str) -> str:
     """Fetch a web page and return its readable text content (~50KB cap).
 
