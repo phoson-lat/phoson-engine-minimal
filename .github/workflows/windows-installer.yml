@@ -5,12 +5,14 @@ on:
     paths:
       - scripts/phoson-installer.ps1
       - tests/scripts/test_windows_installer.ps1
+      - tests/scripts/test_windows_installer_binary.ps1
       - .github/workflows/windows-installer.yml
   push:
     branches: [main]
     paths:
       - scripts/phoson-installer.ps1
       - tests/scripts/test_windows_installer.ps1
+      - tests/scripts/test_windows_installer_binary.ps1
       - .github/workflows/windows-installer.yml
   workflow_dispatch:
 
@@ -32,12 +34,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Installer contract tests
         run: ./tests/scripts/test_windows_installer.ps1
+      - name: Binary-mode contract tests
+        run: ./tests/scripts/test_windows_installer_binary.ps1
       - name: Bootstrap uv and install published CLI
         run: |
           # Runner-local tool locations containing spaces exercise quoting.
           $env:UV_TOOL_DIR = Join-Path $env:RUNNER_TEMP 'phoson tools'
           $env:UV_TOOL_BIN_DIR = Join-Path $env:RUNNER_TEMP 'phoson bin'
-          ./scripts/phoson-installer.ps1 -Version 0.40.0 -CI -Setup
+          ./scripts/phoson-installer.ps1 -Version 0.40.0 -Method uv -CI -Setup
           if ($LASTEXITCODE -ne 0) { throw 'Installer failed' }
           $cli = Join-Path $env:UV_TOOL_BIN_DIR 'phoson-cli.exe'
           $version = & $cli --version
@@ -52,7 +56,7 @@ jobs:
       - name: Repeat install and check persistent PATH
         run: |
           $before = [Environment]::GetEnvironmentVariable('Path', 'User')
-          ./scripts/phoson-installer.ps1 -Version 0.40.0 -SkipSetup -Setup
+          ./scripts/phoson-installer.ps1 -Version 0.40.0 -Method uv -SkipSetup -Setup
           if ($LASTEXITCODE -ne 0) { throw 'Repeat install failed' }
           $after = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($before -cne $after) { throw 'Repeat install changed user PATH' }
