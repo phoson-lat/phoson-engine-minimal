@@ -28,7 +28,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # ── Flags ─────────────────────────────────────────────────────────────────────
 VERSION = os.environ.get("PHOSON_VERSION") or None
@@ -68,19 +68,39 @@ for pkg in (
 
 # First-party packages are imported dynamically by the plugin loader
 # (``importlib.import_module``), which static analysis cannot see.
-for pkg in (
-    "phoson_agent",
-    "phoson_llm",
-    "phoson_cli",
-    "phoson_plugin_checkpoint",
-    "phoson_plugin_mcp",
-    "phoson_plugin_memory",
-    "phoson_plugin_peers",
-):
+# First-party packages, including EVERY official plugin: the CLI imports them
+# dynamically (official_plugins.py), so the analysis cannot see them.
+OFFICIAL_PLUGINS = sorted(p.name for p in ROOT.glob("phoson_plugin_*") if p.is_dir())
+for pkg in ("phoson_agent", "phoson_llm", "phoson_cli", *OFFICIAL_PLUGINS):
     HIDDEN_IMPORTS.extend(collect_submodules(pkg))
+
+# tiktoken finds its encodings by scanning the *namespace package*
+# ``tiktoken_ext`` with pkgutil.iter_modules. Neither is visible to the
+# analysis, so without this every token count failed in the binary with
+# "Unknown encoding cl100k_base. Plugins found: []". The module is bundled
+# both as code and as a file on disk, which is what iter_modules scans.
+HIDDEN_IMPORTS.extend(collect_submodules("tiktoken_ext"))
 
 # ── Data files ────────────────────────────────────────────────────────────────
 DATA_FILES = [("phoson_cli/phos-ascii.txt", "phoson_cli")]
+DATA_FILES += collect_data_files("tiktoken_ext", include_py_files=True)
+
+# Bundle the BPE ranks the CLI uses, so the binary never downloads them on
+# first use (offline machines, corporate proxies). tiktoken caches each file
+# under TIKTOKEN_CACHE_DIR; the runtime hook points that variable at this
+# directory inside the bundle unless the user set it.
+TIKTOKEN_ENCODINGS = ("cl100k_base", "o200k_base")
+TIKTOKEN_CACHE = ROOT / "build" / "tiktoken_cache"
+TIKTOKEN_CACHE.mkdir(parents=True, exist_ok=True)
+os.environ["TIKTOKEN_CACHE_DIR"] = str(TIKTOKEN_CACHE)
+import tiktoken  # noqa: E402 - needs TIKTOKEN_CACHE_DIR set first
+
+for _encoding in TIKTOKEN_ENCODINGS:
+    tiktoken.get_encoding(_encoding).encode("warm the cache")
+_cached = [p for p in TIKTOKEN_CACHE.iterdir() if p.is_file()]
+if len(_cached) < len(TIKTOKEN_ENCODINGS):
+    raise SystemExit(f"tiktoken cache incomplete: {sorted(p.name for p in _cached)}")
+DATA_FILES += [(str(p), "tiktoken_cache") for p in _cached]
 
 # Official plugins ship a declarative phoson-plugin.toml manifest at their
 # package root; the loader reads it before importing the plugin.
@@ -120,7 +140,7 @@ a = Analysis(
     datas=DATA_FILES,
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
-    runtime_hooks=[],
+    runtime_hooks=[str(ROOT / "scripts" / "pyi_rth_phoson.py")],
     # Keep the bundle small: no GUI/plot/test stacks, and tiktoken's
     # BPE files are runtime data we must NOT exclude (see note below).
     excludes=["tkinter", "matplotlib", "PIL", "pytest", "IPython"],

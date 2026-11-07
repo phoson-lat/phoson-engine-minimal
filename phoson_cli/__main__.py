@@ -986,6 +986,11 @@ def main() -> None:
 
 def _run_cli() -> None:
     """The actual CLI body (pre-I-112 ``main``) — see :func:`main` wrapper."""
+    if sys.argv[1:] == ["--self-test"]:
+        # Hidden build check (release workflow, support): see phoson_cli.self_test.
+        from phoson_cli.self_test import run_self_test
+
+        sys.exit(run_self_test())
     options = parse_args(sys.argv[1:])
 
     if options.version:
