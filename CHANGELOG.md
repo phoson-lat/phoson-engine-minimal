@@ -15,8 +15,8 @@ Binary-first installation, a declarative plugin standard and a hardened engine/C
 - **release**: release binaries are now one-folder bundles archived as
   `phoson-cli-<os>-<arch>.tar.gz` (`.zip` on Windows) instead of the onefile
   `phoson-cli-<os>-<arch>` / `.exe` assets. Onefile binaries re-extracted ~65 MB on every
-  launch (`--version` took 1.7–3.9 s; now ~0.2 s, and the download shrinks from 62 MB to 29 MB on
-  macOS arm64). Unpack the archive and keep the folder together
+  launch (`--version` took 1.7–3.9 s; an installed bundle starts in ~0.1 s on macOS arm64; the
+  download size is about the same). Unpack the archive and keep the folder together
   ([#293](https://github.com/phoson-lat/phoson-engine-minimal/pull/293))
 - **permissions**: `write_file`/`patch_file` outside the working directory and reads of credential
   stores (`~/.phoson`, `~/.ssh`, `~/.aws`, …) now ask by default, also in auto mode; in one-shot
