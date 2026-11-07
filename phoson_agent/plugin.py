@@ -3,7 +3,7 @@ Module for plugin system infrastructure.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from collections.abc import Callable
 
 from phoson_agent.models import AgentTool
@@ -15,6 +15,9 @@ from phoson_agent.cli_extensions import (
     ToolRenderSpec,
 )
 
+if TYPE_CHECKING:
+    from phoson_agent.plugin_manifest import PluginManifest
+
 
 class Plugin(ABC):
     """
@@ -24,7 +27,14 @@ class Plugin(ABC):
     - Tools (functions that the agent can call)
     - Middlewares (hooks into the agent lifecycle)
     - Configuration (settings for the plugin)
+
+    ``manifest`` is set by the loader when the plugin ships a
+    ``phoson-plugin.toml`` (see :mod:`phoson_agent.plugin_manifest`).
     """
+
+    #: The plugin's parsed manifest, attached by the loader (``None`` when the
+    #: plugin has none or was not loaded through a registry).
+    manifest: "PluginManifest | None" = None
 
     @property
     @abstractmethod
