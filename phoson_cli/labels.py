@@ -22,6 +22,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "deepseek": "DeepSeek",
     "alibaba": "Alibaba Cloud",
     "together": "Together AI",
+    "cheaperinference": "Cheaper Inference",
     "perplexity": "Perplexity",
     "lmstudio": "LM Studio",
     "vllm": "vLLM",

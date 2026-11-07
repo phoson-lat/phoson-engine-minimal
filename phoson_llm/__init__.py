@@ -61,6 +61,7 @@ if TYPE_CHECKING:
         OpenRouterChat,
         PerplexityChat,
         GitHubModelsChat,
+        CheaperInferenceChat,
         OpenAICompatibleChat,
     )
 
@@ -116,6 +117,7 @@ __all__ = [
     "AlibabaChat",
     "DeepSeekChat",
     "TogetherChat",
+    "CheaperInferenceChat",
     "PerplexityChat",
     "LMStudioChat",
     "VLLMChat",
@@ -185,6 +187,7 @@ _CHAT_EXPORTS = frozenset(
         "AlibabaChat",
         "DeepSeekChat",
         "TogetherChat",
+        "CheaperInferenceChat",
         "PerplexityChat",
         "LMStudioChat",
         "VLLMChat",

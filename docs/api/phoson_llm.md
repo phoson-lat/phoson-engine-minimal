@@ -19,7 +19,7 @@ Unified LLM chat interface providing a normalized API across multiple providers.
 - **Mistral AI** — Mistral Large, Mistral Small, Codestral (Native SDK support)
 - **AWS Bedrock** — Enterprise-grade access to Anthropic, Meta, Mistral models (Native SDK support)
 - **Azure OpenAI** — Enterprise OpenAI deployments with custom URL support
-- **And many others** — Together AI, Perplexity, Fireworks, Cohere, OmniRoute, LM Studio, vLLM
+- **And many others** — Together AI, Cheaper Inference, Perplexity, Fireworks, Cohere, OmniRoute, LM Studio, vLLM
 
 ## Chat Adapters
 
@@ -99,6 +99,7 @@ Many providers use the OpenAI API format. Phoson provides dedicated classes for 
 | `DeepSeekChat` | DeepSeek | `DEEPSEEK_API_KEY` |
 | `AlibabaChat` | Alibaba Cloud (DashScope) | `DASHSCOPE_API_KEY` |
 | `TogetherChat` | Together AI | `TOGETHER_API_KEY` |
+| `CheaperInferenceChat` | Cheaper Inference (multi-vendor, discounted; `ci_live_` keys) | `CHEAPER_INFERENCE_API_KEY` |
 | `PerplexityChat` | Perplexity | `PERPLEXITY_API_KEY` |
 | `FireworksChat` | Fireworks AI | `FIREWORKS_API_KEY` |
 | `CohereChat` | Cohere | `COHERE_API_KEY` |
@@ -380,7 +381,7 @@ from phoson_llm import (
     # Chat adapters
     BaseLLMChat, OpenAIChat, AnthropicChat, OllamaChat, OpenRouterChat,
     GitHubModelsChat, NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
-    TogetherChat, PerplexityChat, FireworksChat, CohereChat, OmniRouteChat,
+    TogetherChat, CheaperInferenceChat, PerplexityChat, FireworksChat, CohereChat, OmniRouteChat,
     LMStudioChat, VLLMChat, AzureChat,
     GeminiChat, MistralChat, BedrockChat,
     # Factory

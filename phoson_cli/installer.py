@@ -104,6 +104,7 @@ class SetupWizard:
         "deepseek",
         "alibaba",
         "together",
+        "cheaperinference",
         "perplexity",
         "lmstudio",
         "vllm",
@@ -409,6 +410,12 @@ class SetupWizard:
                 "Alibaba Cloud (DashScope) API key",
                 config.alibaba_api_key,
                 field_name="alibaba_api_key",
+            )
+        if "cheaperinference" in self.enabled_providers:
+            config.cheaperinference_api_key = await self._secret_prompt(
+                "Cheaper Inference API key (ci_live_...)",
+                config.cheaperinference_api_key,
+                field_name="cheaperinference_api_key",
             )
         if "together" in self.enabled_providers:
             config.together_api_key = await self._secret_prompt(
@@ -819,6 +826,9 @@ class SetupWizard:
         table.add_row("DeepSeek", self._mask_secret(config.deepseek_api_key))
         table.add_row("Alibaba Cloud", self._mask_secret(config.alibaba_api_key))
         table.add_row("Together AI", self._mask_secret(config.together_api_key))
+        table.add_row(
+            "Cheaper Inference", self._mask_secret(config.cheaperinference_api_key)
+        )
         table.add_row("Perplexity", self._mask_secret(config.perplexity_api_key))
         table.add_row("LM Studio", config.lmstudio_base_url or "—")
         table.add_row("vLLM", config.vllm_base_url or "—")
@@ -1088,6 +1098,8 @@ class SetupWizard:
             enabled.append("alibaba")
         if config.together_api_key or config.provider == "together":
             enabled.append("together")
+        if config.cheaperinference_api_key or config.provider == "cheaperinference":
+            enabled.append("cheaperinference")
         if config.perplexity_api_key or config.provider == "perplexity":
             enabled.append("perplexity")
         if config.lmstudio_base_url or config.provider == "lmstudio":
