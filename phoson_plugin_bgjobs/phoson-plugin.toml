@@ -1,0 +1,27 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-bgjobs"
+name = "Background Jobs"
+version = "0.1.0"
+description = "Run long shell commands in the background and wake the agent when they finish."
+entry = "phoson_plugin_bgjobs:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = [
+    "run_bg_job",
+    "list_bg_jobs",
+    "stop_bg_job",
+    "wait_bg_jobs",
+]
+commands = ["/jobs"]
+
+[capabilities]
+network = false
+shell = true
+filesystem = "write"

@@ -1,0 +1,30 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-computeruse"
+name = "Computer Use"
+version = "0.1.0"
+description = "Screenshot, pointer and keyboard control of the local desktop (needs the 'computeruse' extra)."
+entry = "phoson_plugin_computeruse:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = [
+    "computer_screenshot",
+    "computer_move",
+    "computer_click",
+    "computer_drag",
+    "computer_scroll",
+    "computer_type",
+    "computer_key",
+    "computer_wait",
+]
+
+[capabilities]
+network = false
+shell = true
+filesystem = "write"

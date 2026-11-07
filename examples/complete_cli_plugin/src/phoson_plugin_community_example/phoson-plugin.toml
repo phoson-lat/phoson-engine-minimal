@@ -1,0 +1,22 @@
+# Plugin manifest — read by phoson without importing the plugin.
+# Spec: docs/research/plugin-manifest-spec.md
+schema = 1
+id = "community-example"            # = Plugin.name = phoson.plugins entry point name
+name = "Community example"
+version = "0.1.0"                    # keep in sync with pyproject.toml
+description = "A complete plugin-platform example: a tool, a slash command, a tool card and a theme."
+entry = "phoson_plugin_community_example:create_plugin"
+license = "MIT"
+
+[compat]
+phoson = ">=0.58"
+
+[provides]
+tools = ["example_checklist"]
+commands = ["/example-status"]
+theme = true
+
+[capabilities]
+network = false
+shell = false
+filesystem = "none"

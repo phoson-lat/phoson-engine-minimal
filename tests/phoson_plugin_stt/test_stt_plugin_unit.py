@@ -53,7 +53,7 @@ def test_parse_model_arch():
 
 def test_plugin_identity_and_metadata():
     plugin = create_plugin()
-    assert plugin.name == "stt"
+    assert plugin.name == "phoson-plugin-stt"
     assert plugin.description
     assert isinstance(plugin, SttPlugin)
 

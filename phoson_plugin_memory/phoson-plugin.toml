@@ -1,0 +1,26 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-memory"
+name = "Memory"
+version = "0.1.0"
+description = "Key/value memory tools backed by Redis (short-term) or Postgres (long-term). Tool names get the configured 'tool_prefix' (none by default)."
+entry = "phoson_plugin_memory:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = [
+    "memory_read",
+    "memory_write",
+    "memory_delete",
+    "memory_list",
+]
+
+[capabilities]
+network = true
+shell = false
+filesystem = "none"

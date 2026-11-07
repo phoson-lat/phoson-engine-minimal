@@ -31,25 +31,60 @@ and never read stdin implicitly.
 
 ## Installing community plugins
 
-Use the plugin manager for packages published to PyPI or a trusted Git source:
-
 ```bash
-phoson-cli plugin install "phoson-plugin-example==1.2.0"
-phoson-cli plugin install github:owner/repository@v1.2.0
-phoson-cli plugin list
+phoson-cli plugin install "phoson-plugin-example==1.2.0"     # PyPI
+phoson-cli plugin install github:owner/repository@v1.2.0     # Git (pinned to its SHA)
+phoson-cli plugin install ./my-plugin                         # local directory
+phoson-cli plugin list                 # id, version, description (no code import)
+phoson-cli plugin info example         # manifest, capabilities, source, location
 phoson-cli plugin disable example
 phoson-cli plugin enable example
-phoson-cli plugin doctor example
+phoson-cli plugin doctor example       # load without initialize(); check vs manifest
+phoson-cli plugin update example       # reinstall from the recorded source
+phoson-cli plugin uninstall example    # delete files, config and lock entry
 ```
 
-`phoson-cli --install-plugin <source>` is an alias for `plugin install`. Add
-`--yes` to intentionally skip its confirmation in automation. GitHub shorthand
-is normalized to a standard `git+https://` requirement and Git sources are
-resolved to a commit SHA recorded in `~/.phoson/plugins.lock.toml`. Installation
-executes Python code with your user permissions, so inspect and pin sources to
-a release tag or commit. A plugin package must export an entry point in the
-existing `phoson.plugins` group. See `examples/PLUGIN_EXAMPLES.md` for a
-complete installable plugin.
+Each plugin is installed into **its own directory**, `~/.phoson/plugins/<id>/`,
+never into the CLI's environment. The CLI's installed versions are passed as
+constraints, so a plugin cannot replace the CLI's dependencies, and
+`uninstall` really removes it. Installation is *stage → review → commit*:
+after the package is staged, its `phoson-plugin.toml` manifest is shown
+(capabilities such as network, shell or filesystem access, the tools and
+commands it adds, its config keys) and you confirm before anything is
+enabled.
+
+`phoson-cli --install-plugin <source>` is an alias for `plugin install`, and
+`--yes` skips the confirmations in automation. Git sources are resolved to a
+commit SHA recorded in `~/.phoson/plugins.lock.toml`. Building a plugin and
+running it executes its Python code with your user permissions, so inspect
+sources and pin them to a release tag or commit. The standalone binary needs
+[`uv`](https://docs.astral.sh/uv/) on PATH to install plugins.
+
+## Writing a plugin
+
+```bash
+phoson-cli plugin new acme-notes          # scaffold: manifest, a tool, a command, tests
+cd phoson-plugin-acme-notes && uv sync && uv run pytest
+phoson-cli plugin validate . --load       # manifest + packaging + provides check
+phoson-cli plugin install .
+```
+
+A distributable plugin is a Python package with:
+
+- a `Plugin` subclass (or factory) exposed through **one** entry point in
+  the `phoson.plugins` group;
+- a **`phoson-plugin.toml` manifest** at the root of its package. Its `id`
+  equals the entry point name and `Plugin.name`. It declares the version,
+  `[compat] phoson`, `[provides]`, `[capabilities]` and a typed `[config]`
+  schema (defaults, env vars, choices, required, secret).
+
+The manifest is read **without importing the plugin**. Phoson uses it to
+list, review and validate the plugin, to refuse an incompatible plugin
+before running it, and to validate and fill its configuration before
+`configure()`. The loaded plugin can see it as `plugin.manifest`. Plugins
+without a manifest still load, but users see them as undeclared. Full
+format and semantics: [`docs/research/plugin-manifest-spec.md`](research/plugin-manifest-spec.md).
+`examples/complete_cli_plugin` is a complete reference plugin.
 
 ## Quick Usage
 

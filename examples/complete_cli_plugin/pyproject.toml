@@ -7,7 +7,7 @@ name = "phoson-plugin-community-example"
 version = "0.1.0"
 description = "End-to-end community plugin example for Phoson"
 requires-python = ">=3.12"
-dependencies = ["phoson-engine-minimal>=0.17.1"]
+dependencies = ["phoson-engine-minimal>=0.58"]
 
 [project.entry-points."phoson.plugins"]
 community-example = "phoson_plugin_community_example:create_plugin"

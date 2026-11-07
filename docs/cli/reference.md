@@ -37,9 +37,10 @@ Options:
   --self-update        Check for and install CLI updates
   --uninstall          Uninstall phoson-cli
   --install-plugin <source>  Install and enable a community plugin (alias)
-  -y, --yes            Skip the install confirmation (plugin install only)
-  plugin <command>     Manage plugins: install, list, enable, disable,
-                       remove, update, doctor
+  -y, --yes            Skip the confirmations (plugin install/update only)
+  plugin <command>     Manage plugins (see `phoson-cli plugin help`):
+                       install, uninstall, update, list, info, enable,
+                       disable, doctor, new, validate
   bg list              List saved sessions with run status (read-only)
   -h, --help           Show this help and exit
 ```

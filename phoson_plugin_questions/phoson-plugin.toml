@@ -1,0 +1,21 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-questions"
+name = "Questions"
+version = "0.1.0"
+description = "Lets the agent ask the user structured multiple-choice questions."
+entry = "phoson_plugin_questions:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = ["questions"]
+
+[capabilities]
+network = false
+shell = false
+filesystem = "none"

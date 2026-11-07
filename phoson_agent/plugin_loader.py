@@ -3,6 +3,7 @@ Module for loading and managing plugins.
 """
 
 import sys
+import logging
 import importlib
 import importlib.util
 from typing import Any
@@ -12,6 +13,15 @@ from collections.abc import Iterator
 
 from phoson_agent.plugin import Plugin, PluginSpec, PluginLoader
 from phoson_agent.exceptions import PhosonPluginLoadError, PhosonPluginConfigError
+from phoson_agent.plugin_manifest import (
+    MANIFEST_FILENAME,
+    PluginManifest,
+    load_manifest,
+    engine_version,
+    find_manifest_for_module,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -94,7 +104,7 @@ class PluginRegistry:
         """
         self._loaders[prefix] = loader
 
-    def load(self, spec: PluginSpec) -> Plugin:
+    def load(self, spec: PluginSpec, *, initialize: bool = True) -> Plugin:
         """
         Load a plugin from a specification.
 
@@ -104,18 +114,31 @@ class PluginRegistry:
         - "path:/path/to/plugin.py" -> local file
         - "entrypoint:my-plugin" -> setuptools entry point
 
+        When the plugin ships a ``phoson-plugin.toml`` manifest, it is read
+        *before* the plugin code is imported: an incompatible plugin is
+        refused without executing it, and ``spec.config`` is validated and
+        filled with the manifest defaults/env values before ``configure()``.
+
         Args:
             spec: Plugin specification
+            initialize: Call ``initialize()`` after ``configure()`` (default).
+                ``False`` loads and configures only — for inspection
+                (``plugin doctor``) without the plugin's side effects.
 
         Returns:
             Loaded and configured Plugin instance
 
         Raises:
-            PhosonPluginConfigError: If the loader prefix is unknown.
-            PhosonPluginLoadError: If the plugin cannot be loaded.
+            PhosonPluginConfigError: If the loader prefix is unknown or the
+                config does not match the manifest schema.
+            PhosonPluginLoadError: If the plugin cannot be loaded or is
+                incompatible with this engine.
         """
+        manifest: PluginManifest | None = None
         if spec.instance:
             plugin = spec.instance
+            manifest = _manifest_for_module(type(plugin).__module__)
+            _check_compat(manifest)
         else:
             name = spec.name
             loader_name = "package"  # default
@@ -131,11 +154,27 @@ class PluginRegistry:
                     f"Available: {list(self._loaders.keys())}"
                 )
 
+            manifest = _manifest_before_load(loader_name, name)
+            _check_compat(manifest)
             plugin = loader(name)
 
+        config = spec.config
+        if manifest is not None:
+            config = manifest.resolve_config(spec.config)
+            plugin.manifest = manifest
+            if plugin.name != manifest.id:
+                logger.warning(
+                    "Plugin %r declares id %r in %s; Plugin.name should match "
+                    "the manifest id.",
+                    plugin.name,
+                    manifest.id,
+                    manifest.path or MANIFEST_FILENAME,
+                )
+
         # Always configure and initialize, even for instances
-        plugin.configure(spec.config)
-        plugin.initialize()
+        plugin.configure(config)
+        if initialize:
+            plugin.initialize()
 
         return plugin
 
@@ -249,22 +288,65 @@ class PluginRegistry:
         return _resolve_plugin(ep.load(), name)
 
 
+def _entry_point(name: str) -> object | None:
+    from importlib.metadata import entry_points
+
+    # Python 3.12+: entry_points() always supports selection by group/name.
+    matches = list(entry_points(group="phoson.plugins", name=name))
+    return matches[0] if matches else None
+
+
+def _manifest_for_module(module: str) -> PluginManifest | None:
+    path = find_manifest_for_module(module)
+    return load_manifest(path) if path is not None else None
+
+
+def _manifest_before_load(loader_name: str, name: str) -> PluginManifest | None:
+    """Locate a plugin's manifest from its spec without importing its code.
+
+    Custom loaders are opaque, so they get no manifest handling.
+    """
+    if loader_name == "package":
+        return _manifest_for_module(name)
+    if loader_name == "entrypoint":
+        ep = _entry_point(name)
+        module = getattr(ep, "module", None)
+        return _manifest_for_module(module) if module else None
+    if loader_name == "path":
+        path = Path(name).expanduser().resolve().parent / MANIFEST_FILENAME
+        return load_manifest(path) if path.is_file() else None
+    return None
+
+
+def _check_compat(manifest: PluginManifest | None) -> None:
+    if manifest is None:
+        return
+    reason = manifest.incompatibility(engine_version())
+    if reason:
+        raise PhosonPluginLoadError(
+            f"Plugin {manifest.id!r} {manifest.version} is not compatible: {reason}."
+        )
+
+
 # Global plugin registry
 _default_registry = PluginRegistry()
 
 
-def load_plugin(spec: str | dict[str, Any] | Plugin) -> Plugin:
+def load_plugin(
+    spec: str | dict[str, Any] | Plugin, *, initialize: bool = True
+) -> Plugin:
     """
     Convenience function to load a plugin using the default registry.
 
     Args:
         spec: Plugin specification (string, dict, or Plugin instance)
+        initialize: See :meth:`PluginRegistry.load`.
 
     Returns:
         Loaded Plugin instance
     """
     plugin_spec = PluginSpec.from_value(spec)
-    return _default_registry.load(plugin_spec)
+    return _default_registry.load(plugin_spec, initialize=initialize)
 
 
 def register_loader(prefix: str, loader: PluginLoader) -> None:
@@ -276,3 +358,16 @@ def register_loader(prefix: str, loader: PluginLoader) -> None:
         loader: Function that takes a plugin name and returns a Plugin instance
     """
     _default_registry.register_loader(prefix, loader)
+
+
+def find_plugin_manifest(spec: str | dict[str, Any] | Plugin) -> PluginManifest | None:
+    """The manifest of a plugin spec, located without importing its code.
+
+    Returns ``None`` for plugins without a manifest and for specs handled by a
+    custom loader. Raises :class:`PluginManifestError` for an invalid one.
+    """
+    plugin_spec = PluginSpec.from_value(spec)
+    if plugin_spec.instance is not None:
+        return _manifest_for_module(type(plugin_spec.instance).__module__)
+    loader_name, _sep, name = plugin_spec.name.rpartition(":")
+    return _manifest_before_load(loader_name or "package", name)

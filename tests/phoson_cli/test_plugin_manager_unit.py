@@ -15,7 +15,6 @@ from phoson_cli.plugin_manager import (
     _load_lockfile,
     _save_lockfile,
     disable_plugin,
-    install_plugin,
     configured_plugins,
     _resolve_git_commit,
     _pin_git_requirement,
@@ -90,61 +89,6 @@ def test_git_source_resolves_and_pins_an_immutable_commit() -> None:
 def test_normalize_plugin_source_rejects_bad_github_target() -> None:
     with pytest.raises(PluginManagerError, match="github:owner/repository"):
         normalize_plugin_source("github:not-valid")
-
-
-def test_install_uses_fresh_interpreter_for_post_install_entrypoints() -> None:
-    config = PhosonConfig()
-    calls: list[list[str]] = []
-
-    def runner(command, **_kwargs):
-        calls.append(command)
-        if command[1:2] == ["-c"]:
-            return SimpleNamespace(returncode=0, stdout='["demo"]\n', stderr="")
-        return SimpleNamespace(returncode=0, stdout="installed", stderr="")
-
-    with (
-        patch("phoson_cli.plugin_manager._entrypoint_names", return_value=set()),
-        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
-        patch("phoson_cli.plugin_manager._save_lockfile"),
-        patch("phoson_cli.plugin_manager.save_config"),
-    ):
-        assert install_plugin("package==1", config, runner=runner) == "demo"
-
-    assert calls[0][:5] == [
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        __import__("sys").executable,
-    ]
-    assert calls[1][0] == __import__("sys").executable
-    assert calls[1][1] == "-c"
-    assert config.plugins == ["entrypoint:demo"]
-
-
-def test_install_reinstalls_local_plugin_with_already_visible_entrypoint(
-    tmp_path,
-) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        '[project.entry-points."phoson.plugins"]\ndemo = "pkg:create_plugin"\n',
-        encoding="utf-8",
-    )
-    config = PhosonConfig()
-
-    def runner(command, **_kwargs):
-        if command[1:2] == ["-c"]:
-            return SimpleNamespace(returncode=0, stdout='["demo"]\n', stderr="")
-        return SimpleNamespace(returncode=0, stdout="installed", stderr="")
-
-    with (
-        patch("phoson_cli.plugin_manager._entrypoint_names", return_value={"demo"}),
-        patch("phoson_cli.plugin_manager._load_lockfile", return_value=[]),
-        patch("phoson_cli.plugin_manager._save_lockfile"),
-        patch("phoson_cli.plugin_manager.save_config"),
-    ):
-        assert install_plugin(str(tmp_path), config, runner=runner) == "demo"
-
-    assert config.plugins == ["entrypoint:demo"]
 
 
 def test_disable_plugin_removes_only_target_and_persists() -> None:

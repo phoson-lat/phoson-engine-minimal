@@ -1,0 +1,26 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-ssh"
+name = "SSH"
+version = "0.1.0"
+description = "Run commands on and copy files to/from remote hosts over SSH with strict host-key checking (needs the 'ssh' extra)."
+entry = "phoson_plugin_ssh:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = [
+    "ssh_hosts",
+    "ssh_exec",
+    "ssh_copy_local_to_remote",
+    "ssh_copy_remote_to_local",
+]
+
+[capabilities]
+network = true
+shell = true
+filesystem = "write"

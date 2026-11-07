@@ -79,6 +79,15 @@ from .cli_extensions import (
     InteractionResult,
     CliCommandInvocation,
 )
+from .plugin_manifest import (
+    MANIFEST_FILENAME,
+    ConfigField,
+    Capabilities,
+    PluginManifest,
+    PluginManifestError,
+    load_manifest,
+    parse_manifest,
+)
 
 __all__ = [
     "AgentEngine",
@@ -110,6 +119,13 @@ __all__ = [
     "QuestionOption",
     "QuestionsResult",
     "load_plugin",
+    "MANIFEST_FILENAME",
+    "ConfigField",
+    "Capabilities",
+    "PluginManifest",
+    "PluginManifestError",
+    "load_manifest",
+    "parse_manifest",
     "register_loader",
     "tool",
     "AgentTool",

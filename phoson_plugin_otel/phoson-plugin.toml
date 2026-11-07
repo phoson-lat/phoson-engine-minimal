@@ -1,0 +1,21 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-otel"
+name = "OpenTelemetry"
+version = "0.1.0"
+description = "OpenTelemetry tracing of agent runs, LLM calls and tool calls, written to a JSONL file and/or exported to an OTLP endpoint."
+entry = "phoson_plugin_otel:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+middlewares = true
+
+[capabilities]
+network = true
+shell = false
+filesystem = "write"

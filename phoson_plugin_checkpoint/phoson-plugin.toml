@@ -1,0 +1,18 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-checkpoint"
+name = "Checkpoints"
+version = "0.1.0"
+description = "Postgres-backed session checkpoint storage (needs the 'checkpoint' extra and a 'dsn')."
+entry = "phoson_plugin_checkpoint:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[capabilities]
+network = true
+shell = false
+filesystem = "none"

@@ -81,6 +81,26 @@ for pkg in (
 # ── Data files ────────────────────────────────────────────────────────────────
 DATA_FILES = [("phoson_cli/phos-ascii.txt", "phoson_cli")]
 
+# Official plugins ship a declarative phoson-plugin.toml manifest at their
+# package root; the loader reads it before importing the plugin.
+DATA_FILES += [
+    (f"{package}/phoson-plugin.toml", package)
+    for package in (
+        "phoson_plugin_bgjobs",
+        "phoson_plugin_checkpoint",
+        "phoson_plugin_computeruse",
+        "phoson_plugin_mcp",
+        "phoson_plugin_memory",
+        "phoson_plugin_monitor",
+        "phoson_plugin_otel",
+        "phoson_plugin_peers",
+        "phoson_plugin_questions",
+        "phoson_plugin_ssh",
+        "phoson_plugin_stt",
+        "phoson_plugin_swarm",
+    )
+]
+
 VERSION_FILE = None
 if VERSION:
     # Stage the version file in a throwaway dir (outside the package so
