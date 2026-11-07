@@ -16,9 +16,18 @@ Security model (F-06):
   metadata endpoint 169.254.169.254 — and fe80::/10), multicast, reserved,
   unspecified, and CGNAT (100.64/10) addresses are all refused, along
   with the literal hostname ``localhost``. A 302 to an internal address is
-  therefore refused, not followed. (DNS-rebinding between the check and the
-  connect is not fully closed — that requires pinning the resolved address;
-  this tool validates the host at every hop, which is the requested scope.)
+  therefore refused, not followed.
+- **DNS-rebinding / connect pinning.** The pre-flight check alone is not
+  enough: httpx would resolve the hostname *again* when connecting, so a
+  short-TTL answer could pass validation with a public IP and then connect
+  to 127.0.0.1 / 169.254.169.254. The client therefore uses
+  :class:`_PinnedTransport`, whose network backend resolves the host once,
+  validates **every** resolved address and opens the TCP socket to one of
+  those validated IPs. httpcore keeps using the original hostname for TLS
+  SNI / certificate verification and the ``Host`` header. This covers the
+  initial request and every redirect hop (each new origin opens a new,
+  pinned connection). ``trust_env=False`` stops ``HTTP(S)_PROXY`` env vars
+  from routing the request around the check.
 - **Download cap.** The body is streamed with ``httpx`` and reading stops
   once ``MAX_DOWNLOAD_BYTES`` (~2 MB) is reached, so a hostile endpoint
   cannot force the process to buffer gigabytes before the 50 KB text cap
@@ -28,11 +37,18 @@ Security model (F-06):
 """
 
 import socket
+import typing
+import asyncio
 import ipaddress
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
+import httpcore
+
+# httpcore's default backend (anyio/trio auto-detect). Not re-exported at the
+# package top level, but it is what AsyncConnectionPool uses by default.
+from httpcore._backends.auto import AutoBackend
 
 from phoson_agent.tool import tool
 
@@ -148,6 +164,104 @@ async def _request_guard(request: httpx.Request) -> None:
         assert_public_url(str(request.url))
     except _BlockedHostError as exc:
         raise httpx.ConnectError(str(exc)) from exc
+
+
+async def _resolve_validated(host: str, port: int) -> list[str]:
+    """Resolve ``host`` once and return its addresses, all checked public.
+
+    Unlike :func:`assert_public_url` this is strict: an unresolvable host or
+    *any* non-public address raises :class:`httpcore.ConnectError` (surfaced
+    by httpx as :class:`httpx.ConnectError`), so the caller only ever
+    connects to an address validated here.
+    """
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not _is_public_ip(literal):
+            raise httpcore.ConnectError(
+                f"Refusing to fetch {host}: {_block_reason(host, literal)}"
+            )
+        return [host]
+
+    if host in _BLOCKED_HOSTNAMES:
+        raise httpcore.ConnectError(f"Refusing to fetch {host}: not a public host")
+
+    try:
+        # getaddrinfo blocks; keep it off the event loop.
+        infos = await asyncio.to_thread(
+            _getaddrinfo, host, port, proto=socket.IPPROTO_TCP
+        )
+    except (socket.gaierror, OSError) as exc:
+        raise httpcore.ConnectError(str(exc)) from exc
+
+    addresses: list[str] = []
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except (ValueError, IndexError):
+            continue
+        if not _is_public_ip(ip):
+            raise httpcore.ConnectError(
+                f"Refusing to fetch {host}: resolves to {_block_reason(host, ip)}"
+            )
+        if str(ip) not in addresses:
+            addresses.append(str(ip))
+    if not addresses:
+        raise httpcore.ConnectError(f"Could not resolve {host}")
+    return addresses
+
+
+class _PinnedBackend(AutoBackend):
+    """httpcore network backend that only connects to validated IPs.
+
+    httpcore calls ``connect_tcp(host=<hostname>, ...)`` and then uses the
+    *hostname* (not the socket peer) as the TLS ``server_hostname``; the
+    ``Host`` header comes from the request URL. Substituting a validated IP
+    here therefore pins the TCP connection without affecting SNI,
+    certificate verification or the ``Host`` header.
+    """
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: typing.Iterable[typing.Any] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        last_exc: Exception | None = None
+        for ip in await _resolve_validated(host, port):
+            try:
+                return await super().connect_tcp(
+                    ip,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_exc = exc  # try the next validated address
+        assert last_exc is not None  # _resolve_validated never returns []
+        raise last_exc
+
+
+class _PinnedTransport(httpx.AsyncHTTPTransport):
+    """``AsyncHTTPTransport`` whose connections go through :class:`_PinnedBackend`.
+
+    httpx 0.28's transport has no ``network_backend`` argument, so after the
+    normal setup its connection pool is replaced with one that uses the
+    pinning backend (default TLS verification, nothing read from the
+    environment, never a proxy).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(trust_env=False)
+        self._pool = httpcore.AsyncConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            network_backend=_PinnedBackend(),
+        )
 
 
 class _TextExtractor(HTMLParser):
@@ -274,6 +388,10 @@ async def web_fetch(url: str) -> str:
             follow_redirects=True,
             max_redirects=MAX_REDIRECTS,
             event_hooks={"request": [_request_guard]},
+            # Connect only to validated IPs (DNS-rebinding), and ignore
+            # HTTP(S)_PROXY / NO_PROXY so a proxy can't bypass the check.
+            transport=_PinnedTransport(),
+            trust_env=False,
         ) as client:
             async with client.stream("GET", url, headers=headers) as response:
                 response.raise_for_status()

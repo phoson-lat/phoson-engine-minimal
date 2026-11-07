@@ -33,9 +33,9 @@ from prompt_toolkit.layout.containers import Window
 from .render import (
     BlockAnsiCache,
     BlockFormattedTextCache,
-    windowed_slice,
     _line_boundaries,
-    render_chat_split,
+    render_chat_parts,
+    windowed_slice_parts,
 )
 
 # ── Perf logging (T-14 / I-84) ───────────────────────────────────────────────
@@ -82,12 +82,12 @@ def _chat_perf_log(
     * ``render_ms`` — the wall time of the dirty-frame re-render
       (``render_chat_split`` + the incremental bounds build) when the
       transcript is dirty (a streamed token, a new block, a resize). 0.0 on
-      frames that only re-sliced (scroll). Its *bounds* component is
-      O(visible) (the frozen prefix's line offsets are cached; only the small
-      in-flight tail is re-scanned — see :meth:`ChatPane.compute_chat_bounds`),
-      but it also includes re-rendering the frozen transcript, which is still
-      O(transcript); that term is the remaining cost to eliminate for a fully
-      O(visible) streaming frame (known follow-up).
+      frames that only re-sliced (scroll). While a turn streams it is
+      O(in-flight tail): the joined frozen prefix is cached
+      (``BlockAnsiCache.render_prefix``), its line offsets are cached
+      (:meth:`ChatPane._frozen_bounds_for`), and the prefix and tail are kept
+      as separate strings (never concatenated per frame). A frame that adds
+      blocks pays only for the new blocks plus one prefix copy.
 
     The logger's handler is attached at import time (below), so the
     steady-state call is a single ``.info``.
@@ -234,14 +234,25 @@ class ChatPane:
         self._total_chat_lines = 1
         self._cache_dirty = True
         self._last_width = 80
-        # T-14 (#171) — windowed chat render. The whole transcript is cached
-        # as ONE ANSI string (re-rendered only when dirty/resized), but
-        # prompt_toolkit is handed only the *visible window* substring.
-        self._full_ansi_text = ""
-        self._full_ansi_bounds: list[int] = [0]
+        # T-14 (#171) — windowed chat render. The transcript is cached as
+        # two ANSI strings — the frozen prefix (immutable blocks) and the
+        # in-flight tail — each with its own line bounds (re-rendered only
+        # when dirty/resized); prompt_toolkit is handed only the *visible
+        # window* substring (``windowed_slice_parts``). The full string /
+        # full bounds are materialised lazily, only when something reads
+        # ``_full_ansi_text`` / ``_full_ansi_bounds`` (tests, legacy callers).
+        self._win_prefix = ""
+        self._win_prefix_bounds: list[int] = [0]
+        self._win_tail = ""
+        self._win_tail_bounds: list[int] = [0]
+        self._full_text_cache: str | None = ""
+        self._full_bounds_cache: list[int] | None = self._win_prefix_bounds
         # T-14 follow-up: incremental line-bounds for the frozen prefix.
+        # ``_frozen_prefix_text`` is the exact string ``_frozen_ansi_bounds``
+        # describes (the invariant the append fast path relies on).
         self._frozen_ansi_bounds: list[int] = [0]
-        self._frozen_ansi_ids: tuple[int, ...] | None = None
+        self._frozen_ansi_ids: tuple[object, ...] | None = None
+        self._frozen_prefix_text: str | None = None
         # Bumped on every dirty re-render; the slice cache refreshes on it.
         self._chat_content_epoch = 0
         self._window_top = -1
@@ -260,6 +271,49 @@ class ChatPane:
         if self._sink_override is not None:
             return self._sink_override
         return self.app.sink
+
+    # ── Full-transcript views (lazy; off the per-frame hot path) ───────────
+
+    @property
+    def _full_ansi_text(self) -> str:
+        """The whole transcript ANSI (``prefix + tail``), built on demand.
+
+        Cached until the next dirty frame, so repeated reads (and the
+        "not re-rendered on scroll" identity checks) see one stable object.
+        """
+        if self._full_text_cache is None:
+            self._full_text_cache = self._win_prefix + self._win_tail
+        return self._full_text_cache
+
+    @_full_ansi_text.setter
+    def _full_ansi_text(self, text: str) -> None:
+        # Seeding seam (tests): the given text becomes the whole window
+        # source, with no separate tail. Set ``_full_ansi_bounds`` alongside.
+        self._win_prefix = text
+        self._win_tail = ""
+        self._win_tail_bounds = [0]
+        self._full_text_cache = text
+        self._full_bounds_cache = None
+
+    @property
+    def _full_ansi_bounds(self) -> list[int]:
+        """Line starts of :attr:`_full_ansi_text` (spliced on demand)."""
+        if self._full_bounds_cache is None:
+            tail_bounds = self._win_tail_bounds
+            if len(tail_bounds) == 1:
+                self._full_bounds_cache = self._win_prefix_bounds
+            else:
+                plen = len(self._win_prefix)
+                self._full_bounds_cache = self._win_prefix_bounds + [
+                    plen + b for b in tail_bounds[1:]
+                ]
+        return self._full_bounds_cache
+
+    @_full_ansi_bounds.setter
+    def _full_ansi_bounds(self, bounds: list[int]) -> None:
+        self._win_prefix_bounds = bounds
+        self._win_tail_bounds = [0]
+        self._full_bounds_cache = bounds
 
     @property
     def chat_window(self) -> Window:
@@ -396,17 +450,18 @@ class ChatPane:
         and after a refill the same ids can describe different ANSI strings
         (a theme with differently-long escapes), so ids alone would be a
         stale fingerprint (F-41).
+
+        The steady-state render path no longer calls this (it keeps prefix
+        and tail apart, see :meth:`_frozen_bounds_for`); it remains the
+        full-string API for callers that hold one concatenated text.
         """
-        prefix = text[:prefix_len]
         tail = text[prefix_len:]
-        fingerprint = (
-            self._block_ansi_cache.generation,
-            width,
-            *(id(block) for block in self.sink.blocks),
-        )
+        fingerprint = self._prefix_fingerprint(width)
         if fingerprint != self._frozen_ansi_ids:
+            prefix = text[:prefix_len]
             self._frozen_ansi_bounds = _line_boundaries(prefix)
             self._frozen_ansi_ids = fingerprint
+            self._frozen_prefix_text = prefix
         # Splice: the prefix's lines, then the tail's lines. The frozen prefix
         # ends in a newline (Rich re-asserts SGR + a \n after every line), so
         # the tail always begins on a fresh visual line whose start offset
@@ -417,6 +472,59 @@ class ChatPane:
         if len(tail_bounds) == 1:
             return self._frozen_ansi_bounds
         return self._frozen_ansi_bounds + [prefix_len + b for b in tail_bounds[1:]]
+
+    def _prefix_fingerprint(self, width: int) -> tuple[object, ...]:
+        """Identity of the frozen prefix's inputs, for the bounds cache.
+
+        Always carries the block-ANSI cache *generation* (F-41: a cleared and
+        refilled cache can give the same blocks different escapes) and the
+        width. The block set is identified in O(1) by the sink's
+        ``BlockList.version`` (bumped on every mutation, never reused), so a
+        streaming frame no longer builds a tuple of every block id. A sink
+        whose ``blocks`` is a plain list (test stubs) falls back to the
+        per-block ids.
+        """
+        blocks = self.sink.blocks
+        version = getattr(blocks, "version", None)
+        if version is not None:
+            return (self._block_ansi_cache.generation, width, "v", version)
+        return (
+            self._block_ansi_cache.generation,
+            width,
+            *(id(block) for block in blocks),
+        )
+
+    def _frozen_bounds_for(self, prefix: str, width: int) -> list[int]:
+        """Line starts of the frozen *prefix*, cached across frames.
+
+        * **Hit** — same fingerprint (see :meth:`_prefix_fingerprint`) *and*
+          the very same prefix string object as last frame (the render cache
+          returns the identical object while nothing changed): O(1). The
+          string identity alone already guarantees the bounds are right
+          (``str`` is immutable); the fingerprint is belt and braces.
+        * **Append** — the new prefix starts with the previously scanned
+          one (blocks appended): only the new suffix is scanned and its
+          offsets spliced on. This is content-checked (``startswith``), so
+          it is immune to the F-41 stale-id problem.
+        * **Rebuild** — anything else (edit, clear, theme change, resize).
+
+        The append and rebuild paths always produce a *new* list object.
+        """
+        fingerprint = self._prefix_fingerprint(width)
+        old = self._frozen_prefix_text
+        if prefix is old and fingerprint == self._frozen_ansi_ids:
+            return self._frozen_ansi_bounds
+        if old is not None and len(prefix) >= len(old) and prefix.startswith(old):
+            base = len(old)
+            bounds = self._frozen_ansi_bounds + [
+                base + b for b in _line_boundaries(prefix[base:])[1:]
+            ]
+        else:
+            bounds = _line_boundaries(prefix)
+        self._frozen_ansi_bounds = bounds
+        self._frozen_ansi_ids = fingerprint
+        self._frozen_prefix_text = prefix
+        return bounds
 
     def render_chat(self) -> ANSI:
         term_width = shutil.get_terminal_size((80, 24)).columns
@@ -436,21 +544,29 @@ class ChatPane:
             # re-assertion and unstyle the window's top line. The FT cache
             # is already created/cleared alongside the ANSI cache (init,
             # apply_theme, _reset_transcript), so the switch is a
-            # fragment-windowing change in this method + render_chat_split.
-            text, prefix_len = render_chat_split(
-                self.sink, width, self._block_ansi_cache
-            )
-            # T-14 (#171): cache the *full* transcript as one ANSI string.
-            # Rich re-asserts each line's SGR state after every newline, so the
-            # string can later be sliced at any line boundary (see
-            # render._line_boundaries / windowed_slice) without corrupting
-            # styling. ``compute_chat_bounds`` builds the per-line char offsets
-            # incrementally: the frozen prefix's bounds are cached and only the
-            # small in-flight tail is re-scanned, so the full-string bounds
-            # match ``count("\n") + 1`` lines (matching ptk's ``split_lines``).
-            self._full_ansi_text = text
-            self._full_ansi_bounds = self.compute_chat_bounds(text, prefix_len, width)
-            self._total_chat_lines = max(1, len(self._full_ansi_bounds))
+            # fragment-windowing change in this method + render_chat_parts.
+            # It is also not a scaling issue: only the *visible window* is
+            # wrapped in ``ANSI(...)`` below, so the per-frame parse is
+            # O(visible) regardless of transcript length.
+            prefix, tail = render_chat_parts(self.sink, width, self._block_ansi_cache)
+            # T-14 (#171): the transcript is kept as frozen prefix + in-flight
+            # tail. Rich re-asserts each line's SGR state after every newline,
+            # so the text can be sliced at any line boundary (see
+            # render._line_boundaries / windowed_slice_parts) without
+            # corrupting styling. While a turn streams the prefix is the same
+            # cached string object, so its bounds are an O(1) cache hit; only
+            # the small tail is re-scanned, and the two are never joined here
+            # — the per-frame cost is O(tail). Total lines match
+            # ``count("\n") + 1`` of the concatenation (ptk's ``split_lines``).
+            prefix_bounds = self._frozen_bounds_for(prefix, width)
+            tail_bounds = _line_boundaries(tail)
+            self._win_prefix = prefix
+            self._win_prefix_bounds = prefix_bounds
+            self._win_tail = tail
+            self._win_tail_bounds = tail_bounds
+            self._full_text_cache = None
+            self._full_bounds_cache = None
+            self._total_chat_lines = max(1, len(prefix_bounds) + len(tail_bounds) - 1)
             self._chat_content_epoch += 1
             self.sink.dirty = False
             self._last_width = width
@@ -477,8 +593,13 @@ class ChatPane:
         ):
             slice_start = time.perf_counter()
             self._windowed_ansi = ANSI(
-                windowed_slice(
-                    self._full_ansi_text, self._full_ansi_bounds, top, height
+                windowed_slice_parts(
+                    self._win_prefix,
+                    self._win_prefix_bounds,
+                    self._win_tail,
+                    self._win_tail_bounds,
+                    top,
+                    height,
                 )
             )
             slice_ms = (time.perf_counter() - slice_start) * 1e3
@@ -487,7 +608,7 @@ class ChatPane:
             self._window_total = total
             self._window_epoch = self._chat_content_epoch
             _chat_perf_log(
-                full_chars=len(self._full_ansi_text),
+                full_chars=len(self._win_prefix) + len(self._win_tail),
                 total_lines=total,
                 top=top,
                 height=height,

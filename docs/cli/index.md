@@ -4,6 +4,7 @@ One-line behavior summaries live in the
 [README](../../README.md#interactive-cli); this folder holds the deep
 dives.
 
+- [reference.md](reference.md) — every command-line option and slash command (generated)
 - [ui.md](ui.md) — full-screen TUI behavior (composer, pickers, activity line)
 - [rewind.md](rewind.md) — double-Esc rewind and `Ctrl+Z` undo
 - [keybindings.md](keybindings.md) — `[keys]` remaps, reasoning toggle

@@ -14,6 +14,7 @@ prototype's "mutate state, then invalidate" streaming pattern.
 import time
 import asyncio
 import datetime
+import itertools
 from typing import Any
 from dataclasses import dataclass
 from collections.abc import Callable
@@ -61,6 +62,119 @@ from ..tools.subagent_panel import (
     render_subagent_summary,
     render_subagent_panel_frame,
 )
+
+# Global, monotonic source for :class:`BlockList` versions. Shared by every
+# list so a version value is never reused — not even by a *different* list
+# (e.g. after ``sink.blocks`` is reassigned) — which makes ``version``
+# equality a sound O(1) "nothing changed" test for caches keyed on it.
+_BLOCK_VERSIONS = itertools.count(1)
+
+
+class BlockList(list):
+    """The sink's transcript block list, with O(1) change detection.
+
+    A plain ``list`` whose every mutation bumps :attr:`version` (from a
+    process-wide counter, so values are unique across lists). Mutations that
+    can change an *existing* position — ``__setitem__``, ``__delitem__``,
+    ``insert``, ``pop``, ``remove``, ``clear``, ``sort``, ``reverse``,
+    ``*=`` — also bump :attr:`rewrite_version`; pure appends (``append``,
+    ``extend``, ``+=``) leave it alone. So:
+
+    * ``version`` unchanged → the list is exactly as it was;
+    * ``rewrite_version`` unchanged → the old contents are still an
+      unchanged prefix (only appends happened since).
+
+    The chat-pane render path (``render.BlockAnsiCache.render_prefix``) keys
+    its cached frozen-transcript ANSI on these, so a streaming frame no
+    longer walks every block. In-place edits of the transcript replace the
+    block at its index (``blocks[i] = new``), which is a rewrite here.
+    """
+
+    __slots__ = ("version", "rewrite_version")
+
+    def __init__(self, iterable=()) -> None:
+        super().__init__(iterable)
+        self.version = self.rewrite_version = next(_BLOCK_VERSIONS)
+
+    def _appended(self) -> None:
+        self.version = next(_BLOCK_VERSIONS)
+
+    def _rewritten(self) -> None:
+        self.version = self.rewrite_version = next(_BLOCK_VERSIONS)
+
+    # Appends: the existing prefix is untouched.
+    def append(self, item) -> None:
+        try:
+            super().append(item)
+        finally:
+            self._appended()
+
+    def extend(self, items) -> None:
+        try:
+            super().extend(items)
+        finally:
+            self._appended()
+
+    def __iadd__(self, items):
+        try:
+            return super().__iadd__(items)
+        finally:
+            self._appended()
+
+    # Rewrites: anything that may change an existing position.
+    def __setitem__(self, index, value) -> None:
+        try:
+            super().__setitem__(index, value)
+        finally:
+            self._rewritten()
+
+    def __delitem__(self, index) -> None:
+        try:
+            super().__delitem__(index)
+        finally:
+            self._rewritten()
+
+    def __imul__(self, n):
+        try:
+            return super().__imul__(n)
+        finally:
+            self._rewritten()
+
+    def insert(self, index, item) -> None:
+        try:
+            super().insert(index, item)
+        finally:
+            self._rewritten()
+
+    def pop(self, index=-1):
+        try:
+            return super().pop(index)
+        finally:
+            self._rewritten()
+
+    def remove(self, item) -> None:
+        try:
+            super().remove(item)
+        finally:
+            self._rewritten()
+
+    def clear(self) -> None:
+        try:
+            super().clear()
+        finally:
+            self._rewritten()
+
+    def sort(self, *args, **kwargs) -> None:
+        try:
+            super().sort(*args, **kwargs)
+        finally:
+            self._rewritten()
+
+    def reverse(self) -> None:
+        try:
+            super().reverse()
+        finally:
+            self._rewritten()
 
 
 @dataclass
@@ -188,7 +302,7 @@ class FullScreenSink:
         self.show_reasoning_default: bool = show_reasoning
         self._tool_render_registry = ToolRenderRegistry({})
 
-        self.blocks: list[object] = []
+        self.blocks = BlockList()
         # Builds the empty-state welcome screen (set by the app, which owns
         # the version/model/session-list facts); ``None`` = one-line hint.
         self.welcome_provider: Callable[[], object] | None = None
@@ -231,6 +345,17 @@ class FullScreenSink:
         self.tool_detail: str = (
             tool_detail if is_valid_tool_detail(tool_detail) else "full"
         )
+
+    @property
+    def blocks(self) -> BlockList:
+        """Finalized transcript renderables (append-mostly; see BlockList)."""
+        return self._blocks
+
+    @blocks.setter
+    def blocks(self, value) -> None:
+        # Reassignments (filters, snapshot restore, tests) are wrapped so the
+        # render caches can always rely on ``version`` / ``rewrite_version``.
+        self._blocks = value if isinstance(value, BlockList) else BlockList(value)
 
     def set_tool_render_registry(self, registry: ToolRenderRegistry) -> None:
         """Apply the active controller's isolated plugin visual specs."""
