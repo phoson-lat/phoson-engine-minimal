@@ -2,8 +2,24 @@
 
 The PowerShell installer supports Windows PowerShell 5.1 and PowerShell 7 on
 64-bit Windows. Run it as your normal user, not as administrator. Internet
-access is required. It installs the published PyPI package using `uv`; no Git
-or preinstalled Python is required. uv manages Python 3.12 automatically.
+access is required.
+
+By default (`-Method binary`) it installs the **prebuilt standalone CLI** from
+the GitHub release:
+
+1. downloads `phoson-cli-windows-x86_64.zip` and `SHA256SUMS`, and refuses to
+   continue on a checksum mismatch;
+2. unpacks it into `%LOCALAPPDATA%\Phoson\versions\<version>`;
+3. points the directory junction `%LOCALAPPDATA%\Phoson\current` at it (no
+   administrator rights needed);
+4. adds `%LOCALAPPDATA%\Phoson\current\phoson-cli` to your **user** PATH.
+
+No Python, Git or uv is required. `phoson-cli --self-update` installs a newer
+release next to the running one and switches the junction.
+`phoson-cli --uninstall` removes the install and its PATH entry.
+
+When no usable binary exists, it falls back to the PyPI package via `uv`
+(`-Method uv` forces this). The rest of this page describes that mode.
 
 ## From a checkout
 
@@ -36,8 +52,11 @@ not PowerShell. Do not pipe it to `Invoke-Expression`.
 ## Options
 
 ```powershell
-# Pin a published stable version; omit -Version for the latest stable package.
-.\scripts\phoson-installer.ps1 -Version 0.40.0
+# Pin a published stable version; omit -Version for the latest stable release.
+.\scripts\phoson-installer.ps1 -Version 0.58.0
+
+# Install the PyPI package with uv instead of the standalone binary.
+.\scripts\phoson-installer.ps1 -Method uv
 
 # Setup is opt-in; ordinary installation never opens a wizard.
 .\scripts\phoson-installer.ps1 -Setup

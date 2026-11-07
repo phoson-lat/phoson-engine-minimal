@@ -1,7 +1,9 @@
 # Standalone phoson-cli binaries (IMPROVEMENTS.md I-93, issue #93).
 #
-# Builds one PyInstaller onefile binary per OS/arch from the release tag
-# and attaches them to the GitHub release. The version is taken from the
+# Builds one PyInstaller one-folder bundle per OS/arch from the release tag,
+# smoke-tests it, archives it (phoson-cli-<os>-<arch>.tar.gz / .zip) and
+# attaches the archives, a SHA256SUMS file and the installer scripts to the
+# GitHub release. scripts/phoson-installer.{sh,ps1} download these. The version is taken from the
 # tag (``v0.15.0`` → ``0.15.0``) and injected into the bundle
 # (``phoson_cli/_frozen_version.txt``) so `phoson-cli --version` works
 # from the binary even though a bundle ships no package metadata.
@@ -55,6 +57,9 @@ jobs:
             pyinstaller_os: windows
             arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Inside `matrix.include` the key is only a matrix variable; it takes
+    # effect here (macOS Intel queue must not block the release).
+    continue-on-error: ${{ matrix.continue-on-error || false }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,49 +100,82 @@ jobs:
         env:
           PHOSON_VERSION: ${{ steps.version.outputs.version }}
 
-      - name: Inspect output
+      - name: Smoke test the bundle
+        # A bundle that cannot start (missing hidden import, data file, ...)
+        # must fail the release here, not on users' machines.
         shell: bash
-        run: ls -la dist/
+        run: |
+          ls -la dist/phoson-cli/
+          exe=dist/phoson-cli/phoson-cli
+          [[ "${{ matrix.pyinstaller_os }}" == windows ]] && exe="${exe}.exe"
+          "$exe" --version
+          version="${{ steps.version.outputs.version }}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            "$exe" --version | grep -qx "phoson-cli ${version}"
+          fi
+          "$exe" --help >/dev/null
+
+      - name: Archive the bundle
+        # One-folder bundle → one archive per platform. The installers unpack
+        # it once; a onefile binary re-extracted ~65 MB on every launch.
+        shell: bash
+        run: |
+          name="phoson-cli-${{ matrix.pyinstaller_os }}-${{ matrix.arch }}"
+          mkdir -p out
+          if [[ "${{ matrix.pyinstaller_os }}" == windows ]]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path dist/phoson-cli -DestinationPath out/${name}.zip"
+          else
+            tar -czf "out/${name}.tar.gz" -C dist phoson-cli
+          fi
+          ls -la out/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: phoson-cli-${{ matrix.pyinstaller_os }}-${{ matrix.arch }}
-          path: dist/phoson-cli*
+          path: out/*
 
   attach:
     needs: build
-    if: github.event_name == 'release'
+    # Also on a manual re-dispatch with a version (e.g. the macOS Intel build
+    # that missed the release): its archive is added and SHA256SUMS is rebuilt
+    # from every archive the release holds.
+    if: >-
+      always() && (github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''))
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event_name == 'release' && github.ref_name || format('v{0}', github.event.inputs.version) }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true
 
-      - name: Rename to release asset names
-        # download-artifact unpacks each artifact into a dir named after
-        # the artifact (e.g. dist/phoson-cli-linux-x86_64/phoson-cli).
-        # Flatten to the release asset names documented in the README
-        # table; Windows binaries get the .exe they already carry.
+      - name: Collect release archives
         shell: bash
         run: |
           mkdir release
-          for f in dist/*/phoson-cli*; do
-            [[ -f "$f" ]] || continue
-            artifact="$(basename "$(dirname "$f")")"
-            out="release/${artifact}"
-            # Windows binaries keep the .exe extension in the asset name
-            # (see the README table).
-            if [[ "$artifact" == *windows* ]]; then
-              out="${out}.exe"
-            fi
-            cp "$f" "$out"
+          cp dist/phoson-cli-* release/
+          # Archives already on the release (earlier runs) stay covered by
+          # the regenerated SHA256SUMS.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir existing \
+            --pattern 'phoson-cli-*.tar.gz' --pattern 'phoson-cli-*.zip' || true
+          for f in existing/*; do
+            [[ -f "$f" && ! -e "release/$(basename "$f")" ]] && cp "$f" release/
           done
+          (cd release && sha256sum phoson-cli-* > SHA256SUMS && cat SHA256SUMS)
+          # Installer scripts ship with the release, so a script and the
+          # binaries it downloads always come from the same version.
+          cp scripts/phoson-installer.sh scripts/phoson-installer.ps1 \
+             scripts/uninstall.sh scripts/install.sh release/
           ls -la release/
 
-      - name: Upload binaries to the release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/phoson-cli-*
+      - name: Upload to the release
+        shell: bash
+        run: gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber

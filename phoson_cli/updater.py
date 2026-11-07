@@ -366,8 +366,9 @@ def manual_hint(mode: str) -> str:
     """How a human can update themselves, per install mode."""
     if mode == InstallMode.FROZEN:
         return (
-            "re-download the latest phoson-cli binary from the GitHub "
-            "Releases page and replace the current executable"
+            "curl -fsSL https://phoson.lat/install | sh  (Windows: download and "
+            "run https://phoson.lat/install.ps1), or unpack the latest release "
+            "archive from the GitHub Releases page"
         )
     if mode == InstallMode.UV_TOOL:
         return f"uv tool upgrade {PACKAGE}"
@@ -438,6 +439,15 @@ async def perform_self_update(
     if not is_update_available(current, latest):
         return UpdateResult(f"You're up to date (v{current}).")
 
+    if mode == InstallMode.FROZEN:
+        from phoson_cli.binary_install import find_binary_install
+
+        install = find_binary_install()
+        if install is not None:
+            return await _self_update_binary(
+                install, current, latest, assume_yes, confirm, progress
+            )
+
     command = upgrade_command(mode)
     if command is None:
         reason = {
@@ -496,6 +506,40 @@ async def perform_self_update(
             "warn",
         )
     return UpdateResult(f"Updated to v{installed} — restart the CLI to use it.")
+
+
+async def _self_update_binary(
+    install,
+    current: str,
+    latest: str,
+    assume_yes: bool,
+    confirm: Callable[[str], Awaitable[bool]] | None,
+    progress: Callable[[str], None],
+) -> UpdateResult:
+    """Update an installer-managed standalone binary in place.
+
+    The new release bundle is downloaded, verified against ``SHA256SUMS``,
+    unpacked next to the running version and swapped in as ``current``; the
+    running process keeps its own (old) version directory until it exits.
+    """
+    from phoson_cli.binary_install import BinaryInstallError, update_binary_install
+
+    ask = confirm if confirm is not None else _update_confirm
+    if not assume_yes and not await ask(f"Update phoson-cli {current} → {latest}?"):
+        return UpdateResult("Update cancelled.")
+    progress(f"Downloading phoson-cli v{latest} ({install.platform})")
+    try:
+        await asyncio.to_thread(update_binary_install, install, latest)
+    except BinaryInstallError as exc:
+        return UpdateResult(f"Update failed: {exc}", "error", 1)
+    except Exception as exc:  # noqa: BLE001 - network/disk failures
+        return UpdateResult(
+            f"Update failed: {type(exc).__name__}: {exc}\n"
+            f"Try manually: {manual_hint(InstallMode.FROZEN)}",
+            "error",
+            1,
+        )
+    return UpdateResult(f"Updated to v{latest} — restart the CLI to use it.")
 
 
 def print_update_result(console, result: str) -> None:

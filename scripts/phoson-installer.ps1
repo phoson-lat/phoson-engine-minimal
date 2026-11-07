@@ -1,22 +1,35 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-Install Phoson CLI for the current Windows user using uv and PyPI.
+Install Phoson CLI for the current Windows user.
 .DESCRIPTION
-No administrator rights, Git, or preinstalled Python required. Downloads uv
-from https://astral.sh if necessary; uv manages Python 3.12. Requires internet.
-Does not change PowerShell profiles or persistent execution policy.
+Default (-Method binary): the prebuilt standalone bundle from the GitHub
+release, verified against SHA256SUMS and unpacked into
+%LOCALAPPDATA%\Phoson\versions\<version>; a directory junction
+%LOCALAPPDATA%\Phoson\current points at it and current\phoson-cli is added
+to the user PATH. No Python or uv needed. `phoson-cli --self-update` and
+`phoson-cli --uninstall` manage this layout.
+Fallback (-Method uv, or automatically when no usable binary exists): the
+released package from PyPI via uv (downloaded from https://astral.sh if
+needed; uv manages Python 3.12).
+No administrator rights required. Does not change PowerShell profiles or
+persistent execution policy. PHOSON_RELEASE_BASE / PHOSON_INSTALL_DIR
+override the release location and install root (testing, mirrors).
 .EXAMPLE
 .\phoson-installer.ps1
 .EXAMPLE
 .\phoson-installer.ps1 -Version 0.40.0 -CI
 .EXAMPLE
 .\phoson-installer.ps1 -Setup
+.EXAMPLE
+.\phoson-installer.ps1 -Method uv
 #>
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $Version,
+    [ValidateSet('binary', 'uv')]
+    [string] $Method = 'binary',
     [switch] $CI,
     [switch] $SkipSetup,
     [switch] $Setup,
@@ -143,18 +156,175 @@ function Install-PhosonCli {
     if ($Configure) { Invoke-PhosonNative $cli @('--setup') }
 }
 
+function Get-PhosonReleaseBase {
+    param([string] $PackageVersion)
+    $root = $env:PHOSON_RELEASE_BASE
+    if (-not $root) { $root = 'https://github.com/phoson-lat/phoson-engine-minimal/releases' }
+    if ($root -match '^https?://') {
+        if ($PackageVersion) { return "$root/download/v$PackageVersion" }
+        return "$root/latest/download"
+    }
+    # A local directory laid out like a release (tests, offline mirrors).
+    if ($PackageVersion) { return (Join-Path $root "download\v$PackageVersion") }
+    return (Join-Path $root 'latest\download')
+}
+
+function Get-PhosonAsset {
+    param([string] $Base, [string] $Name, [string] $Destination)
+    if ($Base -match '^https?://') {
+        $oldProtocol = [Net.ServicePointManager]::SecurityProtocol
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = $oldProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -OutFile $Destination -ErrorAction Stop
+        }
+        finally { [Net.ServicePointManager]::SecurityProtocol = $oldProtocol }
+    }
+    else {
+        Copy-Item -LiteralPath (Join-Path $Base $Name) -Destination $Destination -ErrorAction Stop
+    }
+}
+
+function Install-PhosonBinary {
+    # Returns $true when installed, $false when no usable binary exists (the
+    # caller may fall back to uv). Integrity failures throw: never fall back
+    # silently from a checksum mismatch.
+    param([string] $PackageVersion, [switch] $Configure)
+    Assert-PhosonWindows
+    $asset = 'phoson-cli-windows-x86_64.zip'
+    $root = $env:PHOSON_INSTALL_DIR
+    if (-not $root) { $root = Join-Path $env:LOCALAPPDATA 'Phoson' }
+    $base = Get-PhosonReleaseBase $PackageVersion
+    $work = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $work -ErrorAction Stop
+    try {
+        $zip = Join-Path $work $asset
+        $sums = Join-Path $work 'SHA256SUMS'
+        try {
+            Get-PhosonAsset $base $asset $zip
+            Get-PhosonAsset $base 'SHA256SUMS' $sums
+        }
+        catch {
+            Write-Warning "Could not download $asset from ${base}: $($_.Exception.Message)"
+            return $false
+        }
+        $expected = $null
+        foreach ($line in Get-Content -LiteralPath $sums) {
+            $parts = -split $line
+            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $asset) {
+                $expected = $parts[0].ToLowerInvariant()
+            }
+        }
+        if (-not $expected) { throw "$asset is not listed in SHA256SUMS; refusing to install." }
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            throw "Checksum mismatch for $asset (expected $expected, got $actual)."
+        }
+        Write-Host 'Checksum verified'
+
+        $versions = Join-Path $root 'versions'
+        $null = New-Item -ItemType Directory -Force -Path $versions
+        $staging = Join-Path $versions ('.staging-' + [Guid]::NewGuid().ToString('N'))
+        Expand-Archive -LiteralPath $zip -DestinationPath $staging -Force
+        $stagedExe = Join-Path $staging 'phoson-cli\phoson-cli.exe'
+        if (-not (Test-Path -LiteralPath $stagedExe -PathType Leaf)) {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+            throw 'The archive does not contain a phoson-cli bundle.'
+        }
+        # Smoke test before switching: a bundle that cannot start here must not
+        # replace a working install.
+        try { $reported = (Invoke-PhosonNative $stagedExe @('--version') | Out-String).Trim() }
+        catch {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+            Write-Warning 'The prebuilt binary does not run on this system.'
+            return $false
+        }
+        if ($reported -notmatch '^phoson-cli (\d+\.\d+\.\d+)') {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+            throw "Unexpected CLI version output: $reported"
+        }
+        $installed = $Matches[1]
+        if ($PackageVersion -and $installed -ne $PackageVersion) {
+            Remove-Item -LiteralPath $staging -Recurse -Force
+            throw "Expected phoson-cli $PackageVersion, received: $reported"
+        }
+
+        $final = Join-Path $versions $installed
+        if (Test-Path -LiteralPath $final) { Remove-Item -LiteralPath $final -Recurse -Force }
+        Move-Item -LiteralPath $staging -Destination $final
+        $current = Join-Path $root 'current'
+        # Directory.Delete on a junction removes the link, not its target.
+        if (Test-Path -LiteralPath $current) { [IO.Directory]::Delete($current) }
+        $null = New-Item -ItemType Junction -Path $current -Target $final
+        $pathEntry = Join-Path $current 'phoson-cli'
+        Add-PhosonUserPath $pathEntry
+
+        $receipt = [ordered]@{
+            method     = 'binary'
+            version    = $installed
+            platform   = 'windows-x86_64'
+            path_entry = $pathEntry
+        } | ConvertTo-Json
+        # No BOM: PowerShell 5.1's -Encoding UTF8 would add one.
+        [IO.File]::WriteAllText((Join-Path $root 'install-receipt.json'), $receipt, (New-Object Text.UTF8Encoding $false))
+
+        # Keep the new version and the one it replaced.
+        Get-ChildItem -LiteralPath $versions -Directory |
+            Where-Object { $_.Name -notlike '.staging-*' -and $_.FullName -ne $final } |
+            Sort-Object LastWriteTime -Descending | Select-Object -Skip 1 |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
+        $uv = Find-PhosonUv
+        if ($uv) {
+            $tools = @(Invoke-PhosonNative $uv @('tool', 'list')) -join "`n"
+            if ($tools -match '(?m)^phoson-engine-minimal ') {
+                Write-Warning 'Removing the previous uv-tool installation (settings are kept).'
+                $null = Invoke-PhosonNative $uv @('tool', 'uninstall', 'phoson-engine-minimal')
+            }
+        }
+
+        $cli = Join-Path $final 'phoson-cli\phoson-cli.exe'
+        Write-Host "phoson-cli $installed installed (standalone binary) at $root"
+        Write-Host 'Open a new terminal, then run: phoson-cli'
+        Write-Host 'Configure later: phoson-cli --setup'
+        Write-Host 'Update: phoson-cli --self-update'
+        Write-Host 'Uninstall: phoson-cli --uninstall (settings are retained)'
+        if ($Configure) { Invoke-PhosonNative $cli @('--setup') | Out-Host }
+        return $true
+    }
+    finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-PhosonInstall {
+    param([string] $Method, [switch] $MethodExplicit, [string] $PackageVersion, [switch] $Configure)
+    if ($Method -eq 'uv') {
+        Install-PhosonCli -PackageVersion $PackageVersion -Configure:$Configure
+        return
+    }
+    # Only the last pipeline value is the function's verdict.
+    $ok = @(Install-PhosonBinary -PackageVersion $PackageVersion -Configure:$Configure)[-1]
+    if ($ok -eq $true) { return }
+    if ($MethodExplicit) {
+        throw 'Binary installation failed; re-run with -Method uv to install from PyPI.'
+    }
+    Write-Warning 'Falling back to the PyPI package (uv).'
+    Install-PhosonCli -PackageVersion $PackageVersion -Configure:$Configure
+}
+
 # Dot-sourcing defines helpers for tests without installing anything.
 if ($MyInvocation.InvocationName -ne '.') {
     if ($Help) {
-        Write-Output 'Usage: .\phoson-installer.ps1 [-Version X.Y.Z] [-Setup] [-CI] [-SkipSetup] [-Help]'
-        Write-Output 'Installs for the current Windows user via uv and PyPI. Setup is opt-in.'
+        Write-Output 'Usage: .\phoson-installer.ps1 [-Version X.Y.Z] [-Method binary|uv] [-Setup] [-CI] [-SkipSetup] [-Help]'
+        Write-Output 'Installs for the current Windows user: the standalone binary by default, or via uv and PyPI. Setup is opt-in.'
         Write-Output '-CI and -SkipSetup suppress setup even when -Setup is specified.'
     }
     else {
         $previousPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Stop'
         try {
-            Install-PhosonCli -PackageVersion $Version -Configure:($Setup -and -not $CI -and -not $SkipSetup)
+            Invoke-PhosonInstall -Method $Method -MethodExplicit:($PSBoundParameters.ContainsKey('Method')) `
+                -PackageVersion $Version -Configure:($Setup -and -not $CI -and -not $SkipSetup)
         }
         finally { $ErrorActionPreference = $previousPreference }
     }

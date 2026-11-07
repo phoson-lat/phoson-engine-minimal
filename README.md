@@ -296,43 +296,68 @@ uv run phoson-cli --setup
 ## 📥 Installation
 
 ```bash
-# Clone the repository
+# Linux / macOS
+curl -fsSL https://phoson.lat/install | sh
+```
+
+```powershell
+# Windows (PowerShell, as your normal user): download, review, run.
+# Details and options: docs/windows-install.md
+Invoke-WebRequest -UseBasicParsing -Uri 'https://phoson.lat/install.ps1' -OutFile .\phoson-installer.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\phoson-installer.ps1
+```
+
+The installer downloads the **prebuilt standalone CLI** for your platform from
+the GitHub release, verifies it against the release's `SHA256SUMS` and installs
+it for your user. No Python, `uv` or administrator rights are needed, and it
+starts in about 0.2 s. It falls back to the PyPI package via `uv` only when no
+prebuilt binary fits your system (for example Alpine/musl, or an older glibc
+than the build machine). Options:
+
+```bash
+curl -fsSL https://phoson.lat/install | sh -s -- --version 0.58.0   # pin a release
+curl -fsSL https://phoson.lat/install | sh -s -- --method uv        # PyPI via uv
+phoson-cli --self-update     # verified in-place update (binary or uv install)
+phoson-cli --uninstall       # or: curl -fsSL https://phoson.lat/uninstall | sh
+```
+
+Binary installs live in `~/.local/share/phoson/versions/<version>/`, with
+`~/.local/bin/phoson-cli` linked to the current one. On Windows they live in
+`%LOCALAPPDATA%\Phoson`, with `current\phoson-cli` on the user PATH. An update
+unpacks the new version next to the running one and switches over atomically.
+Your configuration in `~/.phoson` is never touched. Community plugins still
+need [`uv`](https://docs.astral.sh/uv/) on PATH to install (see
+[docs/plugins.md](docs/plugins.md)).
+
+### Release assets
+
+Each [GitHub release](https://github.com/phoson-lat/phoson-engine-minimal/releases)
+carries one-folder bundles (unpacked once at install time, so there is no
+per-launch extraction), a `SHA256SUMS` file and the installer scripts:
+
+| Platform | Asset |
+|----------|-------|
+| Linux x86_64 | `phoson-cli-linux-x86_64.tar.gz` |
+| Linux ARM64 | `phoson-cli-linux-arm64.tar.gz` |
+| macOS Apple Silicon | `phoson-cli-darwin-arm64.tar.gz` |
+| macOS Intel | `phoson-cli-darwin-x86_64.tar.gz` |
+| Windows x86_64 | `phoson-cli-windows-x86_64.zip` |
+
+To install by hand, unpack the archive and run `phoson-cli/phoson-cli`
+(`phoson-cli\phoson-cli.exe` on Windows) from the extracted folder. Keep the
+whole folder together, because the launcher loads its libraries from
+`_internal/`.
+
+### From source
+
+```bash
 git clone https://github.com/phoson-lat/phoson-engine-minimal.git
 cd phoson-engine-minimal
-
-# Install dependencies
 uv sync --dev --locked
-
-# Install git hooks
 uv run pre-commit install --install-hooks
 uv run pre-commit install --hook-type commit-msg
 uv run pre-commit install --hook-type pre-push
 ```
-
-### Standalone binaries (no Python required)
-
-Prebuilt `phoson-cli` binaries are attached to each
-[GitHub release](https://github.com/phoson-lat/phoson-engine-minimal/releases)
-— no Python interpreter or `uv`/`pip` needed (issue #93):
-
-| Platform | Asset |
-|----------|-------|
-| Linux x86_64 | `phoson-cli-linux-x86_64` |
-| Linux ARM64 | `phoson-cli-linux-arm64` |
-| macOS Apple Silicon | `phoson-cli-darwin-arm64` |
-| macOS Intel | `phoson-cli-darwin-x86_64` |
-| Windows x86_64 | `phoson-cli-windows-x86_64.exe` |
-
-Download the asset for your platform, make it executable (Unix), and run:
-
-```bash
-chmod +x phoson-cli
-./phoson-cli --setup     # configure credentials, then just: phoson-cli
-```
-
-`--self-update` inside a binary points back to the Releases page
-(the binary is a one-file bundle with no package metadata to upgrade).
-
 
 ---
 
