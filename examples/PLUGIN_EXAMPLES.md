@@ -39,6 +39,19 @@ A published plugin declares exactly one entry point in the existing
 community-example = "phoson_plugin_community_example:create_plugin"
 ```
 
+and ships a `phoson-plugin.toml` manifest next to its package code
+(`src/phoson_plugin_community_example/phoson-plugin.toml`). Its `id` matches
+the entry point name and `Plugin.name`. It declares what the plugin provides
+and which capabilities it uses, and Phoson shows that before installing. Check
+it with:
+
+```bash
+phoson-cli plugin validate ./examples/complete_cli_plugin --load
+```
+
+To start a new plugin from a template, run `phoson-cli plugin new <id>`. See
+`docs/research/plugin-manifest-spec.md` for the manifest format.
+
 Plugins execute Python with the same permissions as `phoson-cli`; only install
 sources you trust. Pin Git sources to a tag or commit, for example:
 
