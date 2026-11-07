@@ -22,6 +22,7 @@ from phoson_agent import (
     AgentEvent,
     AgentDoneEvent,
     AgentErrorEvent,
+    AgentRetryEvent,
     AgentStartEvent,
     AgentTokenEvent,
     AgentStepDoneEvent,
@@ -43,6 +44,7 @@ from ..formatting import (
     history_blocks,
     render_done_line,
     render_user_turn,
+    retry_notice_text,
     render_error_notice,
     render_tool_done_line,
     render_streaming_panel,
@@ -749,6 +751,21 @@ class FullScreenSink:
                 line = render_done_line(event, self.theme)
                 if line is not None:
                     self.blocks.append(line)
+
+            case AgentRetryEvent():
+                # The engine discarded a turn whose stream broke mid-response
+                # and is re-requesting it: drop the partial live text so the
+                # retried answer does not render after a dangling fragment.
+                turn = self.current_turn
+                if turn is not None:
+                    turn.content = ""
+                    turn.reasoning = ""
+                    turn.reasoning_since = None
+                    turn.thinking_since = None
+                    turn.composing_tool = ""
+                self.blocks.append(
+                    render_notice("warn", retry_notice_text(event), self.theme)
+                )
 
             case AgentErrorEvent():
                 self.protect_persistence()

@@ -166,7 +166,7 @@ def resolve_backend() -> tuple[str, str]:
     return "duckduckgo", ""
 
 
-@tool
+@tool(parallel_safe=True)
 async def web_search(query: str) -> str:
     """Search the web and return top 5 results with titles, URLs and snippets."""
     backend, _note = resolve_backend()

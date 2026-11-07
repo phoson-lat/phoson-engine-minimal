@@ -28,6 +28,11 @@ ToolReturn = str | dict[str, Any] | ImageToolResult
 ToolHandler = Callable[[JsonObject, "AgentContext"], ToolReturn | Awaitable[ToolReturn]]
 
 
+# ``AgentTool.metadata`` key marking a tool safe to run concurrently with
+# other parallel-safe calls of the same LLM turn (see ``AgentTool.parallel_safe``).
+PARALLEL_SAFE_KEY = "parallel_safe"
+
+
 @dataclass
 class AgentTool:
     """Definition of an agent tool.
@@ -43,6 +48,19 @@ class AgentTool:
     parameters: JsonSchema
     handler: ToolHandler
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def parallel_safe(self) -> bool:
+        """Whether calls to this tool may run concurrently with each other.
+
+        Opt-in via ``metadata[PARALLEL_SAFE_KEY] = True`` (or
+        ``@tool(parallel_safe=True)``). Only tools with no side effects that
+        another call in the same turn could observe — reads, searches,
+        fetches — should set it. Consecutive parallel-safe calls in one LLM
+        turn have their handlers run concurrently (sync handlers in a worker
+        thread); results are still recorded in the original call order.
+        """
+        return self.metadata.get(PARALLEL_SAFE_KEY) is True
 
 
 @dataclass
@@ -210,6 +228,31 @@ class AgentErrorEvent(AgentEvent):
     message: str = ""
     code: str | None = None
     retryable: bool = False
+
+
+@dataclass(kw_only=True)
+class AgentRetryEvent(AgentEvent):
+    """Event emitted when the engine discards a failed LLM turn and retries it.
+
+    Sent when the provider stream failed with a *retryable* error after it
+    had already produced visible output (tokens, reasoning or tool-call
+    deltas) — the case a pre-commit retry wrapper such as
+    :class:`phoson_llm.retry.RetryingChat` cannot recover. The partial
+    output of that turn never reached the history; front ends should
+    discard (or mark as abandoned) whatever they rendered for it since the
+    last tool result, then render the retried turn as usual.
+
+    Attributes:
+        attempt: 1-indexed retry number for this iteration.
+        max_attempts: Retry budget per iteration (``max_stream_retries``).
+        reason: The provider error message that triggered the retry.
+        code: The provider error code, when known.
+    """
+
+    attempt: int = 1
+    max_attempts: int = 1
+    reason: str = ""
+    code: str | None = None
 
 
 @dataclass(kw_only=True)

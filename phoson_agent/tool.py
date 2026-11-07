@@ -19,7 +19,7 @@ from typing import (
 )
 from collections.abc import Callable
 
-from phoson_agent.models import AgentTool
+from phoson_agent.models import PARALLEL_SAFE_KEY, AgentTool
 
 _TYPE_MAP: dict[type, str] = {
     str: "string",
@@ -140,14 +140,24 @@ def tool(_fn: Callable[..., Any]) -> AgentTool: ...
 def tool(
     *,
     inject: list[str] | None = None,
+    parallel_safe: bool = False,
 ) -> Callable[[Callable[..., Any]], AgentTool]: ...
 def tool(
     _fn: Callable[..., Any] | None = None,
     *,
     inject: list[str] | None = None,
+    parallel_safe: bool = False,
 ) -> AgentTool | Callable[[Callable[..., Any]], AgentTool]:
     """
     Decorator to register a function as an agent tool.
+
+    Args:
+        inject: Parameter names filled from the :class:`AgentContext`
+            instead of the model's arguments.
+        parallel_safe: Mark the tool as free of side effects another call
+            in the same turn could observe (reads, searches). Consecutive
+            parallel-safe calls run concurrently; see
+            :attr:`AgentTool.parallel_safe`.
     """
 
     def decorator(fn: Callable[..., Any]) -> AgentTool:
@@ -206,6 +216,7 @@ def tool(
             description=description,
             parameters=parameters,
             handler=final_handler,
+            metadata={PARALLEL_SAFE_KEY: True} if parallel_safe else {},
         )
 
     if _fn is not None:

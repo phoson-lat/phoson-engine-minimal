@@ -976,3 +976,23 @@ def test_on_session_title_repaints_without_a_notice() -> None:
     assert ticks == [1]  # invalidated (header repaints)
     assert sink.dirty is True
     assert len(sink.blocks) == blocks  # nothing visible added
+
+
+def test_retry_event_discards_partial_text_and_adds_notice() -> None:
+    from phoson_agent import AgentRetryEvent, AgentStartEvent, AgentTokenEvent
+
+    sink, _ = _make_sink()
+    sink.on_event(AgentStartEvent(model="m", message_count=1, max_iterations=5))
+    sink.on_event(AgentTokenEvent(content="partial ans"))
+    assert sink.current_turn is not None
+    assert sink.current_turn.content == "partial ans"
+    blocks_before = len(sink.blocks)
+
+    sink.on_event(
+        AgentRetryEvent(attempt=1, max_attempts=1, reason="overloaded", code="x")
+    )
+
+    assert sink.current_turn.content == ""
+    assert len(sink.blocks) == blocks_before + 1
+    notice = sink.blocks[-1].plain
+    assert "overloaded" in notice and "retrying (1/1)" in notice

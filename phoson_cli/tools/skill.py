@@ -46,7 +46,7 @@ def _skill(name: str) -> str:
     return load_skill_body(found)
 
 
-@tool
+@tool(parallel_safe=True)
 def skill(name: str) -> str:
     """Load a skill's full instructions by name.
 

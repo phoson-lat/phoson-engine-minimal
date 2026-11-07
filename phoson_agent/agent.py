@@ -128,6 +128,19 @@ class AgentEngine:
             unchanged: ``config.reasoning_effort`` is used for every
             iteration, so a user's explicit ``/reasoning-effort`` is always
             respected.
+        max_stream_retries: How many times one iteration may be re-requested
+            after the provider stream fails with a *retryable* error once
+            visible output was already streamed (a connection drop or an
+            ``overloaded`` error mid-response). The partial turn is
+            discarded and an :class:`AgentRetryEvent` tells front ends to
+            drop what they rendered. ``0`` disables it. Failures before any
+            output are left to :class:`phoson_llm.retry.RetryingChat`.
+        stream_retry_delay: Base delay in seconds before such a retry
+            (multiplied by the retry number).
+
+    The ``tools`` and ``middlewares`` lists are copied at construction:
+    plugin contributions are added to the engine's own lists, never to the
+    caller's, so one list can safely seed several engines.
     """
 
     chat: BaseLLMChat
@@ -139,6 +152,8 @@ class AgentEngine:
     max_iterations: int = 12
     tool_budget_tokens: int | None = field(default=None, repr=False)
     effort_scheduler: EffortScheduler | None = field(default=None, repr=False)
+    max_stream_retries: int = 1
+    stream_retry_delay: float = 1.0
 
     # Internal state
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
@@ -159,6 +174,10 @@ class AgentEngine:
         explicitly named. Subclasses and test fixtures can call it directly
         without relying on dataclass construction mechanics.
         """
+        # Own copies: plugins (and the discovery meta-tool) are appended
+        # below, and must never leak into a list the caller shares.
+        self.tools = list(self.tools)
+        self.middlewares = list(self.middlewares)
         self._constructor_tool_names = {t.name for t in self.tools}
         self._loaded_plugins = []
         for plugin_spec in self.plugins:
@@ -210,6 +229,8 @@ class AgentEngine:
             tool_runner=self._tool_runner,
             prepare_event=self._prepare_event,
             phoson_weight=self.phoson_weight,
+            max_stream_retries=self.max_stream_retries,
+            stream_retry_delay=self.stream_retry_delay,
         )
         self._setup_tool_discovery()
 
@@ -406,8 +427,18 @@ class AgentEngine:
     # ── Middleware orchestration ────────────────────────────────────────
 
     async def _notify_middlewares(self, event: AgentEvent) -> None:
+        # ``on_agent_event`` is observation only: a failing observer (metrics,
+        # tracing, UI bridge) is logged and skipped, never allowed to abort
+        # the run mid-tool and leave the history half-written.
         for middleware in self.middlewares:
-            await middleware.on_agent_event(event)
+            try:
+                await middleware.on_agent_event(event)
+            except Exception:  # noqa: BLE001 - observers must not kill the run
+                logger.exception(
+                    "%s.on_agent_event failed on %s (ignored)",
+                    type(middleware).__name__,
+                    type(event).__name__,
+                )
 
     async def _prepare_event(self, event: AgentEvent) -> AgentEvent:
         await self._notify_middlewares(event)
@@ -521,7 +552,19 @@ class AgentEngine:
                 iteration_config = replace(config, reasoning_effort=effort)
 
             tool_error_this_iteration = False
-            history = await self._apply_before_llm(history, iteration_config)
+            try:
+                history = await self._apply_before_llm(history, iteration_config)
+            except Exception as exc:  # noqa: BLE001 - end the run cleanly
+                logger.error("on_before_llm middleware raised: %r", exc)
+                yield await self._prepare_event(
+                    AgentErrorEvent(
+                        message=f"Middleware error before LLM call: "
+                        f"{type(exc).__name__}: {exc}",
+                        code="middleware_error",
+                        retryable=False,
+                    )
+                )
+                return
             self._history = history
 
             iteration_done = False

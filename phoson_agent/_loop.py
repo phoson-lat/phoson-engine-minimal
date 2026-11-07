@@ -17,6 +17,8 @@ loop with a :class:`ToolRunner`.
 """
 
 import time
+import asyncio
+import logging
 import datetime
 from collections.abc import Callable, AsyncIterator
 
@@ -39,11 +41,13 @@ from phoson_agent.models import (
     RunStep,
     AgentEvent,
     AgentErrorEvent,
+    AgentRetryEvent,
     AgentTokenEvent,
     AgentStepDoneEvent,
     AgentReasoningEvent,
     AgentToolComposingEvent,
 )
+from phoson_llm.exceptions import PhosonProviderError
 from phoson_agent._internals import (
     IterationCost,
     IterationFinal,
@@ -63,6 +67,8 @@ from phoson_agent._tool_runner import ToolRunner, PrepareEventFn
 # hundreds of deltas — without this cap every delta would invalidate the
 # TUI.
 _COMPOSING_THROTTLE_S = 0.25
+
+logger = logging.getLogger(__name__)
 
 
 class _ComposingTracker:
@@ -120,10 +126,14 @@ class AgentLoop:
         tool_runner: ToolRunner,
         prepare_event: PrepareEventFn,
         phoson_weight: float,
+        max_stream_retries: int = 0,
+        stream_retry_delay: float = 1.0,
     ) -> None:
         self._tool_runner = tool_runner
         self._prepare_event = prepare_event
         self._phoson_weight = phoson_weight
+        self._max_stream_retries = max(0, max_stream_retries)
+        self._stream_retry_delay = max(0.0, stream_retry_delay)
 
     async def run_iteration(
         self,
@@ -140,23 +150,52 @@ class AgentLoop:
         ``IterationFailed`` sentinels — see ``_internals.py`` for the
         contract. Public events are forwarded as-is.
         """
-        llm_started = now_utc()
-        outcome = LLMStepOutcome()
+        retries = 0
+        while True:
+            llm_started = now_utc()
+            outcome = LLMStepOutcome()
 
-        async for agent_event in self._consume_llm_stream(
-            llm_call=llm_call,
-            history=history,
-            config=config,
-            outcome=outcome,
-        ):
-            yield agent_event
+            async for agent_event in self._consume_llm_stream(
+                llm_call=llm_call,
+                history=history,
+                config=config,
+                outcome=outcome,
+            ):
+                yield agent_event
 
-        llm_ended = now_utc()
-        llm_step = self._build_llm_step(outcome, config, llm_started, llm_ended)
-        steps.append(llm_step)
+            llm_ended = now_utc()
+            llm_step = self._build_llm_step(outcome, config, llm_started, llm_ended)
+            steps.append(llm_step)
 
-        yield IterationCost(cost_usd=llm_step.cost_usd, credits=llm_step.credits)
-        yield await self._prepare_event(AgentStepDoneEvent(step=llm_step))
+            yield IterationCost(cost_usd=llm_step.cost_usd, credits=llm_step.credits)
+            yield await self._prepare_event(AgentStepDoneEvent(step=llm_step))
+
+            # Mid-stream failure: a retryable provider error after visible
+            # output was already streamed. A pre-commit retry wrapper
+            # (RetryingChat) cannot replay it, but nothing of this turn has
+            # reached the history yet — so the whole turn can be discarded
+            # and re-requested. Front ends drop the partial output on
+            # AgentRetryEvent.
+            error = outcome.error_event
+            if (
+                error is not None
+                and error.retryable
+                and outcome.emitted_output
+                and retries < self._max_stream_retries
+            ):
+                retries += 1
+                yield await self._prepare_event(
+                    AgentRetryEvent(
+                        attempt=retries,
+                        max_attempts=self._max_stream_retries,
+                        reason=error.message,
+                        code=error.code,
+                    )
+                )
+                if self._stream_retry_delay:
+                    await asyncio.sleep(self._stream_retry_delay * retries)
+                continue
+            break
 
         if outcome.error_event is not None:
             yield IterationFailed(
@@ -234,6 +273,39 @@ class AgentLoop:
         get live feedback while the model composes the call (I-128).
         """
         composing_trackers: dict[int, _ComposingTracker] = {}
+        try:
+            async for agent_event in self._demux_llm_stream(
+                llm_call, history, config, outcome, composing_trackers
+            ):
+                outcome.emitted_output = True
+                yield agent_event
+        except Exception as exc:  # noqa: BLE001 - adapters/middlewares must not kill the run
+            # The BaseLLMChat contract is to report failures as ErrorEvent,
+            # but an adapter bug or a ``wrap_llm_call`` middleware may still
+            # raise. Surface it as this turn's error so the run ends with a
+            # proper AgentErrorEvent instead of an exception escaping
+            # ``stream()``. CancelledError is a BaseException and passes.
+            logger.error("LLM stream raised: %r", exc)
+            if isinstance(exc, PhosonProviderError):
+                outcome.error_event = ErrorEvent(
+                    message=str(exc), code=exc.code, retryable=exc.retryable
+                )
+            else:
+                outcome.error_event = ErrorEvent(
+                    message=f"{type(exc).__name__}: {exc}",
+                    code="llm_exception",
+                    retryable=False,
+                )
+
+    async def _demux_llm_stream(
+        self,
+        llm_call: LLMCallNext,
+        history: list[Message],
+        config: ModelConfig,
+        outcome: LLMStepOutcome,
+        composing_trackers: "dict[int, _ComposingTracker]",
+    ) -> AsyncIterator[AgentEvent]:
+        """Fold LLM events into ``outcome``; yield only user-visible ones."""
         async for event in llm_call(history, config):
             if isinstance(event, TokenEvent):
                 yield await self._prepare_event(AgentTokenEvent(content=event.content))
@@ -257,6 +329,9 @@ class AgentLoop:
                         )
                     )
             elif isinstance(event, ToolCallEvent):
+                # Not yielded, but it means this turn produced output that a
+                # retry would have to replace.
+                outcome.emitted_output = True
                 outcome.tool_calls.append(event)
             elif isinstance(event, UsageEvent):
                 outcome.usage_event = event

@@ -714,7 +714,7 @@ def _glob(pattern: str, path: str = ".") -> str:
 # ─────────────────────────── tool wrappers ───────────────────────────
 
 
-@tool
+@tool(parallel_safe=True)
 def grep(
     pattern: str,
     path: str = ".",
@@ -753,7 +753,7 @@ def grep(
     )
 
 
-@tool
+@tool(parallel_safe=True)
 def glob(pattern: str, path: str = ".") -> str:
     """Find files by name pattern (native, .gitignore-aware).
 

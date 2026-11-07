@@ -39,6 +39,18 @@ agent = AgentEngine(
 | `context`        | `AgentContext`        | `AgentContext()` | Agent context for tool execution     |
 | `phoson_weight`  | `float`               | `1.0`          | Cost multiplier for credits            |
 | `max_iterations` | `int`                 | `12`           | Max LLM->tool cycles                   |
+| `max_stream_retries` | `int`             | `1`            | Re-runs of a turn whose stream failed with a retryable error *after* output was streamed (emits `AgentRetryEvent`); `0` disables |
+| `stream_retry_delay` | `float`           | `1.0`          | Base delay (s) before such a retry, × retry number |
+
+The `tools` and `middlewares` lists are copied at construction — plugin
+contributions never leak into the caller's lists.
+
+Exceptions raised by middleware hooks or by the LLM adapter never escape
+`stream()`: a failing `on_before_tool`/`on_after_tool` becomes an error tool
+result (`middleware_error`), a failing `on_before_llm` or adapter ends the run
+with an `AgentErrorEvent` (`middleware_error` / `llm_exception`), and a failing
+`on_agent_event` observer is logged and ignored. Every `tool_use` always gets
+its `tool_result`, even when the consumer stops iterating mid-tool.
 
 **Methods:**
 
@@ -59,6 +71,7 @@ agent = AgentEngine(
 7. `AgentStepDoneEvent` — Step completed (LLM or tool)
 8. `AgentDoneEvent` — Agent finished (contains result)
 9. `AgentErrorEvent` — Error occurred
+10. `AgentRetryEvent` — A turn broke mid-stream and is being re-requested; drop its partial output
 
 ### AgentContext
 
@@ -92,6 +105,27 @@ The decorator automatically:
 - Supports async functions
 - Injects context via keyword-only args
 
+**Parallel-safe tools**
+
+```python
+@tool(parallel_safe=True)
+def read_config(path: str) -> str:
+    """Read a config file (no side effects)."""
+    ...
+```
+
+Consecutive calls (in one LLM turn) to tools marked `parallel_safe` run
+concurrently — async handlers via `asyncio.gather`, sync handlers in worker
+threads. Middleware `on_before_tool` hooks still run one at a time, and
+results are committed to the history in call order. A call to a tool without
+the flag is a barrier: it runs alone. Manual `AgentTool`s opt in with
+`metadata={"parallel_safe": True}`. Only mark tools whose effects no other
+call in the same turn could observe.
+
+Image results (`ImageToolResult`) are appended after *all* tool results of the
+turn, since providers require tool results to directly follow the assistant
+turn.
+
 **Advanced: Inject context**
 
 ```python
@@ -110,6 +144,7 @@ class AgentTool:
     description: str                       # From docstring
     parameters: dict[str, Any]            # JSON Schema
     handler: ToolHandler                   # Callable
+    metadata: dict[str, Any]               # Never sent to the model ("parallel_safe", MCP annotations…)
 ```
 
 ### Manual tools
@@ -285,6 +320,7 @@ All events inherit from `AgentEvent` which has `timestamp`.
 | `AgentStepDoneEvent`   | `step: RunStep`                                 |
 | `AgentDoneEvent`       | `result: AgentRunResult`                         |
 | `AgentErrorEvent`      | `message`, `code`, `retryable`                 |
+| `AgentRetryEvent`      | `attempt`, `max_attempts`, `reason`, `code`    |
 | `AgentSubagentResult`  | `index`, `task`, `result`, `cost_usd`, `credits`, `duration_ms`, `input_tokens`, `output_tokens`, `error` *(experimental — not yet emitted; subagent results currently travel as tool results)* |
 
 > **`AgentToolComposingEvent` notes:** emitted while the provider streams

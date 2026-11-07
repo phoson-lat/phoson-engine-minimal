@@ -105,6 +105,10 @@ class LLMStepOutcome:
     # assistant message can carry it back to the model on the next turn
     # (#134). ``None`` when the turn produced no reasoning.
     reasoning_done_event: ReasoningDoneEvent | None = None
+    # True once the turn produced visible output (tokens, reasoning,
+    # composing deltas or a complete tool call). Drives the mid-stream retry:
+    # an error *before* any output is the retry wrapper's job.
+    emitted_output: bool = False
 
 
 # ─── Internal control sentinels for the iteration generator ──────────────────
