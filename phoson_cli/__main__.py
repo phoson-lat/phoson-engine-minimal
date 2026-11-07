@@ -737,16 +737,36 @@ def uninstall() -> None:
     """Remove phoson-cli and optionally config."""
     print("Uninstalling phoson-cli...")
 
-    result = subprocess.run(
-        ["uv", "tool", "uninstall", "phoson-engine-minimal"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        print("Package uninstalled.")
+    from phoson_cli._frozen import is_frozen
+
+    if is_frozen():
+        from phoson_cli.binary_install import uninstall_binary, find_binary_install
+
+        install = find_binary_install()
+        if install is None:
+            print(
+                "This is a standalone binary that was not installed by the "
+                f"phoson installer; delete it manually: {sys.executable}"
+            )
+        else:
+            outcome = uninstall_binary(install)
+            if outcome.removed_link is not None:
+                print(f"Removed {outcome.removed_link}")
+            if outcome.removed_root:
+                print(f"Removed {install.root}")
+            if outcome.pending:
+                print(outcome.pending)
     else:
-        print(f"Failed to uninstall package: {result.stderr}", file=sys.stderr)
+        result = subprocess.run(
+            ["uv", "tool", "uninstall", "phoson-engine-minimal"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            print("Package uninstalled.")
+        else:
+            print(f"Failed to uninstall package: {result.stderr}", file=sys.stderr)
 
     config_dir = Path.home() / ".phoson"
     if config_dir.exists():
