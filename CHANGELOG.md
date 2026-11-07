@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.58.1 (2026-11-07)
+
+The standalone binaries can hold a conversation again.
+
+### Fix
+
+- **release**: the standalone binaries failed the first conversation with
+  `Unknown encoding cl100k_base. Plugins found: []` (0.57.x onefile and 0.58.0 alike): tiktoken's
+  `tiktoken_ext` encoding plugin was not bundled. It is now, together with the `cl100k_base` and
+  `o200k_base` BPE ranks, so token counting also works offline and behind proxies without a
+  first-use download ([#294](https://github.com/phoson-lat/phoson-engine-minimal/pull/294))
+- **release**: every official plugin is bundled in the binaries (only 4 of 12 were, so monitors,
+  background jobs, OTel, swarm, SSH, … could not load there)
+  ([#294](https://github.com/phoson-lat/phoson-engine-minimal/pull/294))
+- **release**: each bundle must pass a new hidden `phoson-cli --self-test` before it is published
+  — a full agent turn against an in-process fake model plus imports of every provider adapter and
+  official plugin, offline ([#294](https://github.com/phoson-lat/phoson-engine-minimal/pull/294))
+
 ## v0.58.0 (2026-11-07)
 
 Binary-first installation, a declarative plugin standard and a hardened engine/CLI.
