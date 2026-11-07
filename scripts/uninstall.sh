@@ -1,40 +1,56 @@
 #!/usr/bin/env sh
-# Uninstall phoson-cli
-# Usage: curl -L phoson.lat/uninstall | sh
+# Uninstall phoson-cli (standalone binary and/or uv-tool installs).
+# Usage: curl -fsSL https://phoson.lat/uninstall | sh
+#        ... | sh -s -- --purge     # also delete ~/.phoson (config, sessions)
 
-set -e
+set -eu
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-RESET='\033[0m'
+PACKAGE_NAME="phoson-engine-minimal"
+INSTALL_DIR="${PHOSON_INSTALL_DIR:-$HOME/.local/share/phoson}"
+BIN_DIR="${PHOSON_BIN_DIR:-$HOME/.local/bin}"
+PURGE=""
+[ "${1:-}" = "--purge" ] && PURGE=1
 
-info() { printf "${GREEN}==>${RESET} %s\n" "$*"; }
-error() { printf "${RED}ERROR:${RESET} %s\n" "$*" >&2; }
+info() { printf '==> %s\n' "$*"; }
 
-main() {
-    info "Uninstalling phoson-cli..."
+removed=""
 
-    if command -v uv >/dev/null 2>&1; then
-        uv tool uninstall phoson-engine-minimal
-    elif command -v pipx >/dev/null 2>&1; then
-        pipx uninstall phoson-engine-minimal
-    else
-        error "Neither uv nor pipx found. Please uninstall manually."
-        exit 1
+if [ -f "$INSTALL_DIR/install-receipt.json" ]; then
+    link="$BIN_DIR/phoson-cli"
+    if [ -L "$link" ]; then
+        case "$(readlink "$link")" in
+            "$INSTALL_DIR"/*) rm -f "$link"; info "Removed $link" ;;
+        esac
     fi
+    rm -rf "$INSTALL_DIR"
+    info "Removed $INSTALL_DIR"
+    removed=1
+fi
 
-    info "Package uninstalled."
+if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q "^$PACKAGE_NAME "; then
+    uv tool uninstall "$PACKAGE_NAME"
+    info "Removed the uv-tool installation"
+    removed=1
+elif command -v pipx >/dev/null 2>&1 && pipx list 2>/dev/null | grep -q "$PACKAGE_NAME"; then
+    pipx uninstall "$PACKAGE_NAME"
+    removed=1
+fi
 
-    if [ -d "$HOME/.phoson" ]; then
-        printf "Remove ~/.phoson config? [y/N]: "
+[ -n "$removed" ] || info "No phoson-cli installation found."
+
+if [ -d "$HOME/.phoson" ]; then
+    if [ -n "$PURGE" ]; then
+        rm -rf "$HOME/.phoson"
+        info "Removed ~/.phoson"
+    elif [ -t 0 ]; then
+        printf 'Remove ~/.phoson (config, sessions, plugins)? [y/N]: '
         read -r response
-        if [ "$response" = "y" ] || [ "$response" = "yes" ]; then
-            rm -rf "$HOME/.phoson"
-            info "Config directory removed."
-        fi
+        case "$response" in
+            y|Y|yes|YES) rm -rf "$HOME/.phoson"; info "Removed ~/.phoson" ;;
+        esac
+    else
+        info "Kept ~/.phoson (re-run with --purge to delete it)."
     fi
+fi
 
-    info "Uninstall complete."
-}
-
-main "$@"
+info "Uninstall complete."
