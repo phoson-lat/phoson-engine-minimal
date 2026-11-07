@@ -676,7 +676,6 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
 
     from phoson_agent import AgentEngine
     from phoson_cli.theme import load_theme, build_theme_registry
-    from phoson_cli.trace import TraceMiddleware
     from phoson_cli.runtime import build_engine_runtime
     from phoson_llm.schemas import Message, ModelConfig
     from phoson_cli.plugin_ui import NonInteractivePluginUiService
@@ -689,6 +688,7 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
         engine_prompt_tools,
     )
     from phoson_cli.guard_classifier import build_permission_classifier
+    from phoson_cli.trace_middleware import TraceMiddleware
     from phoson_cli.permissions_store import build_permission_middleware
 
     tracing = trace or trace_enabled()

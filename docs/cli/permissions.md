@@ -110,6 +110,35 @@ combined with *strictest-wins* — neither can loosen the other — so a
 such key and behaves **exactly** as before, and tools whose intent cannot be
 derived (MCP/plugin tools) keep their tool-name level and annotation hints.
 
+### Protective path intents (ask by default)
+
+Two intents are derived from the **resolved** `path` argument of the built-in
+file tools (symlinks followed, resolved exactly the way the tool itself opens
+the path) and, unlike the others, have a built-in default level of `ask` —
+they apply even with an empty `permissions.json`:
+
+| Intent | When | Default |
+|---|---|---|
+| `filesystem_write_outside_workspace` | `write_file` / `patch_file` target a path outside the current working directory (`../x`, `/etc/…`, `~/.bashrc` via an absolute path, a symlink that escapes the project) | `ask` |
+| `filesystem_read_sensitive` | `read_file`, `list_dir`, `grep`, `glob`, `view_image` read a credential store under `$HOME` (`.phoson`, `.ssh`, `.aws`, `.gnupg`, `.netrc`, `.config/gh`, `.config/gcloud`, `.docker/config.json`, `.kube/config`) or a directory containing one (`grep -r token ~`) | `ask` |
+
+They exist so a prompt injection (e.g. instructions inside a fetched page)
+cannot silently overwrite shell startup files or read SSH keys. Work inside
+the project is unaffected. Like any intent rule they combine strictest-wins
+with the tool level and also apply in auto mode (`"*": "allow"`). In
+non-interactive runs (one-shot `-p`) an `ask` fails closed, so such a call is
+refused with an explanation. To change them:
+
+```json
+{
+  "intent_levels": { "filesystem_write_outside_workspace": "allow" },
+  "allow_patterns": { "write_file": ["/tmp/*"] }
+}
+```
+
+An allow-pattern on the tool's `path` still short-circuits to `allow`, which
+is the precise way to permit one location.
+
 **Audit log.** Every decision produces a structured `PermissionDecision`
 (tool, level, deciding rule, derived intents, and a non-reversible argument
 digest) delivered to the `on_decision` sink. When `phoson_plugin_otel` is

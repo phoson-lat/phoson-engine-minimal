@@ -2,10 +2,12 @@ import os
 import json
 import asyncio
 import logging
+import weakref
 import datetime
+import tempfile
 import unicodedata
 from pathlib import Path, PureWindowsPath
-from dataclasses import dataclass
+from dataclasses import field, dataclass
 
 from phoson_agent.exceptions import PhosonSessionNotFoundError
 from phoson_agent.sessions.models import (
@@ -58,6 +60,13 @@ class JsonlStorage(SessionStorage):
     - **Non-blocking**: every disk operation runs through
       ``asyncio.to_thread`` so callers awaiting on a busy event loop are
       not blocked by I/O.
+    - **Serialized per session**: saves of one session through one storage
+      instance never overlap, and ``save_meta``'s load-modify-save runs as
+      one unit, so a metadata update cannot write back a tree that predates
+      a concurrent checkpoint. Temporary files are unique per write.
+    - **Private**: session files are created ``0o600`` (they hold tool
+      output, which may include secrets) and a newly created session
+      directory is ``0o700``.
 
     Args:
         base_path: Directory path where session JSONL files are stored.
@@ -69,10 +78,26 @@ class JsonlStorage(SessionStorage):
     """
 
     base_path: Path
+    _locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = field(  # noqa: E501
+        default_factory=weakref.WeakKeyDictionary, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Create the base directory if it doesn't exist."""
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        self.base_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def _lock(self, session_id: str) -> asyncio.Lock:
+        # Keyed by event loop too: an asyncio.Lock binds to the loop it is
+        # first contended on, and hosts may drive one storage from several
+        # ``asyncio.run`` calls (one-shot, ``bg list``).
+        loop = asyncio.get_running_loop()
+        per_loop = self._locks.get(loop)
+        if per_loop is None:
+            per_loop = self._locks[loop] = {}
+        lock = per_loop.get(session_id)
+        if lock is None:
+            lock = per_loop[session_id] = asyncio.Lock()
+        return lock
 
     def _session_file(self, session_id: str) -> Path:
         """Get the file path for a session."""
@@ -83,7 +108,8 @@ class JsonlStorage(SessionStorage):
 
     async def save(self, tree: ConversationTree) -> None:
         """Persist a conversation tree to a JSONL file atomically."""
-        await asyncio.to_thread(self._save_sync, tree)
+        async with self._lock(tree.session_id):
+            await asyncio.to_thread(self._save_sync, tree)
 
     async def load(self, session_id: str) -> ConversationTree:
         """Load a conversation tree from a JSONL file."""
@@ -107,21 +133,14 @@ class JsonlStorage(SessionStorage):
         ``status`` and ``last_run_id`` (#129) are passed through from the
         meta dict when present; callers that do not manage run status
         (legacy metrics dicts) leave the tree's current values untouched.
+        Only the keys present in *meta* are applied: a partial update such as
+        ``{"title": ...}`` leaves the persisted cost/token/step totals as they
+        are (previously absent keys were written back as ``0``).
         """
-        tree = await self.load(session_id)
-        tree.update_session_meta(
-            total_cost=float(meta.get("total_cost_usd", 0.0)),
-            total_tokens=int(meta.get("total_input_tokens", 0))
-            + int(meta.get("total_output_tokens", 0)),
-            total_input_tokens=int(meta.get("total_input_tokens", 0)),
-            total_output_tokens=int(meta.get("total_output_tokens", 0)),
-            step_count=int(meta.get("step_count", 0)),
-            last_model=meta.get("last_model") or None,
-            title=meta.get("title"),
-            status=meta.get("status"),
-            last_run_id=meta.get("last_run_id"),
-        )
-        await self.save(tree)
+        async with self._lock(session_id):
+            tree = await asyncio.to_thread(self._load_sync, session_id)
+            tree.update_session_meta(**_meta_updates(meta))
+            await asyncio.to_thread(self._save_sync, tree)
 
     async def list_meta(self, cwd: str | None = None) -> list[SessionMeta]:
         return await self.list_sessions(cwd=cwd)
@@ -131,18 +150,24 @@ class JsonlStorage(SessionStorage):
     def _save_sync(self, tree: ConversationTree) -> None:
         """Atomically write the tree to disk.
 
-        Strategy: write to ``<file>.tmp.<pid>`` in the same directory, fsync,
-        then ``os.replace`` to swap it in. ``os.replace`` is atomic on POSIX
-        and Windows when source and destination live on the same filesystem
-        (which they do because we use the same parent directory).
+        Strategy: write to a unique temporary file (``mkstemp``, mode
+        ``0o600``) in the same directory, fsync, then ``os.replace`` to swap
+        it in. ``os.replace`` is atomic on POSIX and Windows when source and
+        destination live on the same filesystem (same parent directory). The
+        unique name keeps concurrent writers — other threads, other storage
+        instances, other processes — from deleting or clobbering each other's
+        temporary file.
         """
         file_path = self._session_file(tree.session_id)
-        tmp_path = file_path.with_name(f"{file_path.name}.tmp.{os.getpid()}")
+        fd, tmp_name = tempfile.mkstemp(
+            dir=file_path.parent, prefix=f".{file_path.name}.", suffix=".tmp"
+        )
+        tmp_path = Path(tmp_name)
 
         nodes = sorted(tree.nodes.values(), key=lambda n: n.created_at)
         wrote_ok = False
         try:
-            with tmp_path.open("w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(tree_meta_to_dict(tree), ensure_ascii=True))
                 f.write("\n")
                 for node in nodes:
@@ -170,11 +195,23 @@ class JsonlStorage(SessionStorage):
 
         tree = ConversationTree.new(session_id=session_id)
         with file_path.open("r", encoding="utf-8") as f:
-            for line in f:
+            for line_number, line in enumerate(f, start=1):
                 raw = line.strip()
                 if not raw:
                     continue
-                data = json.loads(raw)
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    # One damaged line (hand edit, external truncation) must
+                    # not make the whole session unloadable; the listing
+                    # already tolerates it the same way.
+                    logger.warning(
+                        "Skipping malformed line %d in %s: %s",
+                        line_number,
+                        file_path,
+                        exc,
+                    )
+                    continue
                 if data.get("type") == "session_meta":
                     apply_tree_meta(tree, data)
                     continue
@@ -187,6 +224,35 @@ class JsonlStorage(SessionStorage):
     def _delete_sync(self, session_id: str) -> None:
         file_path = self._session_file(session_id)
         file_path.unlink(missing_ok=True)
+
+
+def _meta_updates(meta: dict) -> dict:
+    """Map a ``save_meta`` dict to ``update_session_meta`` kwargs.
+
+    Absent keys map to ``None`` (= keep the stored value). ``total_tokens``
+    is only recomputed when at least one side of the split is given.
+    """
+    updates: dict = {}
+    if "total_cost_usd" in meta:
+        updates["total_cost"] = float(meta["total_cost_usd"])
+    has_input = "total_input_tokens" in meta
+    has_output = "total_output_tokens" in meta
+    if has_input:
+        updates["total_input_tokens"] = int(meta["total_input_tokens"])
+    if has_output:
+        updates["total_output_tokens"] = int(meta["total_output_tokens"])
+    if has_input or has_output:
+        updates["total_tokens"] = int(meta.get("total_input_tokens", 0)) + int(
+            meta.get("total_output_tokens", 0)
+        )
+    if "step_count" in meta:
+        updates["step_count"] = int(meta["step_count"])
+    if meta.get("last_model"):
+        updates["last_model"] = meta["last_model"]
+    for key in ("title", "status", "last_run_id"):
+        if meta.get(key) is not None:
+            updates[key] = meta[key]
+    return updates
 
 
 def list_session_metas(base_path: Path, cwd: str | None = None) -> list[SessionMeta]:
