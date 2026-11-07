@@ -12,6 +12,12 @@ cached (keyed by block identity + width). Subsequent render passes only
 concatenate cached strings and re-render the live streaming panel —
 turning per-frame cost from O(entire transcript) into O(new blocks).
 
+The *joined* frozen prefix is cached too (:meth:`BlockAnsiCache.render_prefix`,
+keyed on the sink's ``BlockList`` version counters), so a streaming frame
+(a token, a spinner tick) does not even walk the block list: it reuses the
+same prefix string object and renders only the in-flight tail
+(:func:`render_chat_parts`).
+
 Hyperlinks (IMPROVEMENTS.md G4, #58): ``formatting.py`` now lets Rich's
 ``Markdown`` emit real OSC 8 hyperlink escapes, which
 ``prompt_toolkit.formatted_text.ANSI()`` doesn't understand on its own and
@@ -88,6 +94,50 @@ def windowed_slice(full_ansi: str, bounds: list[int], top: int, height: int) -> 
     return full_ansi[start:stop]
 
 
+def windowed_slice_parts(
+    prefix: str,
+    prefix_bounds: list[int],
+    tail: str,
+    tail_bounds: list[int],
+    top: int,
+    height: int,
+) -> str:
+    """:func:`windowed_slice` over ``prefix + tail`` without building it.
+
+    *prefix_bounds* / *tail_bounds* are ``_line_boundaries`` of each part.
+    The concatenation's bounds are ``prefix_bounds`` followed by
+    ``len(prefix) + b`` for ``b`` in ``tail_bounds[1:]`` (the tail's first
+    line continues the prefix's last one), so line ``k``'s start can be
+    looked up in whichever part holds it. Returns exactly
+    ``windowed_slice(prefix + tail, merged_bounds, top, height)`` while
+    copying only the visible window — the chat pane keeps the (large)
+    frozen prefix and the (small) in-flight tail apart so a streaming frame
+    never concatenates the whole transcript.
+    """
+    n_prefix = len(prefix_bounds)
+    total = n_prefix + len(tail_bounds) - 1
+    if total <= 0 or height <= 0:
+        return ""
+    top = max(0, top)
+    if top >= total:
+        return ""
+    plen = len(prefix)
+
+    def line_start(k: int) -> int:
+        if k < n_prefix:
+            return prefix_bounds[k]
+        return plen + tail_bounds[k - n_prefix + 1]
+
+    end_line = min(top + height, total)
+    start = line_start(top)
+    stop = line_start(end_line) if end_line < total else plen + len(tail)
+    if stop <= plen:
+        return prefix[start:stop]
+    if start >= plen:
+        return tail[start - plen : stop - plen]
+    return prefix[start:] + tail[: stop - plen]
+
+
 def _make_console(buf: io.StringIO, width: int) -> Console:
     return Console(
         file=buf,
@@ -116,7 +166,7 @@ class BlockAnsiCache:
     ANSI strings, and the ids alone would look unchanged (F-41).
     """
 
-    __slots__ = ("_entries", "_width", "_console", "_buf", "generation")
+    __slots__ = ("_entries", "_width", "_console", "_buf", "generation", "_prefix")
 
     def __init__(self) -> None:
         self._entries: dict[int, tuple[object, str]] = {}
@@ -124,6 +174,9 @@ class BlockAnsiCache:
         self._buf = io.StringIO()
         self._console: Console | None = None
         self.generation: int = 0
+        # (version, rewrite_version, block_count, joined_ansi) of the last
+        # :meth:`render_prefix` call; dropped by :meth:`clear`.
+        self._prefix: tuple[int, int, int, str] | None = None
 
     def get_or_render(self, block: object, width: int) -> str:
         """Return the cached ANSI string for *block*, rendering if needed."""
@@ -147,6 +200,49 @@ class BlockAnsiCache:
         self._entries[key] = (block, text)
         return text
 
+    def render_prefix(self, blocks, width: int) -> str:
+        """Return the concatenated ANSI of *blocks* (the frozen transcript).
+
+        When *blocks* is a ``sink.BlockList`` (the real sink), the joined
+        string is cached against its ``version`` counters:
+
+        * same ``version`` → nothing changed: the *same* string object is
+          returned without touching the block list (O(1) — the streaming
+          frame path);
+        * same ``rewrite_version`` → only appends happened: the cached
+          string is extended with just the new blocks' ANSI;
+        * otherwise (an in-place edit, removal, clear, reassignment) → a
+          full re-join from the per-block cache.
+
+        The cache lives on this object and :meth:`clear` drops it, so a
+        resize / theme change / transcript reset (all of which clear the
+        cache and bump :attr:`generation`) can never serve a stale join, and
+        swapping cache objects (snapshot restore) swaps the join with them.
+        Any other sequence (e.g. a plain ``list``) is joined uncached,
+        exactly as before.
+        """
+        if width != self._width:
+            self.clear(width)
+        version = getattr(blocks, "version", None)
+        if version is None:
+            return "".join([self.get_or_render(b, width) for b in blocks])
+        rewrite_version = blocks.rewrite_version
+        count = len(blocks)
+        cached = self._prefix
+        if cached is not None:
+            c_version, c_rewrite, c_count, c_text = cached
+            if c_version == version:
+                return c_text
+            if c_rewrite == rewrite_version and count >= c_count:
+                text = c_text + "".join(
+                    [self.get_or_render(b, width) for b in blocks[c_count:]]
+                )
+                self._prefix = (version, rewrite_version, count, text)
+                return text
+        text = "".join([self.get_or_render(b, width) for b in blocks])
+        self._prefix = (version, rewrite_version, count, text)
+        return text
+
     def clear(self, width: int) -> None:
         """Drop all entries (e.g. on terminal resize or a theme change).
 
@@ -154,6 +250,7 @@ class BlockAnsiCache:
         the invalidation even when the same block objects reappear.
         """
         self._entries.clear()
+        self._prefix = None
         self._width = width
         self.generation += 1
 
@@ -231,23 +328,22 @@ class BlockFormattedTextCache:
         self.generation += 1
 
 
-def render_chat_split(
+def render_chat_parts(
     sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
-) -> tuple[str, int]:
-    """Render the sink's transcript to ``(ansi_text, frozen_prefix_len)``.
+) -> tuple[str, str]:
+    """Render the sink's transcript as ``(frozen_prefix, live_tail)`` ANSI.
 
-    *frozen_prefix_len* is the length of the **frozen** portion of the
-    rendered text — the concatenated immutable transcript blocks — before
-    the in-flight turn (activity line + streaming panel) is written. The
-    frozen portion never changes while a turn streams (only *appends* add
-    blocks), so the caller (``PhosonApp._render_chat``) can cache the
-    frozen part's line boundaries and re-scan only the small in-flight tail
-    per frame (T-14 follow-up: the per-frame line-bounds build becomes
-    O(visible) during streaming instead of O(transcript) — see
-    ``PhosonApp._compute_chat_bounds``).
+    *frozen_prefix* is the concatenation of the immutable transcript blocks;
+    *live_tail* is the in-flight turn (activity line, streaming panel,
+    subagent panel) — or the welcome screen in the empty state, which is not
+    frozen (prefix ``""``). ``frozen_prefix + live_tail`` is the full
+    transcript text.
 
-    When *cache* is given (the app's steady-state path), immutable
-    transcript blocks are rendered at most once per width; without it,
+    With *cache* (the app's steady-state path), blocks render at most once
+    per width and the joined prefix itself is cached
+    (:meth:`BlockAnsiCache.render_prefix`): while a turn streams the prefix
+    is the *same* string object every frame and only the tail is rendered,
+    so a dirty frame costs O(tail), not O(transcript). Without *cache*,
     behaviour matches the original uncached implementation.
     """
     own_cache = cache is None
@@ -267,14 +363,11 @@ def render_chat_split(
             console.print(welcome)
         else:
             console.print("  @ files  ·  / commands", style=sink.theme.muted_deep)
-        return buf.getvalue(), 0
+        return "", buf.getvalue()
 
-    for block in sink.blocks:
-        buf.write(cache.get_or_render(block, width))
-
-    # Length of the frozen prefix (all immutable blocks, written above).
-    # The in-flight turn appended below does not alter it while streaming.
-    prefix_len = buf.tell()
+    # The frozen prefix (all immutable blocks). The in-flight turn rendered
+    # below does not alter it while streaming.
+    prefix = cache.render_prefix(sink.blocks, width)
 
     turn = sink.current_turn
     if turn is not None:
@@ -331,7 +424,24 @@ def render_chat_split(
         if panel is not None:
             console.print(panel)
 
-    return buf.getvalue(), prefix_len
+    return prefix, buf.getvalue()
+
+
+def render_chat_split(
+    sink: FullScreenSink, width: int, cache: BlockAnsiCache | None = None
+) -> tuple[str, int]:
+    """Render the sink's transcript to ``(ansi_text, frozen_prefix_len)``.
+
+    *frozen_prefix_len* is the length of the **frozen** portion of the
+    rendered text — the concatenated immutable transcript blocks — before
+    the in-flight turn (activity line + streaming panel) is written. The
+    frozen portion never changes while a turn streams (only *appends* add
+    blocks). Concatenating wrapper around :func:`render_chat_parts`; the
+    chat pane uses the parts directly so it never joins the whole
+    transcript on a streaming frame.
+    """
+    prefix, tail = render_chat_parts(sink, width, cache)
+    return prefix + tail, len(prefix)
 
 
 def render_chat(
@@ -348,4 +458,10 @@ def render_chat(
     return text
 
 
-__all__ = ["BlockAnsiCache", "render_chat", "render_chat_split"]
+__all__ = [
+    "BlockAnsiCache",
+    "render_chat",
+    "render_chat_parts",
+    "render_chat_split",
+    "windowed_slice_parts",
+]
