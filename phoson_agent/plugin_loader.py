@@ -291,11 +291,8 @@ class PluginRegistry:
 def _entry_point(name: str) -> object | None:
     from importlib.metadata import entry_points
 
-    eps = entry_points()
-    if hasattr(eps, "select"):
-        matches = list(eps.select(group="phoson.plugins", name=name))
-    else:  # pragma: no cover - legacy importlib_metadata shape
-        matches = [ep for ep in eps.get("phoson.plugins", []) if ep.name == name]
+    # Python 3.12+: entry_points() always supports selection by group/name.
+    matches = list(entry_points(group="phoson.plugins", name=name))
     return matches[0] if matches else None
 
 

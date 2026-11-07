@@ -411,7 +411,8 @@ def parse_manifest(data: dict[str, Any], *, path: Path | None = None) -> PluginM
         raise PluginManifestError(f"Invalid plugin manifest ({where}):", problems)
 
     return PluginManifest(
-        schema=schema,
+        # Validated above (an int in SUPPORTED_SCHEMAS); narrowed for typing.
+        schema=schema if isinstance(schema, int) else 1,
         id=plugin_id,
         name=take(data, "name", str, ""),
         version=version,
