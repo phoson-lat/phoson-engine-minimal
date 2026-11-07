@@ -76,7 +76,7 @@ class SttPlugin(Plugin):
 
     @property
     def name(self) -> str:
-        return "stt"
+        return "phoson-plugin-stt"
 
     @property
     def description(self) -> str:

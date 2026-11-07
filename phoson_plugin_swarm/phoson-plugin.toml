@@ -1,0 +1,28 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-swarm"
+name = "Agent Swarms"
+version = "0.1.0"
+description = "Create teams of collaborating sub-agents with a shared blackboard and token budgets."
+entry = "phoson_plugin_swarm:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = [
+    "swarm_create",
+    "swarm_assign",
+    "swarm_message",
+    "swarm_status",
+    "swarm_collect",
+    "swarm_dissolve",
+]
+
+[capabilities]
+network = false
+shell = false
+filesystem = "none"

@@ -1,0 +1,22 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-monitor"
+name = "Monitors"
+version = "0.1.0"
+description = "Background monitors (interval, file and command watchers) that wake the agent when they fire."
+entry = "phoson_plugin_monitor:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = ["register_monitor", "list_monitors", "stop_monitor"]
+commands = ["/monitors"]
+
+[capabilities]
+network = false
+shell = true
+filesystem = "write"

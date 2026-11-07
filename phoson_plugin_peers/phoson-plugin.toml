@@ -1,0 +1,22 @@
+# Phoson plugin manifest — see phoson_agent/plugin_manifest.py.
+schema = 1
+id = "phoson-plugin-peers"
+name = "Peers"
+version = "0.1.0"
+description = "Named agents on the same machine discover each other and exchange messages through on-disk mailboxes."
+entry = "phoson_plugin_peers:plugin"
+license = "MIT"
+homepage = "https://github.com/phoson-lat/phoson-engine-minimal"
+authors = ["Abel Santillan Rodriguez <abelsantillanrdz@gmail.com>"]
+
+[compat]
+phoson = ">=0.57"
+
+[provides]
+tools = ["peer_list", "peer_send", "peer_ask"]
+commands = ["/peers", "/tell"]
+
+[capabilities]
+network = false
+shell = false
+filesystem = "write"
