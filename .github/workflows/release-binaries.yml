@@ -114,6 +114,10 @@ jobs:
             "$exe" --version | grep -qx "phoson-cli ${version}"
           fi
           "$exe" --help >/dev/null
+          # --version/--help never load the tokenizer, providers or plugins;
+          # the self-test runs a full agent turn offline and imports every
+          # dynamically loaded module (PyInstaller cannot see those).
+          "$exe" --self-test
 
       - name: Archive the bundle
         # One-folder bundle → one archive per platform. The installers unpack
