@@ -6,6 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.58.0 (2026-11-07)
+
+Binary-first installation, a declarative plugin standard and a hardened engine/CLI.
+
+### Breaking
+
+- **release**: release binaries are now one-folder bundles archived as
+  `phoson-cli-<os>-<arch>.tar.gz` (`.zip` on Windows) instead of the onefile
+  `phoson-cli-<os>-<arch>` / `.exe` assets. Onefile binaries re-extracted ~65 MB on every
+  launch (`--version` took 1.7–3.9 s; now ~0.2 s, and the download shrinks from 62 MB to 29 MB on
+  macOS arm64). Unpack the archive and keep the folder together
+  ([#293](https://github.com/phoson-lat/phoson-engine-minimal/pull/293))
+- **permissions**: `write_file`/`patch_file` outside the working directory and reads of credential
+  stores (`~/.phoson`, `~/.ssh`, `~/.aws`, …) now ask by default, also in auto mode; in one-shot
+  `-p` runs they are refused. Override with `intent_levels` or a path allow-pattern
+  ([#291](https://github.com/phoson-lat/phoson-engine-minimal/pull/291))
+- **plugins**: the STT plugin's `Plugin.name` is now `phoson-plugin-stt` (was `stt`)
+  ([#292](https://github.com/phoson-lat/phoson-engine-minimal/pull/292))
+
+### Feat
+
+- **installer**: `phoson.lat/install` (and the Windows installer) installs the prebuilt standalone
+  CLI by default — verified against the release's `SHA256SUMS`, smoke-tested, unpacked into
+  `~/.local/share/phoson/versions/<v>` (`%LOCALAPPDATA%\Phoson` on Windows) with no Python, uv or
+  admin rights. It falls back to the released PyPI package via uv (never the main branch) when no
+  binary fits the system, and no longer calls apt-get/brew. `--self-update` and `--uninstall`
+  manage binary installs; releases attach `SHA256SUMS` and the installer scripts
+  ([#293](https://github.com/phoson-lat/phoson-engine-minimal/pull/293))
+- **plugins**: `phoson-plugin.toml` manifest — id, version, `[compat]`, `[provides]`,
+  `[capabilities]` and a typed `[config]` schema, read without importing the plugin; incompatible
+  plugins are refused before running and config is validated/filled before `configure()`. All
+  official plugins ship one ([#292](https://github.com/phoson-lat/phoson-engine-minimal/pull/292))
+- **cli**: community plugins install into their own directory (`~/.phoson/plugins/<id>/`) with the
+  CLI's versions as constraints, after a manifest review; `plugin uninstall` deletes them,
+  `plugin update` re-resolves the source; new `plugin new` (scaffold), `plugin validate [--load]`,
+  `plugin info` and `plugin help` ([#292](https://github.com/phoson-lat/phoson-engine-minimal/pull/292))
+- **agent**: consecutive `@tool(parallel_safe=True)` calls run concurrently (read-only built-in
+  tools opt in); a turn whose stream breaks mid-response with a retryable error is retried once
+  (`AgentRetryEvent`) ([#290](https://github.com/phoson-lat/phoson-engine-minimal/pull/290))
+- **docs**: generated `docs/cli/reference.md` with every option and slash command
+  ([#291](https://github.com/phoson-lat/phoson-engine-minimal/pull/291))
+
+### Fix
+
+- **agent**: exceptions from middleware hooks or the LLM adapter no longer escape `stream()` or
+  leave a `tool_use` without its result; image tool results follow all tool results of a turn; the
+  caller's `tools`/`middlewares` lists are no longer mutated
+  ([#290](https://github.com/phoson-lat/phoson-engine-minimal/pull/290))
+- **sessions**: saving a generated title no longer zeroes the session's cost/token totals;
+  concurrent saves no longer fail or clobber each other; session files are `0600`; a malformed line
+  no longer makes a session unloadable ([#291](https://github.com/phoson-lat/phoson-engine-minimal/pull/291))
+- **cli**: `web_fetch` connects only to the IP it validated (DNS rebinding) and ignores proxy env
+  vars ([#291](https://github.com/phoson-lat/phoson-engine-minimal/pull/291))
+
+### Perf
+
+- **tui**: streaming no longer re-renders the whole transcript per frame (8000 blocks: 4.08 →
+  0.66 ms/frame); CLI startup no longer imports the engine (~70 → ~50 ms)
+  ([#291](https://github.com/phoson-lat/phoson-engine-minimal/pull/291))
+
 ## v0.57.1 (2026-10-25)
 
 ### Fix
