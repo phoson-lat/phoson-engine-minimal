@@ -96,6 +96,8 @@ One-shot mode (no REPL, no session — for scripts and CI):
 
 Options:
   -p, --print          Print the final answer and exit (one-shot mode)
+  --auto               One-shot: run tools that would ask (programs, code,
+                       deletes) instead of refusing them
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
@@ -145,6 +147,7 @@ class CliOptions:
     plugin_args: list[str] | None = None
     bg_args: list[str] | None = None
     assume_yes: bool = False
+    auto: bool = False
 
 
 def _fail(message: str) -> NoReturn:
@@ -218,6 +221,8 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.classic = True
         elif arg in {"-p", "--print"}:
             options.print_mode = True
+        elif arg == "--auto":
+            options.auto = True
         elif arg == "--trace":
             options.trace = True
         elif arg in {
@@ -817,7 +822,9 @@ def _read_stdin_task() -> str:
         return ""
 
 
-async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> int:
+async def _run_oneshot(
+    config: PhosonConfig, task: str, trace: bool = False, auto: bool = False
+) -> int:
     """Run a single agent task and print the final content to stdout.
 
     No REPL, no session persistence — intended for scripts and CI.
@@ -843,6 +850,7 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
     from phoson_cli.runtime import build_engine_runtime
     from phoson_llm.schemas import Message, ModelConfig
     from phoson_cli.plugin_ui import NonInteractivePluginUiService
+    from phoson_agent.permissions import WILDCARD_TOOL
     from phoson_cli.session_utils import (
         build_offload,
         close_plugins,
@@ -882,6 +890,10 @@ async def _run_oneshot(config: PhosonConfig, task: str, trace: bool = False) -> 
             classifier_auto_allow=config.permission_classifier_auto_allow,
             classifier_timeout_s=config.permission_classifier_timeout_s,
         )
+        if auto:
+            # ``--auto``: this run only, like the TUI auto mode. Per-tool
+            # levels and intent rules in permissions.json still win over it.
+            permission.policy.levels[WILDCARD_TOOL] = "allow"
         # #139: optional structured run trace for headless one-shot. Appended
         # last (it only implements on_agent_event, so chain order is inert).
         if tracing:
@@ -1128,7 +1140,13 @@ def _run_cli() -> None:
                     file=sys.stderr,
                 )
             sys.exit(1)
-        sys.exit(asyncio.run(_run_oneshot(config, options.task, trace=options.trace)))
+        sys.exit(
+            asyncio.run(
+                _run_oneshot(
+                    config, options.task, trace=options.trace, auto=options.auto
+                )
+            )
+        )
 
     config_path = Path.home() / ".phoson" / "config.toml"
 

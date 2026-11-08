@@ -25,6 +25,7 @@ Notes:
   setting it to ``0``.
 """
 
+import os
 import time
 import hashlib
 from pathlib import Path
@@ -205,9 +206,13 @@ def offload_output(
     head = text[:head_chars]
     tail = text[-tail_chars:] if len(text) > head_chars + tail_chars else ""
     try:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Tool output can hold anything the tools read (secrets included):
+        # the directory and files are private to the user.
+        output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = output_dir / f"{safe_tool}_{tool_call_id}_{digest}.txt"
-        path.write_text(text, encoding="utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
     except OSError:
         # Offloading is best-effort; never break the run because of it.
         return text

@@ -100,6 +100,7 @@ from .clipboard import (
     paste_image_from_clipboard,
 )
 from .tasks_dock import TasksDock
+from ..hyperlinks import guard_hyperlinks
 from ..model_cache import ModelCache
 from .command_host import FullScreenCommandHost
 from .confirmation import FullScreenConfirmationService
@@ -434,6 +435,9 @@ class PhosonApp:
 
         self._build_layout()
         self.app: Application = self._build_application()
+        # Never let a partly repainted OSC 8 link stay open across the rest
+        # of the frame (everything turning into one hyperlink).
+        guard_hyperlinks(self.app.output)
         self._apply_style()
         # Modal Float dialogs live in their own controller (#187); ``PhosonApp``
         # keeps thin delegates so the public ``run_float_*`` surface is unchanged.
