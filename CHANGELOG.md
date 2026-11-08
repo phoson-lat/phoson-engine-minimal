@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.59.0 (2026-11-07)
+
+A new OpenAI-compatible provider.
+
+### Feat
+
+- **llm**: add the [Cheaper Inference](https://www.cheaperinference.com/docs) provider
+  (`--provider cheaperinference`, key in `CHEAPER_INFERENCE_API_KEY`): available in the setup
+  wizard, the `/model` picker (lists only its chat models) and `provider/model` routing
+  ([#295](https://github.com/phoson-lat/phoson-engine-minimal/pull/295))
+
+### CI
+
+- **ci**: pytest runs with `-v`, so a test that hits the timeout is named in the log
+  ([#296](https://github.com/phoson-lat/phoson-engine-minimal/pull/296))
+
 ## v0.58.1 (2026-11-07)
 
 The standalone binaries can hold a conversation again.
