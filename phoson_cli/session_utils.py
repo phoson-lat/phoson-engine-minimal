@@ -26,6 +26,7 @@ from phoson_agent.middleware import (
 from phoson_agent.permissions import PermissionMiddleware
 from phoson_agent.plugins.offload import RetentionPolicy, OffloadMiddleware
 from phoson_agent.plugins.summarizer import SummarizationMiddleware
+from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from . import official_plugins
 from .config import PhosonConfig
@@ -746,7 +747,41 @@ def vllm_base_url(config: PhosonConfig) -> str | None:
     return base_url or config.vllm_base_url
 
 
-def build_summarizer(config: PhosonConfig) -> SummarizationMiddleware:
+def build_context_resolver(config: PhosonConfig) -> ContextWindowResolver:
+    """The context-window resolver shared by the context meter and compaction.
+
+    Hooks, in resolution order after windows learned from provider errors:
+    the user's ``models.json`` ``context_window``, then the provider's live
+    model listing (fetched once per provider with the configured
+    credentials), then the built-in registry and dynamic local lookups.
+    The listing uses the *config passed here*, so a later key change takes
+    effect after a restart or a provider switch rebuild.
+    """
+
+    def user_override(provider: str, model: str) -> int | None:
+        from .models import load_models_file, resolve_context_window
+
+        return resolve_context_window(
+            load_models_file(), provider, model.split("/", 1)[-1]
+        )
+
+    async def catalog(provider: str) -> dict[str, int] | None:
+        from .model_selector import provider_context_windows
+
+        return await provider_context_windows(config, provider)
+
+    return ContextWindowResolver(
+        ollama_base_url=config.ollama_base_url or "http://localhost:11434",
+        openrouter_api_key=config.openrouter_api_key,
+        vllm_base_url=vllm_base_url(config),
+        user_override=user_override,
+        catalog=catalog,
+    )
+
+
+def build_summarizer(
+    config: PhosonConfig, resolver: ContextWindowResolver | None = None
+) -> SummarizationMiddleware:
     """Build the auto-compaction middleware for a configuration.
 
     Shared by the REPL (``SessionController``) and the one-shot path so
@@ -762,6 +797,7 @@ def build_summarizer(config: PhosonConfig) -> SummarizationMiddleware:
         ollama_base_url=config.ollama_base_url or "http://localhost:11434",
         openrouter_api_key=config.openrouter_api_key,
         vllm_base_url=vllm_base_url(config),
+        context_resolver=resolver or build_context_resolver(config),
     )
     # E1 context-management knobs (same as SessionController._apply_context_config).
     summarizer.threshold = config.compact_threshold

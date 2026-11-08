@@ -435,6 +435,11 @@ class SummarizationMiddleware(AgentMiddleware):
     #: history). ``None`` (unit tests, the library-only path) falls back to
     #: ``call_next`` with whatever tools the chain carries.
     chat: "BaseLLMChat | None" = None
+    #: Shared context-window resolver. Hosts pass the one they also use for
+    #: display (with their user-override / catalog hooks) so the compaction
+    #: gate and the context meter agree; ``None`` builds a private one from
+    #: the endpoint fields above.
+    context_resolver: ContextWindowResolver | None = field(default=None, repr=False)
 
     # Internal state. Both are constructed in ``__post_init__``; using
     # ``init=False`` keeps them out of the dataclass constructor and out of
@@ -460,7 +465,7 @@ class SummarizationMiddleware(AgentMiddleware):
 
     def __post_init__(self) -> None:
         """Initializes the resolver and estimator."""
-        self._resolver = ContextWindowResolver(
+        self._resolver = self.context_resolver or ContextWindowResolver(
             ollama_base_url=self.ollama_base_url,
             openrouter_api_key=self.openrouter_api_key,
             vllm_base_url=self.vllm_base_url,

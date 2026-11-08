@@ -52,7 +52,6 @@ from phoson_agent.sessions import (
 from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.plugins.summarizer import safe_cut_index
-from phoson_agent.plugins.context_window import ContextWindowResolver
 
 from .theme import (
     ThemeRegistry,
@@ -65,7 +64,6 @@ from .models import (
     load_models_file,
     provider_settings,
     normalize_provider,
-    resolve_context_window,
 )
 from .runtime import build_engine_runtime
 from ._session import SessionState, SessionMetrics
@@ -97,6 +95,7 @@ from .session_utils import (
     build_system_prompt,
     engine_prompt_tools,
     engine_visible_tools,
+    build_context_resolver,
 )
 from .shell_context import ShellContext, format_shell_context
 from .tools.compact import compact_context
@@ -298,11 +297,10 @@ class SessionController:
         self.subagent_model: str = config.subagent_model or config.model
 
         # Context window resolver + token estimator for prompt display.
-        self._cw_resolver = ContextWindowResolver(
-            ollama_base_url=config.ollama_base_url or "http://localhost:11434",
-            openrouter_api_key=config.openrouter_api_key,
-            vllm_base_url=vllm_base_url(config),
-        )
+        # One resolver for the context meter *and* the compaction gate, so
+        # both see the same window (user override → provider listing →
+        # registry → local lookups).
+        self._cw_resolver = build_context_resolver(config)
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
 
@@ -311,7 +309,7 @@ class SessionController:
         # the E1 context-management knobs (mode presets) are applied via
         # ``_apply_context_config``. Shared with the one-shot path
         # (session_utils.build_summarizer) so both construct it identically.
-        self.summarizer = build_summarizer(config)
+        self.summarizer = build_summarizer(config, self._cw_resolver)
         # Offload middleware (IMPROVEMENTS.md E1): large tool outputs go
         # to disk and the context keeps head/tail + path.
         self.offload = build_offload(config)
@@ -2071,15 +2069,9 @@ class SessionController:
         ``set_model``/``set_provider`` so the header's indicator reflects
         the new model immediately, not just after the next turn.
         """
-        models_data = load_models_file()
-        model_bare = self.current_model.split("/", 1)[-1]
-        override = resolve_context_window(models_data, self.config.provider, model_bare)
-        if override is not None:
-            self._context_window = override
-        else:
-            self._context_window = await self._cw_resolver.resolve(
-                self.config.provider, self.current_model
-            )
+        self._context_window = await self._cw_resolver.resolve(
+            self.config.provider, self.current_model
+        )
 
     async def set_provider(self, provider: str) -> None:
         """Switch to a different provider and rebuild runtime state.

@@ -12,15 +12,18 @@ from phoson_agent.plugins.context_window import (
 
 
 class TestContextWindowRegistry:
-    def test_registry_has_anthropic_models(self):
-        for key in CONTEXT_WINDOW_REGISTRY:
-            if key.startswith("anthropic/"):
-                assert CONTEXT_WINDOW_REGISTRY[key] == 200_000
+    def test_registry_keys_are_normalized_and_positive(self):
+        from phoson_agent.plugins.context_window import normalize_model_id
 
-    def test_registry_has_openai_models(self):
-        for key in CONTEXT_WINDOW_REGISTRY:
-            if key.startswith("openai/"):
-                assert CONTEXT_WINDOW_REGISTRY[key] == 128_000
+        for key, window in CONTEXT_WINDOW_REGISTRY.items():
+            provider, _, model = key.partition("/")
+            assert provider and normalize_model_id(model) == model
+            assert window > 0
+
+    def test_current_generation_windows(self):
+        assert CONTEXT_WINDOW_REGISTRY["anthropic/claude-opus-5-5"] == 1_000_000
+        assert CONTEXT_WINDOW_REGISTRY["openai/gpt-5.5"] == 1_050_000
+        assert CONTEXT_WINDOW_REGISTRY["xai/grok-4.7"] == 500_000
 
 
 # ── Resolver: static lookup ─────────────────────────────────────────
@@ -40,9 +43,18 @@ class TestResolverStatic:
 
     async def test_openai_prefix_match(self):
         r = ContextWindowResolver()
-        # Not in registry but starts with gpt-4
+        # Not in the registry: the conservative family window
         assert await r.resolve("openai", "gpt-5") == 128_000
-        assert await r.resolve("openai", "o3-pro") == 128_000
+        assert await r.resolve("openai", "o3-pro") == 200_000
+        assert await r.resolve("openai", "gpt-6.1-sol") == 1_050_000
+
+    async def test_normalized_ids_and_provider_aliases(self):
+        r = ContextWindowResolver()
+        assert await r.resolve("anthropic", "claude-opus-4-6-20250514") == 200_000
+        assert await r.resolve("anthropic", "anthropic/claude-sonnet-5-5") == 1_000_000
+        assert await r.resolve("google", "models/gemini-3.8-flash") == 1_048_576
+        assert await r.resolve("grok", "grok-4.20-0309-reasoning") == 1_000_000
+        assert await r.resolve("azure", "gpt-4.1") == 1_047_576
 
     async def test_fallback_default(self):
         r = ContextWindowResolver()

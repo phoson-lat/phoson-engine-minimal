@@ -18,6 +18,17 @@ from .models import (
 )
 
 
+def _window(value: object) -> int | None:
+    """A positive token count from a listing field (int, or a whole float)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, float) and value > 0 and value.is_integer():
+        return int(value)
+    return None
+
+
 class ModelListingError(Exception):
     """A provider's live model listing failed (network/API error).
 
@@ -257,6 +268,7 @@ async def _list_anthropic_models(config: PhosonConfig) -> list[ModelOption]:
             label=item.get("display_name") or item.get("id", ""),
             provider="anthropic",
             description=item.get("type", ""),
+            context_length=_window(item.get("max_input_tokens")),
         )
         for item in data.get("data", [])
         if item.get("id")
@@ -358,7 +370,12 @@ async def _list_groq_models(config: PhosonConfig) -> list[ModelOption]:
     except (httpx.HTTPError, ValueError) as exc:
         raise ModelListingError(f"Failed to fetch Groq models: {exc}") from exc
     options = [
-        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="groq")
+        ModelOption(
+            id=item.get("id", ""),
+            label=item.get("id", ""),
+            provider="groq",
+            context_length=_window(item.get("context_window")),
+        )
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -406,7 +423,10 @@ async def _list_deepseek_models(config: PhosonConfig) -> list[ModelOption]:
         raise ModelListingError(f"Failed to fetch DeepSeek models: {exc}") from exc
     options = [
         ModelOption(
-            id=item.get("id", ""), label=item.get("id", ""), provider="deepseek"
+            id=item.get("id", ""),
+            label=item.get("id", ""),
+            provider="deepseek",
+            context_length=_window(item.get("context_window")),
         )
         for item in data.get("data", [])
         if item.get("id")
@@ -449,6 +469,7 @@ async def _list_cheaperinference_models(config: PhosonConfig) -> list[ModelOptio
             label=item.get("name") or item["id"],
             provider="cheaperinference",
             description=item.get("description", "") or "",
+            context_length=_window(item.get("context_length")),
         )
         for item in items
         if isinstance(item, dict)
@@ -479,6 +500,7 @@ async def _list_together_models(config: PhosonConfig) -> list[ModelOption]:
             label=item.get("display_name") or item.get("id", ""),
             provider="together",
             description=item.get("description", ""),
+            context_length=_window(item.get("context_length")),
         )
         for item in items
         if item.get("id")
@@ -501,7 +523,12 @@ async def _list_mistral_models(config: PhosonConfig) -> list[ModelOption]:
     except (httpx.HTTPError, ValueError) as exc:
         raise ModelListingError(f"Failed to fetch Mistral models: {exc}") from exc
     options = [
-        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="mistral")
+        ModelOption(
+            id=item.get("id", ""),
+            label=item.get("id", ""),
+            provider="mistral",
+            context_length=_window(item.get("max_context_length")),
+        )
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -555,6 +582,7 @@ async def _list_fireworks_models(config: PhosonConfig) -> list[ModelOption]:
             label=item.get("name", item.get("id", "")),
             provider="fireworks",
             description=item.get("displayName", ""),
+            context_length=_window(item.get("contextLength")),
         )
         for item in data.get("models", data.get("data", []))
         if item.get("name") or item.get("id")
@@ -581,6 +609,7 @@ async def _list_cohere_models(config: PhosonConfig) -> list[ModelOption]:
             id=item.get("name", item.get("id", "")),
             label=item.get("name", item.get("id", "")),
             provider="cohere",
+            context_length=_window(item.get("context_length")),
         )
         for item in data.get("models", data.get("data", []))
         if item.get("name") or item.get("id")
@@ -603,7 +632,12 @@ async def _list_xai_models(config: PhosonConfig) -> list[ModelOption]:
     except (httpx.HTTPError, ValueError) as exc:
         raise ModelListingError(f"Failed to fetch xAI models: {exc}") from exc
     options = [
-        ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="xai")
+        ModelOption(
+            id=item.get("id", ""),
+            label=item.get("id", ""),
+            provider="xai",
+            context_length=_window(item.get("context_length")),
+        )
         for item in data.get("data", [])
         if item.get("id")
     ]
@@ -680,6 +714,7 @@ async def _list_gemini_models(config: PhosonConfig) -> list[ModelOption]:
             or item.get("name", "").replace("models/", ""),
             provider="gemini",
             description=item.get("description", ""),
+            context_length=_window(item.get("inputTokenLimit")),
         )
         for item in data.get("models", [])
         if item.get("name")
@@ -963,3 +998,25 @@ def _openrouter_agentic_index(item: dict) -> float | None:
     if isinstance(index, (int, float)):
         return float(index)
     return None
+
+
+async def provider_context_windows(
+    config: PhosonConfig, provider: str
+) -> dict[str, int] | None:
+    """``model id → context window`` from *provider*'s live model listing.
+
+    Uses the same authenticated listers as the model picker, so it needs the
+    provider's key (a provider without one, or one whose listing has no
+    window field, yields an empty mapping). ``None`` when the listing failed.
+    Ids are reported as listed; the resolver normalizes them.
+    """
+    variant = _variant_config(config, provider, config.model)
+    try:
+        options = await _fetch_provider_models(variant)
+    except ModelListingError:
+        return None
+    return {
+        option.id: option.context_length
+        for option in options
+        if option.id and option.context_length
+    }
