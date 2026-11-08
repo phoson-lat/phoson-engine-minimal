@@ -112,6 +112,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/notify",
             "/warnings",
             "/mcp",
+            "/extras",
             "/auth",
             "/setup",
             "/update",
@@ -284,6 +285,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(("/setup",), "Run the initial setup wizard again", "_cmd_setup"),
     CommandSpec(("/mcp",), "Manage Model Context Protocol servers", "_cmd_mcp"),
+    CommandSpec(
+        ("/extras",),
+        "Install optional features (speech to text, Computer Use, SSH, …)",
+        "_cmd_extras",
+    ),
     CommandSpec(
         ("/update", "/upgrade"),
         "Check for and install CLI updates",

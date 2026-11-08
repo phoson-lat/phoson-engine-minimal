@@ -98,8 +98,10 @@ MCP = OfficialPlugin(
     availability=("phoson_plugin_mcp._plugin", "MCP_AVAILABLE"),
     missing_dependency_hint=(
         "MCP is enabled but the `mcp` package is not installed. "
-        "Install with: uv sync --dev  (or: uv sync --extra mcp / "
-        "pip install 'phoson-engine-minimal[mcp]'). "
+        "Install with: /extras install mcp"
+        "  (or: phoson-cli extras install mcp"
+        "; in a Python environment:"
+        " pip install 'phoson-engine-minimal[mcp]'). "
         "Set enable_mcp = false in [defaults] to silence this."
     ),
 )
@@ -155,8 +157,10 @@ SSH = OfficialPlugin(
     availability=("phoson_plugin_ssh", "SSH_AVAILABLE"),
     missing_dependency_hint=(
         "SSH is enabled but the `asyncssh` package is not installed. "
-        "Install with: uv sync --extra ssh  (or: "
-        "pip install 'phoson-engine-minimal[ssh]'). "
+        "Install with: /extras install ssh"
+        "  (or: phoson-cli extras install ssh"
+        "; in a Python environment:"
+        " pip install 'phoson-engine-minimal[ssh]'). "
         "Set enable_ssh = false in [defaults] to silence this."
     ),
 )

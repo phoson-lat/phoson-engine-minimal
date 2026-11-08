@@ -422,7 +422,10 @@ class WindowsBackend(ComputerBackend):
         except ImportError as exc:  # pragma: no cover - depends on the extra
             raise ComputerUseError(
                 "The Windows backend needs Pillow to encode screenshots. "
-                "Install with: uv sync --extra computeruse-windows"
+                "Install with: /extras install computeruse"
+                "  (or: phoson-cli extras install computeruse"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[computeruse]')"
             ) from exc
         image = Image.frombytes("RGB", (grab_w, grab_h), data, "raw", "BGRX")
         buffer = BytesIO()

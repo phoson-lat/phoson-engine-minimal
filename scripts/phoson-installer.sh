@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://phoson.lat/install | sh
 #   curl -fsSL https://phoson.lat/install | sh -s -- --version 0.58.0
+#   curl -fsSL https://phoson.lat/install | sh -s -- --with stt,computeruse
 #
 # Default method: the prebuilt standalone binary from the GitHub release
 # (no Python, uv or root needed). The archive is verified against the
@@ -26,6 +27,7 @@
 #   PHOSON_RELEASE_BASE  default https://github.com/phoson-lat/phoson-engine-minimal/releases
 #   PHOSON_INSTALL_DIR   default ~/.local/share/phoson
 #   PHOSON_BIN_DIR       default ~/.local/bin
+#   PHOSON_EXTRAS        optional features to install, like --with
 
 set -eu
 
@@ -54,6 +56,9 @@ Usage: phoson-installer.sh [OPTIONS]
 Options:
   --version X.Y.Z     Install this version (default: latest release)
   --method M          binary (default) or uv (PyPI package via uv)
+  --with LIST         Also install optional features, comma-separated
+                      (stt, computeruse, ssh, memory, checkpoint, mcp,
+                      gemini, mistral, aws); same as: phoson-cli extras install
   --skip-setup        Do not run the setup wizard
   --ci                Non-interactive: implies --skip-setup
   -h, --help          Show this help
@@ -230,6 +235,7 @@ VERSION=""
 METHOD="binary"
 METHOD_EXPLICIT=""
 SKIP_SETUP=""
+WITH_EXTRAS="${PHOSON_EXTRAS:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -238,6 +244,8 @@ while [ $# -gt 0 ]; do
         --method) METHOD="${2:-}"; METHOD_EXPLICIT=1; shift ;;
         --method=*) METHOD="${1#*=}"; METHOD_EXPLICIT=1 ;;
         --use-pipx) die "--use-pipx is no longer supported; use --method uv." ;;
+        --with) WITH_EXTRAS="${WITH_EXTRAS:+$WITH_EXTRAS,}${2:-}"; shift ;;
+        --with=*) WITH_EXTRAS="${WITH_EXTRAS:+$WITH_EXTRAS,}${1#*=}" ;;
         --ci|--skip-setup) SKIP_SETUP=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1 (see --help)" ;;
@@ -279,6 +287,19 @@ else
     CLI="$PHOSON_CLI"
 fi
 
+if [ -n "$WITH_EXTRAS" ]; then
+    extras=$(printf '%s' "$WITH_EXTRAS" | tr ',' ' ')
+    # Versions before `extras` would read the words as a task prompt.
+    if "$CLI" --help 2>/dev/null | grep -q '^  extras '; then
+        info "Installing optional features: $extras"
+        # shellcheck disable=SC2086
+        "$CLI" extras install $extras ||
+            warn "Some optional features did not install; retry with: phoson-cli extras install $extras"
+    else
+        warn "This version cannot install optional features (--with); upgrade, then run: phoson-cli extras install $extras"
+    fi
+fi
+
 if [ -z "$SKIP_SETUP" ] && [ -t 0 ] && [ -t 1 ]; then
     info "Running the setup wizard (re-run any time with: phoson-cli --setup)"
     "$CLI" --setup || warn "Setup did not finish; run 'phoson-cli --setup' later."
@@ -288,5 +309,6 @@ fi
 
 printf '\n'
 info "${BOLD}Done.${RESET} Start with: phoson-cli"
+printf '    Extras:    phoson-cli extras  (speech to text, Computer Use, …)\n'
 printf '    Update:    phoson-cli --self-update\n'
 printf '    Uninstall: phoson-cli --uninstall\n'

@@ -138,7 +138,7 @@ def install_managed_uv(
     name, expected = asset
     url = _RELEASE_URL.format(version=UV_VERSION, asset=name)
     if notify is not None:
-        notify(f"Downloading uv {UV_VERSION} to install plugins ({url})")
+        notify(f"Downloading uv {UV_VERSION} to install packages ({url})")
     try:
         data = download(url)
     except Exception as exc:  # network, TLS, HTTP status

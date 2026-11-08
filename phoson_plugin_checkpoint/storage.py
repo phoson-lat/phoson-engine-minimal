@@ -99,8 +99,11 @@ class PostgresStorage(SessionStorage):
     async def _ensure_pool(self) -> Any:
         if not ASYNCPG_AVAILABLE:
             raise ImportError(
-                "asyncpg not installed. Install with: pip install asyncpg "
-                "or pip install 'phoson-engine-minimal[checkpoint]'"
+                "asyncpg not installed. "
+                "Install with: /extras install checkpoint"
+                "  (or: phoson-cli extras install checkpoint"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[checkpoint]')"
             )
         if self._pool is not None:
             return self._pool

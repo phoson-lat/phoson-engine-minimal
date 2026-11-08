@@ -117,7 +117,11 @@ def _crop_png(data: bytes, region: Region) -> bytes:
     except ImportError as exc:  # pragma: no cover - depends on the env
         raise ComputerUseError(
             "Region capture on Wayland needs Pillow (the portal only captures "
-            "the whole screen). Install with: uv sync --extra computeruse"
+            "the whole screen). "
+            "Install with: /extras install computeruse"
+            "  (or: phoson-cli extras install computeruse"
+            "; in a Python environment:"
+            " pip install 'phoson-engine-minimal[computeruse]')"
         ) from exc
     image = Image.open(BytesIO(data)).crop(
         (region.x, region.y, region.right, region.bottom)

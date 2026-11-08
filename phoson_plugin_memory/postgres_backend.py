@@ -65,8 +65,11 @@ class PostgresBackend(MemoryBackend):
     async def _ensure_pool(self) -> Any:
         if not ASYNCPG_AVAILABLE:
             raise ImportError(
-                "asyncpg not installed. Install with: pip install asyncpg "
-                "or pip install 'phoson-engine-minimal[memory]'"
+                "asyncpg not installed. "
+                "Install with: /extras install memory"
+                "  (or: phoson-cli extras install memory"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[memory]')"
             )
         if self._pool is not None:
             return self._pool

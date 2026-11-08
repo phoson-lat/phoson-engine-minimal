@@ -14,5 +14,6 @@ dives.
 - [agents-md.md](agents-md.md) — project memory injection
 - [skills.md](skills.md) — `SKILL.md` on-demand instruction packages
 - [background-tasks.md](background-tasks.md) — sub-agents that run while the agent keeps working
+- [extras.md](extras.md) — `/extras`: optional features (speech to text, Computer Use, …) installed on demand
 - [models-config.md](models-config.md) — `models.json`, `config.toml`, themes
 - [compaction.md](compaction.md) — auto-compaction and `[defaults]` knobs

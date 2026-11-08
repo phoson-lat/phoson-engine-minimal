@@ -250,8 +250,11 @@ class JeepneyTransport(DBusTransport):
             raise DBusError(
                 "The Wayland backend needs 'jeepney' for a persistent D-Bus "
                 "connection (a session dies when its creating client "
-                "disconnects, which rules out one-shot `gdbus`). Install with: "
-                "uv sync --extra computeruse-wayland"
+                "disconnects, which rules out one-shot `gdbus`). "
+                "Install with: /extras install computeruse"
+                "  (or: phoson-cli extras install computeruse"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[computeruse]')"
             ) from exc
         self._new_method_call = new_method_call
         self._address_cls = DBusAddress

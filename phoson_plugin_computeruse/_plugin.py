@@ -191,8 +191,11 @@ class ComputerUsePlugin(Plugin):
                 from PIL import Image
             except ImportError as exc:  # pragma: no cover - depends on size
                 raise ComputerUseError(
-                    "Downscaling this screenshot needs Pillow. Install with: "
-                    "uv sync --extra computeruse"
+                    "Downscaling this screenshot needs Pillow. "
+                    "Install with: /extras install computeruse"
+                    "  (or: phoson-cli extras install computeruse"
+                    "; in a Python environment:"
+                    " pip install 'phoson-engine-minimal[computeruse]')"
                 ) from exc
             image = Image.open(BytesIO(data)).convert("RGB").resize((fit_w, fit_h))
             buffer = BytesIO()

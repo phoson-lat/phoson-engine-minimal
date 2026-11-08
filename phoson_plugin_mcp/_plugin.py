@@ -251,7 +251,11 @@ class MCPPlugin(Plugin):
         """Initialize MCP servers from configuration file."""
         if not MCP_AVAILABLE:
             raise ImportError(
-                "MCP package not installed. Install with: pip install mcp"
+                "MCP package not installed. "
+                "Install with: /extras install mcp"
+                "  (or: phoson-cli extras install mcp"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[mcp]')"
             )
 
         # Load configuration from file if it exists

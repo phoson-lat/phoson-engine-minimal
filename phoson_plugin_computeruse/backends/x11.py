@@ -93,9 +93,11 @@ class X11Backend(ComputerBackend):
         if not X11_AVAILABLE:
             raise ComputerUseError(
                 "The X11 backend needs the optional 'mss', 'Pillow' and "
-                "'python-xlib' packages. Install with: "
-                "uv sync --extra computeruse  (or: "
-                "pip install 'phoson-engine-minimal[computeruse]'). "
+                "'python-xlib' packages. "
+                "Install with: /extras install computeruse"
+                "  (or: phoson-cli extras install computeruse"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[computeruse]'). "
                 f"Original error: {_X11_IMPORT_ERROR}"
             )
         try:

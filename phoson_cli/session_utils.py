@@ -490,6 +490,10 @@ def build_plugin_specs(config: PhosonConfig) -> list[str | dict[str, Any] | Plug
     available only through ``AgentEngine``'s API; TOML config is
     intentionally restricted to strings and dictionaries.
     """
+    # Extras (`/extras install`) are importable before any plugin needs them.
+    from .extras import activate_extras
+
+    activate_extras()
     if config.plugins:
         # Community plugins live in isolated directories under
         # ~/.phoson/plugins; make them importable before the engine loads
