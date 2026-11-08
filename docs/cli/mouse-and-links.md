@@ -39,3 +39,24 @@ everything that followed — the "all text is underlined" glitch.
 `phoson_cli.hyperlinks.osc8_passthrough` now anchors such a close onto a
 figure space (`U+2007`, visually blank) so the sequence stays balanced.
 This is an internal rendering detail; it needs no action from the user.
+
+## Rendering safety
+
+Two classes of rendering glitches are prevented in the full-screen TUI:
+
+- **Links that spread over the screen.** The TUI repaints only the cells
+  that change, so a repaint could write the start of a link without its end,
+  and the terminal would then treat everything written afterwards (footer,
+  spinner, other lines) as part of that link. The output layer now closes any
+  open link before the cursor moves, a line ends or the frame is flushed
+  (`phoson_cli.hyperlinks.guard_hyperlinks`). Links still work; nothing else
+  can inherit them.
+- **Characters that break lines.** Rich and prompt_toolkit used to disagree
+  on the width of some text: emoji with a variation selector (`⚠️`), ZWJ
+  sequences (`👨‍👩‍👧`), skin tones and flags, and raw control bytes or escape
+  sequences in tool output. Text then shifted, wrapped early or overwrote
+  itself. Every rendered segment is now normalized to the width Rich laid it
+  out with: escapes and control bytes become spaces, and composite emoji are
+  shown as their base character (flags as their country letters, `🇲🇽` →
+  `MX`). In the bash preview, a carriage return (progress bars) keeps only
+  what was written last, as a terminal would.

@@ -1015,10 +1015,15 @@ def _bash_output_body(result: str, theme: Theme) -> list[RenderableType]:
     stripped = result.strip()
     if not stripped:
         return []
-    out_lines = stripped.splitlines()
+    # Split on newlines only: ``splitlines`` would also split on the bare
+    # ``\r`` a progress bar uses to redraw its line (handled below).
+    out_lines = stripped.split("\n")
     shown = out_lines[:_BASH_PREVIEW_LINES]
     rendered: list[RenderableType] = []
     for line in shown:
+        # A carriage return rewinds the line (progress bars): the terminal
+        # would show only what was written last, so keep just that part.
+        line = line.rstrip("\r").rsplit("\r", 1)[-1]
         clean = _OSC_RE.sub("", line[:100])
         line_text = Text.from_ansi(clean, style=theme.text)
         rendered.append(Text(_INDENT, style=theme.text) + line_text)
