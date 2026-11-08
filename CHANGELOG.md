@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.61.0 (2026-11-08)
+
+Real cost and context-window numbers for every provider, a smoother plugin experience, and
+faster MCP startup.
+
+### Breaking
+
+- **llm**: the GitHub Models provider is removed, because GitHub retired the service on
+  2026-07-30. `phoson_llm` no longer exports `GitHubModelsChat`, and `GITHUB_TOKEN` no longer
+  auto-enables a provider. An existing `provider = "github"` config still loads; using it explains
+  the retirement and asks you to pick another provider ([#304](https://github.com/phoson-lat/phoson-engine-minimal/pull/304))
+
+### Feat
+
+- **llm**: cost is tracked for every API provider:
+  - DeepSeek, xAI, Groq, Together, Fireworks, Perplexity, Cohere, NVIDIA and Azure now price their
+    calls.
+  - Cheaper Inference prices from its live catalog, with cache rates and the long-context tier.
+  - Perplexity uses the cost each response reports, which includes search fees.
+  - The price table gains the current OpenAI, Anthropic, Gemini, xAI and Groq lineups.
+  - Cached tokens of a model without a separate cache rate are no longer counted as free.
+
+  ([#298](https://github.com/phoson-lat/phoson-engine-minimal/pull/298))
+- **context**: the context window is known for every provider's models. It comes from the
+  provider's own model listing (Anthropic, Gemini, Groq, DeepSeek, Mistral, Fireworks, Cohere, xAI,
+  Together, Cheaper Inference), from an updated built-in table (Claude 5.x and gpt-5.5 at 1M+,
+  grok-4.x, …), and otherwise from the model family's most conservative window. 1M-token models
+  no longer compact at 128K. The compaction gate now also honours the `models.json`
+  `context_window` override ([#303](https://github.com/phoson-lat/phoson-engine-minimal/pull/303))
+- **plugins**: `phoson-cli plugin config <id>` shows each setting with its value and where it
+  comes from. `set` and `unset` validate against the plugin's manifest before saving
+  ([#301](https://github.com/phoson-lat/phoson-engine-minimal/pull/301))
+- **plugins**: the standalone binary can install plugins without `uv` on PATH. It downloads a
+  pinned, checksum-verified `uv` once into `~/.phoson/bin`; `PHOSON_NO_MANAGED_UV=1` opts out
+  ([#299](https://github.com/phoson-lat/phoson-engine-minimal/pull/299))
+- **permissions**: tools of an installed plugin that declares `shell` or filesystem writes ask
+  before running, and your intent rules (for example `network_outbound`) cover the capabilities a
+  plugin declares. Official plugins are unchanged ([#302](https://github.com/phoson-lat/phoson-engine-minimal/pull/302))
+
+### Perf
+
+- **mcp**: MCP servers are discovered in parallel at startup, each bounded by a `startup_timeout`
+  (30 s by default). A hung server no longer blocks the CLI ([#300](https://github.com/phoson-lat/phoson-engine-minimal/pull/300))
+
 ## v0.60.0 (2026-11-07)
 
 Prompt caching on Cheaper Inference.
