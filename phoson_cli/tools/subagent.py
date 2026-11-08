@@ -31,6 +31,7 @@ from phoson_llm.exceptions import PhosonProviderError
 from phoson_agent.exceptions import PhosonAgentError, PhosonMaxIterationsError
 from phoson_agent.middleware import AgentMiddleware
 
+from ..tasks import TaskManager, mark_subagent_context, reset_subagent_context
 from ._timeouts import sanitize_timeout
 from .subagent_metrics import (
     AgentStatus,
@@ -406,6 +407,21 @@ async def _stream_final(
     ``code``/``message`` when the stream ended in an
     ``AgentErrorEvent`` — so callers can classify either shape.
     """
+    # Mark the run as a sub-agent's: middleware shared with the parent (the
+    # background-task delivery) must not act on the child's LLM calls.
+    token = mark_subagent_context()
+    try:
+        return await _stream_final_inner(engine, messages, config, on_event)
+    finally:
+        reset_subagent_context(token)
+
+
+async def _stream_final_inner(
+    engine: AgentEngine,
+    messages: list[Message],
+    config: ModelConfig,
+    on_event: Callable[[Any], None] | None,
+) -> AgentRunResult:
     terminal_error: AgentErrorEvent | None = None
     try:
         async for event in engine.stream(messages, config):
@@ -459,6 +475,7 @@ async def _run_one_subagent(
     safe_mode: bool = False,
     bash_confirmation: Any = None,
     plugin_ui: Any = None,
+    on_update: Callable[[], None] | None = None,
 ) -> tuple[str, str | None]:
     """Run a single sub-agent; return ``(final_content, fallback_used)``.
 
@@ -480,6 +497,8 @@ async def _run_one_subagent(
     def _on_event(event: Any) -> None:
         if progress is not None and isinstance(event, AgentStepDoneEvent):
             progress.update_from_step(index, event.step)
+            if on_update is not None:
+                on_update()
 
     async def _run(model_name: str) -> AgentRunResult:
         sub_engine = AgentEngine(
@@ -596,6 +615,9 @@ _AGENT_INJECT = [
     "middlewares",
     "bash_confirmation",
     "plugin_ui",
+    # Session background tasks (``background: true``); absent in one-shot
+    # mode and inside sub-agents, where the tools then run in the foreground.
+    "task_manager",
 ]
 _AGENTS_INJECT = _AGENT_INJECT + ["subagent_max_parallel"]
 
@@ -606,6 +628,68 @@ SUBAGENT_TIMEOUT_DESCRIPTION = (
     "the configured default (300s). Raise it for long-running tasks (no "
     "maximum). 0 disables the timeout entirely."
 )
+
+
+#: Description the LLM sees for the ``background`` parameter.
+SUBAGENT_BACKGROUND_DESCRIPTION = (
+    "Run in the background and return at once with a task id such as #3. You "
+    "keep working; the result is delivered to you automatically when it "
+    "finishes, or call task_wait / task_output to get it sooner. Use it for "
+    "long, independent work you don't need right away."
+)
+
+
+def _start_background_agents(
+    manager: TaskManager,
+    tasks: list[str],
+    *,
+    run_kwargs: dict[str, Any],
+    model: str,
+    timeout_note: str | None,
+) -> str:
+    """Start one background task per sub-agent task; describe what started."""
+    lines: list[str] = []
+    for task_text in tasks:
+        tracker = SubagentProgressTracker()
+        index = tracker.register(task_text)
+
+        def _make_run(
+            task_text: str = task_text,
+            tracker: SubagentProgressTracker = tracker,
+            index: int = index,
+        ):
+            async def _run(record: Any) -> str:
+                tracker.start(index)
+                content, fallback_used = await _run_one_subagent(
+                    task=task_text,
+                    model=model,
+                    progress=tracker,
+                    index=index,
+                    on_update=lambda: manager.notify(record),
+                    **run_kwargs,
+                )
+                if fallback_used:
+                    return f"[fallback to {fallback_used}] {content}"
+                return content
+
+            return _run
+
+        try:
+            record = manager.start(
+                "agent", task_text, _make_run(), progress=tracker.tasks[index]
+            )
+        except RuntimeError as exc:
+            lines.append(f"- not started: {task_text[:60]!r} ({exc})")
+            continue
+        lines.append(f"- {record.label}: {task_text[:80]}")
+    started = any(line.startswith("- #") for line in lines)
+    body = ("Started in the background:\n" if started else "") + "\n".join(lines)
+    if started:
+        body += (
+            "\nKeep working. Each result is delivered to you when it finishes; "
+            "use task_wait / task_output if you need one sooner."
+        )
+    return f"{timeout_note}\n{body}" if timeout_note else body
 
 
 def _resolve_subagent_timeout(
@@ -630,6 +714,7 @@ async def agent(
     tools: list[str] | None = None,
     model: str | None = None,
     timeout: Annotated[float | None, SUBAGENT_TIMEOUT_DESCRIPTION] = None,
+    background: Annotated[bool, SUBAGENT_BACKGROUND_DESCRIPTION] = False,
     *,
     chat: BaseLLMChat,
     available_tools: dict[str, AgentTool],
@@ -642,6 +727,7 @@ async def agent(
     middlewares: list[AgentMiddleware] | None = None,
     bash_confirmation: Any = None,
     plugin_ui: Any = None,
+    task_manager: TaskManager | None = None,
 ) -> str:
     """Delegate a self-contained task to a fresh sub-agent (clean context).
 
@@ -671,6 +757,25 @@ async def agent(
     effective_timeout, timeout_note = _resolve_subagent_timeout(
         timeout, subagent_timeout_seconds
     )
+
+    if background and task_manager is not None:
+        return _start_background_agents(
+            task_manager,
+            [task],
+            run_kwargs=dict(
+                chat=chat,
+                selected_tools=list(selected.values()),
+                max_iterations=max_iterations,
+                timeout_seconds=effective_timeout,
+                fallback_model=main_model,
+                middlewares=middlewares,
+                safe_mode=safe_mode,
+                bash_confirmation=bash_confirmation,
+                plugin_ui=plugin_ui,
+            ),
+            model=model or default_model,
+            timeout_note=timeout_note,
+        )
 
     # Live-metrics panel (E2): every call owns a fresh tracker — a run
     # may call this tool several times, and the panel must always show
@@ -710,6 +815,7 @@ async def agents(
     tools: list[str] | None = None,
     model: str | None = None,
     timeout: Annotated[float | None, SUBAGENT_TIMEOUT_DESCRIPTION] = None,
+    background: Annotated[bool, SUBAGENT_BACKGROUND_DESCRIPTION] = False,
     *,
     chat: BaseLLMChat,
     available_tools: dict[str, AgentTool],
@@ -723,6 +829,7 @@ async def agents(
     middlewares: list[AgentMiddleware] | None = None,
     bash_confirmation: Any = None,
     plugin_ui: Any = None,
+    task_manager: TaskManager | None = None,
 ) -> str:
     """Delegate several independent tasks to parallel sub-agents.
 
@@ -756,6 +863,25 @@ async def agents(
 
     effective_model = model or default_model
     selected_tools_list = list(selected.values())
+
+    if background and task_manager is not None:
+        return _start_background_agents(
+            task_manager,
+            tasks,
+            run_kwargs=dict(
+                chat=chat,
+                selected_tools=selected_tools_list,
+                max_iterations=max_iterations,
+                timeout_seconds=effective_timeout,
+                fallback_model=main_model,
+                middlewares=middlewares,
+                safe_mode=safe_mode,
+                bash_confirmation=bash_confirmation,
+                plugin_ui=plugin_ui,
+            ),
+            model=effective_model,
+            timeout_note=timeout_note,
+        )
     # Bound the concurrency: the parent agent decides how many tasks to
     # spawn, not how many LLM sessions may run at once.
     semaphore = asyncio.Semaphore(max(1, subagent_max_parallel))

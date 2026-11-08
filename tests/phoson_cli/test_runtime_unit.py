@@ -125,7 +125,13 @@ async def test_oneshot_and_controller_share_the_middleware_chain(tmp_path) -> No
     with patch("phoson_cli.controller.build_chat", return_value=_FakeChat()):
         controller = SessionController(config, _Sink())  # type: ignore[arg-type]
     try:
-        interactive = [type(mw).__name__ for mw in controller._middlewares]
+        # The REPL adds one host-only middleware on top of the shared chain:
+        # background-task delivery (one-shot has no background tasks).
+        interactive = [
+            type(mw).__name__
+            for mw in controller._middlewares
+            if type(mw).__name__ != "TaskDeliveryMiddleware"
+        ]
         assert captured["oneshot"] == interactive
         # One-shot used to ignore ``reasoning_sandwich`` entirely.
         assert captured["effort_scheduler"] is not None
