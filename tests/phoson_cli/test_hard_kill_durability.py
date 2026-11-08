@@ -444,5 +444,8 @@ async def test_cancel_mid_turn_does_not_duplicate_checkpointed_steps(tmp_path) -
 
     assert outcome.status == "cancelled"
     messages = await _disk_messages(tmp_path, session_id)
-    assert [m.role for m in messages] == ["user", "assistant"]
+    # The step is kept once, and the cancelled call is answered (R1): a
+    # bare tool_use would make every later turn fail with a 400.
+    assert [m.role for m in messages] == ["user", "assistant", "user"]
     assert isinstance(messages[1].content[0], ToolUseBlock)
+    assert messages[2].content[0].tool_call_id == "tc_1"
