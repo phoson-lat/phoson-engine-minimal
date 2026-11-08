@@ -33,10 +33,12 @@ else in this module needs the same treatment.
 import io
 
 from rich.console import Console
+from rich.segment import Segment
 
 from .sink import FullScreenSink
 from ..formatting import render_activity_line, render_streaming_panel
 from ..hyperlinks import osc8_passthrough
+from .terminal_text import safe_segment_text
 
 
 def _line_boundaries(s: str) -> list[int]:
@@ -138,8 +140,28 @@ def windowed_slice_parts(
     return prefix[start:] + tail[: stop - plen]
 
 
+class _TerminalSafeConsole(Console):
+    """A Console whose output prompt_toolkit lays out exactly like Rich did.
+
+    Every text segment goes through :func:`safe_segment_text`: escape
+    sequences and control bytes are blanked and multi-code-point clusters
+    whose widths disagree are reduced, keeping each segment's Rich width, so
+    prompt_toolkit never shifts or breaks a line (see
+    :mod:`phoson_cli.fullscreen.terminal_text`).
+    """
+
+    def render(self, renderable, options=None):  # noqa: ANN001, ANN201
+        for segment in super().render(renderable, options):
+            text = segment.text
+            if segment.control or not text:
+                yield segment
+                continue
+            safe = safe_segment_text(text)
+            yield segment if safe is text else Segment(safe, segment.style)
+
+
 def _make_console(buf: io.StringIO, width: int) -> Console:
-    return Console(
+    return _TerminalSafeConsole(
         file=buf,
         force_terminal=True,
         color_system="truecolor",

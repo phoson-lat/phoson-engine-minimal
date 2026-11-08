@@ -111,6 +111,89 @@ def osc8_passthrough(ansi_text: str) -> str:
     return _OSC8_RE.sub(lambda m: "\x01" + m.group(0) + "\x02", ansi_text)
 
 
+#: An OSC 8 sequence; group 1 is the URI (empty for a close).
+_OSC8_PARTS_RE = re.compile(r"\x1b\]8;[^;\x1b]*;([^\x1b]*)\x1b\\")
+
+#: The OSC 8 close sequence written to end an open hyperlink.
+OSC8_CLOSE = "\x1b]8;;\x1b\\"
+
+#: Output methods that move the cursor or end a write burst. A hyperlink
+#: must never stay open across them (see :func:`guard_hyperlinks`).
+_BOUNDARY_METHODS = (
+    "cursor_goto",
+    "cursor_up",
+    "cursor_down",
+    "cursor_forward",
+    "cursor_backward",
+    "erase_screen",
+    "erase_end_of_line",
+    "erase_down",
+    "enter_alternate_screen",
+    "quit_alternate_screen",
+    "flush",
+)
+
+
+def guard_hyperlinks(output: object) -> object:
+    """Keep a prompt_toolkit ``Output`` from leaving a hyperlink open.
+
+    prompt_toolkit repaints only the cells that changed. An OSC 8 *open*
+    rides on the first cell of a link and the *close* on the cell after it,
+    so a repaint that rewrites the first cell but not the last (scrolling,
+    a streamed line, a resize) writes the open without the close. Terminals
+    treat the link as "on" for every character written afterwards — the
+    footer, the spinner, the next lines — so all of it turns into one big
+    hyperlink: the "everything is highlighted as a link" bug.
+
+    This wraps ``output`` in place: it tracks whether the last OSC 8
+    sequence written through ``write_raw`` opened a link, and writes a close
+    before any cursor movement, erase, line break or flush while one is
+    open. A link's own cells are written contiguously, so they keep their
+    hyperlink; nothing outside them can inherit it. Returns ``output``.
+    """
+    write_raw = getattr(output, "write_raw", None)
+    if write_raw is None or getattr(output, "_phoson_link_guard", False):
+        return output
+    state = {"open": False}
+
+    def _close_if_open() -> None:
+        if state["open"]:
+            state["open"] = False
+            write_raw(OSC8_CLOSE)
+
+    def guarded_write_raw(data: str) -> None:
+        last = None
+        for last in _OSC8_PARTS_RE.finditer(data):
+            pass
+        if last is not None:
+            state["open"] = bool(last.group(1))
+        write_raw(data)
+
+    write = getattr(output, "write", None)
+    if write is not None:
+
+        def guarded_write(data: str) -> None:
+            if "\n" in data or "\r" in data:
+                _close_if_open()
+            write(data)
+
+        output.write = guarded_write  # type: ignore[attr-defined]
+
+    for name in _BOUNDARY_METHODS:
+        method = getattr(output, name, None)
+        if method is None:
+            continue
+
+        def guarded(*args, _method=method, **kwargs):  # noqa: ANN002, ANN003
+            _close_if_open()
+            return _method(*args, **kwargs)
+
+        setattr(output, name, guarded)
+    output.write_raw = guarded_write_raw  # type: ignore[attr-defined]
+    output._phoson_link_guard = True  # type: ignore[attr-defined]
+    return output
+
+
 def file_uri(path: str) -> str:
     """OSC 8 ``file://`` URI for a path (T-7 tool-card links).
 
@@ -124,4 +207,4 @@ def file_uri(path: str) -> str:
     return "file://" + quote(str(resolved), safe="/")
 
 
-__all__ = ["osc8_passthrough"]
+__all__ = ["OSC8_CLOSE", "guard_hyperlinks", "osc8_passthrough"]
