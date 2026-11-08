@@ -28,6 +28,14 @@ default, no configuration needed:
   1024 tokens, so short prompts stay on Model Studio's implicit-cache path.
   Cached usage shows up as `cache_creation_input_tokens` (write) /
   `cached_tokens` (read).
+- **Cheaper Inference** — the gateway adds no cache markers on its own, so
+  Claude models (`claude-*`) get the same explicit markers: the system prompt
+  (the tool list rides along with it in Anthropic's prefix order) and the end of
+  the conversation carry `cache_control: {"type": "ephemeral"}`. Other models
+  (GPT, DeepSeek, …) rely on their provider's implicit cache and get no
+  markers. Every request also sends the session id as
+  `x-ci-prompt-cache-session`, so a conversation is routed consistently and the
+  upstream cache stays warm. Cached reads show up as `cached_tokens`.
 
 The system prompt is deliberately a **stable prefix** (date + timezone,
 not a live clock) so it does not bust the cache between turns. Cached

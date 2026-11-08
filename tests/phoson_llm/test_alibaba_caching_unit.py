@@ -145,6 +145,8 @@ def _build(messages, *, cache, system=None, tools=None):
         tools=tools,
         max_tokens_key="max_tokens",
         cache=cache,
+        # The adapter enables fusion exactly when it enables the cache.
+        coalesce_tool_results=cache,
     )
 
 

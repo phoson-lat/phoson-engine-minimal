@@ -560,6 +560,7 @@ def _build_request_kwargs(
     max_tokens_key: str,
     extra_kwargs: dict[str, Any] | None = None,
     cache: bool = False,
+    coalesce_tool_results: bool = False,
 ) -> dict[str, Any]:
     """Build the kwargs dict for ``chat.completions.create``.
 
@@ -571,6 +572,11 @@ def _build_request_kwargs(
             prefix (system + tool definitions) and the last message. Only
             enabled for providers that document the ``cache_control``
             content-part field (see :func:`_apply_explicit_cache`).
+        coalesce_tool_results: When True (and ``cache`` is on), fuse runs of
+            consecutive ``tool`` messages into one multi-block message
+            (:func:`_coalesce_tool_messages`). An Alibaba Model Studio
+            extension that plain OpenAI-compatible backends reject, so it is
+            opt-in separately from the cache markers.
     """
     kwargs: dict[str, Any] = {
         "model": config.model,
@@ -591,10 +597,11 @@ def _build_request_kwargs(
 
     # Applied after the system-message normalization so the marker lands on
     # whichever system message ends up at the front (config.system or the
-    # conversation's own). Consecutive tool results are fused first so the
-    # last-message marker stays within Model Studio's 20-block lookback window.
+    # conversation's own). On Model Studio, consecutive tool results are fused
+    # first so the last-message marker stays within its 20-block lookback window.
     if cache:
-        _coalesce_tool_messages(kwargs["messages"])
+        if coalesce_tool_results:
+            _coalesce_tool_messages(kwargs["messages"])
         _apply_explicit_cache(kwargs["messages"])
 
     if config.temperature is not None:
@@ -631,6 +638,7 @@ async def stream_chat_completions(
     cost_calculator: CostCalculator = _no_cost,
     extra_kwargs: dict[str, Any] | None = None,
     cache: bool = False,
+    coalesce_tool_results: bool = False,
 ) -> AsyncIterator[LLMEvent]:
     """Stream a response from an OpenAI-compatible Chat Completions endpoint.
 
@@ -659,6 +667,9 @@ async def stream_chat_completions(
             prefix and the last message (providers that document the
             ``cache_control`` content-part field — see
             :func:`_apply_explicit_cache`).
+        coalesce_tool_results: Fuse consecutive tool results on the cache
+            path (Alibaba Model Studio only — see
+            :func:`_coalesce_tool_messages`).
 
     Yields:
         Phoson ``LLMEvent`` instances in the order documented by
@@ -671,6 +682,7 @@ async def stream_chat_completions(
         max_tokens_key=max_tokens_key,
         extra_kwargs=extra_kwargs,
         cache=cache,
+        coalesce_tool_results=coalesce_tool_results,
     )
 
     text_acc = ""

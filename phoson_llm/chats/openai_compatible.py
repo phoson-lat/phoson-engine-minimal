@@ -29,8 +29,9 @@ class OpenAICompatibleChat(BaseLLMChat):
         prompt_caching: Opt-in explicit prompt caching. When True the shared
             loop marks the stable prefix (system + tool definitions) and the
             last message with ``cache_control`` content parts. Only enable it
-            for endpoints that document the field (Alibaba Model Studio);
-            other OpenAI-compatible backends may reject it.
+            for endpoints that document the field (Alibaba Model Studio,
+            Cheaper Inference for Claude); other OpenAI-compatible backends
+            may reject it.
     """
 
     def __init__(
@@ -73,6 +74,22 @@ class OpenAICompatibleChat(BaseLLMChat):
         """
         return self._prompt_caching
 
+    def _coalesce_tool_results(self, model: str) -> bool:  # noqa: ARG002
+        """Whether to fuse consecutive tool results on the cache path.
+
+        Off by default: only Alibaba Model Studio accepts the merged form.
+        """
+        return False
+
+    def _request_kwargs(self, config: ModelConfig) -> dict[str, Any] | None:
+        """Extra ``chat.completions.create`` kwargs for this request.
+
+        Defaults to the static ``extra_kwargs`` from the constructor.
+        Adapters override it to add per-request values (e.g. a header
+        derived from ``config.session_id``).
+        """
+        return self._extra_kwargs
+
     async def stream(
         self,
         messages: list[Message],
@@ -85,8 +102,9 @@ class OpenAICompatibleChat(BaseLLMChat):
             "config": config,
             "tools": tools,
             "max_tokens_key": self._max_tokens_key,
-            "extra_kwargs": self._extra_kwargs,
+            "extra_kwargs": self._request_kwargs(config),
             "cache": self._cache_enabled(config.model),
+            "coalesce_tool_results": self._coalesce_tool_results(config.model),
         }
         if self._cost_calculator is not None:
             kwargs["cost_calculator"] = self._cost_calculator
