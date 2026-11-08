@@ -40,7 +40,7 @@ Options:
   -y, --yes            Skip the confirmations (plugin install/update only)
   plugin <command>     Manage plugins (see `phoson-cli plugin help`):
                        install, uninstall, update, list, info, enable,
-                       disable, doctor, new, validate
+                       disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
   -h, --help           Show this help and exit
 ```

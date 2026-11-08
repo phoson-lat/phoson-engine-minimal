@@ -117,7 +117,7 @@ Options:
   -y, --yes            Skip the confirmations (plugin install/update only)
   plugin <command>     Manage plugins (see `phoson-cli plugin help`):
                        install, uninstall, update, list, info, enable,
-                       disable, doctor, new, validate
+                       disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
   -h, --help           Show this help and exit
 """
@@ -527,6 +527,12 @@ Install and manage community plugins (each in ~/.phoson/plugins/<id>/):
   info <id>            Manifest, capabilities, source and install location
   enable <id> / disable <id>
   doctor <id>          Load without initializing; check it against its manifest
+  config <id>          Show its settings: value, source (config/env/default),
+                       type and description from the manifest
+  config <id> set <key> <value>
+                       Validate against the manifest and save to config.toml
+                       (arrays/objects as JSON)
+  config <id> unset <key>
 
 Author plugins:
   new <id> [--dir D]   Scaffold a plugin project (manifest, tool, command, tests)
@@ -592,7 +598,10 @@ def _run_plugin_command(
         disable_plugin,
         install_plugin,
         uninstall_plugin,
+        set_plugin_config,
         configured_plugins,
+        plugin_config_view,
+        unset_plugin_config,
     )
 
     if not args or args[0] in {"help", "-h", "--help"}:
@@ -667,6 +676,30 @@ def _run_plugin_command(
                     print(f"  - {problem}")
                 return 1
             print(f"Plugin OK: {plugin.name} {plugin.version}")
+            return 0
+        if command == "config" and len(rest) == 1:
+            view = plugin_config_view(rest[0], config)
+            for line in view.lines():
+                print(line)
+            return 1 if view.problems else 0
+        if command == "config" and len(rest) == 4 and rest[1] == "set":
+            plugin_id, _, key, raw = rest
+            value, field_spec = set_plugin_config(plugin_id, key, raw, config)
+            shown = "********" if field_spec.secret else repr(value)
+            print(f"Set {plugin_id}.{key} = {shown}")
+            if field_spec.secret:
+                hint = f" or set ${field_spec.env}" if field_spec.env else ""
+                print(
+                    "  note: secrets are stored in plain text in config.toml; "
+                    f"keep it private{hint}."
+                )
+            return 0
+        if command == "config" and len(rest) == 3 and rest[1] == "unset":
+            plugin_id, _, key = rest
+            if unset_plugin_config(plugin_id, key, config):
+                print(f"Unset {plugin_id}.{key}")
+            else:
+                print(f"{plugin_id}.{key} was not set in config.toml")
             return 0
         if command == "new" and rest:
             rest, directory = _pop_option(rest, "--dir")

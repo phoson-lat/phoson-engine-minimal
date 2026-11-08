@@ -29,6 +29,7 @@ import tempfile
 import importlib
 import subprocess
 import importlib.metadata
+from typing import Any
 from pathlib import Path
 from datetime import UTC, datetime
 from dataclasses import field, dataclass
@@ -39,7 +40,12 @@ from packaging.utils import canonicalize_name
 
 from phoson_agent import Plugin, PluginManifest, load_plugin, load_manifest
 from phoson_agent.plugin_loader import find_plugin_manifest
-from phoson_agent.plugin_manifest import MANIFEST_FILENAME, engine_version
+from phoson_agent.plugin_manifest import (
+    MANIFEST_FILENAME,
+    ConfigField,
+    PluginManifestError,
+    engine_version,
+)
 
 from .config import PhosonConfig, PhosonConfigError, save_config
 
@@ -978,3 +984,173 @@ def plugin_info(plugin_id: str, config: PhosonConfig) -> PluginInfo:
     if configured is None and lock is None:
         raise PluginManagerError(f"Plugin not found: {plugin_id}")
     return PluginInfo(plugin_id=plugin_id, configured=configured, lock=lock)
+
+
+# ─── Plugin configuration (`plugin config`) ──────────────────────────────────
+
+_SECRET_MASK = "********"
+
+
+@dataclass(frozen=True)
+class ConfigRow:
+    """One manifest config key with its effective value and where it comes from."""
+
+    spec: ConfigField
+    value: Any
+    #: ``config`` (config.toml), ``env $NAME``, ``default`` or ``unset``.
+    source: str
+
+    def display_value(self) -> str:
+        if self.source == "unset":
+            return "-"
+        if self.spec.secret:
+            return _SECRET_MASK
+        import json
+
+        if isinstance(self.value, str):
+            return self.value
+        return json.dumps(self.value)
+
+
+@dataclass(frozen=True)
+class PluginConfigView:
+    """A plugin's configuration as ``plugin config <id>`` shows it."""
+
+    plugin_id: str
+    manifest: PluginManifest | None
+    values: dict[str, Any]
+    rows: list[ConfigRow]
+    problems: list[str]
+
+    def lines(self) -> list[str]:
+        if self.manifest is None or not self.manifest.config:
+            lines = [f"{self.plugin_id}: no [config] schema in its manifest."]
+            if self.values:
+                lines.append("  Configured values (config.toml):")
+                lines.extend(f"    {k} = {v!r}" for k, v in self.values.items())
+            return lines
+        lines = [f"{self.plugin_id} configuration:"]
+        for row in self.rows:
+            spec = row.spec
+            flags = ", ".join(
+                flag
+                for flag, on in (("required", spec.required), ("secret", spec.secret))
+                if on
+            )
+            head = f"  {spec.key} ({spec.type}{', ' + flags if flags else ''})"
+            lines.append(f"{head} = {row.display_value()}  [{row.source}]")
+            if spec.description:
+                lines.append(f"      {spec.description}")
+            if spec.choices:
+                lines.append(
+                    "      choices: " + ", ".join(repr(c) for c in spec.choices)
+                )
+            if spec.env:
+                lines.append(f"      env: ${spec.env}")
+        lines.extend(f"  problem: {problem}" for problem in self.problems)
+        return lines
+
+
+def _config_spec(config: PhosonConfig, plugin_id: str) -> tuple[list, int]:
+    """The spec list holding *plugin_id* and its index there."""
+    for specs in (config.plugins, config.disabled_plugins):
+        for index, spec in enumerate(specs):
+            if _matches(spec, plugin_id):
+                return specs, index
+    raise PluginManagerError(f"Configured plugin not found: {plugin_id}")
+
+
+def _spec_values(spec: str | dict) -> dict[str, Any]:
+    if isinstance(spec, dict) and isinstance(spec.get("config"), dict):
+        return dict(spec["config"])
+    return {}
+
+
+def _store_values(
+    config: PhosonConfig, specs: list, index: int, values: dict[str, Any]
+) -> None:
+    name = _plugin_name(specs[index])
+    specs[index] = {"name": name, "config": values} if values else name
+    save_config(config, only_fields={"plugins", "disabled_plugins"})
+
+
+def _schema_field(manifest: PluginManifest | None, plugin_id: str, key: str):
+    if manifest is None or not manifest.config:
+        raise PluginManagerError(
+            f"Plugin {plugin_id!r} declares no [config] schema; edit its inline "
+            "table in ~/.phoson/config.toml instead."
+        )
+    fields = {f.key: f for f in manifest.config}
+    if key not in fields:
+        raise PluginManagerError(
+            f"Unknown config key {key!r} for {plugin_id} "
+            f"(expected one of: {', '.join(sorted(fields))})"
+        )
+    return fields[key]
+
+
+def plugin_config_view(
+    plugin_id: str,
+    config: PhosonConfig,
+    *,
+    environ: dict[str, str] | None = None,
+) -> PluginConfigView:
+    """Effective configuration of a configured plugin, without importing it."""
+    activate_plugin_paths()
+    specs, index = _config_spec(config, plugin_id)
+    spec = specs[index]
+    values = _spec_values(spec)
+    manifest, _error = _manifest_info(spec)
+    env = os.environ if environ is None else environ
+    rows: list[ConfigRow] = []
+    problems: list[str] = []
+    if manifest is not None and manifest.config:
+        for field_spec in manifest.config:
+            if field_spec.key in values:
+                row = ConfigRow(field_spec, values[field_spec.key], "config")
+            elif field_spec.env and field_spec.env in env:
+                row = ConfigRow(
+                    field_spec, env[field_spec.env], f"env ${field_spec.env}"
+                )
+            elif field_spec.default is not None:
+                row = ConfigRow(field_spec, field_spec.default, "default")
+            else:
+                row = ConfigRow(field_spec, None, "unset")
+            rows.append(row)
+        try:
+            manifest.resolve_config(values, environ=dict(env))
+        except PluginManifestError as exc:
+            problems = list(exc.problems) or [str(exc)]
+    return PluginConfigView(plugin_id, manifest, values, rows, problems)
+
+
+def set_plugin_config(
+    plugin_id: str, key: str, raw_value: str, config: PhosonConfig
+) -> tuple[Any, ConfigField]:
+    """Validate *raw_value* against the manifest and store it in config.toml."""
+    activate_plugin_paths()
+    specs, index = _config_spec(config, plugin_id)
+    manifest, _error = _manifest_info(specs[index])
+    field_spec = _schema_field(manifest, plugin_id, key)
+    try:
+        value = field_spec.parse(raw_value)
+    except ValueError as exc:
+        raise PluginManagerError(f"{key}: {raw_value!r} {exc}") from None
+    problem = field_spec.check(value)
+    if problem:
+        raise PluginManagerError(f"{key}: {problem}")
+    values = _spec_values(specs[index])
+    values[key] = value
+    _store_values(config, specs, index, values)
+    return value, field_spec
+
+
+def unset_plugin_config(plugin_id: str, key: str, config: PhosonConfig) -> bool:
+    """Remove *key* from the plugin's stored config; ``False`` if it was not set."""
+    specs, index = _config_spec(config, plugin_id)
+    values = _spec_values(specs[index])
+    if key not in values:
+        return False
+    del values[key]
+    _store_values(config, specs, index, values)
+    return True

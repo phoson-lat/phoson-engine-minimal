@@ -42,7 +42,17 @@ phoson-cli plugin enable example
 phoson-cli plugin doctor example       # load without initialize(); check vs manifest
 phoson-cli plugin update example       # reinstall from the recorded source
 phoson-cli plugin uninstall example    # delete files, config and lock entry
+phoson-cli plugin config example       # settings: value, source, type, description
+phoson-cli plugin config example set limit 50
+phoson-cli plugin config example unset limit
 ```
+
+`plugin config` reads the `[config]` schema from the plugin's manifest, so
+values are checked (type, `choices`) before they are saved to the plugin's
+inline table in `~/.phoson/config.toml`. Arrays and objects are given as JSON.
+The listing shows where each effective value comes from (`config`,
+`env $VAR`, `default` or `unset`), masks `secret` keys and lists problems such
+as a missing required key; it exits non-zero when there are any.
 
 Each plugin is installed into **its own directory**, `~/.phoson/plugins/<id>/`,
 never into the CLI's environment. The CLI's installed versions are passed as

@@ -102,6 +102,30 @@ class ConfigField:
     env: str | None = None
     choices: tuple[Any, ...] = ()
 
+    def check(self, value: Any) -> str | None:
+        """Why *value* is invalid for this field, or ``None`` when it is valid."""
+        error = _type_error(value, self.type)
+        if error:
+            return error
+        if self.choices and value not in self.choices:
+            return f"{value!r} is not one of {', '.join(repr(c) for c in self.choices)}"
+        return None
+
+    def parse(self, raw: str) -> Any:
+        """Convert command-line text to this field's type.
+
+        Scalars use the same rules as the ``env`` override; arrays and
+        objects are JSON. Raises ``ValueError`` with a short reason.
+        """
+        if self.type in ("array", "object"):
+            import json
+
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                raise ValueError(f"is not valid JSON for an {self.type}") from None
+        return _coerce_env(raw, self.type)
+
 
 @dataclass(frozen=True)
 class Capabilities:
