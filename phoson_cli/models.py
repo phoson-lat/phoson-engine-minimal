@@ -65,7 +65,7 @@ def models_file_path(home: str | Path | None = None) -> Path:
 #: router, a vendor prefix in the model id does NOT identify the serving
 #: provider.
 ROUTER_PROVIDERS: frozenset[str] = frozenset(
-    {"openrouter", "github", "omniroute", "cheaperinference"}
+    {"openrouter", "omniroute", "cheaperinference"}
 )
 
 #: Provider aliases normalized to their canonical name.
@@ -97,7 +97,6 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "openai",
         "anthropic",
         "ollama",
-        "github",
         "nvidia",
         "xai",
         "grok",

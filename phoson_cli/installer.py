@@ -97,7 +97,6 @@ class SetupWizard:
         "openai",
         "anthropic",
         "ollama",
-        "github",
         "nvidia",
         "xai",
         "groq",
@@ -374,12 +373,6 @@ class SetupWizard:
             config.ollama_base_url = await self._prompt_text(
                 "Ollama base URL",
                 config.ollama_base_url or "http://localhost:11434",
-            )
-        if "github" in self.enabled_providers:
-            config.github_token = await self._secret_prompt(
-                "GitHub token",
-                config.github_token,
-                field_name="github_token",
             )
         if "nvidia" in self.enabled_providers:
             config.nvidia_api_key = await self._secret_prompt(
@@ -819,7 +812,6 @@ class SetupWizard:
         table.add_row("OpenAI", self._mask_secret(config.openai_api_key))
         table.add_row("Anthropic", self._mask_secret(config.anthropic_api_key))
         table.add_row("Ollama", config.ollama_base_url or "—")
-        table.add_row("GitHub", self._mask_secret(config.github_token))
         table.add_row("NVIDIA", self._mask_secret(config.nvidia_api_key))
         table.add_row("xAI / Grok", self._mask_secret(config.xai_api_key))
         table.add_row("Groq", self._mask_secret(config.groq_api_key))
@@ -1084,8 +1076,6 @@ class SetupWizard:
             enabled.append("anthropic")
         if config.ollama_base_url or config.provider == "ollama":
             enabled.append("ollama")
-        if config.github_token or config.provider == "github":
-            enabled.append("github")
         if config.nvidia_api_key or config.provider == "nvidia":
             enabled.append("nvidia")
         if config.xai_api_key or config.provider in ("xai", "grok"):

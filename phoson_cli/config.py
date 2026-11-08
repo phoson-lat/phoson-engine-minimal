@@ -38,7 +38,6 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
     "AnthropicChat": "phoson_llm.chats.anthropic",
     "OllamaChat": "phoson_llm.chats.ollama",
     "OpenRouterChat": "phoson_llm.chats.openrouter",
-    "GitHubModelsChat": "phoson_llm.chats.github_models",
     "NVIDIAChat": "phoson_llm.chats.nvidia",
     "GrokChat": "phoson_llm.chats.grok",
     "GroqChat": "phoson_llm.chats.groq",
@@ -126,7 +125,6 @@ class PhosonConfig:
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
     ollama_base_url: str | None = None
-    github_token: str | None = None
     nvidia_api_key: str | None = None
     xai_api_key: str | None = None
     groq_api_key: str | None = None
@@ -570,6 +568,12 @@ def _resolve_effort_profile(
     return {str(phase): effort for phase, effort in raw.items()}
 
 
+#: Providers whose service no longer exists, with the reason shown to users
+#: who still have one configured.
+RETIRED_PROVIDERS: Final[dict[str, str]] = {
+    "github": "GitHub Models was retired by GitHub on 2026-07-30.",
+}
+
 _PROVIDER_ALIASES: Final[dict[str, str]] = {
     "aws": "bedrock",
     "dashscope": "alibaba",
@@ -597,6 +601,8 @@ _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
         "deepseek",
         "fireworks",
         "gemini",
+        # Retired (see RETIRED_PROVIDERS): still accepted so an existing
+        # config loads and build_chat can explain, instead of failing startup.
         "github",
         "google-code-assist",
         "groq",
@@ -1004,9 +1010,6 @@ def load_config() -> PhosonConfig:
         ),
         ollama_base_url=_resolve_optional_str(
             "OLLAMA_BASE_URL", "ollama_base_url", fd, d.ollama_base_url
-        ),
-        github_token=_resolve_optional_str(
-            "GITHUB_TOKEN", "github_token", fd, d.github_token
         ),
         nvidia_api_key=_resolve_optional_str(
             "NVIDIA_API_KEY", "nvidia_api_key", fd, d.nvidia_api_key
@@ -1487,7 +1490,6 @@ _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
     "openrouter_api_key": "OPENROUTER_API_KEY",
     "openai_api_key": "OPENAI_API_KEY",
     "anthropic_api_key": "ANTHROPIC_API_KEY",
-    "github_token": "GITHUB_TOKEN",
     "nvidia_api_key": "NVIDIA_API_KEY",
     "xai_api_key": "XAI_API_KEY",
     "groq_api_key": "GROQ_API_KEY",
@@ -1640,7 +1642,6 @@ def save_config(
         ("openai_api_key", getattr(config, "openai_api_key", None)),
         ("anthropic_api_key", getattr(config, "anthropic_api_key", None)),
         ("ollama_base_url", getattr(config, "ollama_base_url", None)),
-        ("github_token", getattr(config, "github_token", None)),
         ("nvidia_api_key", getattr(config, "nvidia_api_key", None)),
         ("xai_api_key", getattr(config, "xai_api_key", None)),
         ("groq_api_key", getattr(config, "groq_api_key", None)),
@@ -1966,8 +1967,6 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("anthropic")
     if getattr(config, "ollama_base_url", None):
         providers.append("ollama")
-    if getattr(config, "github_token", None):
-        providers.append("github")
     if getattr(config, "nvidia_api_key", None):
         providers.append("nvidia")
     if getattr(config, "xai_api_key", None):
@@ -2124,9 +2123,10 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
         return _chat_class("OllamaChat")(
             base_url=base_url or config.ollama_base_url or "http://localhost:11434"
         )
-    if provider == "github":
-        return _chat_class("GitHubModelsChat")(
-            api_key=config.github_token, base_url=base_url
+    if provider in RETIRED_PROVIDERS:
+        raise ValueError(
+            f"{RETIRED_PROVIDERS[provider]} Choose another provider with "
+            "`phoson-cli --setup` or /provider."
         )
     if provider == "nvidia":
         return _chat_class("NVIDIAChat")(

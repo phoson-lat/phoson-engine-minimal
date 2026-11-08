@@ -60,7 +60,6 @@ if TYPE_CHECKING:
         CodeAssistChat,
         OpenRouterChat,
         PerplexityChat,
-        GitHubModelsChat,
         CheaperInferenceChat,
         OpenAICompatibleChat,
     )
@@ -110,7 +109,6 @@ __all__ = [
     "OllamaChat",
     "OpenRouterChat",
     "OpenAICompatibleChat",
-    "GitHubModelsChat",
     "NVIDIAChat",
     "GrokChat",
     "GroqChat",
@@ -180,7 +178,6 @@ _CHAT_EXPORTS = frozenset(
         "OllamaChat",
         "OpenRouterChat",
         "OpenAICompatibleChat",
-        "GitHubModelsChat",
         "NVIDIAChat",
         "GrokChat",
         "GroqChat",

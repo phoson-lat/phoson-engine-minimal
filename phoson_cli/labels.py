@@ -14,7 +14,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "openai": "OpenAI",
     "anthropic": "Anthropic",
     "ollama": "Ollama",
-    "github": "GitHub Models",
+    "github": "GitHub Models (retired)",
     "nvidia": "NVIDIA",
     "xai": "Grok (X.AI)",
     "grok": "Grok (X.AI)",

@@ -20,7 +20,6 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "anthropic": (".chats.anthropic", "AnthropicChat"),
     "ollama": (".chats.ollama", "OllamaChat"),
     "openrouter": (".chats.openrouter", "OpenRouterChat"),
-    "github": (".chats.github_models", "GitHubModelsChat"),
     "nvidia": (".chats.nvidia", "NVIDIAChat"),
     "xai": (".chats.grok", "GrokChat"),
     "grok": (".chats.grok", "GrokChat"),

@@ -10,7 +10,6 @@ Unified LLM chat interface providing a normalized API across multiple providers.
 - **Anthropic** — Claude 3.5, Claude 3, Claude 2 (with extended thinking, tool use, prompt caching)
 - **OpenRouter** — Multi-provider aggregation with unified pricing
 - **Ollama** — Local LLM inference (Llama, Mistral, etc.)
-- **GitHub Models** — Free access to Llama 3, Mistral, Phi-3, GPT-4o for developers
 - **NVIDIA** — GPU-accelerated inference for open models (Llama 3, Nemotron, Mistral)
 - **Groq** — Ultra-fast LPU inference (Llama 3, Mixtral)
 - **DeepSeek** — High-performance Chinese LLMs (DeepSeek-V3, DeepSeek-Coder)
@@ -92,7 +91,6 @@ Many providers use the OpenAI API format. Phoson provides dedicated classes for 
 
 | Class | Provider | Default Env Var |
 |-------|----------|-----------------|
-| `GitHubModelsChat` | GitHub Models | `GITHUB_TOKEN` |
 | `NVIDIAChat` | NVIDIA NIM | `NVIDIA_API_KEY` |
 | `GrokChat` | xAI Grok | `XAI_API_KEY` |
 | `GroqChat` | Groq | `GROQ_API_KEY` |
@@ -384,7 +382,7 @@ Model lookups are case-insensitive and also try `provider/model`, so ids that co
 | Cost reported by the provider (`usage.cost`, or Perplexity's `usage.cost.total_cost`, which includes search fees) | OpenRouter, Perplexity |
 | Live catalog `GET /public/models` (keyless, cached for 6 h) | Cheaper Inference |
 | Local price table (`phoson_llm.pricing.PRICES`) | OpenAI, Azure (deployment named after the model), Anthropic, Gemini, Bedrock, Mistral, Alibaba, DeepSeek, xAI, Groq, Together, Fireworks, Cohere, NVIDIA |
-| Not priced (`cost_known=False`) | Ollama, LM Studio, vLLM, OmniRoute, GitHub Models, ChatGPT and Code Assist subscriptions |
+| Not priced (`cost_known=False`) | Ollama, LM Studio, vLLM, OmniRoute, ChatGPT and Code Assist subscriptions |
 
 A model missing from its source reports `cost_known=False` (shown as unknown) instead of a guessed price.
 
@@ -394,7 +392,7 @@ A model missing from its source reports `cost_known=False` (shown as unknown) in
 from phoson_llm import (
     # Chat adapters
     BaseLLMChat, OpenAIChat, AnthropicChat, OllamaChat, OpenRouterChat,
-    GitHubModelsChat, NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
+    NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
     TogetherChat, CheaperInferenceChat, PerplexityChat, FireworksChat, CohereChat, OmniRouteChat,
     LMStudioChat, VLLMChat, AzureChat,
     GeminiChat, MistralChat, BedrockChat,

@@ -34,7 +34,6 @@ def test_secret_persistence_map_covers_every_supported_secret() -> None:
         "openrouter_api_key": "OPENROUTER_API_KEY",
         "openai_api_key": "OPENAI_API_KEY",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
-        "github_token": "GITHUB_TOKEN",
         "nvidia_api_key": "NVIDIA_API_KEY",
         "xai_api_key": "XAI_API_KEY",
         "groq_api_key": "GROQ_API_KEY",
