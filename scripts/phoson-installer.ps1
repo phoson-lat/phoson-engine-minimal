@@ -175,7 +175,20 @@ function Get-PhosonAsset {
         $oldProtocol = [Net.ServicePointManager]::SecurityProtocol
         try {
             [Net.ServicePointManager]::SecurityProtocol = $oldProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -OutFile $Destination -ErrorAction Stop
+            # GitHub's release CDN returns transient 5xx/504s at times: retry
+            # with backoff (2+4+8+16 s) before giving up.
+            $delay = 2
+            for ($attempt = 1; ; $attempt++) {
+                try {
+                    Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -OutFile $Destination -ErrorAction Stop
+                    break
+                }
+                catch {
+                    if ($attempt -ge 5) { throw }
+                    Start-Sleep -Seconds $delay
+                    $delay *= 2
+                }
+            }
         }
         finally { [Net.ServicePointManager]::SecurityProtocol = $oldProtocol }
     }
@@ -204,8 +217,9 @@ function Install-PhosonBinary {
             Get-PhosonAsset $base 'SHA256SUMS' $sums
         }
         catch {
-            Write-Warning "Could not download $asset from ${base}: $($_.Exception.Message)"
-            return $false
+            # A download failure is a network/GitHub problem, not a missing
+            # binary: never fall back to PyPI over it.
+            throw "Could not download $asset from ${base} (network or GitHub error): $($_.Exception.Message). Try again in a minute, or re-run with -Method uv to install from PyPI instead."
         }
         $expected = $null
         foreach ($line in Get-Content -LiteralPath $sums) {
