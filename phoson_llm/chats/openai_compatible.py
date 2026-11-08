@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
+from phoson_llm.utils import SDK_MAX_RETRIES, sdk_timeout
 from phoson_llm.pricing import price_table_calculator
 from phoson_llm.schemas import Message, LLMEvent, ModelConfig, ToolDefinition
 from phoson_llm.chats.base import BaseLLMChat
@@ -68,6 +69,8 @@ class OpenAICompatibleChat(BaseLLMChat):
             api_key=resolved_key,
             base_url=base_url,
             default_headers=default_headers or None,
+            timeout=sdk_timeout(),
+            max_retries=SDK_MAX_RETRIES,
         )
 
     def __repr__(self) -> str:

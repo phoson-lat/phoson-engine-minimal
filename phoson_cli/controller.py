@@ -16,6 +16,7 @@ front end is a new sink, not a fork.
 import uuid
 import asyncio
 import logging
+import contextlib
 from typing import Any
 from pathlib import Path
 from dataclasses import dataclass
@@ -583,16 +584,18 @@ class SessionController:
         # holds a persistent httpx.AsyncClient). Schedule on the running
         # loop; no-op on the first call from __init__.
         if old_chat is not None and hasattr(old_chat, "aclose"):
-            try:
-                asyncio.get_running_loop().create_task(old_chat.aclose())
-            except RuntimeError:
-                pass
+            self._spawn(old_chat.aclose(), "chat:aclose")
         # Release the old engine's plugin resources (e.g. MCP pooled
         # sessions / STDIO subprocesses) so switching model/provider does
         # not leak them. Failures are logged, never fatal to the rebuild.
         if old_plugins:
             try:
-                asyncio.get_running_loop().create_task(close_plugins(old_plugins))
+                asyncio.get_running_loop()
+                # Tracked: shutdown waits for it, and the new providers start
+                # only after the old ones closed (R7).
+                self._pending_plugin_close = self._spawn(
+                    close_plugins(old_plugins), "plugins:close"
+                )
             except RuntimeError:
                 for plugin in old_plugins:
                     try:
@@ -783,7 +786,7 @@ class SessionController:
         if not self._wake_resume_pending:
             return
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return
         self._wake_resume_pending = False
@@ -793,10 +796,49 @@ class SessionController:
             ensure = getattr(plugin, "ensure_started", None)
             if ensure is None:
                 continue
-            loop.create_task(
-                ensure(),
-                name=f"wakes:{getattr(plugin, 'name', 'plugin')}:ensure_started",
+            self._spawn(
+                self._start_after_close(ensure),
+                f"wakes:{getattr(plugin, 'name', 'plugin')}:ensure_started",
             )
+
+    def _spawn(self, coro: Any, name: str) -> asyncio.Task | None:
+        """Run ``coro`` in the background, tracked so nothing is lost (R7).
+
+        The task is kept until it finishes (a bare ``create_task`` can be
+        garbage-collected mid-flight and its errors were never retrieved),
+        failures are logged, and :meth:`shutdown` waits for what is left.
+        Without a running loop the coroutine is closed and ``None`` returned.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            coro.close()
+            return None
+        task = loop.create_task(coro, name=name)
+        jobs = self.__dict__.setdefault("_background_jobs", set())
+        jobs.add(task)
+
+        def _done(finished: asyncio.Task) -> None:
+            jobs.discard(finished)
+            if not finished.cancelled() and finished.exception() is not None:
+                _LOGGER.warning(
+                    "Background job %s failed", name, exc_info=finished.exception()
+                )
+
+        task.add_done_callback(_done)
+        return task
+
+    async def _start_after_close(self, ensure: Any) -> None:
+        """Start a wake provider once the previous engine's plugins closed.
+
+        Starting the new instance while the old one is still closing let the
+        old instance's teardown race the new reapers (jobs ended "orphaned").
+        """
+        pending = self.__dict__.get("_pending_plugin_close")
+        if pending is not None and not pending.done():
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.shield(pending)
+        await ensure()
 
     async def shutdown(self) -> None:
         """Release the chat client and any loaded engine plugins.
@@ -817,6 +859,11 @@ class SessionController:
         self._monitor_wake_task = None
         # Background tasks die with the session (sub-agents cannot resume).
         await self.tasks.shutdown()
+        # Let tracked housekeeping (old clients / plugins closing) finish, so
+        # quitting right after a rebuild cannot leave MCP servers running.
+        pending = list(self.__dict__.get("_background_jobs", ()))
+        if pending:
+            await asyncio.wait(pending, timeout=10)
         # Let the one-shot LLM title task finish (and persist) before the chat
         # client closes, so no task outlives the session.
         await self.titles.aclose()
@@ -950,7 +997,25 @@ class SessionController:
 
         async def consume() -> None:
             nonlocal terminal
-            async for event in self.engine.stream(path, config):
+            stream = self.engine.stream(path, config)
+            try:
+                await _drain(stream)
+            finally:
+                # Close the engine's generator *now*, not whenever GC gets to
+                # it: closing runs the engine's own cleanup, which records a
+                # "cancelled" result for every in-flight tool call. Without
+                # it, a cancel landing mid-checkpoint saved a ``tool_use``
+                # with no result and every later turn got a 400 (R1).
+                aclose = getattr(stream, "aclose", None)
+                try:
+                    if aclose is not None:
+                        await aclose()
+                except Exception:  # noqa: BLE001 - cleanup must not mask the cause
+                    _LOGGER.debug("Closing the agent stream failed", exc_info=True)
+
+        async def _drain(stream: Any) -> None:
+            nonlocal terminal
+            async for event in stream:
                 # Creating the task/iterator is not enough: the engine may
                 # still be waiting to start with the previous run's history.
                 # AgentStartEvent is emitted only after history is initialized.
@@ -1183,15 +1248,18 @@ class SessionController:
         # the source of truth (set by _set_run_status / load_session);
         # legacy metrics dicts carry no status, so save_meta passes None
         # and leaves the tree's value in place.
+        meta = {
+            **self.session_metrics.to_meta(),
+            "status": self.tree.status,
+            "last_run_id": self.tree.last_run_id,
+        }
+        save_with_meta = getattr(self.storage, "save_with_meta", None)
+        if save_with_meta is not None:
+            # One write instead of write + re-read + write (R5).
+            await save_with_meta(self.tree, meta)
+            return
         await self.storage.save(self.tree)
-        await self.storage.save_meta(
-            self.tree.session_id,
-            {
-                **self.session_metrics.to_meta(),
-                "status": self.tree.status,
-                "last_run_id": self.tree.last_run_id,
-            },
-        )
+        await self.storage.save_meta(self.tree.session_id, meta)
 
     async def _checkpoint(self) -> None:
         """Persist a durability-critical checkpoint of the in-flight turn.
@@ -1378,6 +1446,9 @@ class SessionController:
             terminal_event = await self._consume_stream(path, config)
         except asyncio.CancelledError:
             return await self._abort_turn(base_count)
+        except Exception as exc:  # noqa: BLE001 - R2: never leave a broken tree
+            await self._fail_turn(base_count, exc)
+            raise
 
         if isinstance(terminal_event, AgentErrorEvent):
             self.summarizer.clear_retained_reasoning()
@@ -1387,6 +1458,7 @@ class SessionController:
             # or /undo'd.
             if self._turn_history_initialized:
                 self._append_partial_history(base_count)
+            self._repair_cursor_orphans()
             self._persist_run_reasoning()
             self._set_run_status(STATUS_ABORTED)
             await self._save_session()
@@ -1433,11 +1505,64 @@ class SessionController:
         self.sink.capture_partial_reasoning()
         if self._turn_history_initialized:
             self._append_partial_history(base_count)
+        self._repair_cursor_orphans()
         self._persist_run_reasoning()
         self._set_run_status(STATUS_ABORTED)
         await self._save_session()
         self.sink.notify("warn", "Partial progress saved.")
         return RunOutcome(status="cancelled")
+
+    async def _fail_turn(self, base_count: int, exc: BaseException) -> RunOutcome:
+        """Keep the session usable after an unexpected error mid-turn (R2).
+
+        A failed checkpoint save (disk full, a Windows file lock), a bug in a
+        sink or a plugin used to escape the turn with the tree ending on a
+        ``tool_use`` and status ``active``: the next turn then sent an
+        unpaired call and got a 400. Like a cancel, this keeps what finished,
+        closes any unanswered tool call and saves best-effort — then the
+        error is re-raised unchanged, so front ends keep their handling of it
+        (the TUI's "could not save" path and protected exit).
+        """
+        _LOGGER.error("Turn failed: %s", exc, exc_info=exc)
+        self.summarizer.clear_retained_reasoning()
+        try:
+            self.sink.flush_line()
+        except Exception:  # noqa: BLE001 - reporting must not fail again
+            pass
+        if self._turn_history_initialized:
+            try:
+                self._append_partial_history(base_count)
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning("Could not keep the partial turn", exc_info=True)
+        self._repair_cursor_orphans()
+        self._set_run_status(STATUS_ABORTED)
+        try:
+            await self._save_session()
+        except Exception:  # noqa: BLE001 - the original error is what matters
+            _LOGGER.warning("Could not save the session after a failure", exc_info=True)
+        raise exc
+
+    def _repair_cursor_orphans(self) -> None:
+        """Answer any tool call the active path leaves without a result.
+
+        Idempotent (see :func:`orphan_recovery`); moves the cursor to the
+        recovery node so the next turn continues from a valid history.
+        """
+        node_id = self._session.current_node_id
+        if node_id is None:
+            return
+        try:
+            path = self._session.tree.get_node_path(node_id)
+        except (ValueError, KeyError):
+            return
+        before = len(path)
+        orphan_recovery(path)
+        if len(path) == before:
+            return
+        recovery = path[-1]
+        if recovery.id not in self._session.tree.nodes:
+            self._session.tree.add_node(recovery)
+        self._session.current_node_id = recovery.id
 
     # ── Autonomous monitor wake (I-126) ──────────────────────────────────
 
@@ -2002,7 +2127,10 @@ class SessionController:
         """
         target = session or self._session
         tree = target.tree
-        if tree.status not in (STATUS_ACTIVE, "orphaned"):
+        # ``aborted`` too: sessions saved by older versions after a cancel
+        # landed mid-checkpoint can end on an unanswered call (R1). The
+        # repair is a no-op on a valid history.
+        if tree.status not in (STATUS_ACTIVE, "orphaned", STATUS_ABORTED):
             return False
         if target.current_node_id is None:
             return False
@@ -2230,10 +2358,7 @@ class SessionController:
             # holds a persistent httpx.AsyncClient). Schedule on the running
             # loop; a no-op when there is none (sync test bootstrap).
             if old_chat is not None and hasattr(old_chat, "aclose"):
-                try:
-                    asyncio.get_running_loop().create_task(old_chat.aclose())
-                except RuntimeError:
-                    pass
+                self._spawn(old_chat.aclose(), "chat:aclose")
             self.engine.chat = self.chat
             self.engine.context.extra["chat"] = self.chat
 

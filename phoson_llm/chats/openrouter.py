@@ -39,6 +39,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
+from phoson_llm.utils import SDK_MAX_RETRIES, sdk_timeout
 from phoson_llm.schemas import (
     Message,
     LLMEvent,
@@ -92,6 +93,8 @@ class OpenRouterChat(BaseLLMChat):
             api_key=api_key or os.environ.get("OPENROUTER_API_KEY", ""),
             base_url=base_url,
             default_headers=default_headers,
+            timeout=sdk_timeout(),
+            max_retries=SDK_MAX_RETRIES,
         )
 
     async def stream(

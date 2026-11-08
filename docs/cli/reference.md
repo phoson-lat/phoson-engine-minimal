@@ -92,5 +92,6 @@ can contribute more; `/help` lists everything active in a session.
 | `/auth` | — | Sign in/out of subscription providers (ChatGPT, Google Code Assist) |
 | `/setup` | — | Run the initial setup wizard again |
 | `/mcp` | — | Manage Model Context Protocol servers |
+| `/browser` | — | Browser use (Chrome DevTools MCP): setup, status, mode, allow/block |
 | `/extras` | — | Install optional features (speech to text, Computer Use, SSH, …) |
 | `/update` | `/upgrade` | Check for and install CLI updates |

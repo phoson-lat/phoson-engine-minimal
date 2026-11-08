@@ -61,9 +61,10 @@ async def test_agent_error_returns_to_prompt_instead_of_crashing(tmp_path) -> No
 
     await repl.run_turn("Hola!")  # must not raise
 
-    # The conversation (user turn) is persisted.
+    # The conversation (user turn) is persisted, with its run status (the
+    # meta now rides on the same single write).
     assert repl.storage.save.await_count >= 1
-    assert repl.storage.save_meta.await_count >= 1
+    assert repl.tree.status == "aborted"
     assert len(repl.tree.nodes) == 1
     assert list(repl.tree.nodes.values())[0].message.role == "user"
 
@@ -146,6 +147,6 @@ async def test_successful_run_still_finalizes(tmp_path) -> None:
     await repl.run_turn("do it")
 
     assert repl.storage.save.await_count >= 1
-    assert repl.storage.save_meta.await_count >= 1
+    assert repl.tree.status == "completed"
     roles = [node.message.role for node in repl.tree.nodes.values()]
     assert roles == ["user", "assistant"]

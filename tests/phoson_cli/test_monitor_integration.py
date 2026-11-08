@@ -310,7 +310,8 @@ class TestControllerWiring:
         # Rebuild the engine (what /model does): old plugin is closed and
         # a new one must resurrect the monitor from disk.
         controller._rebuild_engine()
-        await asyncio.sleep(0)  # let the ensure_started task run
+        # The new instance starts once the old one has closed (R7).
+        await asyncio.sleep(0.1)
         new_plugin = find_monitor_plugin(controller.engine._loaded_plugins)
         assert new_plugin is not plugin
         assert _key("long") in new_plugin._tasks

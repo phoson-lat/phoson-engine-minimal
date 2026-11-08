@@ -11,8 +11,10 @@ from anthropic.types import (
 )
 
 from phoson_llm.utils import (
+    SDK_MAX_RETRIES,
     CONTEXT_LENGTH_ERROR_CODE,
     guess_mime,
+    sdk_timeout,
     map_error_code,
     load_file_as_base64,
     normalize_stop_reason,
@@ -357,6 +359,8 @@ class AnthropicChat(BaseLLMChat):
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
             base_url=base_url,
+            timeout=sdk_timeout(),
+            max_retries=SDK_MAX_RETRIES,
         )
 
     async def aclose(self) -> None:

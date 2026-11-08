@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
+from phoson_llm.utils import SDK_MAX_RETRIES, sdk_timeout
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -68,6 +69,8 @@ class OpenAIChat(BaseLLMChat):
         self._client = AsyncOpenAI(
             api_key=api_key or os.environ.get("OPENAI_API_KEY", ""),
             base_url=base_url,
+            timeout=sdk_timeout(),
+            max_retries=SDK_MAX_RETRIES,
         )
 
     async def stream(

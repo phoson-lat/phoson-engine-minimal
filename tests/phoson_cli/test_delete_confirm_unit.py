@@ -136,9 +136,8 @@ async def test_delete_command_reports_invalid_session_id() -> None:
     kept = await handler.handle(Command(name="/delete", args="../victim"))
 
     assert kept is True
-    assert host.errors == [
-        "Invalid session ID. Use /sessions to choose a saved session."
-    ]
+    # Nothing matches the unsafe id, so delete() is never reached.
+    assert host.errors == ["No session matching '../victim'. Run /sessions to list."]
 
 
 @pytest.mark.asyncio

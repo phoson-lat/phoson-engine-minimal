@@ -11,6 +11,7 @@ completers) so the session runtime can build the catalog without the TUI
 stack.
 """
 
+import re
 import inspect
 from typing import Final
 from dataclasses import dataclass
@@ -112,6 +113,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/notify",
             "/warnings",
             "/mcp",
+            "/browser",
             "/extras",
             "/auth",
             "/setup",
@@ -286,6 +288,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     CommandSpec(("/setup",), "Run the initial setup wizard again", "_cmd_setup"),
     CommandSpec(("/mcp",), "Manage Model Context Protocol servers", "_cmd_mcp"),
     CommandSpec(
+        ("/browser",),
+        "Browser use (Chrome DevTools MCP): setup, status, mode, allow/block",
+        "_cmd_browser",
+    ),
+    CommandSpec(
         ("/extras",),
         "Install optional features (speech to text, Computer Use, SSH, …)",
         "_cmd_extras",
@@ -451,6 +458,11 @@ def get_command_help(
 # ─── Parsing ─────────────────────────────────────────────────────────────────
 
 
+#: What a slash-command name looks like (``/model``, ``/reasoning-effort``,
+#: plugin ``/acme:notes``). Anything else starting with "/" is a message.
+_COMMAND_NAME_RE = re.compile(r"^/[A-Za-z][\w:-]*$")
+
+
 @dataclass
 class Command:
     """Represents a parsed slash command."""
@@ -466,5 +478,9 @@ def parse_command(text: str) -> Command | None:
         return None
     parts = stripped.split(maxsplit=1)
     name = parts[0]
+    # A pasted path ("/Users/me/app.py crashes") is a message: command names
+    # are one word with no further slashes.
+    if not _COMMAND_NAME_RE.match(name):
+        return None
     args = parts[1].strip() if len(parts) > 1 else ""
     return Command(name=name, args=args)

@@ -412,7 +412,12 @@ class CommandHandler:
         self._refresh_dispatch()
         handler = self._dispatch.get(cmd.name)
         if handler is None:
-            self.host.print_error(f"Unknown command: {cmd.name}")
+            import difflib
+
+            names = sorted(self._dispatch)
+            close = difflib.get_close_matches(cmd.name, names, n=1, cutoff=0.6)
+            hint = f" Did you mean {close[0]}?" if close else " See /help."
+            self.host.print_error(f"Unknown command: {cmd.name}.{hint}")
             return True
         return await handler(self, cmd)
 
@@ -1362,6 +1367,17 @@ class CommandHandler:
             r.print_error("Usage: /permissions <tool> <allow|ask|deny>")
             return True
         tool, level = parts
+        known = _known_tool_names(self.session)
+        if known and tool != WILDCARD_TOOL and tool not in known:
+            import difflib
+
+            close = difflib.get_close_matches(tool, sorted(known), n=1)
+            hint = f" Did you mean {close[0]!r}?" if close else ""
+            r.print_error(
+                f"Unknown tool {tool!r}; nothing was changed.{hint} "
+                "Use * for every tool."
+            )
+            return True
         if not set_level(policy, tool, level):
             r.print_error(f"Invalid level: {level!r} — use allow, ask or deny")
             return True
@@ -1832,18 +1848,35 @@ class CommandHandler:
         if not cmd.args:
             r.print_info("Usage:  /delete <session_id>")
             return True
-        session_id = cmd.args.strip()
+        query = cmd.args.strip()
+        # Same prefix matching as /resume: a short id is what users type,
+        # and deleting must never "succeed" for an id that matched nothing.
+        sessions = await self.session.storage.list_meta()
+        matches = [s for s in sessions if str(s.id).startswith(query)]
+        if not matches:
+            r.print_error(f"No session matching {query!r}. Run /sessions to list.")
+            return True
+        if len(matches) > 1:
+            r.print_info(f"{len(matches)} sessions match {query!r}:")
+            for s in matches[:10]:
+                title = getattr(s, "title", None) or "(untitled)"
+                r.print_info(f"  {str(s.id)[:8]}  [{title}]")
+            r.print_info("Be more specific.")
+            return True
+        session_id = str(matches[0].id)
         if session_id == self.session.tree.session_id:
             r.print_error("Cannot delete the current active session. Use /new first.")
             return True
+        title = getattr(matches[0], "title", None)
+        label = f"{session_id[:8]}" + (f" [{title}]" if title else "")
         if not await self.host.confirm(
-            f"Delete session {session_id[:8]}? This cannot be undone."
+            f"Delete session {label}? This cannot be undone."
         ):
             r.print_info("Delete cancelled.")
             return True
         try:
             await self.session.storage.delete(session_id)
-            r.print_info(f"Session {session_id[:8]} deleted.")
+            r.print_info(f"Session {label} deleted.")
         except ValueError:
             r.print_error(
                 "Invalid session ID. Use /sessions to choose a saved session."
@@ -1930,6 +1963,140 @@ class CommandHandler:
             return True
         body = task.outcome_text(limit=None) if task.done else (task.detail or "")
         r.print_info(f"{task.summary_line()}\n{body}".rstrip())
+        return True
+
+    async def _cmd_browser(self, cmd: Command) -> bool:
+        """``/browser [setup|status|mode M|allow P|block P|clear|on|off]``."""
+        from . import browser
+
+        r = self._r
+        config = self.session.config
+        path = Path(config.mcp_config_file)
+        words = cmd.args.split()
+        action = words[0].lower() if words else "status"
+        usage = (
+            "Usage: /browser [setup | status | mode profile|chrome | "
+            "allow <domain> | block <domain> | clear | on | off]"
+        )
+
+        async def _apply(message: str) -> None:
+            # The server entry changed: (re)start MCP so it takes effect.
+            if not config.enable_mcp:
+                config.enable_mcp = True
+                save_config(config, only_fields={"enable_mcp"})
+            await self.session.set_model(self.session.current_model)
+            r.print_info(message)
+
+        try:
+            settings = browser.current_settings(path)
+        except ValueError as exc:
+            r.print_error(str(exc))
+            return True
+
+        if action == "setup":
+            ok, node = browser.node_status()
+            if not ok:
+                r.print_error(node)
+                return True
+            found = browser.detect_browser()
+            if found is None:
+                r.print_error(
+                    "No Chrome, Edge, Brave or Chromium found. Install Google "
+                    "Chrome (the officially supported browser) and run "
+                    "/browser setup again."
+                )
+                return True
+            name, executable = found
+            settings = settings or browser.BrowserSettings()
+            # Chrome is found by the server itself; others are passed in.
+            settings.executable = None if name == "Chrome" else executable
+            browser.save_settings(path, settings)
+            notes = [
+                f"Browser use is set up with {name} ({node}).",
+                f"Mode: {settings.mode} — a dedicated profile in "
+                f"{browser.profile_dir()} (your own profile is not used).",
+                "Reading pages (navigate, snapshot, screenshot) runs freely; "
+                "clicks, typing, forms, uploads and scripts ask first.",
+                "Google usage statistics are off. Server: chrome-devtools-mcp "
+                f"{browser.SERVER_VERSION} (first start downloads it with npx).",
+            ]
+            if name != "Chrome":
+                notes.append(
+                    f"{name} works over the same protocol but only Chrome is "
+                    "officially supported by the server."
+                )
+            await _apply("\n".join(notes))
+            return True
+
+        if settings is None:
+            r.print_info("Browser use is not set up. Run /browser setup.")
+            return True
+
+        if action == "status":
+            ok, node = browser.node_status()
+            enabled = browser.is_enabled(path) and config.enable_mcp
+            lines = [
+                f"Browser use: {'on' if enabled else 'off'} · mode {settings.mode}",
+                "  browser: " + (settings.executable or "Chrome (found by the server)"),
+            ]
+            if settings.mode == "profile":
+                lines.append(f"  profile: {browser.profile_dir()}")
+            else:
+                lines.append("  your running Chrome (remote debugging must be on)")
+            lines.append(f"  allowed: {', '.join(settings.allowed) or 'any site'}")
+            lines.append(f"  blocked: {', '.join(settings.blocked) or 'none'}")
+            lines.append(f"  {node}")
+            r.print_info("\n".join(lines))
+            return True
+
+        if action == "mode" and len(words) == 2 and words[1] in browser.MODES:
+            settings.mode = words[1]
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            if settings.mode == "chrome":
+                message = (
+                    "Mode: chrome — the agent attaches to the Chrome you have "
+                    "open, with your real profile and sessions. Requires Chrome "
+                    "144+ and remote debugging enabled in "
+                    "chrome://inspect/#remote-debugging. Navigation now asks too."
+                )
+            else:
+                message = (
+                    f"Mode: profile — a dedicated profile in {browser.profile_dir()}."
+                )
+            await _apply(message)
+            return True
+
+        if action in {"allow", "block"} and len(words) == 2:
+            try:
+                pattern = browser.normalize_pattern(words[1])
+            except ValueError as exc:
+                r.print_error(str(exc))
+                return True
+            target = settings.allowed if action == "allow" else settings.blocked
+            if pattern not in target:
+                target.append(pattern)
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            extra = (
+                " Only allowed sites can be opened (needs Chrome 149+)."
+                if action == "allow"
+                else ""
+            )
+            await _apply(f"{action.capitalize()}ed {pattern}.{extra}")
+            return True
+
+        if action == "clear":
+            settings.allowed.clear()
+            settings.blocked.clear()
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            await _apply("Cleared the allowed and blocked sites.")
+            return True
+
+        if action in {"on", "off"}:
+            browser.save_settings(path, settings, enabled=action == "on")
+            await _apply(f"Browser use {action}.")
+            return True
+
+        r.print_error(usage)
         return True
 
     async def _cmd_tokens(self, cmd: Command) -> bool:  # noqa: ARG002
@@ -2109,3 +2276,12 @@ def run_bg_command(args: list[str]) -> int:
         file=sys.stderr,
     )
     return 2
+
+
+def _known_tool_names(session: object) -> set[str]:
+    """Names of the tools the running engine has (empty when unknown)."""
+    engine = getattr(session, "engine", None)
+    tools = getattr(engine, "tools", None) or []
+    return {
+        name for tool in tools if isinstance(name := getattr(tool, "name", None), str)
+    }

@@ -446,7 +446,14 @@ async def _run_classic(repl, session: str | None) -> str | None:
     if session and (error := await _resume_session(repl, session)):
         await repl.shutdown()
         return error
-    await repl.run()
+    try:
+        await repl.run()
+    finally:
+        # R2: a crash out of the REPL must still stop MCP servers, plugins
+        # and background tasks (shutdown is idempotent).
+        shutdown = getattr(repl, "shutdown", None)
+        if shutdown is not None:
+            await shutdown()
     return None
 
 

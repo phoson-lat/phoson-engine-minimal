@@ -301,6 +301,8 @@ class PhosonRepl(SessionFrontend):
                 if self.is_running:
                     self.cancel_current()
                     self.renderer.print_warn("Interrupted — run cancelled.")
+            except Exception as exc:  # noqa: BLE001 - R2: keep the REPL alive
+                self.renderer.print_error(f"The turn failed: {exc}")
 
     # ── Reasoning (Ctrl+T) ─────────────────────────────────────────────────
 
