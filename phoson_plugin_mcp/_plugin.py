@@ -143,6 +143,44 @@ def _extract_annotations(remote_tool: Any) -> dict[str, Any]:
     }
 
 
+_HINT_KEYS = {
+    "readOnlyHint": "read_only",
+    "destructiveHint": "destructive",
+    "idempotentHint": "idempotent",
+    "openWorldHint": "open_world",
+}
+
+
+def _apply_annotation_override(
+    annotations: dict[str, Any], overrides: Any, remote_tool_name: str
+) -> dict[str, Any]:
+    """Merge the user's per-tool annotations from the server config.
+
+    ``"annotations": {"take_snapshot": {"readOnlyHint": true}}`` in a server
+    entry lets the *user's own config* correct how a server classifies a
+    tool (servers are conservative: chrome-devtools marks a snapshot as not
+    read-only). Only the four MCP hint names are honoured; the entry comes
+    from the user's file, never from the server.
+    """
+    if not isinstance(overrides, dict):
+        return annotations
+    override = overrides.get(remote_tool_name)
+    if not isinstance(override, dict):
+        return annotations
+    merged = dict(annotations)
+    for key, value in override.items():
+        target = _HINT_KEYS.get(key)
+        if target is not None and isinstance(value, bool):
+            merged[target] = value
+            merged["annotated"] = True
+    if merged.get("annotated"):
+        for key in ("read_only", "idempotent"):
+            merged.setdefault(key, False)
+        for key in ("destructive", "open_world"):
+            merged.setdefault(key, True)
+    return merged
+
+
 class MCPPlugin(Plugin):
     """
     Plugin for integrating Model Context Protocol (MCP) servers.
@@ -434,6 +472,9 @@ class MCPPlugin(Plugin):
     ) -> list[AgentTool]:
         """Convert remote MCP tool definitions to AgentTool objects."""
         agent_tools: list[AgentTool] = []
+        server_config = self.servers.get(server_name)
+        if not isinstance(server_config, dict):
+            server_config = {}
 
         for remote_tool in remote_tools:
             remote_tool_name = remote_tool.name
@@ -476,7 +517,13 @@ class MCPPlugin(Plugin):
                     description=description,
                     parameters=parameters,
                     handler=mcp_tool_handler,
-                    metadata={"mcp_annotations": _extract_annotations(remote_tool)},
+                    metadata={
+                        "mcp_annotations": _apply_annotation_override(
+                            _extract_annotations(remote_tool),
+                            server_config.get("annotations"),
+                            remote_tool_name,
+                        )
+                    },
                 )
             )
 

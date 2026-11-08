@@ -1932,6 +1932,140 @@ class CommandHandler:
         r.print_info(f"{task.summary_line()}\n{body}".rstrip())
         return True
 
+    async def _cmd_browser(self, cmd: Command) -> bool:
+        """``/browser [setup|status|mode M|allow P|block P|clear|on|off]``."""
+        from . import browser
+
+        r = self._r
+        config = self.session.config
+        path = Path(config.mcp_config_file)
+        words = cmd.args.split()
+        action = words[0].lower() if words else "status"
+        usage = (
+            "Usage: /browser [setup | status | mode profile|chrome | "
+            "allow <domain> | block <domain> | clear | on | off]"
+        )
+
+        async def _apply(message: str) -> None:
+            # The server entry changed: (re)start MCP so it takes effect.
+            if not config.enable_mcp:
+                config.enable_mcp = True
+                save_config(config, only_fields={"enable_mcp"})
+            await self.session.set_model(self.session.current_model)
+            r.print_info(message)
+
+        try:
+            settings = browser.current_settings(path)
+        except ValueError as exc:
+            r.print_error(str(exc))
+            return True
+
+        if action == "setup":
+            ok, node = browser.node_status()
+            if not ok:
+                r.print_error(node)
+                return True
+            found = browser.detect_browser()
+            if found is None:
+                r.print_error(
+                    "No Chrome, Edge, Brave or Chromium found. Install Google "
+                    "Chrome (the officially supported browser) and run "
+                    "/browser setup again."
+                )
+                return True
+            name, executable = found
+            settings = settings or browser.BrowserSettings()
+            # Chrome is found by the server itself; others are passed in.
+            settings.executable = None if name == "Chrome" else executable
+            browser.save_settings(path, settings)
+            notes = [
+                f"Browser use is set up with {name} ({node}).",
+                f"Mode: {settings.mode} — a dedicated profile in "
+                f"{browser.profile_dir()} (your own profile is not used).",
+                "Reading pages (navigate, snapshot, screenshot) runs freely; "
+                "clicks, typing, forms, uploads and scripts ask first.",
+                "Google usage statistics are off. Server: chrome-devtools-mcp "
+                f"{browser.SERVER_VERSION} (first start downloads it with npx).",
+            ]
+            if name != "Chrome":
+                notes.append(
+                    f"{name} works over the same protocol but only Chrome is "
+                    "officially supported by the server."
+                )
+            await _apply("\n".join(notes))
+            return True
+
+        if settings is None:
+            r.print_info("Browser use is not set up. Run /browser setup.")
+            return True
+
+        if action == "status":
+            ok, node = browser.node_status()
+            enabled = browser.is_enabled(path) and config.enable_mcp
+            lines = [
+                f"Browser use: {'on' if enabled else 'off'} · mode {settings.mode}",
+                "  browser: " + (settings.executable or "Chrome (found by the server)"),
+            ]
+            if settings.mode == "profile":
+                lines.append(f"  profile: {browser.profile_dir()}")
+            else:
+                lines.append("  your running Chrome (remote debugging must be on)")
+            lines.append(f"  allowed: {', '.join(settings.allowed) or 'any site'}")
+            lines.append(f"  blocked: {', '.join(settings.blocked) or 'none'}")
+            lines.append(f"  {node}")
+            r.print_info("\n".join(lines))
+            return True
+
+        if action == "mode" and len(words) == 2 and words[1] in browser.MODES:
+            settings.mode = words[1]
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            if settings.mode == "chrome":
+                message = (
+                    "Mode: chrome — the agent attaches to the Chrome you have "
+                    "open, with your real profile and sessions. Requires Chrome "
+                    "144+ and remote debugging enabled in "
+                    "chrome://inspect/#remote-debugging. Navigation now asks too."
+                )
+            else:
+                message = (
+                    f"Mode: profile — a dedicated profile in {browser.profile_dir()}."
+                )
+            await _apply(message)
+            return True
+
+        if action in {"allow", "block"} and len(words) == 2:
+            try:
+                pattern = browser.normalize_pattern(words[1])
+            except ValueError as exc:
+                r.print_error(str(exc))
+                return True
+            target = settings.allowed if action == "allow" else settings.blocked
+            if pattern not in target:
+                target.append(pattern)
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            extra = (
+                " Only allowed sites can be opened (needs Chrome 149+)."
+                if action == "allow"
+                else ""
+            )
+            await _apply(f"{action.capitalize()}ed {pattern}.{extra}")
+            return True
+
+        if action == "clear":
+            settings.allowed.clear()
+            settings.blocked.clear()
+            browser.save_settings(path, settings, enabled=browser.is_enabled(path))
+            await _apply("Cleared the allowed and blocked sites.")
+            return True
+
+        if action in {"on", "off"}:
+            browser.save_settings(path, settings, enabled=action == "on")
+            await _apply(f"Browser use {action}.")
+            return True
+
+        r.print_error(usage)
+        return True
+
     async def _cmd_tokens(self, cmd: Command) -> bool:  # noqa: ARG002
         m = self.session.session_metrics
         cache = ""
