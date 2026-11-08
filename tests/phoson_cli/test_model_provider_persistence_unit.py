@@ -54,7 +54,7 @@ def test_model_provider_for_uses_vendor_prefix() -> None:
 def test_model_provider_for_router_prefix_does_not_switch() -> None:
     # Routers serve other vendors' ids (openai/gpt-4o via OpenRouter).
     assert model_provider_for("openai/gpt-4o", "openrouter") is None
-    assert model_provider_for("anthropic/claude-sonnet-4-6", "github") is None
+    assert model_provider_for("anthropic/claude-sonnet-4-6", "omniroute") is None
 
 
 def test_model_provider_for_unknown_prefix_never_switches() -> None:

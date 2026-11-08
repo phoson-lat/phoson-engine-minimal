@@ -114,8 +114,6 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_xai_models(config)
     if provider == "nvidia":
         return await _list_nvidia_models(config)
-    if provider == "github":
-        return await _list_github_models(config)
     if provider == "azure":
         return await _list_azure_models(config)
     if provider in ("bedrock", "aws"):
@@ -662,33 +660,6 @@ async def _list_nvidia_models(config: PhosonConfig) -> list[ModelOption]:
         ModelOption(id=item.get("id", ""), label=item.get("id", ""), provider="nvidia")
         for item in data.get("data", [])
         if item.get("id")
-    ]
-    return _prioritize_current(options, config.model)
-
-
-async def _list_github_models(config: PhosonConfig) -> list[ModelOption]:
-    api_key = getattr(config, "github_token", None)
-    if not api_key:
-        return [ModelOption(id=config.model, label=config.model, provider="github")]
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                "https://models.inference.ai.azure.com/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            response.raise_for_status()
-            data = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise ModelListingError(f"Failed to fetch GitHub Models: {exc}") from exc
-    items = data if isinstance(data, list) else data.get("data", [])
-    options = [
-        ModelOption(
-            id=item.get("id", item.get("name", "")),
-            label=item.get("name") or item.get("id", ""),
-            provider="github",
-        )
-        for item in items
-        if item.get("id") or item.get("name")
     ]
     return _prioritize_current(options, config.model)
 

@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from phoson_llm.chats.openrouter import OpenRouterChat
     from phoson_llm.chats.perplexity import PerplexityChat
     from phoson_llm.chats.code_assist import CodeAssistChat
-    from phoson_llm.chats.github_models import GitHubModelsChat
     from phoson_llm.chats.cheaperinference import CheaperInferenceChat
     from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
@@ -50,7 +49,6 @@ __all__ = [
     "OllamaChat",
     "OpenRouterChat",
     "OpenAICompatibleChat",
-    "GitHubModelsChat",
     "NVIDIAChat",
     "GrokChat",
     "GroqChat",
@@ -80,7 +78,6 @@ _MODULES: dict[str, str] = {
     "OllamaChat": ".ollama",
     "OpenRouterChat": ".openrouter",
     "OpenAICompatibleChat": ".openai_compatible",
-    "GitHubModelsChat": ".github_models",
     "NVIDIAChat": ".nvidia",
     "GrokChat": ".grok",
     "GroqChat": ".groq",
