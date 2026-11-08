@@ -1,6 +1,7 @@
 """Tests for community plugin management CLI (I-110)."""
 
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -280,7 +281,8 @@ def test_update_plugin_uses_locked_requirement_and_preserves_config(tmp_path) ->
     with patch("phoson_cli.plugin_manager._lockfile_path", return_value=lockfile):
         assert update_plugin("demo", config, runner=runner) == "demo"
 
-    assert seen[0][:5] == ["uv", "pip", "install", "--upgrade", "--python"]
+    assert Path(seen[0][0]).stem == "uv"
+    assert seen[0][1:5] == ["pip", "install", "--upgrade", "--python"]
     assert seen[0][-1] == "git+https://github.com/org/demo.git@v1"
     assert config.plugins == ["entrypoint:demo"]
     assert _load_lockfile(lockfile)[0]["installed_at"] != "old"

@@ -53,6 +53,12 @@ after the package is staged, its `phoson-plugin.toml` manifest is shown
 commands it adds, its config keys) and you confirm before anything is
 enabled.
 
+Installs use `uv` (or `pip` for a Python install without `uv`). The
+standalone binary has no `pip`, so when `uv` is not on `PATH` it downloads a
+pinned `uv` release once into `~/.phoson/bin/`, verified against a SHA-256
+built into the CLI. Set `PHOSON_NO_MANAGED_UV=1` to forbid the download and
+use your own `uv` instead.
+
 `phoson-cli --install-plugin <source>` is an alias for `plugin install`, and
 `--yes` skips the confirmations in automation. Git sources are resolved to a
 commit SHA recorded in `~/.phoson/plugins.lock.toml`. Building a plugin and
