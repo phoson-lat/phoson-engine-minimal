@@ -41,6 +41,7 @@ from phoson_llm.schemas import (
     ContentBlock,
     ToolDefinition,
 )
+from phoson_agent.detach import DETACHER_KEY
 from phoson_agent.sessions import (
     STATUS_ACTIVE,
     STATUS_ABORTED,
@@ -53,7 +54,7 @@ from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.plugins.summarizer import safe_cut_index
 
-from .tasks import TaskManager, TaskDeliveryMiddleware
+from .tasks import TaskManager, ToolDetacher, TaskDeliveryMiddleware
 from .theme import (
     ThemeRegistry,
     build_theme_registry,
@@ -673,6 +674,9 @@ class SessionController:
         # Background tasks: ``agent``/``agents`` with ``background: true`` and
         # the ``task_*`` tools reach the session's manager through this.
         self.engine.context.extra["task_manager"] = self.tasks
+        # Ctrl+B: running detachable calls (bash, sub-agents, web_fetch) can
+        # be sent to the background; see ``detach_running_tools``.
+        self.engine.context.extra[DETACHER_KEY] = self.detacher
         # Live sub-agent metrics (E2): the tools create a fresh tracker
         # per call and push it to the front end through this callback
         # (bound to ``sink.on_subagent_progress``).
@@ -724,6 +728,27 @@ class SessionController:
             manager = TaskManager()
             self.__dict__["_tasks"] = manager
         return manager
+
+    @property
+    def detacher(self) -> ToolDetacher:
+        """Hands running tool calls to :attr:`tasks` on request (Ctrl+B)."""
+        detacher = self.__dict__.get("_detacher")
+        if detacher is None:
+            detacher = ToolDetacher(self.tasks)
+            self.__dict__["_detacher"] = detacher
+        return detacher
+
+    def detachable_running(self) -> list[Any]:
+        """Tool calls running now that :meth:`detach_running_tools` can move."""
+        return self.detacher.live_calls()
+
+    def detach_running_tools(self) -> list[Any]:
+        """Send every running detachable call to the background.
+
+        Returns the started :class:`~phoson_cli.tasks.BackgroundTask` records
+        (empty when nothing detachable is running).
+        """
+        return self.detacher.detach_all()
 
     def _wake_providers(self) -> list[Any]:
         """Loaded wake plugins plus the background-task manager."""

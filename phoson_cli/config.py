@@ -843,6 +843,7 @@ KNOWN_KEY_ACTIONS: Final[tuple[str, ...]] = (
     "toggle_permission_mode",
     "command_palette",
     "dictate",
+    "background",
     "exit",
     "interrupt",
 )

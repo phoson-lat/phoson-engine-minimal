@@ -2712,3 +2712,30 @@ def _transcript(app: PhosonApp) -> str:
     width = max(40, shutil.get_terminal_size((80, 24)).columns - 4)
     text = render_chat(app.sink, width, None)
     return re.sub(r"\x1b\[[0-9;]*m|\x1b\][^\x1b]*\x1b\\|[\x01\x02]", "", text)
+
+
+# ─── Ctrl+B: send running tool calls to the background ───────────────────────
+
+
+def test_ctrl_b_sends_running_calls_to_the_background(
+    app: PhosonApp, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    notes: list[str] = []
+    monkeypatch.setattr(app.sink, "notify", lambda _level, text: notes.append(text))
+    monkeypatch.setattr(app, "_is_run_in_flight", lambda: True)
+    started = [SimpleNamespace(label="#4", title="bash: npm test")]
+    monkeypatch.setattr(app.session.controller, "detach_running_tools", lambda: started)
+
+    _trigger(app, "c-b")
+
+    assert notes and "#4 bash: npm test" in notes[-1]
+    assert "keeps going" in notes[-1]
+
+
+def test_ctrl_b_while_idle_lists_tasks(app: PhosonApp, monkeypatch) -> None:
+    notes: list[str] = []
+    monkeypatch.setattr(app.sink, "notify", lambda _level, text: notes.append(text))
+    _trigger(app, "c-b")
+    assert notes[-1] == "No background tasks."

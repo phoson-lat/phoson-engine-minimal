@@ -1153,6 +1153,29 @@ class PhosonApp:
         """Shift+Tab (T-6): cycle the visible permission mode ask → auto."""
         _cycle_permission_mode_impl(self)
 
+    def send_to_background(self) -> None:
+        """Ctrl+B: move running tool calls to the background, or list tasks."""
+        controller = self.session.controller
+        started = controller.detach_running_tools() if self._is_run_in_flight() else []
+        if started:
+            names = ", ".join(f"{task.label} {task.title[:40]}" for task in started)
+            self.sink.notify(
+                "info", f"Sent to the background: {names}. The agent keeps going."
+            )
+            return
+        tasks = controller.tasks.tasks()
+        if not tasks:
+            hint = (
+                "Nothing to send to the background: only bash, sub-agents and "
+                "web_fetch can run there."
+                if self._is_run_in_flight()
+                else "No background tasks."
+            )
+            self.sink.notify("info", hint)
+            return
+        lines = [task.summary_line() for task in tasks[-8:]]
+        self.sink.notify("info", "Background tasks:\n" + "\n".join(lines))
+
     def cycle_reasoning_effort(self) -> None:
         """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""
         _cycle_reasoning_effort_impl(self)

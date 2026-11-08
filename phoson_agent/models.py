@@ -62,6 +62,15 @@ class AgentTool:
         """
         return self.metadata.get(PARALLEL_SAFE_KEY) is True
 
+    @property
+    def detachable(self) -> bool:
+        """Whether a running call may be sent to the background by the host.
+
+        Opt-in via ``metadata["detachable"] = True`` (or
+        ``@tool(detachable=True)``); see :mod:`phoson_agent.detach`.
+        """
+        return self.metadata.get("detachable") is True
+
 
 @dataclass
 class RunStep:
