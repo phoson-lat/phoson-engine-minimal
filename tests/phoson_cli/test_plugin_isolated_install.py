@@ -286,11 +286,37 @@ def test_activate_ignores_locations_outside_the_plugins_dir(env, tmp_path) -> No
     assert str(tmp_path) not in sys.path
 
 
-def test_frozen_binary_requires_uv(env, monkeypatch) -> None:
+def test_frozen_binary_without_uv_and_opt_out_fails(env, monkeypatch) -> None:
+    monkeypatch.delenv("PHOSON_HOME", raising=False)
+    monkeypatch.setenv("PHOSON_NO_MANAGED_UV", "1")
     monkeypatch.setattr("phoson_cli.plugin_manager.shutil.which", lambda _n: None)
     monkeypatch.setattr("phoson_cli.plugin_manager._is_frozen", lambda: True)
-    with pytest.raises(PluginManagerError, match="requires `uv`"):
+    with pytest.raises(PluginManagerError, match="PHOSON_NO_MANAGED_UV"):
         install_plugin("phoson-plugin-demo", PhosonConfig(), runner=fake_installer())
+
+
+def test_frozen_binary_without_uv_provisions_a_private_copy(env, monkeypatch) -> None:
+    monkeypatch.delenv("PHOSON_HOME", raising=False)
+    monkeypatch.delenv("PHOSON_NO_MANAGED_UV", raising=False)
+    monkeypatch.setattr("phoson_cli.plugin_manager.shutil.which", lambda _n: None)
+    monkeypatch.setattr("phoson_cli.plugin_manager._is_frozen", lambda: True)
+    managed = env / ".phoson" / "bin" / "uv"
+
+    def provision(**_kwargs) -> str:
+        managed.parent.mkdir(parents=True, exist_ok=True)
+        managed.write_text("")
+        return str(managed)
+
+    monkeypatch.setattr("phoson_cli.managed_uv.install_managed_uv", provision)
+    calls: list[list[str]] = []
+    install_plugin(
+        "phoson-plugin-demo",
+        PhosonConfig(),
+        runner=fake_installer(calls=calls),
+        confirm=lambda _review: True,
+    )
+    assert calls[0][0] == str(managed)
+    assert "--python-version" in calls[0]
 
 
 def _with_git(runner, commit: str = "a" * 40):

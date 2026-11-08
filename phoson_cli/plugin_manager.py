@@ -330,9 +330,17 @@ def _installer_command(
     ``uv`` is preferred; ``pip`` (``python -m pip``) is the fallback for
     regular installs. The standalone binary has no interpreter of its own to
     hand to the installer, so it requires ``uv`` and targets the bundled
-    Python version.
+    Python version; when none is on ``PATH`` a pinned, checksum-verified
+    copy is downloaded once into ``~/.phoson/bin`` (:mod:`.managed_uv`).
     """
-    uv = shutil.which("uv")
+    from .managed_uv import ManagedUvError, find_uv, ensure_uv
+
+    uv = find_uv()
+    if uv is None and _is_frozen():
+        try:
+            uv = ensure_uv(notify=lambda msg: print(msg, file=sys.stderr))
+        except ManagedUvError as exc:
+            raise PluginManagerError(str(exc)) from exc
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     if uv is not None:
         command = [uv, "pip", "install", "--target", str(target)]
@@ -343,15 +351,17 @@ def _installer_command(
         if constraints is not None:
             command += ["--constraint", str(constraints)]
         return [*command, requirement]
-    if _is_frozen():
-        raise PluginManagerError(
-            "Installing plugins with the standalone binary requires `uv` on PATH "
-            "(https://docs.astral.sh/uv/)."
-        )
     command = [sys.executable, "-m", "pip", "install", "--target", str(target)]
     if constraints is not None:
         command += ["--constraint", str(constraints)]
     return [*command, requirement]
+
+
+def _uv_executable() -> str:
+    """``uv`` for direct invocations: on PATH, else the private copy."""
+    from .managed_uv import find_uv
+
+    return find_uv() or "uv"
 
 
 def _host_distributions() -> dict[str, Distribution]:
@@ -738,7 +748,15 @@ def update_plugin(
             f"Plugin lockfile entry for {plugin_id!r} lacks a requirement"
         )
     result = runner(
-        ["uv", "pip", "install", "--upgrade", "--python", sys.executable, requirement],
+        [
+            _uv_executable(),
+            "pip",
+            "install",
+            "--upgrade",
+            "--python",
+            sys.executable,
+            requirement,
+        ],
         capture_output=True,
         text=True,
         check=False,

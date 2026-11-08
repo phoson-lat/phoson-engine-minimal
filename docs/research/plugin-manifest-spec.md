@@ -155,8 +155,9 @@ uv pip install --target <staging> --python <host python> \
   lockfile cannot point the CLI at arbitrary code or make `uninstall` delete
   arbitrary paths.
 - **Standalone binary.** With no interpreter to hand to the installer, the
-  binary uses `uv` with `--python-version <bundled X.Y>` and requires `uv` on
-  PATH. Regular installs fall back to `python -m pip --target` when `uv` is
+  binary uses `uv` with `--python-version <bundled X.Y>`. Without `uv` on
+  PATH it provisions a pinned, checksum-verified `uv` into `~/.phoson/bin`
+  (`phoson_cli/managed_uv.py`; `PHOSON_NO_MANAGED_UV=1` opts out). Regular installs fall back to `python -m pip --target` when `uv` is
   missing.
 
 ### Stage → review → commit
