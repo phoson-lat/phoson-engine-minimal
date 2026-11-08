@@ -44,6 +44,7 @@ from phoson_llm.schemas import Message, ModelConfig, ToolCallEvent
 from .models import AgentTool
 from .intents import (
     VALID_INTENTS,
+    SHELL_COMMAND_TOOLS,
     INTENT_PROCESS_SPAWN,
     DEFAULT_INTENT_LEVELS,
     INTENT_FILESYSTEM_READ,
@@ -112,6 +113,7 @@ SOURCE_TOOL_AND_INTENT = "tool_level+intent"
 SOURCE_HINT = "hint"
 SOURCE_DEFAULT = "default"
 SOURCE_MODE = "mode"
+SOURCE_DEFAULT_INTENT = "default_intent"
 SOURCE_CLASSIFIER = "classifier"
 
 #: Pseudo tool name for a *global default* level (``"*"``). Unlike a regular
@@ -399,6 +401,10 @@ def is_simple_shell_command(command: str) -> bool:
                 return False
             elif ch == "$" and nxt == "(":
                 return False
+            elif ch in "<>":
+                # A redirect reads or writes a file the pattern never saw
+                # (``cat * > ~/.zshrc`` must not match ``cat *``).
+                return False
         i += 1
     return True
 
@@ -462,6 +468,13 @@ class PermissionPolicy:
     #: from the call — the declared capabilities of plugin tools (see
     #: :func:`apply_plugin_capabilities`).
     tool_intents: dict[str, frozenset[str]] = field(default_factory=dict)
+    #: Soft per-intent defaults (e.g.
+    #: :data:`~phoson_agent.intents.SAFE_DEFAULT_INTENT_LEVELS`), consulted
+    #: only after explicit levels, intent rules and the ``"*"`` mode — so
+    #: they never override anything the user configured. Empty by default:
+    #: a library policy keeps the allow-by-default behaviour unless the host
+    #: opts in.
+    default_intent_levels: dict[str, str] = field(default_factory=dict)
 
     def normalized_levels(self) -> dict[str, str]:
         """Levels with invalid entries dropped."""
@@ -527,6 +540,9 @@ class PermissionPolicy:
                     return LEVEL_ALLOW, SOURCE_ALLOW_PATTERN, intents
 
         explicit = self.levels.get(tool_name)
+        if explicit is None and tool_name in SHELL_COMMAND_TOOLS:
+            # A tool that runs a shell line inherits bash's own rule.
+            explicit = self.levels.get("bash")
         intent_lvl = self.intent_level(intents)
         combined = strictest_level(explicit, intent_lvl)
         if combined is not None:
@@ -547,9 +563,21 @@ class PermissionPolicy:
         if wildcard in VALID_LEVELS:
             return wildcard, SOURCE_MODE, intents
 
+        soft = strictest_level(
+            *(
+                level
+                for intent in intents
+                if (level := self.default_intent_levels.get(intent)) in VALID_LEVELS
+            )
+        )
         hints = self.hints.get(tool_name)
         if hints is not None:
-            return hints.derived_level(), SOURCE_HINT, intents
+            hinted = hints.derived_level()
+            if soft is not None and strictest_level(soft, hinted) != hinted:
+                return soft, SOURCE_DEFAULT_INTENT, intents
+            return hinted, SOURCE_HINT, intents
+        if soft is not None:
+            return soft, SOURCE_DEFAULT_INTENT, intents
         return LEVEL_ALLOW, SOURCE_DEFAULT, intents
 
     def check(

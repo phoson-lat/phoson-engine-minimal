@@ -79,6 +79,18 @@ DEFAULT_INTENT_LEVELS: dict[str, str] = {
     INTENT_FILESYSTEM_READ_SENSITIVE: "ask",
 }
 
+#: Recommended *soft* defaults for hosts that want a safe out-of-the-box gate
+#: (the CLI uses them). Unlike :data:`DEFAULT_INTENT_LEVELS` they are consulted
+#: only when nothing else decides — no explicit tool level, no intent rule and
+#: no auto mode (``"*"``) — so auto mode and any rule the user writes override
+#: them. Running programs or code and deleting files ask; reading, editing in
+#: the workspace and the web tools stay allowed.
+SAFE_DEFAULT_INTENT_LEVELS: dict[str, str] = {
+    INTENT_PROCESS_SPAWN: "ask",
+    INTENT_LANG_EXEC: "ask",
+    INTENT_FILESYSTEM_DELETE: "ask",
+}
+
 _VALID_INTENTS = frozenset(VALID_INTENTS)
 
 
@@ -175,6 +187,65 @@ _READ_PROGRAMS: frozenset[str] = frozenset(
         "mawk",  # in-place handled below
     }
 )
+
+#: Shell builtins and inspection commands with no side effects. Kept apart
+#: from ``_READ_PROGRAMS`` (which read *files*): these read nothing a policy
+#: cares about, so they map to ``filesystem_read`` only to stay non-empty.
+_INERT_PROGRAMS: frozenset[str] = frozenset(
+    {
+        "echo",
+        "printf",
+        "pwd",
+        "true",
+        "false",
+        "test",
+        "[",
+        "date",
+        "whoami",
+        "id",
+        "uname",
+        "hostname",
+        "seq",
+        "sleep",
+        "cd",
+        "clear",
+    }
+)
+
+#: ``git`` subcommands that only read the repository.
+_GIT_READ: frozenset[str] = frozenset(
+    {
+        "status",
+        "log",
+        "diff",
+        "show",
+        "blame",
+        "shortlog",
+        "describe",
+        "rev-parse",
+        "rev-list",
+        "ls-files",
+        "ls-tree",
+        "cat-file",
+        "grep",
+        "reflog",
+        "whatchanged",
+        "name-rev",
+        "merge-base",
+        "count-objects",
+        "help",
+        "version",
+    }
+)
+#: ``git`` subcommands that reach a remote.
+_GIT_NETWORK: frozenset[str] = frozenset(
+    {"push", "pull", "fetch", "clone", "ls-remote", "submodule", "remote"}
+)
+#: ``git`` subcommands that discard work.
+_GIT_DELETE: frozenset[str] = frozenset({"clean", "rm"})
+
+#: Programs that print the environment (API keys live there).
+_ENV_DUMP_PROGRAMS: frozenset[str] = frozenset({"env", "printenv", "export", "set"})
 
 _WRITE_PROGRAMS: frozenset[str] = frozenset(
     {
@@ -333,17 +404,61 @@ _WRAPPERS: frozenset[str] = frozenset(
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
+def _git_intents(tokens: list[str]) -> frozenset[str]:
+    """``git <subcommand>``: read-only, network, delete, or a local write."""
+    sub = next((t for t in tokens[1:] if not t.startswith("-")), "")
+    if sub in _GIT_READ:
+        return frozenset({INTENT_FILESYSTEM_READ})
+    if sub == "branch" and not any(
+        t in {"-d", "-D", "--delete", "-m", "-M", "--move"} for t in tokens
+    ):
+        return frozenset({INTENT_FILESYSTEM_READ})
+    if sub in _GIT_NETWORK:
+        return frozenset({INTENT_NETWORK_OUTBOUND, INTENT_FILESYSTEM_WRITE})
+    if sub in _GIT_DELETE:
+        return frozenset({INTENT_FILESYSTEM_DELETE})
+    # commit, add, checkout, switch, reset, merge, rebase, stash, tag, …
+    return frozenset({INTENT_FILESYSTEM_WRITE})
+
+
+_AWK_EXEC = re.compile(r"\bsystem\s*\(|\|\s*getline|\bgetline\b|\|\s*\"|>\s*\"")
+_SED_EXEC = re.compile(r"(?:^|[;{}\s/\d$])[ewW](?:\s|$)|/e\b|/w\s")
+
+
 def _program_intents(program: str, args: Iterable[str]) -> frozenset[str]:
     """Map one program (and its tokens) to a set of intents."""
     tokens = list(args)
+    if program == "git":
+        return _git_intents(tokens)
+    if program in _INERT_PROGRAMS:
+        return frozenset({INTENT_FILESYSTEM_READ})
+    if program in _ENV_DUMP_PROGRAMS:
+        return frozenset({INTENT_FILESYSTEM_READ_SENSITIVE})
     if program in {"find", "fd", "fdfind"}:
-        # ``find`` is read-only *unless* it runs a command or deletes:
-        # ``-exec``/``-execdir``/``-ok``/``-okdir`` spawn, ``-delete`` removes.
+        # ``find`` is read-only *unless* it runs a command, deletes or writes:
+        # ``-exec``/``-execdir``/``-ok``/``-okdir`` spawn, ``-delete`` removes,
+        # ``-fprint``/``-fprintf``/``-fls`` write a file.
         if any(t in {"-exec", "-execdir", "-ok", "-okdir"} for t in tokens):
             return frozenset({INTENT_PROCESS_SPAWN})
         if "-delete" in tokens:
             return frozenset({INTENT_FILESYSTEM_DELETE})
+        if any(t in {"-fprint", "-fprint0", "-fprintf", "-fls"} for t in tokens):
+            return frozenset({INTENT_FILESYSTEM_WRITE})
         return frozenset({INTENT_FILESYSTEM_READ})
+    if program == "sort" and any(
+        t == "-o" or t.startswith("-o") or t.startswith("--output") for t in tokens
+    ):
+        return frozenset({INTENT_FILESYSTEM_WRITE})
+    if program in {"awk", "gawk", "mawk"} and any(
+        _AWK_EXEC.search(t) for t in tokens[1:]
+    ):
+        # awk can run commands (system(), "cmd" | getline, print > "file").
+        return frozenset({INTENT_LANG_EXEC})
+    if program == "sed" and any(
+        _SED_EXEC.search(t) for t in tokens[1:] if not t.startswith("-")
+    ):
+        # GNU sed ``e`` executes and ``w``/``W`` write a file.
+        return frozenset({INTENT_LANG_EXEC, INTENT_FILESYSTEM_WRITE})
     if program in _DELETE_PROGRAMS:
         return frozenset({INTENT_FILESYSTEM_DELETE})
     if program in _WRITE_PROGRAMS:
@@ -368,6 +483,25 @@ def _program_intents(program: str, args: Iterable[str]) -> frozenset[str]:
 # ── Shell segmentation ───────────────────────────────────────────────────────
 
 _SEPARATORS = frozenset(";&|\n")
+#: Redirection marker tokens emitted by :func:`shell_segments`.
+_REDIRECT_OPS = frozenset({">", ">>", "<"})
+
+
+def split_redirects(tokens: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Separate ``(op, target)`` redirections from a segment's other tokens."""
+    words: list[str] = []
+    redirects: list[tuple[str, str]] = []
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok in _REDIRECT_OPS:
+            if idx + 1 < len(tokens):
+                redirects.append((tok, tokens[idx + 1]))
+            idx += 2
+            continue
+        words.append(tok)
+        idx += 1
+    return words, redirects
 
 
 def _strip_path(program: str) -> str:
@@ -447,12 +581,25 @@ def shell_segments(command: str) -> tuple[list[list[str]], bool]:
                 # Plain whitespace separates *tokens* of the same command.
                 _end_token()
             elif ch in "<>":
-                # Redirection: not a program token, but its effect is a file
-                # access. ``>`` implies a write; ``<`` implies a read.
+                # Redirection. Kept as a marker token (``>``, ``>>``, ``<``)
+                # followed by its target, so callers can see the file access:
+                # ``>`` writes, ``<`` reads. A leading fd number (``2>``) is
+                # dropped; fd duplication (``2>&1``, ``>&-``) targets no file.
+                if token and "".join(token).isdigit():
+                    token.clear()
                 _end_token()
-                # Consume a doubled ``>>`` as one operator.
-                if nxt == ch:
+                op = ch
+                if nxt == ch:  # ``>>`` / ``<<``
+                    op += ch
                     i += 1
+                if i + 1 < n and command[i + 1] == "&":
+                    i += 1
+                    while i + 1 < n and (
+                        command[i + 1].isdigit() or command[i + 1] == "-"
+                    ):
+                        i += 1
+                elif op != "<<":  # a heredoc delimiter is not a file
+                    current.append(op)
             else:
                 token.append(ch)
         i += 1
@@ -467,6 +614,9 @@ def _segment_program(tokens: list[str]) -> str | None:
     # Skip leading VAR=value assignments and wrapper commands.
     while idx < len(tokens):
         tok = tokens[idx]
+        if tok in _REDIRECT_OPS:
+            idx += 2  # the operator and its target
+            continue
         if _ASSIGNMENT.match(tok):
             idx += 1
             continue
@@ -476,6 +626,24 @@ def _segment_program(tokens: list[str]) -> str | None:
             continue
         return base
     return None
+
+
+def _monitor_command(args: dict[str, Any]) -> Any:
+    spec = args.get("spec")
+    if args.get("kind") == "command" and isinstance(spec, dict):
+        return spec.get("command")
+    return None
+
+
+#: Non-``bash`` tools that run a shell command line, and how to get it. Their
+#: calls are classified like ``bash`` with that line (plus ``process_spawn``,
+#: since they launch a process that outlives the call), and the gate applies
+#: ``bash``'s own level to them when they have none — so they cannot be used
+#: to sidestep a ``bash`` rule.
+SHELL_COMMAND_TOOLS: dict[str, Any] = {
+    "run_bg_job": lambda args: args.get("command"),
+    "register_monitor": _monitor_command,
+}
 
 
 def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...]:
@@ -489,6 +657,18 @@ def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...
     if not isinstance(args, dict):
         args = {}
 
+    extract = SHELL_COMMAND_TOOLS.get(tool_name)
+    if extract is not None:
+        command = extract(args)
+        if not isinstance(command, str) or not command.strip():
+            return ()
+        return tuple(
+            sorted(
+                set(infer_intents("bash", {"command": command}))
+                | {INTENT_PROCESS_SPAWN}
+            )
+        )
+
     if tool_name == "bash":
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -496,9 +676,17 @@ def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...
         segments, opaque = shell_segments(command)
         intents: set[str] = set()
         for segment in segments:
-            program = _segment_program(segment)
+            words, redirects = split_redirects(segment)
+            program = _segment_program(words)
             if program:
-                intents |= _program_intents(program, segment)
+                intents |= _program_intents(program, words)
+            elif words and _strip_path(words[0]) in _ENV_DUMP_PROGRAMS:
+                # Bare ``env`` (a wrapper with nothing to wrap) prints the
+                # environment, API keys included.
+                intents.add(INTENT_FILESYSTEM_READ_SENSITIVE)
+            for op, target in redirects:
+                intents |= _redirect_intents(op, target)
+            intents |= _shell_path_intents(words[1:] if program else words)
         if opaque:
             # An unparseable construct can run arbitrary code; keep the gate
             # able to ask/deny rather than silently approving it.
@@ -508,6 +696,64 @@ def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...
     intents = set(_TOOL_INTENTS.get(tool_name, frozenset()))
     intents |= _path_intents(tool_name, args)
     return tuple(sorted(intents))
+
+
+# ── Shell path checks ────────────────────────────────────────────────────────
+
+#: Redirect targets that are not files.
+_NON_FILE_TARGETS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
+
+
+def _looks_like_path(token: str) -> bool:
+    return token.startswith(("~", "/", "./", "../", ".")) or "/" in token
+
+
+def _workspace() -> Path | None:
+    try:
+        return Path.cwd().resolve()
+    except OSError:
+        return None
+
+
+def _is_sensitive(resolved: Path) -> bool:
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(_is_within(resolved, home / rel) for rel in SENSITIVE_HOME_PATHS)
+
+
+def _redirect_intents(op: str, target: str) -> set[str]:
+    """Intents of one shell redirection (``>``/``>>`` write, ``<`` read)."""
+    if target in _NON_FILE_TARGETS:
+        return set()
+    # The shell expands ``~`` in a redirect target.
+    resolved = _resolve_tool_path(target, expand_user=True)
+    if op == "<":
+        intents = {INTENT_FILESYSTEM_READ}
+        if resolved is not None and _is_sensitive(resolved):
+            intents.add(INTENT_FILESYSTEM_READ_SENSITIVE)
+        return intents
+    intents = {INTENT_FILESYSTEM_WRITE}
+    workspace = _workspace()
+    if resolved is None or workspace is None or not _is_within(resolved, workspace):
+        intents.add(INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE)
+    return intents
+
+
+def _shell_path_intents(tokens: list[str]) -> set[str]:
+    """``filesystem_read_sensitive`` when an argument names a credential store.
+
+    ``cat ~/.ssh/id_rsa`` must be gated exactly like ``read_file`` on the same
+    path; the shell expands ``~``, so it is expanded here too.
+    """
+    for token in tokens:
+        if token.startswith("-") or not _looks_like_path(token):
+            continue
+        resolved = _resolve_tool_path(token, expand_user=True)
+        if resolved is not None and _is_sensitive(resolved):
+            return {INTENT_FILESYSTEM_READ_SENSITIVE}
+    return set()
 
 
 # ── Path-derived protective intents ──────────────────────────────────────────
@@ -602,6 +848,9 @@ __all__ = [
     "INTENT_FILESYSTEM_READ_SENSITIVE",
     "INTENT_FILESYSTEM_WRITE_OUTSIDE_WORKSPACE",
     "SENSITIVE_HOME_PATHS",
+    "SAFE_DEFAULT_INTENT_LEVELS",
+    "split_redirects",
+    "SHELL_COMMAND_TOOLS",
     "INTENT_FILESYSTEM_READ",
     "INTENT_FILESYSTEM_WRITE",
     "INTENT_LANG_EXEC",

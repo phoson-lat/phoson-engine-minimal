@@ -29,9 +29,33 @@ The full-screen header shows a mode chip you cycle with **Shift+Tab**:
 
 Auto is only an opt-in default: precedence is unchanged, so a per-tool
 level (`/permissions ssh_exec deny`) or an intent rule still wins over it
-and can never be loosened by auto. With no `permissions.json` at all, tools
-keep their pre-auto behaviour — built-ins run freely, but annotated plugin
-tools such as SSH still confirm.
+and can never be loosened by auto.
+
+## Safe defaults
+
+Out of the box, without any rule of yours, calls that **run a program or
+code, or delete files** ask first. This covers `bash` commands classified as
+`process_spawn`, `lang_exec` or `filesystem_delete`, for example `pytest`,
+`python -c …` and `rm`. Everything else runs freely: reading, editing inside
+the workspace, read-only commands (`ls`, `cat`, `grep`, `git status`,
+`git diff`, `echo`) and the web tools.
+
+These defaults only apply when nothing else decides, so any of these
+overrides them:
+
+- auto mode (Shift+Tab, or `"*": "allow"`);
+- a level for the tool (`/permissions bash allow`);
+- an intent rule (`"intent_levels": {"process_spawn": "allow"}`);
+- an allow-pattern (`"allow_patterns": {"bash": ["pytest*"]}`).
+
+**One-shot mode** (`-p`) cannot ask, so these calls are refused. Pass
+`--auto` to run them anyway; that applies to this run only, and per-tool
+levels and intent rules in `permissions.json` still win over it.
+
+Tools that run a shell line in the background, `run_bg_job` and a
+`command` monitor, are classified like `bash` with that line, and they
+follow `bash`'s level when they have none of their own. They can no longer
+be used to get around a `bash` rule.
 
 ```json
 {
@@ -76,12 +100,20 @@ resolves the call to the **strictest** applicable rule:
 
 | Intent | Derivation examples |
 |---|---|
-| `filesystem_read` | `read_file`, `list_dir`, `grep`, `glob`; `ls`, `cat`, `grep`, `find` (without `-exec`/`-delete`) |
-| `filesystem_write` | `write_file`, `patch_file`; `cp`, `mv`, `mkdir`, `chmod`, `sed -i`, `>` redirection |
-| `filesystem_delete` | `rm`, `rmdir`, `unlink`, `shred`; `find … -delete` |
+| `filesystem_read` | `read_file`, `list_dir`, `grep`, `glob`; `ls`, `cat`, `grep`, `find` (without `-exec`/`-delete`); `echo`, `pwd`; read-only `git` (`status`, `log`, `diff`, `show`, …) |
+| `filesystem_write` | `write_file`, `patch_file`; `cp`, `mv`, `mkdir`, `chmod`, `sed -i`, `sort -o`, `find -fprint`; `>`/`>>` redirection; local `git` changes (`commit`, `checkout`, …) |
+| `filesystem_delete` | `rm`, `rmdir`, `unlink`, `shred`; `find … -delete`; `git clean`, `git rm` |
 | `network_outbound` | `web_fetch`, `web_search`; `curl`, `wget`, `ssh`, `scp`, `rsync`, roaming package managers |
 | `process_spawn` | any program not otherwise classified (the catch-all) |
-| `lang_exec` | interpreters/evaluators: `python`, `node`, `bash`, `make`, `gcc`, … |
+| `lang_exec` | interpreters/evaluators: `python`, `node`, `bash`, `make`, `gcc`, …; `awk` with `system()`/pipes, GNU `sed` `e` |
+
+`bash` also gets the protective path intents described below. A redirect
+target (`> ~/.zshrc`) outside the workspace is
+`filesystem_write_outside_workspace`. An argument or redirect naming a
+credential store (`cat ~/.ssh/id_rsa`) is `filesystem_read_sensitive`, as is
+printing the environment (`env`, `printenv`), where API keys live. A line
+with a redirect is never a "simple command", so an allow-pattern such as
+`cat *` cannot match `cat a > ~/.zshrc`.
 
 Write the policy in `intent_levels`:
 

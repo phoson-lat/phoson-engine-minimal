@@ -33,6 +33,7 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from phoson_agent.models import AgentTool
+from phoson_agent.intents import SAFE_DEFAULT_INTENT_LEVELS
 from phoson_agent.permissions import (
     LEVEL_ASK,
     LEVEL_DENY,
@@ -82,6 +83,16 @@ def _normalize_level(value: object) -> str | None:
     return None
 
 
+def _default_policy() -> PermissionPolicy:
+    """The policy used without a (readable) permissions file: safe defaults.
+
+    Running programs or code and deleting files ask (see
+    :data:`~phoson_agent.intents.SAFE_DEFAULT_INTENT_LEVELS`); auto mode and
+    any rule in permissions.json override that.
+    """
+    return PermissionPolicy(default_intent_levels=dict(SAFE_DEFAULT_INTENT_LEVELS))
+
+
 def load_policy(path: Path | None = None) -> PermissionPolicy:
     """Read the durable policy from disk (empty policy when absent/broken).
 
@@ -92,13 +103,13 @@ def load_policy(path: Path | None = None) -> PermissionPolicy:
     try:
         raw = json.loads(policy_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return PermissionPolicy()
+        return _default_policy()
     except (OSError, json.JSONDecodeError) as exc:
         _LOGGER.warning("Ignoring unreadable permissions file %s: %s", policy_path, exc)
-        return PermissionPolicy()
+        return _default_policy()
 
     if not isinstance(raw, dict):
-        return PermissionPolicy()
+        return _default_policy()
 
     levels_raw = raw.get("levels", {})
     levels: dict[str, str] = {}
@@ -131,6 +142,7 @@ def load_policy(path: Path | None = None) -> PermissionPolicy:
         levels=levels,
         allow_patterns=allow_patterns,
         intent_levels=intent_levels,
+        default_intent_levels=dict(SAFE_DEFAULT_INTENT_LEVELS),
     )
 
 
