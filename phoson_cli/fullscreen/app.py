@@ -35,7 +35,13 @@ from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
-from prompt_toolkit.layout.containers import Float, HSplit, Window, FloatContainer
+from prompt_toolkit.layout.containers import (
+    Float,
+    HSplit,
+    Window,
+    FloatContainer,
+    ConditionalContainer,
+)
 from prompt_toolkit.layout.processors import (
     Processor,
     Transformation,
@@ -93,6 +99,7 @@ from .chat_pane import (
 from .clipboard import (
     paste_image_from_clipboard,
 )
+from .tasks_dock import TasksDock
 from ..hyperlinks import guard_hyperlinks
 from ..model_cache import ModelCache
 from .command_host import FullScreenCommandHost
@@ -340,6 +347,9 @@ def _skill_names() -> list[str]:
 class PhosonApp:
     """Full-screen front end over :class:`.SessionFrontend`."""
 
+    #: Set once the session exists (the layout is built before that).
+    _tasks_dock: "TasksDock | None" = None
+
     def __init__(self, config: PhosonConfig) -> None:
         self.theme = config._startup_theme or load_theme()
         # Kept for _build_application (runs before self.session exists): the
@@ -471,6 +481,8 @@ class PhosonApp:
         self._rewind = RewindController(self)
         # Command palette controller (#187); see palette_controller.py.
         self._palette = PaletteController(self)
+        # Background tasks: dock above the composer, notices, Ctrl+B view.
+        self._tasks_dock = TasksDock(self)
         # Empty-state welcome screen (identity, recent sessions, key tips).
         self.sink.welcome_provider = self._render_welcome
 
@@ -592,10 +604,29 @@ class PhosonApp:
             content=FormattedTextControl(self._get_footer_text), height=1
         )
 
+        # Background tasks dock (running / needs approval / just finished),
+        # right above the composer. Built before the session exists, hence
+        # the late lookups.
+        tasks_dock = ConditionalContainer(
+            Window(
+                content=FormattedTextControl(
+                    lambda: self._tasks_dock.text() if self._tasks_dock else ""
+                ),
+                height=lambda: D.exact(
+                    self._tasks_dock.height() if self._tasks_dock else 0
+                ),
+                style="class:tasks",
+            ),
+            filter=Condition(
+                lambda: self._tasks_dock is not None and self._tasks_dock.visible()
+            ),
+        )
+
         main_container = HSplit(
             [
                 header_window,
                 self._chat_window,
+                tasks_dock,
                 self._composer_frame,
                 footer_window,  # Now contains only keyboard hints
             ]
@@ -1156,6 +1187,28 @@ class PhosonApp:
     def cycle_permission_mode(self) -> None:
         """Shift+Tab (T-6): cycle the visible permission mode ask → auto."""
         _cycle_permission_mode_impl(self)
+
+    def send_to_background(self) -> None:
+        """Ctrl+B: move running tool calls to the background, or list tasks."""
+        controller = self.session.controller
+        started = controller.detach_running_tools() if self._is_run_in_flight() else []
+        if started:
+            names = ", ".join(f"{task.label} {task.title[:40]}" for task in started)
+            self.sink.notify(
+                "info", f"Sent to the background: {names}. The agent keeps going."
+            )
+            return
+        if not controller.tasks.tasks():
+            hint = (
+                "Nothing to send to the background: only bash, sub-agents and "
+                "web_fetch can run there."
+                if self._is_run_in_flight()
+                else "No background tasks."
+            )
+            self.sink.notify("info", hint)
+            return
+        if self._tasks_dock is not None:
+            self.app.create_background_task(self._tasks_dock.open_view())
 
     def cycle_reasoning_effort(self) -> None:
         """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""

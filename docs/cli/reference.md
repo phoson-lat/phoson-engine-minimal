@@ -82,6 +82,7 @@ can contribute more; `/help` lists everything active in a session.
 | `/skills` | — | List available skills, or show one's instructions: /skills <name> |
 | `/env` | — | Show provider, model and session info |
 | `/cost` | — | Show running cost in USD/credits |
+| `/tasks` | — | Background tasks: list, <n> output, cancel/approve/deny <n> |
 | `/tokens` | — | Show running input/output token totals |
 | `/steps` | — | Show the number of agent steps so far |
 | `/auth` | — | Sign in/out of subscription providers (ChatGPT, Google Code Assist) |

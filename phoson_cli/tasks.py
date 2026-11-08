@@ -63,6 +63,25 @@ def in_subagent_context() -> bool:
     return _IN_SUBAGENT.get()
 
 
+_CURRENT_TASK: contextvars.ContextVar["BackgroundTask | None"] = contextvars.ContextVar(
+    "phoson_current_task", default=None
+)
+
+
+def current_background_task() -> "BackgroundTask | None":
+    """The background task whose code is running now (``None`` in a turn)."""
+    return _CURRENT_TASK.get()
+
+
+@dataclass
+class PendingApproval:
+    """A permission question a background task is waiting on."""
+
+    tool: str
+    summary: str
+    future: asyncio.Future = field(repr=False)
+
+
 @dataclass
 class BackgroundTask:
     """One unit of background work and its outcome."""
@@ -81,6 +100,8 @@ class BackgroundTask:
     detail: str = ""
     #: Set once the result has been handed to the main agent.
     delivered: bool = False
+    #: A permission question waiting for the user (the task is paused).
+    approval: PendingApproval | None = None
     _task: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -187,6 +208,7 @@ class TaskManager:
 
         async def _body() -> None:
             token = mark_subagent_context()
+            _CURRENT_TASK.set(task)
             try:
                 task.result = await run(task)
                 task.status = "done"
@@ -198,6 +220,41 @@ class TaskManager:
                 _LOGGER.debug("Background task %s failed", task.label, exc_info=True)
             finally:
                 reset_subagent_context(token)
+                task.finished_at = time.monotonic()
+                self.notify(task)
+
+        task._task = asyncio.create_task(_body(), name=f"phoson-task-{task.id}")
+        self.notify(task)
+        return task
+
+    def adopt(
+        self,
+        kind: TaskKind,
+        title: str,
+        running: asyncio.Task,
+        to_text: Callable[[Any], str] = str,
+    ) -> BackgroundTask:
+        """Take ownership of an already-running asyncio task (a detached call).
+
+        ``to_text`` turns the task's return value into the result text. Not
+        limited by :attr:`max_running`: the work is already running.
+        """
+        task = BackgroundTask(id=self._next_id, kind=kind, title=title.strip())
+        self._next_id += 1
+        self._tasks[task.id] = task
+
+        async def _body() -> None:
+            try:
+                task.result = to_text(await running)
+                task.status = "done"
+            except asyncio.CancelledError:
+                if not running.done():
+                    running.cancel()
+                task.status = "cancelled"
+            except Exception as exc:  # noqa: BLE001 - reported as the outcome
+                task.status = "error"
+                task.error = f"{type(exc).__name__}: {exc}"
+            finally:
                 task.finished_at = time.monotonic()
                 self.notify(task)
 
@@ -242,6 +299,39 @@ class TaskManager:
 
     # ── Delivery ──────────────────────────────────────────────────────────
 
+    # ── Approvals ─────────────────────────────────────────────────────────
+
+    async def request_approval(
+        self, task: BackgroundTask, tool: str, summary: str
+    ) -> bool:
+        """Park a background task's permission question until the user answers.
+
+        The question does not interrupt the user: it waits in the task list
+        (``pending_approvals``) until :meth:`resolve_approval` is called.
+        """
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        task.approval = PendingApproval(tool=tool, summary=summary, future=future)
+        previous = task.detail
+        task.detail = f"waiting for approval: {tool}"
+        self.notify(task)
+        try:
+            return bool(await future)
+        finally:
+            task.approval = None
+            task.detail = previous
+            self.notify(task)
+
+    def pending_approvals(self) -> list[BackgroundTask]:
+        return [t for t in self._tasks.values() if t.approval is not None]
+
+    def resolve_approval(self, task_id: int, allow: bool) -> bool:
+        """Answer a task's pending question; ``False`` if there was none."""
+        task = self._tasks.get(task_id)
+        if task is None or task.approval is None or task.approval.future.done():
+            return False
+        task.approval.future.set_result(allow)
+        return True
+
     def undelivered(self) -> list[BackgroundTask]:
         return [t for t in self._tasks.values() if t.done and not t.delivered]
 
@@ -270,6 +360,84 @@ class TaskManager:
         if not running:
             return None
         return f"{len(running)} task{'s' if len(running) != 1 else ''}"
+
+
+def _call_title(call: Any) -> str:
+    """Short human title for a tool call (the bash command, the task, …)."""
+    args = getattr(call, "args", None) or {}
+    name = getattr(call, "tool_name", "tool")
+    for key in ("command", "task", "url", "query", "path"):
+        value = args.get(key) if isinstance(args, dict) else None
+        if isinstance(value, str) and value.strip():
+            return f"{name}: {value.strip()}"
+    tasks = args.get("tasks") if isinstance(args, dict) else None
+    if isinstance(tasks, list) and tasks:
+        return f"{name}: {len(tasks)} tasks"
+    return name
+
+
+def _runner_result_text(value: Any) -> str:
+    """The tool runner's ``(text, error, error_flag, image)`` as result text."""
+    if isinstance(value, tuple) and value:
+        text, error_text, error_flag = value[0], value[1], value[2]
+        if error_flag:
+            raise RuntimeError(error_text or text or "tool failed")
+        return str(text)
+    return str(value)
+
+
+class ToolDetacher:
+    """Host side of :mod:`phoson_agent.detach` for this session.
+
+    The tool runner registers every running detachable call here; the front
+    end's "send to background" key calls :meth:`detach_all`, which hands the
+    running calls to the :class:`TaskManager` and answers each one with a
+    placeholder result so the turn continues at once.
+    """
+
+    def __init__(self, manager: TaskManager) -> None:
+        self.manager = manager
+        self._live: dict[int, tuple[Any, asyncio.Task, asyncio.Future]] = {}
+
+    def track(self, call: Any, task: asyncio.Task) -> asyncio.Future:
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._live[id(call)] = (call, task, future)
+        return future
+
+    def untrack(self, call: Any) -> None:
+        self._live.pop(id(call), None)
+
+    def live_calls(self) -> list[Any]:
+        """Running calls that :meth:`detach_all` would send to the background."""
+        return [call for call, task, _ in self._live.values() if not task.done()]
+
+    def detach_all(self) -> list[BackgroundTask]:
+        """Send every running detachable call to the background."""
+        started: list[BackgroundTask] = []
+        for key, (call, task, future) in list(self._live.items()):
+            if task.done() or future.done():
+                continue
+            name = getattr(call, "tool_name", "tool")
+            kind: TaskKind = (
+                "bash"
+                if name == "bash"
+                else "agent"
+                if name in {"agent", "agents"}
+                else "tool"
+            )
+            record = self.manager.adopt(
+                kind, _call_title(call), task, to_text=_runner_result_text
+            )
+            future.set_result(
+                f"The user moved this call to the background as task "
+                f"{record.label}; it is still running. Its result will be "
+                f"delivered to you when it finishes; use task_wait or "
+                f"task_output({record.id}) if you need it sooner. Carry on "
+                f"with other work meanwhile."
+            )
+            self._live.pop(key, None)
+            started.append(record)
+        return started
 
 
 def render_results(tasks: list[BackgroundTask]) -> str:
@@ -326,6 +494,9 @@ class TaskDeliveryMiddleware(AgentMiddleware):
 __all__ = [
     "DELIVERY_CHARS",
     "BackgroundTask",
+    "ToolDetacher",
+    "PendingApproval",
+    "current_background_task",
     "TaskDeliveryMiddleware",
     "TaskManager",
     "in_subagent_context",

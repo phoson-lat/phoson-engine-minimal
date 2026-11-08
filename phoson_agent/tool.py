@@ -19,6 +19,7 @@ from typing import (
 )
 from collections.abc import Callable
 
+from phoson_agent.detach import DETACHABLE_KEY
 from phoson_agent.models import PARALLEL_SAFE_KEY, AgentTool
 
 _TYPE_MAP: dict[type, str] = {
@@ -141,12 +142,14 @@ def tool(
     *,
     inject: list[str] | None = None,
     parallel_safe: bool = False,
+    detachable: bool = False,
 ) -> Callable[[Callable[..., Any]], AgentTool]: ...
 def tool(
     _fn: Callable[..., Any] | None = None,
     *,
     inject: list[str] | None = None,
     parallel_safe: bool = False,
+    detachable: bool = False,
 ) -> AgentTool | Callable[[Callable[..., Any]], AgentTool]:
     """
     Decorator to register a function as an agent tool.
@@ -158,6 +161,9 @@ def tool(
             in the same turn could observe (reads, searches). Consecutive
             parallel-safe calls run concurrently; see
             :attr:`AgentTool.parallel_safe`.
+        detachable: Let a host send a running call to the background (see
+            :mod:`phoson_agent.detach`). Only for tools whose work can safely
+            finish after the model has moved on (long commands, sub-agents).
     """
 
     def decorator(fn: Callable[..., Any]) -> AgentTool:
@@ -216,7 +222,10 @@ def tool(
             description=description,
             parameters=parameters,
             handler=final_handler,
-            metadata={PARALLEL_SAFE_KEY: True} if parallel_safe else {},
+            metadata={
+                **({PARALLEL_SAFE_KEY: True} if parallel_safe else {}),
+                **({DETACHABLE_KEY: True} if detachable else {}),
+            },
         )
 
     if _fn is not None:

@@ -708,7 +708,7 @@ def _resolve_subagent_timeout(
     return sanitize_timeout(timeout, configured_default, allow_zero=True)
 
 
-@tool(inject=_AGENT_INJECT)
+@tool(inject=_AGENT_INJECT, detachable=True)
 async def agent(
     task: str,
     tools: list[str] | None = None,
@@ -809,7 +809,7 @@ async def agent(
     return content
 
 
-@tool(inject=_AGENTS_INJECT)
+@tool(inject=_AGENTS_INJECT, detachable=True)
 async def agents(
     tasks: list[str],
     tools: list[str] | None = None,

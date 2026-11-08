@@ -73,7 +73,24 @@ def request_exit(app: Any) -> None:
         if result == "protected":
             app.sink.notify("info", "Saving session before exit...")
         return
+    # Background tasks die with the session: confirm with a second press.
+    tasks = getattr(getattr(app, "session", None), "tasks", None)
+    running = tasks.running() if tasks is not None else []
+    now = time.monotonic()
+    if running and now - getattr(app, "_exit_tasks_armed_at", 0.0) > EXIT_TASKS_WINDOW:
+        app._exit_tasks_armed_at = now
+        noun = "task is" if len(running) == 1 else "tasks are"
+        app.sink.notify(
+            "warn",
+            f"{len(running)} background {noun} still running and will be "
+            "cancelled. Press again to quit.",
+        )
+        return
     app.app.exit()
+
+
+#: Seconds within which a second quit press confirms cancelling running tasks.
+EXIT_TASKS_WINDOW = 3.0
 
 
 def handle_ctrl_d(app: Any) -> None:
