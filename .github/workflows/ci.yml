@@ -80,7 +80,10 @@ jobs:
         # pytest-timeout comes in as an ephemeral dependency of `uv run --with`
         # (uv.lock is untouched) so a stalled test fails in minutes instead of
         # sitting at 18% until the cap above kills the job.
-        run: uv run --with pytest-timeout pytest -q --timeout=300 --timeout-method=thread || [ $? -eq 5 ]
+        # -v prints each test id *before* it runs: the thread-method timeout
+        # dumps stacks and exits without a summary, so with -q a hang could
+        # only be located by counting progress dots.
+        run: uv run --with pytest-timeout pytest -v --timeout=300 --timeout-method=thread || [ $? -eq 5 ]
 
   # The config/persistence tests isolate themselves via $HOME, which Windows'
   # `expanduser` ignores (it uses $USERPROFILE), so on Windows they used to
