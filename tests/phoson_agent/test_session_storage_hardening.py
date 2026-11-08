@@ -60,7 +60,10 @@ async def test_concurrent_saves_do_not_fail_or_leave_temp_files(
     )
 
     assert [r for r in results if isinstance(r, BaseException)] == []
-    assert sorted(p.name for p in tmp_path.iterdir()) == [f"{tree.session_id}.jsonl"]
+    # Only the session file — plus its (permanent, tiny) cross-process lock
+    # file; no temporary files are left behind.
+    names = sorted(p.name for p in tmp_path.iterdir() if not p.name.endswith(".lock"))
+    assert names == [f"{tree.session_id}.jsonl"]
 
 
 async def test_meta_update_interleaved_with_saves_keeps_latest_nodes(

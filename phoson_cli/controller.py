@@ -1248,15 +1248,18 @@ class SessionController:
         # the source of truth (set by _set_run_status / load_session);
         # legacy metrics dicts carry no status, so save_meta passes None
         # and leaves the tree's value in place.
+        meta = {
+            **self.session_metrics.to_meta(),
+            "status": self.tree.status,
+            "last_run_id": self.tree.last_run_id,
+        }
+        save_with_meta = getattr(self.storage, "save_with_meta", None)
+        if save_with_meta is not None:
+            # One write instead of write + re-read + write (R5).
+            await save_with_meta(self.tree, meta)
+            return
         await self.storage.save(self.tree)
-        await self.storage.save_meta(
-            self.tree.session_id,
-            {
-                **self.session_metrics.to_meta(),
-                "status": self.tree.status,
-                "last_run_id": self.tree.last_run_id,
-            },
-        )
+        await self.storage.save_meta(self.tree.session_id, meta)
 
     async def _checkpoint(self) -> None:
         """Persist a durability-critical checkpoint of the in-flight turn.
