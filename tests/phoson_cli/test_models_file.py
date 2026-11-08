@@ -308,18 +308,21 @@ async def test_repl_uses_models_json_context_window(tmp_path) -> None:
         ),
     ]
     data = {"models": {"qwen3.8-27b": {"context_window": 262144}}}
-    import phoson_cli.controller as controller_mod
+    from phoson_cli.session_utils import build_context_resolver
 
     repl = _make_repl_with_events(tmp_path, events)
     repl.current_model = "openrouter/qwen3.8-27b"
     repl.config.provider = "openrouter"
-    mock_resolve = repl._controller._cw_resolver.resolve
+    # The real shared resolver: its user-override hook reads models.json
+    # before any network lookup (the listing hook must not be reached).
+    resolver = build_context_resolver(repl.config)
+    resolver._catalog = None
+    repl._controller._cw_resolver = resolver
 
-    with patch.object(controller_mod, "load_models_file", return_value=data):
+    with patch("phoson_cli.models.load_models_file", return_value=data):
         await repl.run_turn("q")
 
     assert repl._controller._context_window == 262144
-    mock_resolve.assert_not_called()  # models.json override short-circuited
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,11 @@ Provides a single entry point to look up the context_window (in tokens)
 for any model, using a mix of static registry and dynamic API queries.
 """
 
+import re
+import time
 import logging
 import warnings
+from collections.abc import Callable, Awaitable
 
 import httpx
 
@@ -15,27 +18,91 @@ logger = logging.getLogger(__name__)
 # Static registry — verified values (tokens)
 # ─────────────────────────────────────────────────────────────────────
 
-# Key format: "provider/model_name"  (model_name as it appears in config)
-# Anthropic: all Claude models share 200k
-# OpenAI:    128k for all listed models
+# Values from the providers' official model pages, verified Nov 2026. Keys are
+# ``provider/<normalized id>`` (see :func:`normalize_model_id`). A provider's
+# live listing (the resolver's ``catalog`` hook) takes precedence when it
+# reports a window; this table covers providers whose listing does not.
 CONTEXT_WINDOW_REGISTRY: dict[str, int] = {
-    # Anthropic
+    # Anthropic — 1M by default for the 5.x generation
+    "anthropic/claude-fable-5-1": 1_000_000,
+    "anthropic/claude-opus-5-5": 1_000_000,
+    "anthropic/claude-sonnet-5-5": 1_000_000,
+    "anthropic/claude-haiku-5-5": 1_000_000,
     "anthropic/claude-opus-4-7": 200_000,
     "anthropic/claude-opus-4-6": 200_000,
     "anthropic/claude-sonnet-4-6": 200_000,
     "anthropic/claude-haiku-4-5": 200_000,
     # OpenAI
+    "openai/gpt-5.6-sol": 1_050_000,
+    "openai/gpt-5.5": 1_050_000,
+    "openai/gpt-4.1": 1_047_576,
     "openai/gpt-4o": 128_000,
     "openai/gpt-4o-mini": 128_000,
-    "openai/o3": 128_000,
+    "openai/o3": 200_000,
     "openai/o4-mini": 128_000,
+    # Google Gemini
+    "gemini/gemini-4-argon": 1_000_000,
+    "gemini/gemini-3.8-flash": 1_048_576,
+    "gemini/gemini-2.5-pro": 1_048_576,
+    # xAI
+    "xai/grok-4.7": 500_000,
+    "xai/grok-4.6": 500_000,
+    "xai/grok-4.5": 500_000,
+    "xai/grok-4.3": 1_000_000,
+    "xai/grok-4.20-0309-reasoning": 1_000_000,
+    "xai/grok-4.20-0309-non-reasoning": 1_000_000,
+    "xai/grok-4.20-multi-agent-0309": 1_000_000,
+    "xai/grok-build-0.1": 256_000,
+    # Cohere
+    "cohere/command-a-plus-05-2026": 128_000,
+    "cohere/command-a-03-2025": 256_000,
+    "cohere/command-a-reasoning-08-2025": 256_000,
+    "cohere/command-a-vision-07-2025": 128_000,
+    "cohere/command-a-translate-08-2025": 8_000,
+    "cohere/command-r7b-12-2024": 128_000,
+    "cohere/command-r-08-2024": 128_000,
+    "cohere/command-r-plus-08-2024": 128_000,
+    # Perplexity
+    "perplexity/nemotron-3.5-super-120b-a12b": 1_048_576,
 }
 
-# Anthropic prefix — any model starting with these gets 200k
-ANTHROPIC_PREFIXES = ("claude-",)
+#: Provider aliases that share a registry namespace.
+_PROVIDER_ALIASES = {"google": "gemini", "grok": "xai", "azure": "openai"}
 
-# OpenAI prefix — any model starting with these gets 128k
+#: Model-family fallbacks: ``(provider, id prefix, window)``. The longest
+#: matching prefix wins. Only families whose *smallest* member has this
+#: window are listed, so an unlisted model is never over-estimated
+#: (over-estimating delays compaction until the provider rejects the turn).
+CONTEXT_WINDOW_FAMILIES: tuple[tuple[str, str, int], ...] = (
+    ("anthropic", "claude-", 200_000),
+    ("openai", "gpt-6", 1_050_000),
+    ("openai", "gpt-4.1", 1_047_576),
+    ("openai", "gpt-", 128_000),
+    ("openai", "o3", 200_000),
+    ("openai", "o1", 128_000),
+    ("openai", "o4", 128_000),
+    ("xai", "grok-4.20", 1_000_000),
+)
+
+# Kept for compatibility with callers that imported them.
+ANTHROPIC_PREFIXES = ("claude-",)
 OPENAI_PREFIXES = ("gpt-4", "o1", "o3", "o4")
+
+
+def registry_window(provider: str, model: str) -> int | None:
+    """The built-in window for ``provider/model``: exact id, then family."""
+    namespace = _PROVIDER_ALIASES.get(provider.lower(), provider.lower())
+    name = normalize_model_id(model)
+    exact = CONTEXT_WINDOW_REGISTRY.get(f"{namespace}/{name}")
+    if exact is not None:
+        return exact
+    best: tuple[int, int] | None = None
+    for family_provider, prefix, window in CONTEXT_WINDOW_FAMILIES:
+        if family_provider == namespace and name.startswith(prefix):
+            if best is None or len(prefix) > best[0]:
+                best = (len(prefix), window)
+    return best[1] if best else None
+
 
 # Default fallback when nothing matches
 DEFAULT_CONTEXT_WINDOW = 128_000
@@ -46,16 +113,40 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 # ─────────────────────────────────────────────────────────────────────
 
 
+#: ``(provider, model) -> window`` set by the user (e.g. ``models.json``).
+UserOverride = Callable[[str, str], "int | None"]
+#: ``provider -> {model id: window}`` from the provider's live model listing,
+#: or ``None`` when it could not be fetched.
+CatalogFetcher = Callable[[str], Awaitable["dict[str, int] | None"]]
+
+#: After a failed catalog fetch, wait this long before trying that provider again.
+CATALOG_RETRY_S = 600.0
+
+_DATE_SUFFIX = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
+
+
+def normalize_model_id(model: str) -> str:
+    """Lower-case, without a vendor prefix (``anthropic/``) or date suffix."""
+    name = model.strip().lower()
+    if name.startswith("models/"):
+        name = name[len("models/") :]
+    name = name.rsplit("/", 1)[-1] if "/" in name else name
+    return _DATE_SUFFIX.sub("", name)
+
+
 class ContextWindowResolver:
     """Resolves the context_window for a given provider + model name.
 
-    Strategy:
-    1. Static registry lookup
-    2. Prefix matching for Anthropic/OpenAI
-    3. For Ollama: query /api/show (with cache)
-    4. For OpenRouter: query /api/v1/models (with cache)
-    5. For vLLM: query /v1/models ``max_model_len`` (with cache)
-    6. Fallback: DEFAULT_CONTEXT_WINDOW
+    Strategy, first hit wins:
+    0. A window learned from a provider error (:meth:`override`)
+    1. The user's own setting (``user_override`` hook, e.g. ``models.json``)
+    2. The provider's live model listing (``catalog`` hook; cached per
+       provider for the resolver's lifetime, retried after a failure)
+    3. Static registry lookup (exact id, then the model family)
+    4. For Ollama: query /api/show (with cache)
+    5. For OpenRouter: query /api/v1/models (with cache)
+    6. For vLLM: query /v1/models ``max_model_len`` (with cache)
+    7. Fallback: DEFAULT_CONTEXT_WINDOW
 
     Args:
         ollama_base_url: Base URL for Ollama API (default: http://localhost:11434).
@@ -69,8 +160,15 @@ class ContextWindowResolver:
         ollama_base_url: str = "http://localhost:11434",
         openrouter_api_key: str | None = None,
         vllm_base_url: str | None = None,
+        *,
+        user_override: UserOverride | None = None,
+        catalog: CatalogFetcher | None = None,
     ) -> None:
-        """Initialize the resolver with optional API endpoints."""
+        """Initialize the resolver with optional API endpoints and hooks."""
+        self._user_override = user_override
+        self._catalog = catalog
+        self._catalogs: dict[str, dict[str, int]] = {}
+        self._catalog_failed_at: dict[str, float] = {}
         self._ollama_base_url = ollama_base_url.rstrip("/")
         self._openrouter_api_key = openrouter_api_key
         self._vllm_base_url = (vllm_base_url or "http://localhost:8000/v1").rstrip("/")
@@ -149,18 +247,24 @@ class ContextWindowResolver:
         if key in self._overrides:
             return self._overrides[key]
 
-        # 1. Static registry
-        if key in CONTEXT_WINDOW_REGISTRY:
-            return CONTEXT_WINDOW_REGISTRY[key]
+        # 1. The user's own setting
+        if self._user_override is not None:
+            try:
+                configured = self._user_override(provider, model)
+            except Exception:  # noqa: BLE001 - a broken hook must not break turns
+                configured = None
+            if isinstance(configured, int) and configured > 0:
+                return configured
 
-        # 2. Prefix matching
-        if provider == "anthropic":
-            if any(model.startswith(p) for p in ANTHROPIC_PREFIXES):
-                return 200_000
+        # 2. The provider's live model listing
+        listed = await self._from_catalog(provider, model)
+        if listed is not None:
+            return listed
 
-        if provider == "openai":
-            if any(model.startswith(p) for p in OPENAI_PREFIXES):
-                return 128_000
+        # 3. Static registry: exact id, then model family
+        static = registry_window(provider, model)
+        if static is not None:
+            return static
 
         # 3. Ollama — dynamic query
         if provider == "ollama":
@@ -176,6 +280,38 @@ class ContextWindowResolver:
 
         # 6. Fallback
         return DEFAULT_CONTEXT_WINDOW
+
+    # ── Provider catalog ──────────────────────────────────────────────
+
+    async def _from_catalog(self, provider: str, model: str) -> int | None:
+        if self._catalog is None:
+            return None
+        windows = self._catalogs.get(provider)
+        if windows is None:
+            failed_at = self._catalog_failed_at.get(provider)
+            if failed_at is not None and time.monotonic() - failed_at < CATALOG_RETRY_S:
+                return None
+            try:
+                fetched = await self._catalog(provider)
+            except Exception as exc:  # noqa: BLE001 - best-effort lookup
+                logger.debug("Model catalog for %s unavailable: %s", provider, exc)
+                fetched = None
+            if fetched is None:
+                # Failed: retry later. An empty mapping is a successful
+                # listing without windows (OpenAI) and is cached as such.
+                self._catalog_failed_at[provider] = time.monotonic()
+                return None
+            windows = {
+                key.strip().lower(): value
+                for key, value in fetched.items()
+                if isinstance(key, str) and isinstance(value, int) and value > 0
+            }
+            self._catalogs[provider] = windows
+            self._catalog_failed_at.pop(provider, None)
+        for candidate in (model.strip().lower(), normalize_model_id(model)):
+            if candidate in windows:
+                return windows[candidate]
+        return None
 
     # ── Ollama ────────────────────────────────────────────────────────
 
@@ -379,6 +515,8 @@ class ContextWindowResolver:
 
     def clear_cache(self) -> None:
         """Clears the internal caches."""
+        self._catalogs.clear()
+        self._catalog_failed_at.clear()
         self._ollama_cache.clear()
         self._openrouter_cache.clear()
         self._vllm_cache.clear()

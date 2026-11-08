@@ -22,6 +22,29 @@ You control it:
   (large tool results — default >24 KB — are written to
   `~/.phoson/compacted/` with only a head/tail preview kept in context).
 
+## How the context window is known
+
+The context meter and the auto-compaction gate share one lookup, so they
+always agree on the window. The first source that knows the model wins:
+
+1. **A limit the provider reported** in a "context length exceeded" error
+   (learned for the rest of the session).
+2. **Your setting**: `context_window` for the model in
+   `~/.phoson/models.json` (see `models-config.md`).
+3. **The provider's model listing**, fetched once per provider with your
+   key: Anthropic (`max_input_tokens`), Gemini (`inputTokenLimit`), Groq,
+   DeepSeek (`context_window`), Mistral (`max_context_length`), Fireworks
+   (`contextLength`), Cohere, xAI, Together and Cheaper Inference
+   (`context_length`), plus OpenRouter, Ollama and vLLM.
+4. **The built-in table** of current models from the providers' model pages
+   (Anthropic, OpenAI, Gemini, xAI, Cohere, Perplexity). It covers OpenAI,
+   Azure, Perplexity and NVIDIA, whose listings carry no window.
+5. **The model family**. An unlisted model gets the window of the smallest
+   model in its family, for example 128K for an unknown `gpt-*`. Too small a
+   window only makes compaction start early; too large a window would let
+   the provider reject the turn.
+6. **128K** when nothing matches.
+
 ## Agent-controlled compaction (`compact_context`)
 
 Automatic compaction is a *safety net*: it reacts to the threshold and is
