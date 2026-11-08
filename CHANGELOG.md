@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.63.0 (2026-11-08)
+
+Browser use, optional features you can install from the binary, and sessions that survive cancels, errors and two CLIs at once.
+
+### Feat
+
+- **cli**: browser use through the official [Chrome DevTools MCP server](https://github.com/ChromeDevTools/chrome-devtools-mcp), driving your own Chrome, Edge, Brave or Chromium. `/browser setup` checks Node.js 20+, finds the browser and configures a pinned server (`chrome-devtools-mcp@1.12.0`).
+  - By default the browser runs with a dedicated profile in `~/.phoson/browser-profile`.
+  - `/browser mode chrome` attaches to the Chrome you have open (144+) once you enable remote debugging there.
+  - Looking at the page (snapshots, screenshots, console and network) runs freely. Clicks, typing, forms and scripts ask first.
+  - `/browser allow|block <domain>` restricts the sites it can reach.
+  - Usage statistics, update checks and CrUX lookups are off. ([#317](https://github.com/phoson-lat/phoson-engine-minimal/pull/317))
+- **browser**: fewer round trips and less context.
+  - Tools act on the selected page, so no `pageId` is needed.
+  - Actions return the updated page in the same call.
+  - Only the newest page snapshot stays in the conversation.
+  - Screenshots are downscaled JPEGs. ([#317](https://github.com/phoson-lat/phoson-engine-minimal/pull/317))
+- **mcp**: images returned by any MCP server reach the model as images, not as base64 text (a screenshot result went from about 27k characters to about 260). Server entries accept per-tool `annotations` and `hints` overrides. ([#317](https://github.com/phoson-lat/phoson-engine-minimal/pull/317))
+- **cli**: `/extras` installs optional features on demand, including from the standalone binary, which has no `pip`: speech to text (`stt`), Computer Use, SSH, MCP, the memory backends and the Gemini, Mistral and AWS SDKs.
+  - Packages go to `~/.phoson/extras/<name>` and never change the CLI's own environment.
+  - The same works as `phoson-cli extras install stt`, and in the installers: `--with stt,computeruse` (`-With` on Windows).
+  - The setup wizard offers the extras your plugins need, and "not installed" errors name the command to run. ([#318](https://github.com/phoson-lat/phoson-engine-minimal/pull/318))
+
+### Fix
+
+- **cli**: pressing Ctrl+C, or hitting an error such as a failed save, in the middle of a turn no longer leaves a tool call without an answer, which made every later turn fail until `/undo`. Sessions damaged this way by older versions are repaired when loaded. ([#313](https://github.com/phoson-lat/phoson-engine-minimal/pull/313))
+- **cli**: model requests time out after 300 s without data instead of about 30 min; set `PHOSON_LLM_READ_TIMEOUT` for models that think silently. Quitting right after `/mcp toggle` no longer leaves MCP servers running. `stop_bg_job` stops jobs started by an earlier engine instance. ([#313](https://github.com/phoson-lat/phoson-engine-minimal/pull/313))
+- **sessions**: saving a checkpoint writes the session file once instead of three passes (about 2.7× faster on large sessions), and listing sessions reads only their headers. Two CLIs on the same session no longer drop each other's turns. ([#316](https://github.com/phoson-lat/phoson-engine-minimal/pull/316))
+- **security**: the permission classifier honours only the first word of its reply, so "DISALLOWED" or "not ALLOW" can no longer be read as ALLOW. Monitor, background-job, peer and task results are never treated as something you asked for. ([#315](https://github.com/phoson-lat/phoson-engine-minimal/pull/315))
+- **cli**: a pasted path such as `/Users/me/app.py crashes` is sent as a message instead of failing as an unknown command, and unknown commands suggest the closest one. ([#314](https://github.com/phoson-lat/phoson-engine-minimal/pull/314))
+- **cli**: `/delete` reports when no session matches and accepts id prefixes. `/permissions` rejects unknown tool names. ([#314](https://github.com/phoson-lat/phoson-engine-minimal/pull/314))
+- **cli**: errors give better hints for context overflow, connection failures and timeouts. ([#314](https://github.com/phoson-lat/phoson-engine-minimal/pull/314))
+- **tui**: background-task results show as a compact card instead of a user message. A failing command is marked failed. ([#312](https://github.com/phoson-lat/phoson-engine-minimal/pull/312))
+- **installer**: downloads are retried, and a network error no longer falls back to PyPI, which then failed with "Executable already exists". ([#311](https://github.com/phoson-lat/phoson-engine-minimal/pull/311))
+- **mcp**: a stdio server's stderr goes to its log during tool discovery too, instead of drawing over the TUI. ([#317](https://github.com/phoson-lat/phoson-engine-minimal/pull/317))
+
 ## v0.62.0 (2026-11-08)
 
 Background work that doesn't block the agent, safer defaults, and a cleaner full-screen render.
