@@ -1,8 +1,12 @@
+import os
 import re
 import base64
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from pathlib import Path
+
+if TYPE_CHECKING:
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -407,3 +411,29 @@ def _scrub_text(text: str) -> str:
     except UnicodeEncodeError:
         return text.encode("utf-8", "replace").decode("utf-8")
     return text
+
+
+# ─── SDK client limits ───────────────────────────────────────────────────────
+
+#: Seconds without a single byte from the provider before a request (or a
+#: stream between chunks) is abandoned. The SDK defaults (600 s, retried
+#: twice) let one stalled stream freeze a turn for ~30 min (R8).
+#: ``PHOSON_LLM_READ_TIMEOUT`` raises it for models that think silently.
+DEFAULT_LLM_READ_TIMEOUT_S = 300.0
+#: SDK-level retries. ``RetryingChat`` already retries before the first
+#: token, so the SDK only covers a single dropped connection.
+SDK_MAX_RETRIES = 1
+
+
+def sdk_timeout() -> "httpx.Timeout":
+    """Timeouts for the vendor SDK clients (Anthropic, OpenAI-compatible)."""
+    import httpx
+
+    raw = os.environ.get("PHOSON_LLM_READ_TIMEOUT", "")
+    try:
+        read = float(raw) if raw else DEFAULT_LLM_READ_TIMEOUT_S
+    except ValueError:
+        read = DEFAULT_LLM_READ_TIMEOUT_S
+    if read <= 0:
+        read = DEFAULT_LLM_READ_TIMEOUT_S
+    return httpx.Timeout(read, connect=15.0, write=60.0, pool=30.0)
