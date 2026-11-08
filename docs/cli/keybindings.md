@@ -25,6 +25,20 @@ cancels it (like `Esc`), otherwise it clears the composer. Pressing it
 `press ctrl+c again to exit` meanwhile. `Ctrl+Q` (action `exit`) quits
 right away; either way a session save in progress finishes first.
 
+## Ctrl+B: send to the background
+
+While the agent is running `bash`, a sub-agent (`agent`/`agents`) or
+`web_fetch`, `Ctrl+B` (action `background`) moves those calls to the
+background. The agent gets a placeholder result such as "moved to the
+background as task #4" and carries on. The call keeps running, and its result
+is delivered to the agent when it finishes (see
+[background-tasks.md](background-tasks.md)). A `bash` command sent there is no
+longer killed at its 30 s timeout; it gets up to an hour.
+
+With nothing to send, `Ctrl+B` lists the background tasks. Inside **tmux**,
+whose prefix is `Ctrl+B`, press it twice or remap it:
+`background = "c-g"`.
+
 ## Newline: Shift/Ctrl/Alt+Enter
 
 `Ctrl+J` inserts a newline on every terminal. **Shift+Enter**, **Ctrl+Enter**

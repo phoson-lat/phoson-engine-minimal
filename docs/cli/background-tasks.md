@@ -18,6 +18,36 @@ The model chooses when to use it, typically for long, independent work it
 doesn't need right away. You can also ask for it: "investigate X in the
 background while you fix Y".
 
+## Commands in the background
+
+`bash` takes `background: true` too, for servers, watchers and long
+builds or tests:
+
+- **Return:** the call comes back at once with a task number.
+- **Output:** the full output goes to a private log file under
+  `~/.phoson/tasks/`, and the result delivered to the agent is the exit code
+  plus the last 200 lines.
+- **Time limit:** 1 hour, or the call's `timeout` if larger.
+- **Permissions:** the command goes through the same permission gate as a
+  foreground `bash`.
+
+This replaces `run_bg_job`, which is deprecated. Keep using `run_bg_job` only
+for a job that must outlive the CLI session.
+
+## Sending a running call there (Ctrl+B)
+
+In the full-screen TUI, `Ctrl+B` moves the running `bash`, sub-agent or
+`web_fetch` calls to the background:
+
+- The agent gets a placeholder result ("moved to the background as task #4")
+  and keeps going.
+- The call keeps running, and a `bash` command is no longer killed at its
+  short timeout.
+- MCP tools cannot be moved yet: their connection must stay in the task that
+  opened it.
+
+With nothing to move, `Ctrl+B` lists the tasks.
+
 ## Getting the results
 
 When a background task finishes, its result reaches the agent once, through
@@ -51,4 +81,4 @@ are clipped inline (`task_output` returns the full text).
   still running, and delivered results stay in the conversation, so `/resume`
   keeps them.
 - **One-shot mode** (`-p`) has no background tasks. There, `background: true`
-  runs the sub-agent in the foreground.
+  runs the sub-agent or command in the foreground.

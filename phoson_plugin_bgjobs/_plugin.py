@@ -374,6 +374,11 @@ class BgJobsPlugin(Plugin):
         ) -> str:
             """Start a shell command as a background job and return immediately.
 
+            Deprecated: prefer the ``bash`` tool with ``background: true``,
+            which goes through the same permission gate, streams to a log
+            file and delivers the result automatically. Use this only for a
+            job that must outlive the CLI session.
+
             The job outlives this run (its own session on POSIX; on Windows
             nothing ties it to this process, since there are no process
             groups) and keeps running after this run ends. When it finishes,

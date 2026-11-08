@@ -205,6 +205,41 @@ class TaskManager:
         self.notify(task)
         return task
 
+    def adopt(
+        self,
+        kind: TaskKind,
+        title: str,
+        running: asyncio.Task,
+        to_text: Callable[[Any], str] = str,
+    ) -> BackgroundTask:
+        """Take ownership of an already-running asyncio task (a detached call).
+
+        ``to_text`` turns the task's return value into the result text. Not
+        limited by :attr:`max_running`: the work is already running.
+        """
+        task = BackgroundTask(id=self._next_id, kind=kind, title=title.strip())
+        self._next_id += 1
+        self._tasks[task.id] = task
+
+        async def _body() -> None:
+            try:
+                task.result = to_text(await running)
+                task.status = "done"
+            except asyncio.CancelledError:
+                if not running.done():
+                    running.cancel()
+                task.status = "cancelled"
+            except Exception as exc:  # noqa: BLE001 - reported as the outcome
+                task.status = "error"
+                task.error = f"{type(exc).__name__}: {exc}"
+            finally:
+                task.finished_at = time.monotonic()
+                self.notify(task)
+
+        task._task = asyncio.create_task(_body(), name=f"phoson-task-{task.id}")
+        self.notify(task)
+        return task
+
     async def cancel(self, task_id: int) -> BackgroundTask | None:
         task = self._tasks.get(task_id)
         if task is None or task.done or task._task is None:
@@ -272,6 +307,84 @@ class TaskManager:
         return f"{len(running)} task{'s' if len(running) != 1 else ''}"
 
 
+def _call_title(call: Any) -> str:
+    """Short human title for a tool call (the bash command, the task, …)."""
+    args = getattr(call, "args", None) or {}
+    name = getattr(call, "tool_name", "tool")
+    for key in ("command", "task", "url", "query", "path"):
+        value = args.get(key) if isinstance(args, dict) else None
+        if isinstance(value, str) and value.strip():
+            return f"{name}: {value.strip()}"
+    tasks = args.get("tasks") if isinstance(args, dict) else None
+    if isinstance(tasks, list) and tasks:
+        return f"{name}: {len(tasks)} tasks"
+    return name
+
+
+def _runner_result_text(value: Any) -> str:
+    """The tool runner's ``(text, error, error_flag, image)`` as result text."""
+    if isinstance(value, tuple) and value:
+        text, error_text, error_flag = value[0], value[1], value[2]
+        if error_flag:
+            raise RuntimeError(error_text or text or "tool failed")
+        return str(text)
+    return str(value)
+
+
+class ToolDetacher:
+    """Host side of :mod:`phoson_agent.detach` for this session.
+
+    The tool runner registers every running detachable call here; the front
+    end's "send to background" key calls :meth:`detach_all`, which hands the
+    running calls to the :class:`TaskManager` and answers each one with a
+    placeholder result so the turn continues at once.
+    """
+
+    def __init__(self, manager: TaskManager) -> None:
+        self.manager = manager
+        self._live: dict[int, tuple[Any, asyncio.Task, asyncio.Future]] = {}
+
+    def track(self, call: Any, task: asyncio.Task) -> asyncio.Future:
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._live[id(call)] = (call, task, future)
+        return future
+
+    def untrack(self, call: Any) -> None:
+        self._live.pop(id(call), None)
+
+    def live_calls(self) -> list[Any]:
+        """Running calls that :meth:`detach_all` would send to the background."""
+        return [call for call, task, _ in self._live.values() if not task.done()]
+
+    def detach_all(self) -> list[BackgroundTask]:
+        """Send every running detachable call to the background."""
+        started: list[BackgroundTask] = []
+        for key, (call, task, future) in list(self._live.items()):
+            if task.done() or future.done():
+                continue
+            name = getattr(call, "tool_name", "tool")
+            kind: TaskKind = (
+                "bash"
+                if name == "bash"
+                else "agent"
+                if name in {"agent", "agents"}
+                else "tool"
+            )
+            record = self.manager.adopt(
+                kind, _call_title(call), task, to_text=_runner_result_text
+            )
+            future.set_result(
+                f"The user moved this call to the background as task "
+                f"{record.label}; it is still running. Its result will be "
+                f"delivered to you when it finishes; use task_wait or "
+                f"task_output({record.id}) if you need it sooner. Carry on "
+                f"with other work meanwhile."
+            )
+            self._live.pop(key, None)
+            started.append(record)
+        return started
+
+
 def render_results(tasks: list[BackgroundTask]) -> str:
     """Frame finished tasks as background output (not user-authored text)."""
     if not tasks:
@@ -326,6 +439,7 @@ class TaskDeliveryMiddleware(AgentMiddleware):
 __all__ = [
     "DELIVERY_CHARS",
     "BackgroundTask",
+    "ToolDetacher",
     "TaskDeliveryMiddleware",
     "TaskManager",
     "in_subagent_context",

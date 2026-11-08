@@ -75,6 +75,11 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # text — the transcript is inserted at the cursor (and streamed live),
     # so it can be used repeatedly on the same message.
     "dictate": ["c-o"],
+    # Ctrl+B: send the running tool calls (bash, sub-agents, web_fetch) to
+    # the background so the agent keeps going; with nothing to send, list
+    # the background tasks. Inside tmux (whose prefix is Ctrl+B) press it
+    # twice, or remap it under [keys].
+    "background": ["c-b"],
 }
 
 #: Modified-Enter encodings that insert a newline, decoded as ``c-j`` (the
@@ -207,6 +212,7 @@ _ACTION_HANDLERS: dict[str, str] = {
     "toggle_permission_mode": "cycle_permission_mode",
     "command_palette": "open_command_palette",
     "dictate": "handle_dictate",
+    "background": "send_to_background",
     "exit": "request_exit",
     "interrupt": "handle_interrupt",
 }

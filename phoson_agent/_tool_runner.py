@@ -42,6 +42,8 @@ from phoson_agent._internals import (
 )
 from phoson_agent.exceptions import PhosonAgentError
 
+from .detach import DETACHER_KEY, set_detach_event
+
 logger = logging.getLogger(__name__)
 
 # Result text recorded when the model's tool call was cut off by its token
@@ -307,9 +309,12 @@ class ToolRunner:
         """Invoke one handler, timing it; never raises (except cancellation)."""
         started = now_utc()
         try:
-            result_text, error_text, error_flag, image = await self._invoke_handler(
-                call, threaded=threaded
-            )
+            (
+                result_text,
+                error_text,
+                error_flag,
+                image,
+            ) = await self._invoke_maybe_detached(call, threaded=threaded)
         except Exception as exc:  # noqa: BLE001 - F-14, deliberate catch-all
             result_text, error_text, error_flag, image = _internal_error(call, exc)
         return _Run(
@@ -436,6 +441,43 @@ class ToolRunner:
             )
         )
         yield await self._prepare_event(AgentStepDoneEvent(step=step))
+
+    async def _invoke_maybe_detached(
+        self, call: ToolCallEvent, *, threaded: bool
+    ) -> tuple[str, str | None, bool, ImageBlock | None]:
+        """Run the handler, letting the host send it to the background.
+
+        Only for detachable tools when a detacher is installed (see
+        :mod:`phoson_agent.detach`); otherwise a plain :meth:`_invoke_handler`.
+        """
+        tool = self._tools_by_name.get(call.tool_name)
+        detacher = self._context.extra.get(DETACHER_KEY)
+        if detacher is None or getattr(tool, "detachable", False) is not True:
+            return await self._invoke_handler(call, threaded=threaded)
+
+        event = asyncio.Event()
+
+        async def _body() -> tuple[str, str | None, bool, ImageBlock | None]:
+            set_detach_event(event)
+            return await self._invoke_handler(call, threaded=threaded)
+
+        task = asyncio.create_task(_body(), name=f"tool:{call.tool_name}")
+        detached = detacher.track(call, task)
+        try:
+            await asyncio.wait({task, detached}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            # The turn was cancelled while the call ran in the foreground:
+            # the call goes with it (unless it was detached just now).
+            if not detached.done():
+                task.cancel()
+            detacher.untrack(call)
+            raise
+        if task.done():
+            detacher.untrack(call)
+            return task.result()
+        # Detached: the host owns ``task`` now; the model gets the placeholder.
+        event.set()
+        return detached.result(), None, False, None
 
     async def _invoke_handler(
         self,

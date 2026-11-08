@@ -288,3 +288,96 @@ async def test_controller_wires_tasks(tmp_path) -> None:
         assert controller._monitor_wake_task is not None  # started by the task
     finally:
         await controller.shutdown()
+
+
+# ─── Detaching running calls (Ctrl+B) ────────────────────────────────────────
+
+
+async def test_tool_detacher_hands_calls_to_the_manager() -> None:
+    from phoson_cli.tasks import ToolDetacher
+
+    manager = TaskManager()
+    detacher = ToolDetacher(manager)
+    release = asyncio.Event()
+
+    async def body():
+        await release.wait()
+        return ("12 passed", None, False, None)
+
+    call = SimpleNamespace(tool_name="bash", args={"command": "pytest -q"})
+    running = asyncio.create_task(body())
+    future = detacher.track(call, running)
+    assert detacher.live_calls() == [call]
+
+    (task,) = detacher.detach_all()
+    assert task.kind == "bash" and task.title == "bash: pytest -q"
+    assert "#1" in future.result() and "background" in future.result()
+    assert detacher.live_calls() == [] and detacher.detach_all() == []
+
+    release.set()
+    await manager.wait()
+    assert task.status == "done" and task.result == "12 passed"
+
+
+async def test_detached_tool_error_is_a_failed_task() -> None:
+    from phoson_cli.tasks import ToolDetacher
+
+    manager = TaskManager()
+    detacher = ToolDetacher(manager)
+
+    async def body():
+        return ("boom", "boom", True, None)
+
+    call = SimpleNamespace(tool_name="web_fetch", args={"url": "https://x"})
+    detacher.track(call, asyncio.create_task(body()))
+    (task,) = detacher.detach_all()
+    await manager.wait()
+    assert task.kind == "tool" and task.status == "error" and "boom" in task.error
+
+
+async def test_bash_background_streams_to_a_private_log(tmp_path, monkeypatch) -> None:
+    import os
+    import sys
+    import stat
+
+    from phoson_cli.tools.bash import bash
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX shell")
+    monkeypatch.setenv("PHOSON_HOME", str(tmp_path))
+    manager = TaskManager()
+    reply = await bash.handler(
+        {"command": "echo first; echo second", "background": True},
+        _ctx({"task_manager": manager}),
+    )
+    assert "#1" in reply
+    (task,) = manager.tasks()
+    await manager.wait()
+    assert task.status == "done"
+    assert "Exit code 0" in task.result and "second" in task.result
+    (log,) = (tmp_path / "tasks").iterdir()
+    assert log.read_text() == "first\nsecond\n"
+    assert stat.S_IMODE(os.stat(log).st_mode) == 0o600
+
+
+async def test_detached_bash_outlives_its_foreground_timeout() -> None:
+    import sys
+
+    from phoson_agent.detach import set_detach_event
+    from phoson_cli.tools.bash import _run_bash
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX shell")
+    event = asyncio.Event()
+
+    async def run():
+        set_detach_event(event)
+        return await _run_bash("sleep 0.4; echo survived", timeout=0.1)
+
+    task = asyncio.create_task(run())
+    await asyncio.sleep(0.02)
+    event.set()  # sent to the background before the 0.1 s deadline
+    assert "survived" in await task
+
+    plain = await _run_bash("sleep 0.4; echo late", timeout=0.1)
+    assert "timed out" in plain
