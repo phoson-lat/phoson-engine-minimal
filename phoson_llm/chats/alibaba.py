@@ -139,3 +139,6 @@ class AlibabaChat(OpenAICompatibleChat):
 
     def _cache_enabled(self, model: str) -> bool:
         return supports_explicit_cache(model)
+
+    def _coalesce_tool_results(self, model: str) -> bool:
+        return supports_explicit_cache(model)
