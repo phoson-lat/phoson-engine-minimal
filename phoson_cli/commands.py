@@ -1869,6 +1869,69 @@ class CommandHandler:
         )
         return True
 
+    async def _cmd_tasks(self, cmd: Command) -> bool:
+        """``/tasks [n | cancel n | approve n | deny n]``: background tasks."""
+        r = self._r
+        manager = self.session.tasks
+        words = cmd.args.split()
+        usage = "Usage: /tasks [n | cancel n | approve n | deny n]"
+
+        def _task_id(word: str) -> int | None:
+            word = word.lstrip("#")
+            return int(word) if word.isdigit() else None
+
+        if not words:
+            tasks = manager.tasks()
+            if not tasks:
+                r.print_info("No background tasks.")
+                return True
+            lines = []
+            for task in tasks:
+                line = task.summary_line()
+                if task.approval is not None:
+                    line += (
+                        f"\n    needs approval: {task.approval.tool} "
+                        f"{task.approval.summary[:80]} "
+                        f"(/tasks approve {task.id} · /tasks deny {task.id})"
+                    )
+                elif task.detail and not task.done:
+                    line += f" — {task.detail}"
+                lines.append(line)
+            r.print_info("\n".join(lines))
+            return True
+
+        action = words[0].lower()
+        if action in {"cancel", "stop", "approve", "allow", "deny"}:
+            target = _task_id(words[1]) if len(words) == 2 else None
+            if target is None:
+                r.print_error(usage)
+                return True
+            if action in {"cancel", "stop"}:
+                task = await manager.cancel(target)
+                if task is None:
+                    r.print_error(f"No background task #{target}.")
+                else:
+                    r.print_info(f"{task.label} is {task.status}.")
+                return True
+            allow = action in {"approve", "allow"}
+            if manager.resolve_approval(target, allow):
+                r.print_info(f"#{target}: {'approved' if allow else 'denied'}.")
+            else:
+                r.print_error(f"Task #{target} is not waiting for an approval.")
+            return True
+
+        target = _task_id(action) if len(words) == 1 else None
+        if target is None:
+            r.print_error(usage)
+            return True
+        task = manager.get(target)
+        if task is None:
+            r.print_error(f"No background task #{target}.")
+            return True
+        body = task.outcome_text(limit=None) if task.done else (task.detail or "")
+        r.print_info(f"{task.summary_line()}\n{body}".rstrip())
+        return True
+
     async def _cmd_tokens(self, cmd: Command) -> bool:  # noqa: ARG002
         m = self.session.session_metrics
         cache = ""

@@ -74,7 +74,16 @@ class CommandCatalog:
 HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     (
         "Session",
-        ("/new", "/tree", "/undo", "/compact", "/resume", "/sessions", "/delete"),
+        (
+            "/new",
+            "/tree",
+            "/undo",
+            "/compact",
+            "/resume",
+            "/sessions",
+            "/delete",
+            "/tasks",
+        ),
     ),
     ("Model", ("/model", "/provider", "/subagent-model", "/reasoning-effort")),
     (
@@ -261,6 +270,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(("/env",), "Show provider, model and session info", "_cmd_env"),
     CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),
+    CommandSpec(
+        ("/tasks",),
+        "Background tasks: list, <n> output, cancel/approve/deny <n>",
+        "_cmd_tasks",
+    ),
     CommandSpec(("/tokens",), "Show running input/output token totals", "_cmd_tokens"),
     CommandSpec(("/steps",), "Show the number of agent steps so far", "_cmd_steps"),
     CommandSpec(
@@ -311,6 +325,8 @@ RUN_SAFE_COMMANDS: Final[frozenset[str]] = frozenset(
         "/tree",
         "/agents-md",
         "/skills",
+        # Background tasks run beside the turn by design.
+        "/tasks",
     }
 )
 

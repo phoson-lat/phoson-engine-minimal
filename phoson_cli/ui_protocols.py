@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from phoson_agent import AgentEngine
     from phoson_agent.sessions import JsonlStorage, ConversationTree
 
+    from .tasks import TaskManager
     from .theme import Theme, ThemeRegistry
     from .config import PhosonConfig
     from ._session import SessionMetrics
@@ -198,6 +199,9 @@ class SessionPort(Protocol):
 
     @property
     def is_running(self) -> bool: ...
+
+    @property
+    def tasks(self) -> "TaskManager": ...
 
     def new_session(self) -> None: ...
 

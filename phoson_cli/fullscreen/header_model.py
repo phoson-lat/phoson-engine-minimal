@@ -35,6 +35,7 @@ _FOOTER_HINT_IDLE = "enter send  ·  ctrl+j newline  ·  / commands"
 # While a turn runs the composer is still live: Enter queues the draft and
 # run-safe commands (and Ctrl+P) remain available — see `turn_controller`.
 _FOOTER_HINT_RUNNING = "esc cancel  ·  enter queue  ·  ctrl+p commands"
+_FOOTER_HINT_DETACHABLE = "esc cancel  ·  ctrl+b background  ·  enter queue"
 _FOOTER_HINT_PICKER = "enter  ·  esc"
 _FOOTER_HINT_SHELL = "enter run  ·  esc / ⌫ exit shell"
 _FOOTER_HINT_EXIT_ARMED = "press ctrl+c again to exit"
@@ -321,6 +322,11 @@ class HeaderModel:
             hint = _FOOTER_HINT_SHELL
         elif app._is_run_in_flight():
             hint = _FOOTER_HINT_RUNNING
+            # A bash / sub-agent / web_fetch call is running: it can be sent
+            # to the background (Ctrl+B) and the agent keeps going.
+            detachable = getattr(app.session.controller, "detachable_running", None)
+            if callable(detachable) and detachable():
+                hint = _FOOTER_HINT_DETACHABLE
         else:
             hint = _FOOTER_HINT_IDLE
 

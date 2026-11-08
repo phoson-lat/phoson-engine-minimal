@@ -69,6 +69,42 @@ whichever of these comes first:
 Results are framed as task output, not as messages from you, and long results
 are clipped inline (`task_output` returns the full text).
 
+## Seeing and managing tasks
+
+**Full-screen TUI:**
+
+- **Dock:** a few lines above the composer list the running tasks with their
+  elapsed time and live detail (the current output line of a command, for
+  example). Tasks waiting for your approval appear there too, and finished
+  tasks stay for a few seconds.
+- **Notices in the chat:** a line appears when a task finishes, fails or needs
+  approval.
+- **Ctrl+B view:** with nothing running that can be sent to the background,
+  `Ctrl+B` opens the tasks view:
+  - `Enter` shows a task's output;
+  - `x` cancels it;
+  - `a` / `d` approve or deny its pending permission question.
+- **Footer hint:** while a `bash`, sub-agent or `web_fetch` call runs, the
+  footer shows `ctrl+b background`.
+- **Quitting:** `Ctrl+Q` with tasks still running asks for a second press,
+  because those tasks will be cancelled.
+
+**Both front ends** have `/tasks`, which also works while a turn runs:
+
+| Command | Effect |
+|---|---|
+| `/tasks` | list tasks, including pending approvals |
+| `/tasks 3` | show task #3's output (or progress) |
+| `/tasks cancel 3` | stop it |
+| `/tasks approve 3` / `/tasks deny 3` | answer its permission question |
+
+### Approvals
+
+When a background sub-agent needs a permission you have set to `ask`, no
+dialog interrupts you. The question waits in the task list, and the sub-agent
+pauses until you answer from the dock / Ctrl+B view or with
+`/tasks approve|deny <n>`.
+
 ## Limits and lifetime
 
 - **How many at once:** up to `max(4, 2 × subagent_max_parallel)` background

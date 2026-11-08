@@ -78,6 +78,11 @@ class SessionFrontend:
         return self._controller
 
     @property
+    def tasks(self):
+        """The session's background tasks (see :mod:`phoson_cli.tasks`)."""
+        return self._controller.tasks
+
+    @property
     def config(self) -> PhosonConfig:
         return self._controller.config
 

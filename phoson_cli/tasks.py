@@ -63,6 +63,25 @@ def in_subagent_context() -> bool:
     return _IN_SUBAGENT.get()
 
 
+_CURRENT_TASK: contextvars.ContextVar["BackgroundTask | None"] = contextvars.ContextVar(
+    "phoson_current_task", default=None
+)
+
+
+def current_background_task() -> "BackgroundTask | None":
+    """The background task whose code is running now (``None`` in a turn)."""
+    return _CURRENT_TASK.get()
+
+
+@dataclass
+class PendingApproval:
+    """A permission question a background task is waiting on."""
+
+    tool: str
+    summary: str
+    future: asyncio.Future = field(repr=False)
+
+
 @dataclass
 class BackgroundTask:
     """One unit of background work and its outcome."""
@@ -81,6 +100,8 @@ class BackgroundTask:
     detail: str = ""
     #: Set once the result has been handed to the main agent.
     delivered: bool = False
+    #: A permission question waiting for the user (the task is paused).
+    approval: PendingApproval | None = None
     _task: asyncio.Task | None = field(default=None, repr=False)
 
     @property
@@ -187,6 +208,7 @@ class TaskManager:
 
         async def _body() -> None:
             token = mark_subagent_context()
+            _CURRENT_TASK.set(task)
             try:
                 task.result = await run(task)
                 task.status = "done"
@@ -276,6 +298,39 @@ class TaskManager:
             await self.cancel(task.id)
 
     # ── Delivery ──────────────────────────────────────────────────────────
+
+    # ── Approvals ─────────────────────────────────────────────────────────
+
+    async def request_approval(
+        self, task: BackgroundTask, tool: str, summary: str
+    ) -> bool:
+        """Park a background task's permission question until the user answers.
+
+        The question does not interrupt the user: it waits in the task list
+        (``pending_approvals``) until :meth:`resolve_approval` is called.
+        """
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        task.approval = PendingApproval(tool=tool, summary=summary, future=future)
+        previous = task.detail
+        task.detail = f"waiting for approval: {tool}"
+        self.notify(task)
+        try:
+            return bool(await future)
+        finally:
+            task.approval = None
+            task.detail = previous
+            self.notify(task)
+
+    def pending_approvals(self) -> list[BackgroundTask]:
+        return [t for t in self._tasks.values() if t.approval is not None]
+
+    def resolve_approval(self, task_id: int, allow: bool) -> bool:
+        """Answer a task's pending question; ``False`` if there was none."""
+        task = self._tasks.get(task_id)
+        if task is None or task.approval is None or task.approval.future.done():
+            return False
+        task.approval.future.set_result(allow)
+        return True
 
     def undelivered(self) -> list[BackgroundTask]:
         return [t for t in self._tasks.values() if t.done and not t.delivered]
@@ -440,6 +495,8 @@ __all__ = [
     "DELIVERY_CHARS",
     "BackgroundTask",
     "ToolDetacher",
+    "PendingApproval",
+    "current_background_task",
     "TaskDeliveryMiddleware",
     "TaskManager",
     "in_subagent_context",
