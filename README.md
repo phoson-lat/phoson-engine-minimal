@@ -226,7 +226,7 @@ Provider adapters return a single typed event stream (`LLMEvent` subclasses):
 | Category | Providers |
 |----------|-----------|
 | Native adapters | **OpenAI** (tool use, reasoning effort), **Anthropic** (thinking, tool use, prompt caching), **Google Gemini**, **Mistral**, **Azure OpenAI**, **AWS Bedrock** |
-| OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Alibaba (DashScope)**, **Groq**, **xAI (Grok)**, **Together**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
+| OpenAI-compatible endpoints | **OpenRouter**, **Ollama**, **LM Studio**, **vLLM**, **DeepSeek**, **Alibaba (DashScope)**, **Groq**, **xAI (Grok)**, **Together**, **Cheaper Inference**, **Perplexity**, **NVIDIA**, **Fireworks**, **Cohere**, **GitHub Models** |
 | Subscription (OAuth, no API key) | **ChatGPT** (Plus/Pro/Team via device code or browser sign-in; tokens in `~/.phoson/auth.json`), **Google Code Assist** (Gemini subscription via browser or copy/paste sign-in; tokens in `~/.phoson/auth-google.json`, backend `cloudcode-pa.googleapis.com`, needs `PHOSON_GOOGLE_CLIENT_ID`) |
 
 All of them are available via the `build_chat()` factory, e.g. `build_chat("openrouter")`, and expose the same `stream()` event contract.

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from phoson_llm.chats.perplexity import PerplexityChat
     from phoson_llm.chats.code_assist import CodeAssistChat
     from phoson_llm.chats.github_models import GitHubModelsChat
+    from phoson_llm.chats.cheaperinference import CheaperInferenceChat
     from phoson_llm.chats.openai_compatible import OpenAICompatibleChat
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "DeepSeekChat",
     "AlibabaChat",
     "TogetherChat",
+    "CheaperInferenceChat",
     "PerplexityChat",
     "LMStudioChat",
     "VLLMChat",
@@ -85,6 +87,7 @@ _MODULES: dict[str, str] = {
     "DeepSeekChat": ".deepseek",
     "AlibabaChat": ".alibaba",
     "TogetherChat": ".together",
+    "CheaperInferenceChat": ".cheaperinference",
     "PerplexityChat": ".perplexity",
     "LMStudioChat": ".lmstudio",
     "VLLMChat": ".vllm",

@@ -64,7 +64,9 @@ def models_file_path(home: str | Path | None = None) -> Path:
 #: ``vendor/model`` id (e.g. OpenRouter serves ``openai/gpt-4o``). For a
 #: router, a vendor prefix in the model id does NOT identify the serving
 #: provider.
-ROUTER_PROVIDERS: frozenset[str] = frozenset({"openrouter", "github", "omniroute"})
+ROUTER_PROVIDERS: frozenset[str] = frozenset(
+    {"openrouter", "github", "omniroute", "cheaperinference"}
+)
 
 #: Provider aliases normalized to their canonical name.
 PROVIDER_ALIASES: dict[str, str] = {
@@ -72,6 +74,8 @@ PROVIDER_ALIASES: dict[str, str] = {
     "aws": "bedrock",
     "grok": "xai",
     "dashscope": "alibaba",
+    "cheaper-inference": "cheaperinference",
+    "cheaper_inference": "cheaperinference",
     # The ChatGPT subscription is served by OpenAI's Codex backend, so the
     # codex-flavoured names are what users reach for.
     "codex": "chatgpt",
@@ -101,6 +105,7 @@ KNOWN_PROVIDERS: frozenset[str] = frozenset(
         "deepseek",
         "alibaba",
         "together",
+        "cheaperinference",
         "perplexity",
         "azure",
         "gemini",

@@ -89,6 +89,8 @@ async def _fetch_provider_models(config: PhosonConfig) -> list[ModelOption]:
         return await _list_alibaba_models(config)
     if provider == "together":
         return await _list_together_models(config)
+    if provider == "cheaperinference":
+        return await _list_cheaperinference_models(config)
     if provider == "mistral":
         return await _list_mistral_models(config)
     if provider == "perplexity":
@@ -408,6 +410,50 @@ async def _list_deepseek_models(config: PhosonConfig) -> list[ModelOption]:
         )
         for item in data.get("data", [])
         if item.get("id")
+    ]
+    return _prioritize_current(options, config.model)
+
+
+#: Model types the Cheaper Inference catalog lists that cannot serve chat.
+_CHEAPERINFERENCE_NON_CHAT = frozenset(
+    {"image", "video", "audio", "tts", "stt", "embedding", "rerank", "realtime"}
+)
+
+
+async def _list_cheaperinference_models(config: PhosonConfig) -> list[ModelOption]:
+    from phoson_llm.chats.cheaperinference import CHEAPER_INFERENCE_BASE_URL
+
+    api_key = getattr(config, "cheaperinference_api_key", None)
+    if not api_key:
+        return [
+            ModelOption(
+                id=config.model, label=config.model, provider="cheaperinference"
+            )
+        ]
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{CHEAPER_INFERENCE_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise ModelListingError(
+            f"Failed to fetch Cheaper Inference models: {exc}"
+        ) from exc
+    items = data if isinstance(data, list) else data.get("data", [])
+    options = [
+        ModelOption(
+            id=item["id"],
+            label=item.get("name") or item["id"],
+            provider="cheaperinference",
+            description=item.get("description", "") or "",
+        )
+        for item in items
+        if isinstance(item, dict)
+        and item.get("id")
+        and str(item.get("type", "")).lower() not in _CHEAPERINFERENCE_NON_CHAT
     ]
     return _prioritize_current(options, config.model)
 

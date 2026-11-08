@@ -28,6 +28,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "deepseek": (".chats.deepseek", "DeepSeekChat"),
     "alibaba": (".chats.alibaba", "AlibabaChat"),
     "together": (".chats.together", "TogetherChat"),
+    "cheaperinference": (".chats.cheaperinference", "CheaperInferenceChat"),
     "perplexity": (".chats.perplexity", "PerplexityChat"),
     "lmstudio": (".chats.lmstudio", "LMStudioChat"),
     "vllm": (".chats.vllm", "VLLMChat"),

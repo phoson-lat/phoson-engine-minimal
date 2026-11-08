@@ -45,6 +45,7 @@ _CHAT_CLASS_MODULES: Final[dict[str, str]] = {
     "DeepSeekChat": "phoson_llm.chats.deepseek",
     "AlibabaChat": "phoson_llm.chats.alibaba",
     "TogetherChat": "phoson_llm.chats.together",
+    "CheaperInferenceChat": "phoson_llm.chats.cheaperinference",
     "PerplexityChat": "phoson_llm.chats.perplexity",
     "LMStudioChat": "phoson_llm.chats.lmstudio",
     "VLLMChat": "phoson_llm.chats.vllm",
@@ -132,6 +133,7 @@ class PhosonConfig:
     deepseek_api_key: str | None = None
     alibaba_api_key: str | None = None
     together_api_key: str | None = None
+    cheaperinference_api_key: str | None = None
     perplexity_api_key: str | None = None
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
@@ -571,6 +573,8 @@ def _resolve_effort_profile(
 _PROVIDER_ALIASES: Final[dict[str, str]] = {
     "aws": "bedrock",
     "dashscope": "alibaba",
+    "cheaper-inference": "cheaperinference",
+    "cheaper_inference": "cheaperinference",
     "google": "gemini",
     "grok": "xai",
     "codex": "chatgpt",
@@ -605,6 +609,7 @@ _CANONICAL_PROVIDERS: Final[frozenset[str]] = frozenset(
         "openrouter",
         "perplexity",
         "together",
+        "cheaperinference",
         "vllm",
         "xai",
     }
@@ -1020,6 +1025,12 @@ def load_config() -> PhosonConfig:
         ),
         together_api_key=_resolve_optional_str(
             "TOGETHER_API_KEY", "together_api_key", fd, d.together_api_key
+        ),
+        cheaperinference_api_key=_resolve_optional_str(
+            "CHEAPER_INFERENCE_API_KEY",
+            "cheaperinference_api_key",
+            fd,
+            d.cheaperinference_api_key,
         ),
         perplexity_api_key=_resolve_optional_str(
             "PERPLEXITY_API_KEY", "perplexity_api_key", fd, d.perplexity_api_key
@@ -1483,6 +1494,7 @@ _SECRET_ENV_BY_KEY: Final[dict[str, str]] = {
     "deepseek_api_key": "DEEPSEEK_API_KEY",
     "alibaba_api_key": "DASHSCOPE_API_KEY",
     "together_api_key": "TOGETHER_API_KEY",
+    "cheaperinference_api_key": "CHEAPER_INFERENCE_API_KEY",
     "perplexity_api_key": "PERPLEXITY_API_KEY",
     "azure_openai_api_key": "AZURE_OPENAI_API_KEY",
     "gemini_api_key": "GEMINI_API_KEY",
@@ -1635,6 +1647,10 @@ def save_config(
         ("deepseek_api_key", getattr(config, "deepseek_api_key", None)),
         ("alibaba_api_key", getattr(config, "alibaba_api_key", None)),
         ("together_api_key", getattr(config, "together_api_key", None)),
+        (
+            "cheaperinference_api_key",
+            getattr(config, "cheaperinference_api_key", None),
+        ),
         ("perplexity_api_key", getattr(config, "perplexity_api_key", None)),
         ("azure_openai_endpoint", getattr(config, "azure_openai_endpoint", None)),
         ("azure_openai_api_key", getattr(config, "azure_openai_api_key", None)),
@@ -1965,6 +1981,8 @@ def _credential_providers(config: PhosonConfig) -> list[str]:
         providers.append("alibaba")
     if getattr(config, "together_api_key", None):
         providers.append("together")
+    if getattr(config, "cheaperinference_api_key", None):
+        providers.append("cheaperinference")
     if getattr(config, "perplexity_api_key", None):
         providers.append("perplexity")
     if getattr(config, "azure_openai_api_key", None):
@@ -2129,6 +2147,10 @@ def _build_chat_adapter(config: PhosonConfig) -> BaseLLMChat:
     if provider == "together":
         return _chat_class("TogetherChat")(
             api_key=config.together_api_key, base_url=base_url
+        )
+    if provider == "cheaperinference":
+        return _chat_class("CheaperInferenceChat")(
+            api_key=config.cheaperinference_api_key, base_url=base_url
         )
     if provider == "perplexity":
         return _chat_class("PerplexityChat")(
