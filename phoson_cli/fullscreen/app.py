@@ -1203,7 +1203,8 @@ class PhosonApp:
             )
             self.sink.notify("info", hint)
             return
-        self.app.create_background_task(self._tasks_dock.open_view())
+        if self._tasks_dock is not None:
+            self.app.create_background_task(self._tasks_dock.open_view())
 
     def cycle_reasoning_effort(self) -> None:
         """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""
