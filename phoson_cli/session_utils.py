@@ -32,6 +32,7 @@ from . import official_plugins
 from .config import PhosonConfig
 from .models import load_models_file, provider_settings
 from .skills import discover_skills, render_skill_index
+from .browser import StaleSnapshotMiddleware
 from .agents_md import load_agents_md
 from .official_plugins import (  # noqa: F401 - re-exported
     _in_tree_plugin_path,
@@ -834,13 +835,16 @@ def build_middlewares(
     - **Offload** joins only when ``config.offload_tool_outputs`` is on (E1)
       and an offload middleware is provided. It rewrites oversized tool
       results first, so they never reach the summarizer's token accounting.
+    - **StaleSnapshot** (browser use) is always present and cheap: it elides
+      every browser page snapshot but the newest *before* the summarizer
+      counts tokens, so superseded snapshots never trigger a compaction.
     - **Summarizer** auto-compacts (when provided) after offload.
     - **EnvironmentalContext** (#143) is always present and sits *after* the
       summarizer, so its ``[env: ...]`` block is appended to the context
       after any compaction — guaranteeing the block is the final message and
-      the stable prefix (prompt cache) is never busted. (Only the summarizer
-      and this middleware implement ``on_before_llm``; their relative order to
-      the tool hooks below is therefore inert.)
+      the stable prefix (prompt cache) is never busted. (Only StaleSnapshot,
+      the summarizer and this middleware implement ``on_before_llm``; their
+      relative order to the tool hooks below is therefore inert.)
     - **DoomLoop** (#142) joins when ``config.loop_detect_n > 0``. It sits
       *before* the permission gate so its ``abort``-mode refusal short-
       circuits an identical looping call without triggering an interactive
@@ -863,6 +867,7 @@ def build_middlewares(
     chain: list[AgentMiddleware] = []
     if offload is not None and config.offload_tool_outputs:
         chain.append(offload)
+    chain.append(StaleSnapshotMiddleware())
     if summarizer is not None:
         chain.append(summarizer)
     chain.append(

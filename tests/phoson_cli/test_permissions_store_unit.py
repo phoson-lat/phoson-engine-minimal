@@ -165,7 +165,8 @@ def test_controller_installs_permission_middleware(tmp_path, policy_file) -> Non
     # rewritten before the summarizer accounts for context; permissions
     # stay the innermost (last) LLM-call middleware.
     assert names[0] == "OffloadMiddleware"
-    assert names[1] == "SummarizationMiddleware"
+    assert names[1] == "StaleSnapshotMiddleware"
+    assert names[2] == "SummarizationMiddleware"
     assert controller.engine.middlewares[-1] is controller.permission_middleware
 
 
