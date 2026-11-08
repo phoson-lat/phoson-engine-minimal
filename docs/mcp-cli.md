@@ -287,6 +287,18 @@ Each server entry accepts two optional flags (I-100). Both default to
 `/mcp toggle <server> [tool]` edits these flags for you. `/mcp status`
 marks disabled servers and tools with `(disabled)`.
 
+### Startup
+
+At startup every enabled server is started and asked for its tools **in
+parallel**, so startup takes as long as the slowest server rather than the
+sum of all of them. Each server gets **`startup_timeout`** seconds (default
+30); a server that does not answer in time, or fails, is skipped with a
+warning and the others still load:
+
+```json
+{"mcpServers": {"big-index": {"command": "my-server", "startup_timeout": 90}}}
+```
+
 ## 🔌 Transport Types
 
 ### STDIO Transport (Default)

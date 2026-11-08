@@ -46,6 +46,28 @@ _SESSION_ENV_PASSTHROUGH = (
 )
 
 
+#: Seconds a server may take to start and list its tools at startup.
+DEFAULT_STARTUP_TIMEOUT_S = 30.0
+
+
+def _startup_timeout(server_config: dict[str, Any]) -> float:
+    """The server's ``startup_timeout`` (seconds), else the default."""
+    value = server_config.get("startup_timeout")
+    try:
+        timeout = float(value) if value is not None else DEFAULT_STARTUP_TIMEOUT_S
+    except (TypeError, ValueError):
+        return DEFAULT_STARTUP_TIMEOUT_S
+    return timeout if timeout > 0 else DEFAULT_STARTUP_TIMEOUT_S
+
+
+def _describe_discovery_error(exc: BaseException) -> str:
+    import asyncio
+
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "timed out (raise `startup_timeout` in its config if it is slow)"
+    return str(exc) or type(exc).__name__
+
+
 def _stdio_child_env(configured: dict[str, Any] | None) -> dict[str, str]:
     """Environment for a stdio MCP server subprocess.
 
@@ -270,11 +292,25 @@ class MCPPlugin(Plugin):
     def _load_tools_from_servers(self) -> None:
         """Load and discover tools from all configured MCP servers.
 
+        Every enabled server is started and listed **concurrently**, each
+        bounded by its ``startup_timeout`` (seconds, default
+        :data:`DEFAULT_STARTUP_TIMEOUT_S`), so startup takes as long as the
+        slowest server instead of the sum of all of them, and a server that
+        hangs cannot block the CLI. Tools keep the configuration order.
+
         If we are inside an already-running event loop (e.g. the CLI), run
         discovery in a temporary thread so initialization can still expose
         concrete MCP tools synchronously.
         """
         import asyncio
+
+        enabled = [
+            (name, config)
+            for name, config in self.servers.items()
+            if self.is_server_enabled(name)
+        ]
+        if not enabled:
+            return
 
         try:
             asyncio.get_running_loop()
@@ -282,44 +318,50 @@ class MCPPlugin(Plugin):
         except RuntimeError:
             running_loop = False
 
-        for server_name, server_config in self.servers.items():
-            if not self.is_server_enabled(server_name):
-                continue
-            try:
-                discovered_tools = self._discover_tools_blocking(
-                    server_name,
-                    server_config,
-                    use_thread=running_loop,
-                )
-                self.tools_cache.extend(discovered_tools)
-            except Exception as e:
+        results = self._run_blocking(
+            lambda: self._discover_all(enabled), use_thread=running_loop
+        )
+        for (server_name, _config), outcome in zip(enabled, results, strict=True):
+            if isinstance(outcome, BaseException):
                 print(
                     "Warning: Failed to discover tools from MCP server "
-                    f"'{server_name}': {e}"
+                    f"'{server_name}': {_describe_discovery_error(outcome)}"
                 )
+                continue
+            self.tools_cache.extend(outcome)
 
-    def _discover_tools_blocking(
-        self,
-        server_name: str,
-        server_config: dict[str, Any],
-        *,
-        use_thread: bool,
-    ) -> list[AgentTool]:
-        """Synchronously discover tools, even when another loop is running."""
+    async def _discover_all(
+        self, servers: list[tuple[str, dict[str, Any]]]
+    ) -> list[list[AgentTool] | BaseException]:
+        """Discover every server concurrently; failures are returned, not raised."""
+        import asyncio
+
+        async def one(name: str, config: dict[str, Any]) -> list[AgentTool]:
+            return await asyncio.wait_for(
+                self._discover_server_tools(name, config),
+                timeout=_startup_timeout(config),
+            )
+
+        return await asyncio.gather(
+            *(one(name, config) for name, config in servers),
+            return_exceptions=True,
+        )
+
+    @staticmethod
+    def _run_blocking(factory: Any, *, use_thread: bool) -> Any:
+        """Run ``factory()``'s coroutine to completion, even inside a loop."""
         import asyncio
         import threading
 
         if not use_thread:
-            return asyncio.run(self._discover_server_tools(server_name, server_config))
+            return asyncio.run(factory())
 
-        result: list[list[AgentTool]] = []
+        result: list[Any] = []
         errors: list[BaseException] = []
 
         def runner() -> None:
             try:
-                result.append(
-                    asyncio.run(self._discover_server_tools(server_name, server_config))
-                )
+                result.append(asyncio.run(factory()))
             except BaseException as exc:
                 errors.append(exc)
 
@@ -329,7 +371,7 @@ class MCPPlugin(Plugin):
 
         if errors:
             raise errors[0]
-        return result[0] if result else []
+        return result[0]
 
     async def _discover_server_tools(
         self,
