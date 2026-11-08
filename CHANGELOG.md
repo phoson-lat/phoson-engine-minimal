@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.60.0 (2026-11-07)
+
+Prompt caching on Cheaper Inference.
+
+### Feat
+
+- **llm**: Claude models on Cheaper Inference are now prompt-cached. The gateway adds no cache
+  markers on its own, so every turn used to pay the full input rate; requests now mark the system
+  prompt (tools included) and the last message with `cache_control`. Every request also sends the
+  session id as `x-ci-prompt-cache-session` so a conversation is routed consistently and the
+  upstream cache stays warm, which helps the implicit caches of GPT, DeepSeek, … too
+  ([#297](https://github.com/phoson-lat/phoson-engine-minimal/pull/297))
+
 ## v0.59.0 (2026-11-07)
 
 A new OpenAI-compatible provider.
