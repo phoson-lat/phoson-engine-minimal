@@ -859,6 +859,14 @@ def _extract_provider_cost(usage: object) -> float | None:
     cost = getattr(usage, "cost", None)
     if cost is None:
         return None
+    # Perplexity reports a breakdown object: ``usage.cost.total_cost``
+    # (tokens plus per-request search/tool fees).
+    if isinstance(cost, dict):
+        cost = cost.get("total_cost")
+    elif not isinstance(cost, (int, float, str)):
+        cost = getattr(cost, "total_cost", None)
+    if cost is None:
+        return None
     try:
         value = float(cost)
     except (TypeError, ValueError):
