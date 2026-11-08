@@ -98,7 +98,7 @@ class TestOffloadOutput:
         def _raise(*_args: object, **_kwargs: object) -> None:
             raise OSError("disk full")
 
-        monkeypatch.setattr(Path, "write_text", _raise)
+        monkeypatch.setattr("phoson_agent.plugins.offload.os.open", _raise)
         text = "X" * 500
         out = offload_output(
             text,

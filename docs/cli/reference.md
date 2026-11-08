@@ -19,6 +19,8 @@ One-shot mode (no REPL, no session — for scripts and CI):
 
 Options:
   -p, --print          Print the final answer and exit (one-shot mode)
+  --auto               One-shot: run tools that would ask (programs, code,
+                       deletes) instead of refusing them
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
