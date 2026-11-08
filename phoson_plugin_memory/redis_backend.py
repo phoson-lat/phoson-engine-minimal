@@ -37,8 +37,11 @@ class RedisBackend(MemoryBackend):
     def _ensure_client(self) -> Any:
         if not REDIS_AVAILABLE:
             raise ImportError(
-                "redis package not installed. Install with: pip install redis "
-                "or pip install 'phoson-engine-minimal[memory]'"
+                "redis package not installed. "
+                "Install with: /extras install memory"
+                "  (or: phoson-cli extras install memory"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[memory]')"
             )
         assert redis_asyncio is not None
         if self._client is None:

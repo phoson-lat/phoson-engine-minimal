@@ -15,5 +15,6 @@ dives.
 - [skills.md](skills.md) — `SKILL.md` on-demand instruction packages
 - [background-tasks.md](background-tasks.md) — sub-agents that run while the agent keeps working
 - [browser.md](browser.md) — interactive browser use through the official Chrome DevTools MCP server
+- [extras.md](extras.md) — `/extras`: optional features (speech to text, Computer Use, …) installed on demand
 - [models-config.md](models-config.md) — `models.json`, `config.toml`, themes
 - [compaction.md](compaction.md) — auto-compaction and `[defaults]` knobs

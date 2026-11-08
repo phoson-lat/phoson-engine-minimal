@@ -23,6 +23,8 @@ override the release location and install root (testing, mirrors).
 .\phoson-installer.ps1 -Setup
 .EXAMPLE
 .\phoson-installer.ps1 -Method uv
+.EXAMPLE
+.\phoson-installer.ps1 -With stt,computeruse
 #>
 [CmdletBinding()]
 param(
@@ -33,8 +35,29 @@ param(
     [switch] $CI,
     [switch] $SkipSetup,
     [switch] $Setup,
+    # Optional features to install afterwards (phoson-cli extras install).
+    [string[]] $With,
     [switch] $Help
 )
+
+$script:PhosonExtras = @()
+
+function Install-PhosonExtras {
+    param([string] $Cli)
+    $names = @($script:PhosonExtras | ForEach-Object { $_ -split '[,\s]+' } | Where-Object { $_ })
+    if ($names.Count -eq 0) { return }
+    # Versions before `extras` would read the words as a task prompt.
+    $usage = (& $Cli --help | Out-String)
+    if ($usage -notmatch '(?m)^  extras ') {
+        Write-Warning "This version cannot install optional features (-With); upgrade, then run: phoson-cli extras install $($names -join ' ')"
+        return
+    }
+    Write-Host "Installing optional features: $($names -join ' ')"
+    & $Cli extras install @names | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Some optional features did not install; retry with: phoson-cli extras install $($names -join ' ')"
+    }
+}
 
 function Invoke-PhosonNative {
     param([string] $Executable, [string[]] $Arguments)
@@ -153,6 +176,7 @@ function Install-PhosonCli {
     if ($resolved -and $resolved.Source -ine $cli) {
         Write-Warning "Another CLI takes precedence on PATH: $($resolved.Source). Use $cli or adjust PATH."
     }
+    Install-PhosonExtras -Cli $cli
     if ($Configure) { Invoke-PhosonNative $cli @('--setup') }
 }
 
@@ -302,6 +326,7 @@ function Install-PhosonBinary {
         Write-Host 'Configure later: phoson-cli --setup'
         Write-Host 'Update: phoson-cli --self-update'
         Write-Host 'Uninstall: phoson-cli --uninstall (settings are retained)'
+        Install-PhosonExtras -Cli $cli
         if ($Configure) { Invoke-PhosonNative $cli @('--setup') | Out-Host }
         return $true
     }
@@ -329,7 +354,8 @@ function Invoke-PhosonInstall {
 # Dot-sourcing defines helpers for tests without installing anything.
 if ($MyInvocation.InvocationName -ne '.') {
     if ($Help) {
-        Write-Output 'Usage: .\phoson-installer.ps1 [-Version X.Y.Z] [-Method binary|uv] [-Setup] [-CI] [-SkipSetup] [-Help]'
+        Write-Output 'Usage: .\phoson-installer.ps1 [-Version X.Y.Z] [-Method binary|uv] [-With stt,computeruse,...] [-Setup] [-CI] [-SkipSetup] [-Help]'
+        Write-Output '-With installs optional features (stt, computeruse, ssh, memory, checkpoint, mcp, gemini, mistral, aws).'
         Write-Output 'Installs for the current Windows user: the standalone binary by default, or via uv and PyPI. Setup is opt-in.'
         Write-Output '-CI and -SkipSetup suppress setup even when -Setup is specified.'
     }
@@ -337,6 +363,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         $previousPreference = $ErrorActionPreference
         $ErrorActionPreference = 'Stop'
         try {
+            if ($With) { $script:PhosonExtras = $With }
             Invoke-PhosonInstall -Method $Method -MethodExplicit:($PSBoundParameters.ContainsKey('Method')) `
                 -PackageVersion $Version -Configure:($Setup -and -not $CI -and -not $SkipSetup)
         }

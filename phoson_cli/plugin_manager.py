@@ -338,7 +338,10 @@ def _is_frozen() -> bool:
 
 
 def _installer_command(
-    target: Path, requirement: str, constraints: Path | None
+    target: Path,
+    requirement: str,
+    constraints: Path | None,
+    *more_requirements: str,
 ) -> list[str]:
     """The command that installs *requirement* into *target*.
 
@@ -365,11 +368,11 @@ def _installer_command(
             command += ["--python", sys.executable]
         if constraints is not None:
             command += ["--constraint", str(constraints)]
-        return [*command, requirement]
+        return [*command, requirement, *more_requirements]
     command = [sys.executable, "-m", "pip", "install", "--target", str(target)]
     if constraints is not None:
         command += ["--constraint", str(constraints)]
-    return [*command, requirement]
+    return [*command, requirement, *more_requirements]
 
 
 def _uv_executable() -> str:
@@ -379,16 +382,22 @@ def _uv_executable() -> str:
     return find_uv() or "uv"
 
 
-def _host_distributions() -> dict[str, Distribution]:
-    """Distributions importable by the host (first on ``sys.path`` wins)."""
-    root = plugins_dir()
+def _host_distributions(
+    exclude: tuple[Path, ...] = (),
+) -> dict[str, Distribution]:
+    """Distributions importable by the host (first on ``sys.path`` wins).
+
+    Copies under the plugins directory (or any of *exclude*) are private
+    installs, not the host's, and are skipped.
+    """
+    roots = (plugins_dir(), *exclude)
     found: dict[str, Distribution] = {}
     for dist in importlib.metadata.distributions():
         name = dist.metadata.get("Name") if dist.metadata else None
         if not name:
             continue
         located = Path(str(dist.locate_file("")))
-        if _inside(located, root):
+        if any(_inside(located, root) for root in roots):
             continue  # another plugin's private copy, not the host's
         found.setdefault(canonicalize_name(name), dist)
     return found

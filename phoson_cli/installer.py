@@ -1,3 +1,4 @@
+import asyncio
 from typing import ClassVar
 from pathlib import Path
 from contextlib import contextmanager
@@ -742,30 +743,67 @@ class SetupWizard:
                     )
 
         config.plugins = preserved + [spec for spec in specs if spec in selected]
-        self._warn_missing_plugin_extras(selected)
+        await self._offer_missing_plugin_extras(selected)
         return config
 
-    def _warn_missing_plugin_extras(self, selected: set[str]) -> None:
-        """Warn when a selected plugin's optional dependency is not importable."""
+    async def _offer_missing_plugin_extras(self, selected: set[str]) -> None:
+        """Offer to install the extras that selected plugins need.
+
+        The packages go to ``~/.phoson/extras`` (``/extras install``), which
+        also works from the standalone binary (no ``pip`` there).
+        """
         from importlib.util import find_spec
 
+        from .extras import ExtrasError, get_extra, install_extra
+
         missing: list[str] = []
-        for spec in selected:
+        for spec in sorted(selected):
             requirement = PLUGIN_REQUIRED_EXTRAS.get(spec)
             if requirement is None:
                 continue
             module, extra = requirement
-            if find_spec(module) is None:
+            try:
+                found = find_spec(module) is not None
+            except (ImportError, ValueError):
+                found = False
+            if not found and extra not in missing:
                 missing.append(extra)
         if not missing:
             return
-        flags = " ".join(f"--extra {extra}" for extra in sorted(set(missing)))
+        names = " ".join(missing)
         self.console.print(
             Text(
-                f"Some selected plugins need optional dependencies:\n  uv sync {flags}",
+                f"Some selected plugins need optional packages: {names}",
                 style=self.theme.warn,
             )
         )
+        if not await self._confirm("Install them now?", default=True):
+            self.console.print(
+                Text(
+                    f"Install them later with: phoson-cli extras install {names}",
+                    style=self.theme.muted,
+                )
+            )
+            return
+        for name in missing:
+            try:
+                status = await asyncio.to_thread(
+                    install_extra,
+                    name,
+                    notify=lambda msg: self.console.print(
+                        Text(msg, style=self.theme.muted)
+                    ),
+                )
+            except ExtrasError as exc:
+                self.console.print(Text(str(exc), style=self.theme.err))
+                continue
+            label = get_extra(name).name
+            if status.ready:
+                self.console.print(Text(f"✓ {label} installed", style=self.theme.ok))
+            else:
+                self.console.print(
+                    Text(f"{label}: {status.detail}", style=self.theme.warn)
+                )
 
     async def _pick_theme(self) -> str:
         """Ask which color theme to save (E4).

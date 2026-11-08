@@ -44,6 +44,10 @@ Options:
                        install, uninstall, update, list, info, enable,
                        disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
+  extras [list|install|remove] <name>
+                       Optional features that need extra packages (speech
+                       to text, Computer Use, SSH, memory backends, provider
+                       SDKs), installed into ~/.phoson/extras
   -h, --help           Show this help and exit
 ```
 
@@ -89,4 +93,5 @@ can contribute more; `/help` lists everything active in a session.
 | `/setup` | — | Run the initial setup wizard again |
 | `/mcp` | — | Manage Model Context Protocol servers |
 | `/browser` | — | Browser use (Chrome DevTools MCP): setup, status, mode, allow/block |
+| `/extras` | — | Install optional features (speech to text, Computer Use, SSH, …) |
 | `/update` | `/upgrade` | Check for and install CLI updates |

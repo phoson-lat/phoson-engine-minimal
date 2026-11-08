@@ -121,6 +121,10 @@ Options:
                        install, uninstall, update, list, info, enable,
                        disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
+  extras [list|install|remove] <name>
+                       Optional features that need extra packages (speech
+                       to text, Computer Use, SSH, memory backends, provider
+                       SDKs), installed into ~/.phoson/extras
   -h, --help           Show this help and exit
 """
 
@@ -146,6 +150,7 @@ class CliOptions:
     task: str | None = None
     plugin_args: list[str] | None = None
     bg_args: list[str] | None = None
+    extras_args: list[str] | None = None
     assume_yes: bool = False
     auto: bool = False
 
@@ -200,6 +205,9 @@ def parse_args(argv: list[str]) -> CliOptions:
             break
         if arg == "bg":
             options.bg_args = argv[i + 1 :]
+            break
+        if arg == "extras":
+            options.extras_args = argv[i + 1 :]
             break
         if arg in {"-h", "--help"}:
             print(_USAGE)
@@ -1048,6 +1056,14 @@ def _run_cli() -> None:
     if options.version:
         print(f"phoson-cli {get_current_version()}")
         return
+
+    # Optional packages installed with `extras install` (speech to text,
+    # Computer Use, provider SDKs…) live outside the CLI's own environment.
+    from phoson_cli.extras import activate_extras, run_extras_command
+
+    activate_extras()
+    if options.extras_args is not None:
+        sys.exit(run_extras_command(options.extras_args))
 
     if options.plugin_args is not None:
         try:

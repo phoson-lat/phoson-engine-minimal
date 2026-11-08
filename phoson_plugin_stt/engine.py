@@ -142,8 +142,11 @@ def _moonshine():
         return importlib.import_module("moonshine_voice")
     except ImportError as exc:  # pragma: no cover - depends on install
         raise SttUnavailable(
-            "moonshine-voice is not installed. Install it with: "
-            "pip install 'phoson-engine-minimal[stt]' (or pip install moonshine-voice)."
+            "moonshine-voice is not installed. "
+            "Install with: /extras install stt"
+            "  (or: phoson-cli extras install stt"
+            "; in a Python environment:"
+            " pip install 'phoson-engine-minimal[stt]')."
         ) from exc
 
 
@@ -178,8 +181,11 @@ def _ensure_portaudio() -> None:
         return
     except ImportError as exc:  # pragma: no cover - depends on install
         raise SttUnavailable(
-            "sounddevice is not installed. Install the STT extra: "
-            "pip install 'phoson-engine-minimal[stt]'."
+            "sounddevice is not installed. "
+            "Install with: /extras install stt"
+            "  (or: phoson-cli extras install stt"
+            "; in a Python environment:"
+            " pip install 'phoson-engine-minimal[stt]')."
         ) from exc
     except OSError:
         pass

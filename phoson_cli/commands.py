@@ -2113,6 +2113,56 @@ class CommandHandler:
         self._r.print_info(f"steps={self.session.session_metrics.step_count}")
         return True
 
+    async def _cmd_extras(self, cmd: Command) -> bool:
+        """List, install or remove optional packages (``~/.phoson/extras``)."""
+        from .extras import (
+            ExtrasError,
+            get_extra,
+            extras_help,
+            all_statuses,
+            remove_extra,
+            install_extra,
+            format_status_table,
+        )
+
+        args = cmd.args.split()
+        if not args or args == ["list"]:
+            self.host.print_info(format_status_table(all_statuses()))
+            self.host.print_info("Install one with: /extras install <name>")
+            return True
+        action, *names = args
+        if action not in {"install", "remove", "uninstall"} or not names:
+            self.host.print_info(extras_help().rstrip())
+            return True
+        loop = asyncio.get_running_loop()
+
+        def notify(message: str) -> None:
+            # install_extra runs in a worker thread; print on the UI loop.
+            loop.call_soon_threadsafe(self.host.print_info, message)
+
+        for name in names:
+            try:
+                if action == "install":
+                    status = await asyncio.to_thread(install_extra, name, notify=notify)
+                    if status.ready:
+                        self.host.print_info(
+                            f"✓ {status.extra.name} installed — ready to use."
+                        )
+                    else:
+                        self.host.print_warn(
+                            f"{status.extra.name} installed, but: {status.detail}"
+                        )
+                elif remove_extra(name):
+                    self.host.print_info(
+                        f"Removed {get_extra(name).name} "
+                        "(restart phoson-cli to unload it)."
+                    )
+                else:
+                    self.host.print_info(f"{get_extra(name).name} is not installed.")
+            except ExtrasError as exc:
+                self.host.print_error(str(exc))
+        return True
+
     async def _cmd_mcp(self, cmd: Command) -> bool:
         return await _MCPSubcommands(self).dispatch(cmd)
 

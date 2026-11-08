@@ -138,9 +138,11 @@ class MacOSBackend(ComputerBackend):
     def __init__(self) -> None:
         if not QUARTZ_AVAILABLE:
             raise ComputerUseError(
-                "The macOS backend needs 'pyobjc-framework-Quartz'. Install "
-                "with: uv sync --extra computeruse-macos  (or: pip install "
-                "'phoson-engine-minimal[computeruse-macos]'). "
+                "The macOS backend needs 'pyobjc-framework-Quartz'. "
+                "Install with: /extras install computeruse"
+                "  (or: phoson-cli extras install computeruse"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[computeruse]'). "
                 f"Original error: {_QUARTZ_IMPORT_ERROR}"
             )
         self._closed = False

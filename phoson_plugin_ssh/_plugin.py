@@ -208,8 +208,10 @@ class SshPlugin(Plugin):
         if not SSH_AVAILABLE:
             raise SshError(
                 "The SSH plugin requires the optional 'asyncssh' package. "
-                "Install with: uv sync --extra ssh  (or: "
-                "pip install 'phoson-engine-minimal[ssh]')."
+                "Install with: /extras install ssh"
+                "  (or: phoson-cli extras install ssh"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[ssh]')."
             )
         logger.debug(
             "SSH plugin initialized: %d explicit host(s), known_hosts=%s",

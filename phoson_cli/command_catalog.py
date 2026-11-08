@@ -114,6 +114,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/warnings",
             "/mcp",
             "/browser",
+            "/extras",
             "/auth",
             "/setup",
             "/update",
@@ -290,6 +291,11 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/browser",),
         "Browser use (Chrome DevTools MCP): setup, status, mode, allow/block",
         "_cmd_browser",
+    ),
+    CommandSpec(
+        ("/extras",),
+        "Install optional features (speech to text, Computer Use, SSH, …)",
+        "_cmd_extras",
     ),
     CommandSpec(
         ("/update", "/upgrade"),

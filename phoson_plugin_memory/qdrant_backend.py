@@ -63,8 +63,11 @@ class QdrantBackend(SemanticMemoryBackend):
     def _ensure_client(self) -> Any:
         if not QDRANT_AVAILABLE:
             raise ImportError(
-                "qdrant-client not installed. Install with: pip install qdrant-client "
-                "or pip install 'phoson-engine-minimal[memory]'"
+                "qdrant-client not installed. "
+                "Install with: /extras install memory"
+                "  (or: phoson-cli extras install memory"
+                "; in a Python environment:"
+                " pip install 'phoson-engine-minimal[memory]')"
             )
         if self._client is None:
             self._client = AsyncQdrantClient(url=self.url, check_compatibility=False)

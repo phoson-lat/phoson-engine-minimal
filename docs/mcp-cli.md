@@ -220,7 +220,8 @@ You can change this location in three ways:
    ```
 
    The MCP SDK is an optional extra. In this repo: `uv sync --dev`.
-   Otherwise: `uv sync --extra mcp` or `pip install 'phoson-engine-minimal[mcp]'`.
+   Otherwise: `/extras install mcp` (works in the standalone binary),
+   `uv sync --extra mcp` or `pip install 'phoson-engine-minimal[mcp]'`.
 
 3. **Runtime command** (persistent):
    ```

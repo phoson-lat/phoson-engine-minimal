@@ -317,6 +317,8 @@ than the build machine). Options:
 ```bash
 curl -fsSL https://phoson.lat/install | sh -s -- --version 0.58.0   # pin a release
 curl -fsSL https://phoson.lat/install | sh -s -- --method uv        # PyPI via uv
+curl -fsSL https://phoson.lat/install | sh -s -- --with stt          # plus optional features
+phoson-cli extras install stt   # add one later (speech to text, computeruse, ssh, …)
 phoson-cli --self-update     # verified in-place update (binary or uv install)
 phoson-cli --uninstall       # or: curl -fsSL https://phoson.lat/uninstall | sh
 ```
@@ -325,7 +327,9 @@ Binary installs live in `~/.local/share/phoson/versions/<version>/`, with
 `~/.local/bin/phoson-cli` linked to the current one. On Windows they live in
 `%LOCALAPPDATA%\Phoson`, with `current\phoson-cli` on the user PATH. An update
 unpacks the new version next to the running one and switches over atomically.
-Your configuration in `~/.phoson` is never touched. Community plugins still
+Your configuration in `~/.phoson` is never touched. Optional features that need extra
+packages (speech to text, Computer Use, SSH, memory backends, provider SDKs)
+install on demand with `/extras` (see [docs/cli/extras.md](docs/cli/extras.md)). Community plugins still
 need [`uv`](https://docs.astral.sh/uv/) on PATH to install (see
 [docs/plugins.md](docs/plugins.md)).
 
