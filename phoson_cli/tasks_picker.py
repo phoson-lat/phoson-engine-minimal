@@ -62,7 +62,8 @@ def task_row(task: Any, width: int = 60) -> str:
         if getattr(task, "approval", None) is not None
         else STATUS_ICONS.get(task.status, "·")
     )
-    title = task.title.replace("\n", " ")
+    short = getattr(task, "short_title", None)
+    title = str(short(width)) if callable(short) else " ".join(task.title.split())
     if len(title) > width:
         title = title[: width - 1] + "…"
     line = f"{icon} {task.label:<4} {title:<{width}} {format_elapsed(task.elapsed):>6}"

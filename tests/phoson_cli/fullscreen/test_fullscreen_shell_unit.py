@@ -2720,12 +2720,13 @@ def _transcript(app: PhosonApp) -> str:
 def test_ctrl_b_sends_running_calls_to_the_background(
     app: PhosonApp, monkeypatch
 ) -> None:
-    from types import SimpleNamespace
 
     notes: list[str] = []
     monkeypatch.setattr(app.sink, "notify", lambda _level, text: notes.append(text))
     monkeypatch.setattr(app, "_is_run_in_flight", lambda: True)
-    started = [SimpleNamespace(label="#4", title="bash: npm test")]
+    from phoson_cli.tasks import BackgroundTask
+
+    started = [BackgroundTask(id=4, kind="bash", title="bash: npm test")]
     monkeypatch.setattr(app.session.controller, "detach_running_tools", lambda: started)
 
     _trigger(app, "c-b")

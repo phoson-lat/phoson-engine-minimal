@@ -1193,7 +1193,9 @@ class PhosonApp:
         controller = self.session.controller
         started = controller.detach_running_tools() if self._is_run_in_flight() else []
         if started:
-            names = ", ".join(f"{task.label} {task.title[:40]}" for task in started)
+            names = ", ".join(
+                f"{task.label} {task.short_title(40)}" for task in started
+            )
             self.sink.notify(
                 "info", f"Sent to the background: {names}. The agent keeps going."
             )

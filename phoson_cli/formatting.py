@@ -432,6 +432,8 @@ def render_user_turn(
     both front ends share — so sinks keep calling a single function and never
     special-case monitor wakes themselves.
     """
+    if text.lstrip().startswith(_TASK_RESULTS_OPEN):
+        return render_task_results_turn(text, theme, at=at)
     if text.lstrip().startswith(_PEER_WAKE_HEADER):
         return render_peer_wake_turn(text, theme, at=at)
     if text.lstrip().startswith(_WAKE_HEADERS):
@@ -473,6 +475,99 @@ def _wake_monitor_names(text: str) -> list[str]:
         if match and match.group(1) not in names:
             names.append(match.group(1))
     return names
+
+
+# ── Background-task results (phoson_cli.tasks) ─────────────────────────────
+#
+# Finished background tasks reach the model as a ``<background-task-results>``
+# block (an autonomous wake turn, or text appended to a tool-result message
+# mid-turn). That block is the model's input and stays untouched; here it is
+# shown as one compact card per task instead of a user-coloured wall of text.
+
+_TASK_RESULTS_OPEN: Final = "<background-task-results>"
+_TASK_RESULTS_CLOSE: Final = "</background-task-results>"
+_TASK_HEADER_RE = re.compile(
+    r"^## Task (#\d+) \((\w+): (.*)\) — (\w+) after (\d+)s\s*$"
+)
+_TASK_STATUS_STYLE: Final = {
+    "done": ("✓", "ok"),
+    "error": ("✗", "err"),
+    "cancelled": ("■", "muted"),
+}
+#: Output lines previewed under each task (the full result is in the context,
+#: and in ``/tasks <n>``).
+_TASK_PREVIEW_LINES = 3
+
+
+def _parse_task_results(text: str) -> tuple[list[dict], str]:
+    """Split a results block into per-task dicts and any trailing user text."""
+    body, _, rest = text.lstrip().partition(_TASK_RESULTS_CLOSE)
+    tasks: list[dict] = []
+    current: dict | None = None
+    for line in body.splitlines():
+        header = _TASK_HEADER_RE.match(line)
+        if header:
+            label, kind, title, status, seconds = header.groups()
+            current = {
+                "label": label,
+                "kind": kind,
+                "title": title,
+                "status": status,
+                "seconds": int(seconds),
+                "lines": [],
+            }
+            tasks.append(current)
+        elif current is not None and line.strip():
+            current["lines"].append(line.rstrip())
+    return tasks, rest.strip()
+
+
+def _task_preview(lines: list[str]) -> list[str]:
+    """The most telling lines of a task's output: exit code + last lines."""
+    kept = [line for line in lines if not line.startswith(("[full log:", "[… "))]
+    if len(kept) <= _TASK_PREVIEW_LINES:
+        return kept
+    return [kept[0], "…", *kept[-(_TASK_PREVIEW_LINES - 1) :]]
+
+
+def render_task_results_turn(
+    text: str, theme: Theme, at: "datetime.datetime | None" = None
+) -> Group:
+    """Render delivered background-task results as compact cards.
+
+    ``⚙ Task #3 finished · bash: set -e … · 2m 4s`` per task, then a few
+    dimmed output lines (exit code, the last lines). Results are autonomous
+    input, so this must not read like a typed user turn.
+    """
+    tasks, rest = _parse_task_results(text)
+    items: list[RenderableType] = []
+    head = Text()
+    head.append("⚙ ", style=f"bold {theme.accent}")
+    count = len(tasks)
+    head.append(
+        "Background task result" + ("s" if count != 1 else ""),
+        style=f"bold {theme.accent}",
+    )
+    if at is not None:
+        head.append(f" at {format_timestamp(at)}", style=theme.muted_deep)
+    items.append(head)
+    for task in tasks:
+        icon, style_name = _TASK_STATUS_STYLE.get(task["status"], ("·", "muted"))
+        color = getattr(theme, style_name, theme.muted)
+        line = Text("  ")
+        line.append(f"{icon} {task['label']} ", style=f"bold {color}")
+        line.append(task["status"], style=color)
+        line.append(f"  ·  {task['kind']}: ", style=theme.muted)
+        line.append(task["title"], style=theme.text)
+        line.append(
+            f"  ·  {format_duration_ms(task['seconds'] * 1000)}", style=theme.muted
+        )
+        items.append(line)
+        for preview in _task_preview(task["lines"]):
+            items.append(Text(f"      {preview[:160]}", style=theme.muted_deep))
+    if rest:
+        items.append(_HighlightedBlock(_user_line(rest, theme, at), theme.badge_user))
+    return Group(*items)
 
 
 def render_monitor_wake_turn(
