@@ -242,3 +242,36 @@ def test_mcp_annotation_overrides_come_from_the_server_entry() -> None:
     assert snap["read_only"] is True and snap["destructive"] is False
     click = tools["mcp_chrome-devtools_click"].metadata["mcp_annotations"]
     assert click == {"annotated": False}
+
+
+@pytest.mark.asyncio
+async def test_tool_discovery_never_writes_server_stderr_to_the_terminal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A stdio server's stderr during discovery goes to its log file: on the
+    terminal it tore the full-screen TUI (chrome-devtools-mcp prints notices
+    on start)."""
+    import contextlib
+
+    from phoson_plugin_mcp import _plugin as mcp
+
+    if not mcp.MCP_AVAILABLE:
+        pytest.skip("mcp SDK not installed")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(mcp.Path, "home", classmethod(lambda cls: tmp_path))
+    seen: dict = {}
+
+    @contextlib.asynccontextmanager
+    async def fake_stdio_client(params, errlog=None):
+        seen["errlog"] = errlog
+        raise RuntimeError("stop here")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mcp, "stdio_client", fake_stdio_client)
+    plugin = mcp.MCPPlugin()
+    with pytest.raises(RuntimeError):
+        await plugin._list_stdio_tools("chrome-devtools", {"command": "npx"})
+    errlog = seen["errlog"]
+    assert errlog is not None and errlog is not sys.stderr
+    assert Path(errlog.name).parent == tmp_path / ".phoson" / "logs" / "mcp"
+    plugin._close_errlogs()

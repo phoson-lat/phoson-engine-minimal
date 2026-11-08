@@ -732,7 +732,11 @@ class MCPPlugin(Plugin):
             env=_stdio_child_env(env),
         )
 
-        async with stdio_client(server_params) as (read, write):
+        # The server's stderr goes to its log file here too: tool discovery at
+        # startup used the terminal, and a chatty server (chrome-devtools-mcp
+        # prints notices on start) wrote over the full-screen TUI.
+        errlog = self._open_errlog(server_name)
+        async with stdio_client(server_params, errlog=errlog) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.list_tools()
@@ -827,8 +831,8 @@ class MCPPlugin(Plugin):
         The MCP stdio transport pipes the subprocess's stderr to ``errlog``
         (default ``sys.stderr``), which leaks raw JSON logs straight into
         the terminal and tears the TUI render. Route it to
-        ``~/.phoson/logs/mcp/<server>.log`` instead. Falls back to
-        ``sys.stderr`` (prior behaviour) if the log path is unwritable.
+        ``~/.phoson/logs/mcp/<server>.log`` instead, or to ``os.devnull``
+        if the log path is unwritable — never to the terminal.
         """
         existing = self._errlog_files.get(server_name)
         if existing is not None:
@@ -838,8 +842,9 @@ class MCPPlugin(Plugin):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             fh = open(path, "a", encoding="utf-8")
-        except Exception:  # noqa: BLE001 - degrade to prior behaviour
-            fh = sys.stderr
+        except Exception:  # noqa: BLE001 - never fall back to the terminal
+            # Writing to the terminal would tear the TUI; drop the output.
+            fh = open(os.devnull, "w", encoding="utf-8")
         self._errlog_files[server_name] = fh
         return fh
 
