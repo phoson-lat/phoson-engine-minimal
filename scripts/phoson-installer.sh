@@ -63,10 +63,12 @@ EOF
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 fetch() { # fetch URL DEST
+    # GitHub's release CDN returns transient 5xx/504s at times: retry with
+    # backoff (curl doubles the delay: 1+2+4+8+16 s) before giving up.
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 2 -o "$2" "$1"
+        curl -fsSL --retry 5 --retry-connrefused -o "$2" "$1"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$2" "$1"
+        wget -q --tries=5 --waitretry=8 -O "$2" "$1"
     else
         die "Neither curl nor wget is available."
     fi
@@ -128,8 +130,10 @@ install_binary() {
 
     info "Downloading $asset"
     if ! fetch "$base/$asset" "$work/$asset" || ! fetch "$base/SHA256SUMS" "$work/SHA256SUMS"; then
-        warn "Could not download $asset from $base."
-        return 1
+        # A download failure is a network/GitHub problem, not a missing binary:
+        # falling back to PyPI here would replace a working binary install
+        # with a different method (and uv refuses to overwrite its link).
+        die "Could not download $asset from $base (network or GitHub error). Try again in a minute, or re-run with --method uv to install from PyPI instead."
     fi
     expected=$(awk -v name="$asset" '{ f=$2; sub(/^\*/, "", f) } f == name { print $1 }' "$work/SHA256SUMS")
     [ -n "$expected" ] || die "$asset is not listed in SHA256SUMS; refusing to install."

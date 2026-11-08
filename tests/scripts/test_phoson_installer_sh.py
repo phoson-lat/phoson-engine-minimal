@@ -154,6 +154,24 @@ def test_falls_back_to_uv_when_the_binary_cannot_run(env) -> None:
     assert not (_share(env) / "current").exists()
 
 
+def test_download_failure_aborts_instead_of_falling_back(env) -> None:
+    """A missing release asset (network/GitHub error) must not switch the
+    install to PyPI: a transient 504 would otherwise swap a working binary
+    install for a uv one (and uv refuses to overwrite the existing link)."""
+    log = Path(env["_fake_bin"]) / "uv.log"
+    uv = Path(env["_fake_bin"]) / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\n')
+    uv.chmod(0o755)
+    env["PHOSON_RELEASE_BASE"] = (Path(env["_release"]) / "missing").as_uri()
+
+    result = _run(INSTALLER, env, "--ci")
+
+    assert result.returncode != 0
+    assert "network or GitHub error" in result.stderr
+    assert "Falling back" not in result.stderr
+    assert not log.exists()
+
+
 def test_explicit_binary_method_does_not_fall_back(env) -> None:
     result = _run(INSTALLER, env, "--ci", "--method", "binary")
     assert result.returncode == 1

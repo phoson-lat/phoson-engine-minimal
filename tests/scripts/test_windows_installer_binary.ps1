@@ -80,6 +80,13 @@ try {
     Assert-Fails { Invoke-PhosonInstall -Method 'binary' | Out-Null } 'Checksum mismatch'
     Assert-Equal $script:uvFallback $false 'no fallback after checksum failure'
 
+    # A download failure (network/GitHub error) aborts; it never falls back to
+    # uv, even with the implicit method.
+    $env:PHOSON_RELEASE_BASE = Join-Path $temp 'missing-release'
+    Assert-Fails { Invoke-PhosonInstall -Method 'binary' | Out-Null } 'network or GitHub error'
+    Assert-Equal $script:uvFallback $false 'no fallback after a download failure'
+    $env:PHOSON_RELEASE_BASE = $release
+
     # No usable binary: implicit method falls back, explicit method fails.
     Publish-Release (Join-Path $release 'latest\download')
     $script:reported = 'fail'
