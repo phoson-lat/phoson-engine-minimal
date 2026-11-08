@@ -324,6 +324,10 @@ def _sanitize_error_message(message: str, limit: int = 80) -> str:
     return text
 
 
+#: Error codes whose (sanitized) message is shown together with the hint.
+_MESSAGE_WITH_HINT_CODES: Final = frozenset({"connection_error", "timeout"})
+
+
 def render_error_notice(event: AgentErrorEvent, theme: Theme) -> Text:
     """Build the single-line error warning shown on ``AgentErrorEvent`` (I-83).
 
@@ -344,7 +348,14 @@ def render_error_notice(event: AgentErrorEvent, theme: Theme) -> Text:
     line.append(event.code or "error", style=f"bold {theme.err}")
     if event.retryable:
         line.append(" · retryable", style=theme.muted)
-    detail = error_hint(event.code) or _sanitize_error_message(event.message)
+    hint = error_hint(event.code)
+    detail = hint or _sanitize_error_message(event.message)
+    if hint and event.code in _MESSAGE_WITH_HINT_CODES:
+        # For these the message says *where* it failed (host, port, which
+        # call timed out): keep it, then the hint.
+        message = _sanitize_error_message(event.message)
+        if message:
+            detail = f"{message} — {hint}"
     if detail:
         line.append(f" — {detail}", style=theme.warn)
     return line
@@ -1357,7 +1368,18 @@ _ERROR_HINTS: Final[dict[str, str]] = {
     "overloaded": "provider is busy — retry shortly or switch model",
     "server_error": "provider-side failure — retry, or switch model",
     "not_found": "model id may be wrong — pick one with /model",
-    "max_iterations": "raise the budget: /config max_iterations <n>",
+    "max_iterations": (
+        "raise max_iterations in ~/.phoson/config.toml "
+        "(or PHOSON_MAX_ITERATIONS), then continue"
+    ),
+    "context_length_exceeded": (
+        "the conversation no longer fits: run /compact, or /new for a fresh session"
+    ),
+    "connection_error": "check the network or the provider base URL, then retry",
+    "timeout": (
+        "the provider did not answer in time — retry, or raise "
+        "PHOSON_LLM_READ_TIMEOUT for slow reasoning models"
+    ),
 }
 
 

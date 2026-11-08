@@ -412,7 +412,12 @@ class CommandHandler:
         self._refresh_dispatch()
         handler = self._dispatch.get(cmd.name)
         if handler is None:
-            self.host.print_error(f"Unknown command: {cmd.name}")
+            import difflib
+
+            names = sorted(self._dispatch)
+            close = difflib.get_close_matches(cmd.name, names, n=1, cutoff=0.6)
+            hint = f" Did you mean {close[0]}?" if close else " See /help."
+            self.host.print_error(f"Unknown command: {cmd.name}.{hint}")
             return True
         return await handler(self, cmd)
 
@@ -1362,6 +1367,17 @@ class CommandHandler:
             r.print_error("Usage: /permissions <tool> <allow|ask|deny>")
             return True
         tool, level = parts
+        known = _known_tool_names(self.session)
+        if known and tool != WILDCARD_TOOL and tool not in known:
+            import difflib
+
+            close = difflib.get_close_matches(tool, sorted(known), n=1)
+            hint = f" Did you mean {close[0]!r}?" if close else ""
+            r.print_error(
+                f"Unknown tool {tool!r}; nothing was changed.{hint} "
+                "Use * for every tool."
+            )
+            return True
         if not set_level(policy, tool, level):
             r.print_error(f"Invalid level: {level!r} — use allow, ask or deny")
             return True
@@ -1832,18 +1848,35 @@ class CommandHandler:
         if not cmd.args:
             r.print_info("Usage:  /delete <session_id>")
             return True
-        session_id = cmd.args.strip()
+        query = cmd.args.strip()
+        # Same prefix matching as /resume: a short id is what users type,
+        # and deleting must never "succeed" for an id that matched nothing.
+        sessions = await self.session.storage.list_meta()
+        matches = [s for s in sessions if str(s.id).startswith(query)]
+        if not matches:
+            r.print_error(f"No session matching {query!r}. Run /sessions to list.")
+            return True
+        if len(matches) > 1:
+            r.print_info(f"{len(matches)} sessions match {query!r}:")
+            for s in matches[:10]:
+                title = getattr(s, "title", None) or "(untitled)"
+                r.print_info(f"  {str(s.id)[:8]}  [{title}]")
+            r.print_info("Be more specific.")
+            return True
+        session_id = str(matches[0].id)
         if session_id == self.session.tree.session_id:
             r.print_error("Cannot delete the current active session. Use /new first.")
             return True
+        title = getattr(matches[0], "title", None)
+        label = f"{session_id[:8]}" + (f" [{title}]" if title else "")
         if not await self.host.confirm(
-            f"Delete session {session_id[:8]}? This cannot be undone."
+            f"Delete session {label}? This cannot be undone."
         ):
             r.print_info("Delete cancelled.")
             return True
         try:
             await self.session.storage.delete(session_id)
-            r.print_info(f"Session {session_id[:8]} deleted.")
+            r.print_info(f"Session {label} deleted.")
         except ValueError:
             r.print_error(
                 "Invalid session ID. Use /sessions to choose a saved session."
@@ -2059,3 +2092,12 @@ def run_bg_command(args: list[str]) -> int:
         file=sys.stderr,
     )
     return 2
+
+
+def _known_tool_names(session: object) -> set[str]:
+    """Names of the tools the running engine has (empty when unknown)."""
+    engine = getattr(session, "engine", None)
+    tools = getattr(engine, "tools", None) or []
+    return {
+        name for tool in tools if isinstance(name := getattr(tool, "name", None), str)
+    }
