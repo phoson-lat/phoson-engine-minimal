@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.62.0 (2026-11-08)
+
+Background work that doesn't block the agent, safer defaults, and a cleaner full-screen render.
+
+### Breaking
+
+- **permissions**: out of the box, `bash` calls that run a program or code (`pytest`, `npm`,
+  `python -c …`) or delete files now **ask** first. Read-only commands (`ls`, `cat`, `git status`,
+  `git diff`, `echo`), edits inside the workspace and the web tools still run freely. Auto mode
+  (Shift+Tab), a level of your own for the tool, or an intent rule overrides this. One-shot mode
+  (`-p`) refuses those calls unless you pass the new `--auto` flag ([#305](https://github.com/phoson-lat/phoson-engine-minimal/pull/305))
+
+### Feat
+
+- **cli**: sub-agents can run in the background. `agent`/`agents` take `background: true`, return
+  at once with a task number (`#3`) and keep running while the agent works; Esc does not stop
+  them. A result reaches the agent once: before its next model call if it is working, or through
+  an automatic turn if it is idle. The new `task_status` / `task_wait` / `task_output` /
+  `task_cancel` tools let the agent check sooner ([#306](https://github.com/phoson-lat/phoson-engine-minimal/pull/306))
+- **cli**: **Ctrl+B** sends the running `bash`, sub-agent or `web_fetch` call to the background
+  so the agent keeps going; a `bash` sent there is no longer killed at its 30 s timeout. `bash`
+  takes `background: true` too, with output streamed to a private log in `~/.phoson/tasks/`. This
+  replaces `run_bg_job`, which is deprecated ([#307](https://github.com/phoson-lat/phoson-engine-minimal/pull/307), [#310](https://github.com/phoson-lat/phoson-engine-minimal/pull/310))
+- **tui**: background tasks have a dock above the composer (elapsed time, live output, pending
+  approvals), notices when they finish, and a tasks view (Ctrl+B with nothing running: output,
+  cancel, approve/deny). Permission questions from background sub-agents wait in a queue
+  instead of interrupting you. `/tasks` works in both front ends, and quitting with tasks
+  running asks for a second press ([#308](https://github.com/phoson-lat/phoson-engine-minimal/pull/308), [#310](https://github.com/phoson-lat/phoson-engine-minimal/pull/310))
+
+### Fix
+
+- **security**: `run_bg_job` and command monitors follow the `bash` permission level instead of
+  running unchecked.
+- **security**: shell redirects count as writes (`> ~/.zshrc` outside the workspace asks), and
+  reading credential stores (`~/.ssh`, `~/.phoson`, …) or printing the environment through
+  `bash` asks like `read_file` does.
+- **security**: `--trace` redacts API keys and tokens, and offloaded tool output is private
+  (0600).
+
+  ([#305](https://github.com/phoson-lat/phoson-engine-minimal/pull/305))
+- **tui**: links no longer spread over the screen. A partial repaint could leave a hyperlink open
+  and turn the footer and other lines into one link ([#309](https://github.com/phoson-lat/phoson-engine-minimal/pull/309))
+- **tui**: characters no longer break lines. Emoji with variation selectors, ZWJ sequences, skin
+  tones, flags and raw escape/control bytes in tool output now render at the width the layout
+  expects (composite emoji show their base character, flags their letters). Progress bars in the
+  bash preview show only their last state ([#309](https://github.com/phoson-lat/phoson-engine-minimal/pull/309))
+
 ## v0.61.0 (2026-11-08)
 
 Real cost and context-window numbers for every provider, a smoother plugin experience, and
