@@ -134,7 +134,9 @@ def build_engine_runtime(
     # open-world) into the permission policy now that plugins have loaded.
     # Replaces the hint map each rebuild so a changed tool set cannot leave
     # stale hints behind.
-    apply_tool_hints(permission.policy, engine.tools)
+    apply_tool_hints(
+        permission.policy, engine.tools, getattr(engine, "_loaded_plugins", ())
+    )
 
     # Mirror the engine's tool schemas (built-in + plugin/MCP tools) into the
     # summarizer so the auto-compact gate counts the schema weight of every

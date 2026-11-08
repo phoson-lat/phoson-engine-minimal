@@ -315,6 +315,15 @@ class PluginReview:
         lines.append(f"  package: {self.distribution} from {self.source}")
         if self.replaces:
             lines.append(f"  replaces installed version {self.replaces}")
+        if self.manifest is not None:
+            from phoson_agent.permissions import capability_hints
+
+            if capability_hints(self.manifest.capabilities) is not None:
+                lines.append(
+                    "  permissions: its tools ask before running (it declares "
+                    "shell or filesystem writes); auto mode or a per-tool rule "
+                    "overrides this"
+                )
         lines.extend(f"  warning: {warning}" for warning in self.warnings)
         return lines
 

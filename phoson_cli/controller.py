@@ -455,7 +455,11 @@ class SessionController:
         """
         from .permissions_store import refresh_policy
 
-        refresh_policy(self.permission_middleware, self.engine.tools)
+        refresh_policy(
+            self.permission_middleware,
+            self.engine.tools,
+            plugins=getattr(self.engine, "_loaded_plugins", ()),
+        )
 
     def _on_permission_decision(self, decision) -> None:
         """Permission audit sink: forward each decision to exporters (#227).
