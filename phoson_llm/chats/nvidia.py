@@ -19,4 +19,5 @@ class NVIDIAChat(OpenAICompatibleChat):
             api_key=api_key,
             api_key_env=ENV_VAR,
             provider_name="NVIDIA",
+            pricing_provider="nvidia",
         )

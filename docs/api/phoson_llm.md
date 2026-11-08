@@ -357,8 +357,9 @@ cost = calculate_cost(
     model="gpt-4o",
     input_tokens=1000,
     output_tokens=500,
+    provider="openai",
 )
-# Returns: (0.015, True)  # (cost_usd, cost_known)
+# Returns: (0.0075, True)  # (cost_usd, cost_known)
 ```
 
 Use `PriceEntry` to get detailed pricing information:
@@ -372,7 +373,20 @@ print(entry.output)  # 10.00
 print(entry.cache_read)  # 1.25
 ```
 
-Note: `PriceEntry` is a frozen dataclass with fields `input`, `output`, `cache_write`, and `cache_read` (prices per million tokens). It does not take a `model` argument directly — use `calculate_cost()` to look up pricing for a specific model.
+Note: `PriceEntry` is a frozen dataclass with fields `input`, `output`, `cache_write`, and `cache_read` (prices per million tokens). It does not take a `model` argument directly — use `calculate_cost()` to look up pricing for a specific model. A cache rate left as `None` bills those tokens at the `input` rate; `0.0` means they are free.
+
+Model lookups are case-insensitive and also try `provider/model`, so ids that contain a slash themselves (Groq's `openai/gpt-oss-120b`) resolve with `provider="groq"`.
+
+### Where each adapter's cost comes from
+
+| Source | Adapters |
+|---|---|
+| Cost reported by the provider (`usage.cost`, or Perplexity's `usage.cost.total_cost`, which includes search fees) | OpenRouter, Perplexity |
+| Live catalog `GET /public/models` (keyless, cached for 6 h) | Cheaper Inference |
+| Local price table (`phoson_llm.pricing.PRICES`) | OpenAI, Azure (deployment named after the model), Anthropic, Gemini, Bedrock, Mistral, Alibaba, DeepSeek, xAI, Groq, Together, Fireworks, Cohere, NVIDIA |
+| Not priced (`cost_known=False`) | Ollama, LM Studio, vLLM, OmniRoute, GitHub Models, ChatGPT and Code Assist subscriptions |
+
+A model missing from its source reports `cost_known=False` (shown as unknown) instead of a guessed price.
 
 ## Public API
 

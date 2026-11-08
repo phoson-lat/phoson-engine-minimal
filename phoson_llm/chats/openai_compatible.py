@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
+from phoson_llm.pricing import price_table_calculator
 from phoson_llm.schemas import Message, LLMEvent, ModelConfig, ToolDefinition
 from phoson_llm.chats.base import BaseLLMChat
 from phoson_llm.chats._openai_compatible import stream_chat_completions
@@ -23,7 +24,12 @@ class OpenAICompatibleChat(BaseLLMChat):
         api_key_env: Env var name for API key (default ``"API_KEY"``).
         max_tokens_key: ``"max_tokens"`` or ``"max_completion_tokens"``.
         default_headers: Optional HTTP headers sent with every request.
-        cost_calculator: Optional cost callback. ``None`` = unknown cost.
+        cost_calculator: Optional cost callback. Takes precedence over
+            ``pricing_provider``; with neither, the cost is reported as
+            unknown.
+        pricing_provider: Price-table prefix (``"deepseek"``, ``"xai"``, …):
+            prices calls from :data:`phoson_llm.pricing.PRICES` via
+            :func:`phoson_llm.pricing.price_table_calculator`.
         extra_kwargs: Extra kwargs for ``chat.completions.create``.
         provider_name: Human-readable name for ``repr()``.
         prompt_caching: Opt-in explicit prompt caching. When True the shared
@@ -46,9 +52,12 @@ class OpenAICompatibleChat(BaseLLMChat):
         extra_kwargs: dict[str, Any] | None = None,
         provider_name: str | None = None,
         prompt_caching: bool = False,
+        pricing_provider: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._max_tokens_key = max_tokens_key
+        if cost_calculator is None and pricing_provider:
+            cost_calculator = price_table_calculator(pricing_provider)
         self._cost_calculator = cost_calculator
         self._extra_kwargs = extra_kwargs
         self._provider_name = provider_name or "OpenAICompatible"

@@ -19,4 +19,5 @@ class FireworksChat(OpenAICompatibleChat):
             api_key=api_key,
             api_key_env=ENV_VAR,
             provider_name="Fireworks",
+            pricing_provider="fireworks",
         )

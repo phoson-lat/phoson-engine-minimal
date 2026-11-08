@@ -48,4 +48,7 @@ class AzureChat(OpenAICompatibleChat):
             max_tokens_key="max_tokens",
             default_headers={"api-key": key},
             provider_name="Azure",
+            # Deployments are usually named after the model they serve
+            # (``gpt-4o``); other names report an unknown cost.
+            pricing_provider="openai",
         )
