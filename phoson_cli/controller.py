@@ -54,7 +54,12 @@ from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.plugins.summarizer import safe_cut_index
 
-from .tasks import TaskManager, ToolDetacher, TaskDeliveryMiddleware
+from .tasks import (
+    TaskManager,
+    ToolDetacher,
+    TaskDeliveryMiddleware,
+    current_background_task,
+)
 from .theme import (
     ThemeRegistry,
     build_theme_registry,
@@ -418,6 +423,16 @@ class SessionController:
         same call never asks twice. Other tools keep the generic
         summary prompt.
         """
+        background = current_background_task()
+        if background is not None:
+            # A background task never pops a dialog over what the user is
+            # doing: the question waits in the task list (Ctrl+B / /tasks).
+            summary = (
+                str(args.get("command") or "")
+                if tool_name == "bash"
+                else self._summarize_args_for_confirm(tool_name, args)
+            )
+            return await self.tasks.request_approval(background, tool_name, summary)
         if self.confirmation is None:
             return False
         if tool_name == "bash":
