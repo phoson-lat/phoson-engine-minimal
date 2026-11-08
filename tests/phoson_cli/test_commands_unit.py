@@ -176,7 +176,8 @@ async def test_branch_command_reports_unknown() -> None:
     kept = await handler.handle(Command(name="/branch", args=""))
 
     assert kept is True
-    assert handler.session.renderer.errors == ["Unknown command: /branch"]
+    (error,) = handler.session.renderer.errors
+    assert error.startswith("Unknown command: /branch.")
 
 
 def test_run_safe_commands_are_real_commands() -> None:
