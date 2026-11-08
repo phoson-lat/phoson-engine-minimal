@@ -53,6 +53,7 @@ from phoson_agent.middleware import is_env_context
 from phoson_agent.plugins.offload import RetentionPolicy
 from phoson_agent.plugins.summarizer import safe_cut_index
 
+from .tasks import TaskManager, TaskDeliveryMiddleware
 from .theme import (
     ThemeRegistry,
     build_theme_registry,
@@ -70,6 +71,7 @@ from ._session import SessionState, SessionMetrics
 from .plugin_ui import SinkPluginUiService
 from .attachments import AttachmentManager
 from .tool_render import ToolRenderRegistry, build_tool_render_registry
+from .tools.tasks import TASK_TOOLS
 from .tool_history import stamp_tool_durations, tool_durations_from_nodes
 from .ui_protocols import (
     AgentEventSink,
@@ -303,6 +305,13 @@ class SessionController:
         self._cw_resolver = build_context_resolver(config)
         self._context_window: int = 128_000  # default, resolved on first use
         self._context_tokens: int = 0  # current estimated tokens in context
+
+        # Background tasks (sub-agents with ``background: true``, …). Owned by
+        # the controller, so they outlive turns and engine rebuilds.
+        self._tasks = TaskManager(max_running=max(4, config.subagent_max_parallel * 2))
+        # A finished task must reach the agent even while it sits idle: the
+        # first task starts the (otherwise plugin-gated) wake loop.
+        self._tasks.add_listener(lambda _task: self.start_monitor_wake_loop())
 
         # Summarization middleware. The provider/model fields are kept in
         # sync with the active config every time ``_rebuild_engine`` runs;
@@ -604,10 +613,20 @@ class SessionController:
             permission=self.permission_middleware,
             main_model=self.current_model,
             subagent_model=self.subagent_model,
-            extra_tools=[compact_context],
+            extra_tools=[compact_context, *TASK_TOOLS],
             engine_factory=AgentEngine,
         )
         self.engine = runtime.engine
+        # Hands finished background tasks to the agent mid-turn. Inserted
+        # before the permission gate, which stays the innermost middleware.
+        engine_middlewares = getattr(self.engine, "middlewares", None)
+        if isinstance(engine_middlewares, list):
+            delivery = TaskDeliveryMiddleware(self.tasks)
+            try:
+                position = engine_middlewares.index(self.permission_middleware)
+            except ValueError:
+                position = len(engine_middlewares)
+            engine_middlewares.insert(position, delivery)
         self.tools = runtime.tools
         self.tools_dict = runtime.tools_dict
         # Retained so sub-agents inherit the gate (#174/F-01).
@@ -651,6 +670,9 @@ class SessionController:
         # agent-controlled compaction in this controller (splicing the
         # engine's in-flight history and queueing the tree-rebase event).
         self.engine.context.extra["do_compact"] = self._compact_inflight
+        # Background tasks: ``agent``/``agents`` with ``background: true`` and
+        # the ``task_*`` tools reach the session's manager through this.
+        self.engine.context.extra["task_manager"] = self.tasks
         # Live sub-agent metrics (E2): the tools create a fresh tracker
         # per call and push it to the front end through this callback
         # (bound to ``sink.on_subagent_progress``).
@@ -693,6 +715,19 @@ class SessionController:
         # can be applied in place (see ``set_model``) instead of rebuilding.
         self._engine_provider = self.config.provider
         self._engine_model = self.current_model
+
+    @property
+    def tasks(self) -> TaskManager:
+        """The session's background-task manager (created on first use)."""
+        manager = self.__dict__.get("_tasks")
+        if manager is None:
+            manager = TaskManager()
+            self.__dict__["_tasks"] = manager
+        return manager
+
+    def _wake_providers(self) -> list[Any]:
+        """Loaded wake plugins plus the background-task manager."""
+        return [*getattr(self.engine, "_loaded_plugins", []), self.tasks]
 
     def _session_cwd(self) -> str:
         """Working directory of the active session (scopes the monitors)."""
@@ -740,6 +775,8 @@ class SessionController:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._monitor_wake_task = None
+        # Background tasks die with the session (sub-agents cannot resume).
+        await self.tasks.shutdown()
         # Let the one-shot LLM title task finish (and persist) before the chat
         # client closes, so no task outlives the session.
         await self.titles.aclose()
@@ -1169,7 +1206,7 @@ class SessionController:
                 # Fold wakes that arrived while the user was composing into
                 # this message; autonomous wakes only run while idle.
                 wake_batches = await drain_all_wakes(
-                    list(getattr(self.engine, "_loaded_plugins", [])),
+                    self._wake_providers(),
                     self._session.tree.session_id,
                 )
                 wake_events = [
@@ -1381,7 +1418,10 @@ class SessionController:
         # flags: a wake plugin listed in ``[defaults].plugins`` (the wizard
         # and the desktop app load it that way) has its flag off, and the
         # loop never started — its wakes waited for the next user message.
-        if not find_wake_plugins(list(getattr(self.engine, "_loaded_plugins", []))):
+        if (
+            not find_wake_plugins(list(getattr(self.engine, "_loaded_plugins", [])))
+            and not self.tasks.tasks()
+        ):
             return
         if self._monitor_wake_task is not None and not self._monitor_wake_task.done():
             return
@@ -1426,7 +1466,7 @@ class SessionController:
 
     async def _wake_loop_tick(self) -> None:
         """One poll of the autonomous wake loop (see the loop's docstring)."""
-        plugins = list(getattr(self.engine, "_loaded_plugins", []))
+        plugins = self._wake_providers()
         # Follow a working-directory change: scoped providers swap their
         # running watchers to the session's current cwd.
         for plugin in find_wake_plugins(plugins):
@@ -1521,9 +1561,7 @@ class SessionController:
         packages. In-memory only; safe to call on every paint.
         """
         parts: list[str] = []
-        for plugin in find_wake_plugins(
-            list(getattr(self.engine, "_loaded_plugins", []))
-        ):
+        for plugin in find_wake_plugins(self._wake_providers()):
             status_fn = getattr(plugin, "monitor_status", None)
             if status_fn is None:
                 continue
