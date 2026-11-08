@@ -291,6 +291,82 @@ class TestMCPToggles:
         assert discovered == ["on"]
         assert [t.name for t in plugin.get_tools()] == ["mcp_on_t"]
 
+    def _parallel_plugin(self, servers, delays):
+        plugin = MCPPlugin()
+        plugin.config_file = Path("/nonexistent/phoson-mcp.json")
+        plugin.servers = servers
+        started: list[str] = []
+
+        async def fake_discover(server_name, server_config):
+            started.append(server_name)
+            await asyncio.sleep(delays[server_name])
+            if delays[server_name] < 0:
+                raise RuntimeError("boom")
+            remote = SimpleNamespace(name="t", description="d", inputSchema={})
+            return plugin._agent_tools_from_remote_tools(server_name, [remote])
+
+        plugin._discover_server_tools = fake_discover
+        return plugin, started
+
+    def test_servers_are_discovered_concurrently_in_config_order(self):
+        import time
+
+        plugin, _ = self._parallel_plugin(
+            {
+                "slow": {"command": "x"},
+                "fast": {"command": "x"},
+                "mid": {"command": "x"},
+            },
+            {"slow": 0.4, "fast": 0.0, "mid": 0.2},
+        )
+        start = time.monotonic()
+        plugin._load_tools_from_servers()
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 0.55  # sequential would take >= 0.6 s
+        assert [t.name for t in plugin.get_tools()] == [
+            "mcp_slow_t",
+            "mcp_fast_t",
+            "mcp_mid_t",
+        ]
+
+    def test_hung_or_failing_server_does_not_block_others(self, capsys):
+        plugin, _ = self._parallel_plugin(
+            {
+                "hung": {"command": "x", "startup_timeout": 0.1},
+                "bad": {"command": "x"},
+                "ok": {"command": "x"},
+            },
+            {"hung": 30.0, "bad": -1, "ok": 0.0},
+        )
+        plugin._load_tools_from_servers()
+
+        assert [t.name for t in plugin.get_tools()] == ["mcp_ok_t"]
+        out = capsys.readouterr().out
+        assert "'hung': timed out" in out
+        assert "'bad': boom" in out
+
+    def test_concurrent_discovery_inside_a_running_loop(self):
+        plugin, _ = self._parallel_plugin(
+            {"a": {"command": "x"}, "b": {"command": "x"}}, {"a": 0.0, "b": 0.0}
+        )
+
+        async def inside_loop():
+            plugin._load_tools_from_servers()
+
+        asyncio.run(inside_loop())
+        assert [t.name for t in plugin.get_tools()] == ["mcp_a_t", "mcp_b_t"]
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(None, 30.0), (5, 5.0), ("2.5", 2.5), (0, 30.0), ("x", 30.0)],
+    )
+    def test_startup_timeout_parsing(self, value, expected):
+        from phoson_plugin_mcp._plugin import _startup_timeout
+
+        config = {} if value is None else {"startup_timeout": value}
+        assert _startup_timeout(config) == expected
+
     def test_execution_guard_disabled_server(self):
         plugin = self._plugin_with_servers({"off": {"enabled": False}})
 
