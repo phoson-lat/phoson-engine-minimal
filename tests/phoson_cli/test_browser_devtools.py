@@ -30,7 +30,8 @@ def test_profile_entry_is_private_pinned_and_lean() -> None:
     assert "--redactNetworkHeaders=true" in args
     assert f"--userDataDir={browser.profile_dir()}" in args
     assert "--autoConnect" not in args
-    assert entry["env"]["CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS"] == "1"
+    for var in ("USAGE_STATISTICS", "UPDATE_CHECKS", "CONFIG_DISCOVERY"):
+        assert entry["env"][f"CHROME_DEVTOOLS_MCP_NO_{var}"] == "1"
     assert entry["startup_timeout"] >= 60
     assert all(entry["tools"][name] is False for name in browser.DISABLED_TOOLS)
     look = entry["annotations"]
@@ -275,3 +276,111 @@ async def test_tool_discovery_never_writes_server_stderr_to_the_terminal(
     assert errlog is not None and errlog is not sys.stderr
     assert Path(errlog.name).parent == tmp_path / ".phoson" / "logs" / "mcp"
     plugin._close_errlogs()
+
+
+def test_entry_saves_round_trips_and_image_tokens() -> None:
+    entry = browser.build_server_entry(browser.BrowserSettings())
+    args = entry["args"]
+    assert "--no-page-id-routing" in args
+    assert "--screenshotFormat=jpeg" in args
+    assert "--screenshotMaxWidth=1280" in args
+    assert "includeSnapshot=true" in entry["hints"]["click"]
+    assert "fill_form" in entry["hints"]["fill"]
+    assert "evaluate_script" in entry["hints"]
+
+
+def test_mcp_description_hints_are_appended() -> None:
+    from phoson_plugin_mcp._plugin import MCPPlugin
+
+    plugin = MCPPlugin()
+    plugin.servers = {"s": {"hints": {"click": "  Use includeSnapshot. ", "x": 3}}}
+    remote = [
+        SimpleNamespace(name=name, description="Clicks.", inputSchema={})
+        for name in ("click", "x", "hover")
+    ]
+    tools = {
+        t.name: t.description
+        for t in plugin._agent_tools_from_remote_tools("s", remote)
+    }
+    assert tools["mcp_s_click"] == "Clicks.\n\nUse includeSnapshot."
+    assert tools["mcp_s_x"] == "Clicks."  # a non-string hint is ignored
+    assert tools["mcp_s_hover"] == "Clicks."
+
+
+def _snapshot_result(body: str, extra: str = "\n## Pages\n1: a [selected]") -> str:
+    text = f"# click response\nClicked\n{browser.SNAPSHOT_MARKER}\n{body}{extra}"
+    return json.dumps(
+        {"success": True, "result": [{"type": "text", "text": text}]},
+        ensure_ascii=True,
+    )
+
+
+def test_elide_snapshot_keeps_the_rest_of_the_result() -> None:
+    raw = _snapshot_result('uid=1_0 RootWebArea "say \\"hi\\""\n  uid=1_1 button')
+    text = json.loads(browser.elide_snapshot(raw))["result"][0]["text"]
+    assert "uid=1_" not in text and browser.SNAPSHOT_MARKER not in text
+    assert text.startswith("# click response\nClicked\n## Page snapshot elided")
+    assert text.endswith("## Pages\n1: a [selected]")
+    at_end = json.loads(browser.elide_snapshot(_snapshot_result("uid=2_0 x", "")))
+    assert "uid=2_0" not in at_end["result"][0]["text"]
+    assert browser.elide_snapshot("no snapshot") == "no snapshot"
+
+
+@pytest.mark.asyncio
+async def test_only_the_newest_snapshot_stays_in_the_conversation() -> None:
+    from phoson_llm.schemas import Message, TextBlock, ModelConfig, ToolResultBlock
+
+    def result(call: str, body: str) -> Message:
+        return Message(
+            role="user",
+            content=[ToolResultBlock(tool_call_id=call, result=_snapshot_result(body))],
+        )
+
+    messages = [
+        Message(role="user", content="open the page"),
+        result("a", "uid=1_0 old"),
+        Message(role="assistant", content=[TextBlock(text="ok")]),
+        result("b", "uid=2_0 newer"),
+        result("c", "uid=3_0 newest"),
+    ]
+    middleware = browser.StaleSnapshotMiddleware()
+    out = await middleware.on_before_llm(messages, ModelConfig(model="m"))
+
+    def text(message: Message) -> str:
+        return message.content[0].result  # type: ignore[union-attr,index]
+
+    assert "uid=1_0" not in text(out[1]) and "uid=2_0" not in text(out[3])
+    assert "uid=3_0 newest" in text(out[4])
+    assert out[0] is messages[0] and out[2] is messages[2] and out[4] is messages[4]
+    assert "uid=1_0" in text(messages[1])  # the input list is not mutated
+    again = await middleware.on_before_llm(out, ModelConfig(model="m"))
+    assert again is out  # one snapshot left: nothing to do
+    single = messages[:2]
+    assert await middleware.on_before_llm(single, ModelConfig(model="m")) is single
+
+
+def test_mcp_image_content_reaches_the_model_as_an_image() -> None:
+    from phoson_agent.models import ImageToolResult
+    from phoson_plugin_mcp._plugin import _with_image
+
+    payload = {
+        "success": True,
+        "result": [
+            {"type": "text", "text": "Took a screenshot."},
+            {"type": "image", "data": "QUJD", "mimeType": "image/jpeg"},
+            {"type": "image", "data": "REVG", "mimeType": "image/png"},
+        ],
+        "tool": "take_screenshot",
+        "server": "chrome-devtools",
+    }
+    out = _with_image(payload)
+    assert isinstance(out, ImageToolResult)
+    assert out.image.source == "data:image/jpeg;base64,QUJD"
+    assert out.image.media_type == "image/jpeg"
+    text = json.loads(out.text)
+    assert "QUJD" not in out.text and "REVG" not in out.text
+    assert text["result"][0] == {"type": "text", "text": "Took a screenshot."}
+    assert "attached below" in text["result"][1]["text"]
+    assert "omitted" in text["result"][2]["text"]
+    plain = {"success": True, "result": [{"type": "text", "text": "x"}]}
+    assert _with_image(plain) is plain

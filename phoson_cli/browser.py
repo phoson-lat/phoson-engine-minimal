@@ -17,9 +17,14 @@ it over the Chrome DevTools Protocol:
 Everything the server needs is in the MCP entry's ``command``/``args``; the
 user-facing choices (mode, allowed / blocked URL patterns) are also kept
 under the entry's ``phoson`` key so ``/browser`` can show and edit them.
-Defaults favour privacy and context size: Google usage statistics and CrUX
-lookups are off, sensitive network headers are redacted, and only the
-navigation / input / debugging / network tool categories are exposed.
+Defaults favour privacy and context size: Google usage statistics, update
+checks, config-file discovery and CrUX lookups are off, sensitive network
+headers are redacted, and only the navigation / input / debugging / network
+tool categories are exposed. Fewer round trips: tools act on the selected
+page (no ``pageId`` on every call), screenshots are downscaled JPEGs, tool
+descriptions carry hints (``includeSnapshot`` on actions, ``fill_form``,
+one ``evaluate_script`` for several reads), and :class:`StaleSnapshotMiddleware`
+keeps only the newest page snapshot in the conversation.
 """
 
 import os
@@ -30,7 +35,10 @@ import shutil
 import subprocess
 from typing import Any
 from pathlib import Path
-from dataclasses import field, dataclass
+from dataclasses import field, replace, dataclass
+
+from phoson_llm.schemas import Message, ModelConfig, ToolResultBlock
+from phoson_agent.middleware import AgentMiddleware
 
 #: The MCP server entry name in ``mcps.json``.
 SERVER_NAME = "chrome-devtools"
@@ -55,6 +63,49 @@ DISABLED_TOOLS = (
     "lighthouse_audit",
     "get_css_styles",
 )
+
+#: Screenshot defaults: image tokens scale with pixels, not bytes.
+_SCREENSHOT_ARGS = (
+    "--screenshotFormat=jpeg",
+    "--screenshotQuality=60",
+    "--screenshotMaxWidth=1280",
+)
+
+#: Environment for the server: no telemetry, no update checks, and no config
+#: file picked up from ``~/.config/cd4a`` (our args are the whole config).
+_SERVER_ENV = {
+    "CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1",
+    "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1",
+    "CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY": "1",
+}
+
+_WITH_SNAPSHOT = (
+    "Pass includeSnapshot=true to get the updated page in this same call "
+    "instead of a separate take_snapshot."
+)
+
+#: Usage hints appended to tool descriptions, to save round trips.
+TOOL_HINTS = {
+    "click": _WITH_SNAPSHOT,
+    "hover": _WITH_SNAPSHOT,
+    "drag": _WITH_SNAPSHOT,
+    "press_key": _WITH_SNAPSHOT,
+    "upload_file": _WITH_SNAPSHOT,
+    "fill": (
+        "To fill several fields, use fill_form once instead of several fill "
+        "calls. " + _WITH_SNAPSHOT
+    ),
+    "fill_form": "Prefer this over several fill calls. " + _WITH_SNAPSHOT,
+    "take_snapshot": (
+        "Not needed right after an action called with includeSnapshot=true. "
+        "Use the uids from the newest snapshot only; older snapshots are "
+        "elided from the conversation."
+    ),
+    "evaluate_script": (
+        "Use one script to read or extract several values at once (return "
+        "an object) instead of several snapshot or tool calls."
+    ),
+}
 
 #: Tools that only look at the page. The server is conservative and marks a
 #: snapshot or a screenshot as not read-only, which would make the agent ask
@@ -218,6 +269,10 @@ def build_server_entry(settings: BrowserSettings) -> dict[str, Any]:
         "--no-usage-statistics",
         "--performanceCrux=false",
         "--redactNetworkHeaders=true",
+        # One agent per server: tools act on the selected page instead of
+        # requiring a pageId on every call.
+        "--no-page-id-routing",
+        *_SCREENSHOT_ARGS,
         *(f"--category{category}=false" for category in _DISABLED_CATEGORIES),
     ]
     if settings.mode == "chrome":
@@ -233,7 +288,7 @@ def build_server_entry(settings: BrowserSettings) -> dict[str, Any]:
         "transport": "stdio",
         "command": "npx",
         "args": args,
-        "env": {"CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1"},
+        "env": dict(_SERVER_ENV),
         "startup_timeout": STARTUP_TIMEOUT_S,
         # Clicking, typing, forms, uploads and evaluate_script keep the
         # server's own (asking) classification.
@@ -241,6 +296,7 @@ def build_server_entry(settings: BrowserSettings) -> dict[str, Any]:
             name: {"readOnlyHint": True, "destructiveHint": False} for name in look
         },
         "tools": {name: False for name in DISABLED_TOOLS},
+        "hints": dict(TOOL_HINTS),
         "phoson": settings.to_dict(),
     }
 
@@ -329,15 +385,82 @@ def normalize_pattern(value: str) -> str:
     return f"*://{host}/*"
 
 
+# ── Context: only the newest snapshot ───────────────────────────────────────
+
+#: The heading chrome-devtools-mcp puts before a page snapshot in a result.
+SNAPSHOT_MARKER = "## Latest page snapshot"
+_ELIDED = "## Page snapshot elided (superseded by a newer snapshot; its uids are stale)"
+#: The snapshot section inside a JSON-encoded tool result: from the marker to
+#: the next ``## `` heading or the end of the JSON string. Escapes are
+#: consumed in pairs, so an escaped quote never ends the match.
+_SNAPSHOT_SECTION_RE = re.compile(
+    re.escape(SNAPSHOT_MARKER) + r'(?:[^"\\]|\\.)*?(?=\\n## |")'
+)
+
+
+def elide_snapshot(text: str) -> str:
+    """``text`` with every page-snapshot section replaced by a short note."""
+    if SNAPSHOT_MARKER not in text:
+        return text
+    return _SNAPSHOT_SECTION_RE.sub(_ELIDED, text)
+
+
+class StaleSnapshotMiddleware(AgentMiddleware):
+    """Keep only the newest browser page snapshot in the conversation.
+
+    Every snapshot is a full accessibility tree of the page, and its element
+    uids are only valid until the page changes, so older ones cost tokens on
+    every request and can mislead the model. Before each LLM call, tool
+    results holding a snapshot (``## Latest page snapshot``) other than the
+    newest one have that section replaced by a short note; the rest of the
+    result (pages, console, network) is kept. The rewrite folds into history
+    (it runs once per snapshot) and does nothing without browser results.
+    """
+
+    async def on_before_llm(
+        self,
+        messages: list[Message],
+        config: ModelConfig,
+    ) -> list[Message]:
+        holders: list[tuple[int, int]] = []
+        for m_index, message in enumerate(messages):
+            if isinstance(message.content, str):
+                continue
+            for b_index, block in enumerate(message.content):
+                if isinstance(block, ToolResultBlock) and (
+                    SNAPSHOT_MARKER in block.result
+                ):
+                    holders.append((m_index, b_index))
+        if len(holders) < 2:
+            return messages
+        stale: dict[int, set[int]] = {}
+        for m_index, b_index in holders[:-1]:
+            stale.setdefault(m_index, set()).add(b_index)
+        updated = list(messages)
+        for m_index, b_indexes in stale.items():
+            message = messages[m_index]
+            blocks = list(message.content)
+            for b_index in b_indexes:
+                block = blocks[b_index]
+                assert isinstance(block, ToolResultBlock)
+                blocks[b_index] = replace(block, result=elide_snapshot(block.result))
+            updated[m_index] = replace(message, content=blocks)
+        return updated
+
+
 __all__ = [
     "DEFAULT_MODE",
     "MODES",
     "SERVER_NAME",
     "SERVER_VERSION",
+    "SNAPSHOT_MARKER",
+    "TOOL_HINTS",
     "BrowserSettings",
+    "StaleSnapshotMiddleware",
     "build_server_entry",
     "current_settings",
     "detect_browser",
+    "elide_snapshot",
     "is_enabled",
     "node_status",
     "normalize_pattern",

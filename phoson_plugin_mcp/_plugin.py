@@ -13,6 +13,8 @@ from pathlib import Path
 from contextlib import AsyncExitStack
 
 from phoson_agent import Plugin, AgentTool
+from phoson_llm.schemas import ImageBlock
+from phoson_agent.models import ImageToolResult
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -179,6 +181,59 @@ def _apply_annotation_override(
         for key in ("destructive", "open_world"):
             merged.setdefault(key, True)
     return merged
+
+
+def _apply_description_hint(description: str, hints: Any, remote_tool_name: str) -> str:
+    """Append the user's per-tool usage hint from the server config.
+
+    ``"hints": {"click": "Pass includeSnapshot=true ..."}`` in a server entry
+    adds guidance to a tool's description (for example, how to save round
+    trips). It comes from the user's own file and only appends: the server's
+    description is kept.
+    """
+    if not isinstance(hints, dict):
+        return description
+    hint = hints.get(remote_tool_name)
+    if not isinstance(hint, str) or not hint.strip():
+        return description
+    return f"{description.rstrip()}\n\n{hint.strip()}"
+
+
+def _with_image(payload: dict[str, Any]) -> dict[str, Any] | ImageToolResult:
+    """Show the model an image a tool returned, instead of its base64 as text.
+
+    MCP ``image`` content (a screenshot, for example) would otherwise reach
+    the model as tens of thousands of base64 characters it cannot see. The
+    first image becomes an :class:`ImageToolResult` (the engine sends it as
+    an image block); in the text, every image's data is replaced by a short
+    note.
+    """
+    parts = payload.get("result")
+    if not isinstance(parts, list):
+        return payload
+    image: ImageBlock | None = None
+    kept: list[Any] = []
+    for part in parts:
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "image"
+            and isinstance(part.get("data"), str)
+        ):
+            mime = str(part.get("mimeType") or "image/png")
+            if image is None:
+                image = ImageBlock(
+                    source=f"data:{mime};base64,{part['data']}", media_type=mime
+                )
+                note = f"[{mime} image: attached below]"
+            else:
+                note = f"[{mime} image: omitted, only the first image is shown]"
+            kept.append({"type": "text", "text": note})
+        else:
+            kept.append(part)
+    if image is None:
+        return payload
+    text = json.dumps({**payload, "result": kept}, ensure_ascii=True)
+    return ImageToolResult(text=text, image=image)
 
 
 class MCPPlugin(Plugin):
@@ -429,7 +484,7 @@ class MCPPlugin(Plugin):
             _context: Any | None = None,
             *,
             _server_name: str = server_name,
-        ) -> dict[str, Any]:
+        ) -> dict[str, Any] | ImageToolResult:
             tool_name = args.get("tool_name")
             if not tool_name:
                 return {"error": "Missing required field: tool_name"}
@@ -485,8 +540,11 @@ class MCPPlugin(Plugin):
             local_tool_name = (
                 f"{self.tool_name_prefix}_{safe_server_name}_{safe_remote_tool_name}"
             )
-            description = remote_tool.description or (
-                f"MCP tool '{remote_tool_name}' from server '{server_name}'"
+            description = _apply_description_hint(
+                remote_tool.description
+                or f"MCP tool '{remote_tool_name}' from server '{server_name}'",
+                server_config.get("hints"),
+                remote_tool_name,
             )
             raw_parameters = remote_tool.inputSchema
             if not isinstance(raw_parameters, dict):
@@ -504,7 +562,7 @@ class MCPPlugin(Plugin):
                 *,
                 _server_name: str = server_name,
                 _remote_tool_name: str = remote_tool_name,
-            ) -> dict[str, Any]:
+            ) -> dict[str, Any] | ImageToolResult:
                 return await self._execute_mcp_tool(
                     _server_name,
                     _remote_tool_name,
@@ -534,7 +592,7 @@ class MCPPlugin(Plugin):
         server_name: str,
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | ImageToolResult:
         """Execute a tool call on an MCP server, reusing a pooled session.
 
         The first call to a given server pays connection setup cost (spawn
@@ -669,7 +727,7 @@ class MCPPlugin(Plugin):
         server_name: str,
         tool_name: str,
         arguments: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | ImageToolResult:
         """Call a tool on an already-initialized, pooled session.
 
         The remote tool list is fetched once per server (on first use) and
@@ -692,14 +750,16 @@ class MCPPlugin(Plugin):
             }
 
         result = await session.call_tool(tool_name, arguments)
-        return {
-            "success": True,
-            "result": self._serialize_mcp_value(
-                result.content if hasattr(result, "content") else result
-            ),
-            "tool": tool_name,
-            "server": server_name,
-        }
+        return _with_image(
+            {
+                "success": True,
+                "result": self._serialize_mcp_value(
+                    result.content if hasattr(result, "content") else result
+                ),
+                "tool": tool_name,
+                "server": server_name,
+            }
+        )
 
     async def _list_server_tools(
         self,

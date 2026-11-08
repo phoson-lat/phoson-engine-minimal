@@ -61,14 +61,25 @@ navigations, redirects and subresources.
 
 ## Privacy and context size
 
-- **No data to Google:** the server's usage statistics are off
-  (`--no-usage-statistics`), and so are CrUX lookups for performance traces.
+- **No data to Google:** the server's usage statistics and update checks are
+  off, and so are CrUX lookups for performance traces. The server also ignores
+  any `cd4a` config file: the MCP entry is its whole configuration.
 - **Redacted headers:** sensitive network headers are redacted in what the
   agent sees.
 - **Pinned version:** the server version is pinned, never `@latest`.
 - **Fewer tools:** the emulation, performance and memory tool categories, plus
   screencast, Lighthouse and CSS-style tools, are off to save tokens. Turn a
   tool back on with `/mcp toggle chrome-devtools <tool>`.
+- **Fewer round trips:** tools act on the selected page (no `pageId` on every
+  call). Tool descriptions carry hints (an MCP entry's `hints` key): actions take
+  `includeSnapshot=true` instead of a separate snapshot, `fill_form` fills
+  several fields at once, and one `evaluate_script` can read several values.
+- **Only the newest snapshot:** each page snapshot is a full accessibility tree
+  whose element uids go stale when the page changes, so older snapshots are
+  replaced by a short note in the conversation; the rest of those results is kept.
+- **Screenshots the model can see:** they are 60%-quality JPEGs at most 1280 px
+  wide, and they reach the model as an image, not as base64 text (this applies
+  to images from any MCP server).
 
 ## Commands
 
