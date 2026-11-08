@@ -303,6 +303,7 @@ async def _run_background(command: str, record: Any, limit: float) -> str:
             await _await_process_cleanup(proc, (pump, pump))
             raise
     shown = "\n".join(tail)
+    record.exit_code = proc.returncode
     return f"Exit code {proc.returncode}.\n{shown}\n[full log: {log_path}]"
 
 

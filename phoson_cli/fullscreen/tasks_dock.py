@@ -110,7 +110,7 @@ class TasksDock:
             sink.notify(
                 level,
                 f"{task.label} {verb.get(task.status, task.status)} after "
-                f"{task.elapsed:.0f}s — {task.title[:60]}",
+                f"{task.elapsed:.0f}s — {task.short_title()}",
             )
         if task.status == "running":
             self._ensure_ticker()
