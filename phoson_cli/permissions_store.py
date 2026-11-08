@@ -28,6 +28,7 @@ with the CLI's configuration surface:
 
 import json
 import logging
+from typing import Any
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -41,6 +42,7 @@ from phoson_agent.permissions import (
     PermissionPolicy,
     PermissionMiddleware,
     collect_tool_hints,
+    apply_plugin_capabilities,
 )
 
 _LOGGER = logging.getLogger("phoson_cli.permissions")
@@ -274,9 +276,22 @@ def build_permission_middleware(
     )
 
 
+def community_plugins(plugins: Iterable[Any]) -> list[Any]:
+    """The plugins the user installed (not the CLI's own official plugins)."""
+    from .official_plugins import OFFICIAL_PLUGINS
+
+    official = {entry.package for entry in OFFICIAL_PLUGINS}
+    return [
+        plugin
+        for plugin in plugins
+        if type(plugin).__module__.split(".", 1)[0] not in official
+    ]
+
+
 def apply_tool_hints(
     policy: PermissionPolicy,
     tools: Iterable[AgentTool],
+    plugins: Iterable[Any] = (),
 ) -> None:
     """Refresh ``policy.hints`` from the loaded tool set (#144 phase 2).
 
@@ -288,10 +303,16 @@ def apply_tool_hints(
 
     Only tools that actually publish hints are entered; built-in tools are
     left untouched and keep the allow-by-default behaviour.
+
+    *plugins* (the loaded plugins) adds the manifest capabilities of the
+    user-installed ones: their tools carry the declared intents, and tools of
+    a plugin that declares ``shell`` or filesystem writes default to *ask*
+    (see :func:`phoson_agent.permissions.apply_plugin_capabilities`).
     """
     policy.hints = collect_tool_hints(
         tool for tool in tools if isinstance(tool, AgentTool)
     )
+    apply_plugin_capabilities(policy, community_plugins(plugins))
 
 
 def refresh_policy(
@@ -299,6 +320,7 @@ def refresh_policy(
     tools: Iterable[AgentTool],
     *,
     policy_path: Path | None = None,
+    plugins: Iterable[Any] = (),
 ) -> PermissionPolicy:
     """Reload the durable policy into a *live* middleware and re-apply hints.
 
@@ -309,7 +331,7 @@ def refresh_policy(
     returns a policy with an empty hint map.
     """
     policy = load_policy(path=policy_path)
-    apply_tool_hints(policy, tools)
+    apply_tool_hints(policy, tools, plugins)
     middleware.policy = policy
     return policy
 

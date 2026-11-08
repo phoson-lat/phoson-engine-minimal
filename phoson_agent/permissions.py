@@ -42,7 +42,15 @@ from collections.abc import Callable, Iterable, Awaitable
 from phoson_llm.schemas import Message, ModelConfig, ToolCallEvent
 
 from .models import AgentTool
-from .intents import VALID_INTENTS, DEFAULT_INTENT_LEVELS, infer_intents
+from .intents import (
+    VALID_INTENTS,
+    INTENT_PROCESS_SPAWN,
+    DEFAULT_INTENT_LEVELS,
+    INTENT_FILESYSTEM_READ,
+    INTENT_FILESYSTEM_WRITE,
+    INTENT_NETWORK_OUTBOUND,
+    infer_intents,
+)
 from .exceptions import PhosonAgentError
 from .middleware import AgentMiddleware
 from .intent_guard import (
@@ -244,6 +252,83 @@ def collect_tool_hints(tools: Iterable[AgentTool]) -> dict[str, ToolHints]:
     return hints
 
 
+# ── Plugin capabilities → permission defaults ────────────────────────────────
+#
+# A plugin manifest declares what the plugin may do (network, shell,
+# filesystem). For plugins the user installed, that declaration feeds the
+# gate twice, and can only ever tighten it:
+#
+# * **intents** — every tool of the plugin carries the intents of its
+#   capabilities, so a user rule such as ``intent_levels.process_spawn = ask``
+#   also covers a plugin that declares ``shell``;
+# * **default level** — a tool of a plugin that declares ``shell`` or
+#   ``filesystem = "write"`` defaults to *ask* (like an unannotated MCP tool)
+#   instead of allow, unless the tool publishes its own annotations, the user
+#   set a level for it, or auto mode (``"*": "allow"``) is on.
+#
+# The capabilities apply to every tool of the plugin (a manifest does not say
+# which tool uses which capability), so this over-approximates on purpose.
+
+
+def capability_intents(capabilities: Any) -> frozenset[str]:
+    """Intents implied by a manifest's ``[capabilities]``."""
+    intents: set[str] = set()
+    if getattr(capabilities, "network", False):
+        intents.add(INTENT_NETWORK_OUTBOUND)
+    if getattr(capabilities, "shell", False):
+        intents.add(INTENT_PROCESS_SPAWN)
+    filesystem = getattr(capabilities, "filesystem", "none")
+    if filesystem in ("read", "write"):
+        intents.add(INTENT_FILESYSTEM_READ)
+    if filesystem == "write":
+        intents.add(INTENT_FILESYSTEM_WRITE)
+    return frozenset(intents)
+
+
+def capability_hints(capabilities: Any) -> "ToolHints | None":
+    """The default-level hint for a plugin's tools, or ``None`` (allow)."""
+    risky = getattr(capabilities, "shell", False) or (
+        getattr(capabilities, "filesystem", "none") == "write"
+    )
+    if not risky:
+        return None
+    return ToolHints(annotated=True, read_only=False, destructive=True)
+
+
+def apply_plugin_capabilities(
+    policy: "PermissionPolicy", plugins: Iterable[Any]
+) -> None:
+    """Fold the manifest capabilities of *plugins* into *policy*.
+
+    Sets :attr:`PermissionPolicy.tool_intents` (replaced, not merged) and adds
+    a capability hint for each risky plugin tool that has no hint of its own,
+    so call it **after** the tool hints were collected. Plugins without a
+    manifest are skipped. Hosts choose which plugins to pass — the CLI passes
+    the ones the user installed, not its own official plugins.
+    """
+    tool_intents: dict[str, frozenset[str]] = {}
+    for plugin in plugins:
+        manifest = getattr(plugin, "manifest", None)
+        capabilities = getattr(manifest, "capabilities", None)
+        if capabilities is None:
+            continue
+        intents = capability_intents(capabilities)
+        hint = capability_hints(capabilities)
+        try:
+            tools = plugin.get_tools()
+        except Exception:  # noqa: BLE001 - a broken plugin must not break the gate
+            continue
+        for tool in tools:
+            name = getattr(tool, "name", None)
+            if not isinstance(name, str):
+                continue
+            if intents:
+                tool_intents[name] = intents
+            if hint is not None and name not in policy.hints:
+                policy.hints[name] = hint
+    policy.tool_intents = tool_intents
+
+
 # ── Bash allow-pattern safety (F-03, F-07, #175) ─────────────────────────────
 #
 # An allow-pattern may only authorize a *single simple command* — one program
@@ -373,6 +458,10 @@ class PermissionPolicy:
     allow_patterns: dict[str, list[str]] = field(default_factory=dict)
     hints: dict[str, ToolHints] = field(default_factory=dict)
     intent_levels: dict[str, str] = field(default_factory=dict)
+    #: Extra intents per tool name, beyond what :func:`infer_intents` derives
+    #: from the call — the declared capabilities of plugin tools (see
+    #: :func:`apply_plugin_capabilities`).
+    tool_intents: dict[str, frozenset[str]] = field(default_factory=dict)
 
     def normalized_levels(self) -> dict[str, str]:
         """Levels with invalid entries dropped."""
@@ -428,6 +517,9 @@ class PermissionPolicy:
         record.
         """
         intents = infer_intents(tool_name, args)
+        declared = self.tool_intents.get(tool_name)
+        if declared:
+            intents = tuple(sorted(set(intents) | declared))
 
         if match_text:
             for pattern in self.allow_patterns.get(tool_name, []):
@@ -746,6 +838,9 @@ __all__ = [
     "VALID_LEVELS",
     "WILDCARD_TOOL",
     "collect_tool_hints",
+    "capability_hints",
+    "capability_intents",
+    "apply_plugin_capabilities",
     "is_simple_shell_command",
     "pattern_allows",
     "strictest_level",

@@ -224,6 +224,33 @@ tool (`mcp_<server>_call`) is never trusted and stays at `ask` because it
 can invoke any remote tool. In one-shot mode this means an `ask`-level MCP
 tool fails closed (refused) unless you set its level explicitly.
 
+## Installed plugins: manifest capabilities
+
+A plugin you install declares what it may do in the `[capabilities]` table
+of its `phoson-plugin.toml`. The installer shows that table for review before
+installing, and the gate then uses it for every tool the plugin provides.
+Like MCP annotations, capabilities can only make the gate stricter.
+
+| Declared capability | Intents added to each of its tools | Default level |
+|---|---|---|
+| `network = true` | `network_outbound` | `allow` |
+| `filesystem = "read"` | `filesystem_read` | `allow` |
+| `filesystem = "write"` | `filesystem_read`, `filesystem_write` | **`ask`** |
+| `shell = true` | `process_spawn` | **`ask`** |
+
+- **Intents.** A rule in `intent_levels`, for example
+  `"network_outbound": "deny"`, also covers plugin tools that declare that
+  capability. The manifest does not say which tool uses which capability, so
+  every tool of the plugin gets all of them.
+- **Default level.** Tools of a plugin that declares `shell` or filesystem
+  writes **ask** before they run, instead of being allowed. These still take
+  precedence: the tool's own MCP annotations, your explicit level for the
+  tool (`/permissions <tool> allow`), and auto mode (`"*": "allow"`).
+- **Scope.** This applies to plugins you install. The official plugins that
+  ship with the CLI (MCP, monitors, background jobs, SSH, …) keep their
+  current behaviour. A plugin without a manifest declares nothing and keeps
+  the allow-by-default behaviour.
+
 ## Web tools: SSRF filter and `ask`
 
 `web_fetch` (F-06) only fetches **public** addresses. Before connecting —
