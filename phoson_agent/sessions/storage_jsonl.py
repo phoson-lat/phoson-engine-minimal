@@ -1,10 +1,12 @@
 import os
+import sys
 import json
 import asyncio
 import logging
 import weakref
 import datetime
 import tempfile
+import contextlib
 import unicodedata
 from pathlib import Path, PureWindowsPath
 from dataclasses import field, dataclass
@@ -67,6 +69,10 @@ class JsonlStorage(SessionStorage):
     - **Private**: session files are created ``0o600`` (they hold tool
       output, which may include secrets) and a newly created session
       directory is ``0o700``.
+    - **Multi-process safe**: each save holds an advisory lock on a side
+      file and, if another process saved the session since this instance
+      last read or wrote it, merges that process's nodes in (they become
+      another branch) instead of overwriting them.
 
     Args:
         base_path: Directory path where session JSONL files are stored.
@@ -80,6 +86,13 @@ class JsonlStorage(SessionStorage):
     base_path: Path
     _locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = field(  # noqa: E501
         default_factory=weakref.WeakKeyDictionary, init=False, repr=False, compare=False
+    )
+
+    #: (mtime_ns, size) of each session file as this instance last read or
+    #: wrote it. A different stamp at save time means another process wrote
+    #: the session in between, and its nodes are merged in (R4).
+    _stamps: dict[str, "tuple[int, int] | None"] = field(
+        default_factory=dict, init=False, repr=False, compare=False
     )
 
     def __post_init__(self) -> None:
@@ -142,6 +155,17 @@ class JsonlStorage(SessionStorage):
             tree.update_session_meta(**_meta_updates(meta))
             await asyncio.to_thread(self._save_sync, tree)
 
+    async def save_with_meta(self, tree: ConversationTree, meta: dict) -> None:
+        """Apply ``meta`` to ``tree`` and persist both in **one** write.
+
+        ``save`` followed by ``save_meta`` wrote the whole file, then read and
+        parsed it back, then wrote it again — three passes over the session on
+        every checkpoint (R5). The tree already holds the meta fields, so
+        updating them in memory and writing once is equivalent.
+        """
+        tree.update_session_meta(**_meta_updates(meta))
+        await self.save(tree)
+
     async def list_meta(self, cwd: str | None = None) -> list[SessionMeta]:
         return await self.list_sessions(cwd=cwd)
 
@@ -159,6 +183,43 @@ class JsonlStorage(SessionStorage):
         temporary file.
         """
         file_path = self._session_file(tree.session_id)
+        with _file_lock(file_path):
+            self._merge_foreign_nodes(tree, file_path)
+            self._write_atomic(tree, file_path)
+            self._stamps[tree.session_id] = _stamp(file_path)
+
+    def _merge_foreign_nodes(self, tree: ConversationTree, file_path: Path) -> None:
+        """Fold in nodes another process saved since we last read or wrote.
+
+        Two CLIs on the same session used to overwrite each other: the
+        second save dropped the first one's turns (R4). Node ids are unique
+        and nodes immutable, so the union is the correct state — the other
+        process's turns become another branch of this tree. The check is a
+        ``stat`` against the stamp of our own last read/write, so the common
+        single-writer case never re-reads the file.
+        """
+        current = _stamp(file_path)
+        if current is None or current == self._stamps.get(tree.session_id):
+            return
+        try:
+            disk = self._load_sync(tree.session_id, stamp=False)
+        except Exception:  # noqa: BLE001 - a damaged file must not block saving
+            logger.warning("Could not read %s to merge it", file_path, exc_info=True)
+            return
+        foreign = [n for n in disk.nodes.values() if n.id not in tree.nodes]
+        added = 0
+        for node in sorted(foreign, key=lambda n: n.created_at):
+            if node.parent_id is None or node.parent_id in tree.nodes:
+                tree.add_node(node)
+                added += 1
+        if added:
+            logger.info(
+                "Merged %d node(s) another process saved to session %s",
+                added,
+                tree.session_id,
+            )
+
+    def _write_atomic(self, tree: ConversationTree, file_path: Path) -> None:
         fd, tmp_name = tempfile.mkstemp(
             dir=file_path.parent, prefix=f".{file_path.name}.", suffix=".tmp"
         )
@@ -185,8 +246,11 @@ class JsonlStorage(SessionStorage):
                 except OSError as exc:
                     logger.debug("Could not remove temp file %s: %s", tmp_path, exc)
 
-    def _load_sync(self, session_id: str) -> ConversationTree:
+    def _load_sync(self, session_id: str, *, stamp: bool = True) -> ConversationTree:
         file_path = self._session_file(session_id)
+        if stamp:
+            # What we are about to read is the version later saves compare to.
+            self._stamps[session_id] = _stamp(file_path)
         if not file_path.exists():
             raise PhosonSessionNotFoundError(
                 f"Session {session_id} does not exist.",
@@ -224,6 +288,62 @@ class JsonlStorage(SessionStorage):
     def _delete_sync(self, session_id: str) -> None:
         file_path = self._session_file(session_id)
         file_path.unlink(missing_ok=True)
+        _lock_path(file_path).unlink(missing_ok=True)
+        self._stamps.pop(session_id, None)
+
+
+def _stamp(file_path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of a session file, or ``None`` when it is missing."""
+    try:
+        info = file_path.stat()
+    except OSError:
+        return None
+    return info.st_mtime_ns, info.st_size
+
+
+def _lock_path(file_path: Path) -> Path:
+    return file_path.with_name(f".{file_path.name}.lock")
+
+
+@contextlib.contextmanager
+def _file_lock(file_path: Path):
+    """Exclusive cross-process lock around one read-merge-write of a session.
+
+    Advisory (``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows) on a
+    side file next to the session, so it never blocks readers of the session
+    file itself. Best effort: if locking is unavailable the write proceeds.
+    """
+    lock = _lock_path(file_path)
+    try:
+        handle = open(lock, "a+b")  # noqa: SIM115 - held for the block
+    except OSError:
+        yield
+        return
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            logger.debug("Could not lock %s; writing without it", lock)
+        yield
+    finally:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                handle.seek(0)
+                with contextlib.suppress(OSError):
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            # flock is released when the handle closes.
+        finally:
+            handle.close()
 
 
 def _meta_updates(meta: dict) -> dict:
@@ -290,6 +410,51 @@ def list_session_metas(base_path: Path, cwd: str | None = None) -> list[SessionM
     return sessions
 
 
+def _read_meta_fast(
+    file_path: Path,
+) -> "tuple[dict, datetime.datetime | None, int] | None":
+    """Read a session's meta without decoding every record.
+
+    Files written by ``save`` start with the ``session_meta`` line, followed
+    by node records in creation order: only the first two lines need JSON
+    parsing, the rest are just counted. The picker and the startup cache
+    list every session, and decoding each whole session file there grew
+    with every turn of every session (R5). Returns ``None`` when the file
+    does not start with a meta record (legacy layout: full scan).
+    """
+    try:
+        with file_path.open("rb") as f:
+            first = f.readline()
+            try:
+                meta = json.loads(first)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return None
+            if not isinstance(meta, dict) or meta.get("type") != "session_meta":
+                return None
+            created_at: datetime.datetime | None = None
+            count = 0
+            for line in f:
+                if not line.strip():
+                    continue
+                count += 1
+                if count == 1:
+                    try:
+                        raw_ts = json.loads(line).get("created_at")
+                        created_at = (
+                            datetime.datetime.fromisoformat(raw_ts) if raw_ts else None
+                        )
+                    except (
+                        json.JSONDecodeError,
+                        TypeError,
+                        ValueError,
+                        AttributeError,
+                    ):
+                        created_at = None
+            return meta, created_at, count
+    except OSError:
+        return None
+
+
 def _read_session_meta(file_path: Path) -> SessionMeta | None:
     """Read just enough of a JSONL session file to build its ``SessionMeta``.
 
@@ -303,9 +468,12 @@ def _read_session_meta(file_path: Path) -> SessionMeta | None:
     created_at: datetime.datetime | None = None
     message_count = 0
     meta_values: dict | None = None
+    fast = _read_meta_fast(file_path)
+    if fast is not None:
+        meta_values, created_at, message_count = fast
     try:
         with file_path.open("r", encoding="utf-8") as f:
-            for line in f:
+            for line in f if fast is None else ():
                 stripped = line.strip()
                 if not stripped:
                     continue
