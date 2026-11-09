@@ -268,3 +268,40 @@ def test_remote_cli_pairs_lists_and_revokes(
     assert run_remote(["revoke", device.id]) == 1
     assert run_serve(["--help"]) == 0
     assert "--allow-plaintext" in capsys.readouterr().out
+
+
+def test_pairing_qr_decodes_back_to_the_matrix() -> None:
+    segno = pytest.importorskip("segno")
+    from phoson_bridge.cli import render_qr
+
+    link = "phoson://pair?code=W2NC-K3VN&url=ws%3A%2F%2F10.0.0.5%3A7337%2Fv1"
+    drawn = render_qr(link)
+    assert drawn is not None
+    rows = [line[len("\x1b[30;47m") : -len("\x1b[0m")] for line in drawn.split("\n")]
+    assert all(line.startswith("\x1b[30;47m") for line in drawn.split("\n"))
+    # Undo the half blocks: each character is two module rows.
+    halves = {"█": (1, 1), "▀": (1, 0), "▄": (0, 1), " ": (0, 0)}
+    modules = []
+    for row in rows:
+        modules.append([halves[ch][0] for ch in row])
+        modules.append([halves[ch][1] for ch in row])
+    expected = [[int(bool(c)) for c in r] for r in segno.make(link, error="m").matrix]
+    border = 2
+    size = len(expected)
+    inner = [r[border : border + size] for r in modules[border : border + size]]
+    assert inner == expected
+    # Quiet zone: light all around.
+    assert not any(modules[0]) and not any(r[0] for r in modules)
+
+
+def test_advertised_url_is_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(G, "lan_addresses", lambda: ["192.168.1.20"])
+    wildcard = G.GatewayConfig(host="0.0.0.0", port=7337)
+    assert wildcard.advertised_url() == "ws://192.168.1.20:7337/v1"
+    explicit = G.GatewayConfig(host="0.0.0.0", public_url="wss://box.tail.ts.net/v1")
+    assert explicit.advertised_url() == "wss://box.tail.ts.net/v1"
+    assert G.GatewayConfig(port=9).advertised_url() == "ws://127.0.0.1:9/v1"
+    with pytest.raises(G.ConfigError, match="public-url"):
+        G.check_config(
+            G.GatewayConfig(public_url="http://x", default_workspace=Path.cwd())
+        )

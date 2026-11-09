@@ -95,8 +95,10 @@ and a link:
 phoson://pair?code=W2NC-K3VN&url=ws%3A%2F%2F100.101.102.103%3A7337%2Fv1
 ```
 
-Render the link as a QR code on the server side, or let the user type the code
-and the URL. Codes are case- and separator-insensitive, single use, and expire
+`phoson-cli` draws this link as a **QR code** in the terminal, so the app's
+pairing screen should offer a QR scanner, with manual entry of the code and URL
+as a fallback. The `url` in the link is the server's advertised address: its LAN
+IP when it listens on `0.0.0.0`, or its `--public-url`. Codes are case- and separator-insensitive, single use, and expire
 after 10 minutes. A wrong guess counts against every pending code, so they
 burn after 5 failed tries.
 

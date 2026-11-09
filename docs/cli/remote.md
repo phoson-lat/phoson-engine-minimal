@@ -20,13 +20,20 @@ phoson-cli remote devices       # who is paired, and when they last connected
 phoson-cli remote revoke <id>   # that device can no longer connect
 ```
 
-`remote pair` also prints a `phoson://pair?...` link with the server address,
-for apps that scan a QR code. Codes are 8 characters. A wrong guess counts
+In a terminal, `remote pair` and `serve --pair` also draw a **QR code** to
+scan with the mobile app. It encodes a `phoson://pair?code=…&url=…` link,
+which is printed below the code as well (`--no-qr` hides the drawing). Codes
+are 8 characters. A wrong guess counts
 against every pending code, so they burn after 5 failed tries. Each address
 also gets only 5 failed attempts every 10 minutes. Only a hash of each device
 token is stored, in `~/.phoson/remote/devices.json`.
 
 ## Reaching the server
+
+The pairing link and QR code carry the address clients should dial. With
+`--host 0.0.0.0` that is this machine's LAN address. For anything else, such as
+a Tailscale or DNS name, a tunnel or a reverse proxy, pass it explicitly:
+`--public-url wss://box.tailnet.ts.net:7337/v1`.
 
 By default the server listens on loopback only, which is safe and useful
 through an SSH tunnel:

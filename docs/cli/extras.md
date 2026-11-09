@@ -9,6 +9,7 @@ install them with `/extras` instead:
 | `stt` | Speech to text (voice input, `Ctrl+O`) | `moonshine-voice` (not on macOS Intel) |
 | `computeruse` | Computer Use: screenshots, mouse and keyboard | `mss`, `Pillow`, plus `pyobjc-framework-Quartz` on macOS |
 | `ssh` | SSH remote execution | `asyncssh` |
+| `remote` | `phoson-cli serve`, remote access ([remote.md](remote.md)) | `websockets`, `segno` (pairing QR code) |
 | `mcp` | Model Context Protocol servers | `mcp` |
 | `memory` | Memory backends | `redis`, `asyncpg`, `qdrant-client` |
 | `checkpoint` | Postgres checkpoints | `asyncpg` |

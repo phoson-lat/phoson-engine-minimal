@@ -43,6 +43,7 @@ import sys
 import json
 import time
 import signal
+import socket
 import asyncio
 import hashlib
 import logging
@@ -304,6 +305,9 @@ class GatewayConfig:
     allow_plaintext: bool = False
     allowed_origins: tuple[str, ...] = ()
     command: list[str] = field(default_factory=bridge_command)
+    #: The URL clients should use (pairing link, QR code), when the listen
+    #: address is not it: a Tailscale or DNS name, a tunnel, a proxy.
+    public_url: str | None = None
 
     @property
     def is_loopback(self) -> bool:
@@ -315,6 +319,38 @@ class GatewayConfig:
 
     def url(self, host: str | None = None) -> str:
         return f"{self.scheme}://{host or self.host}:{self.port}/v1"
+
+    def advertised_url(self) -> str:
+        """The URL to give clients: ``public_url``, else a reachable address.
+
+        A wildcard listen address (``0.0.0.0``) is not one a phone can dial, so
+        it is replaced by this machine's first LAN address.
+        """
+        if self.public_url:
+            return self.public_url
+        if self.host in {"0.0.0.0", "::", ""}:
+            addresses = lan_addresses()
+            if addresses:
+                return self.url(addresses[0])
+        return self.url()
+
+
+def lan_addresses() -> list[str]:
+    """This machine's non-loopback IPv4 addresses (best effort)."""
+    found: set[str] = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.add(str(info[4][0]))
+    except OSError:
+        pass
+    try:
+        # The address of the default route, without sending anything.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            found.add(str(probe.getsockname()[0]))
+    except OSError:
+        pass
+    return sorted(a for a in found if not a.startswith("127."))
 
 
 class ConfigError(ValueError):
@@ -331,6 +367,8 @@ def check_config(config: GatewayConfig) -> None:
             "--allow-plaintext on a network that already encrypts (Tailscale, a "
             "VPN, an SSH tunnel)."
         )
+    if config.public_url and not config.public_url.startswith(("ws://", "wss://")):
+        raise ConfigError("--public-url must start with ws:// or wss://.")
     if not config.default_workspace.is_dir():
         raise ConfigError(f"Workspace {config.default_workspace} is not a directory.")
 
@@ -562,7 +600,7 @@ async def serve(config: GatewayConfig, *, ready: Any = None) -> None:
         port = next(iter(server.sockets)).getsockname()[1]
         config.port = port
         info = {
-            "url": config.url(),
+            "url": config.advertised_url(),
             "pid": os.getpid(),
             "startedAt": time.time(),
             "tls": bool(config.tls_cert),
