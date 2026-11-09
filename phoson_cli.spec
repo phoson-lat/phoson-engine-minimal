@@ -60,6 +60,8 @@ for pkg in (
     "asyncpg",
     "redis",
     "qdrant_client",
+    # Remote-access gateway (`phoson-cli serve`).
+    "websockets",
 ):
     try:
         HIDDEN_IMPORTS.extend(collect_submodules(pkg))
@@ -71,7 +73,7 @@ for pkg in (
 # First-party packages, including EVERY official plugin: the CLI imports them
 # dynamically (official_plugins.py), so the analysis cannot see them.
 OFFICIAL_PLUGINS = sorted(p.name for p in ROOT.glob("phoson_plugin_*") if p.is_dir())
-for pkg in ("phoson_agent", "phoson_llm", "phoson_cli", *OFFICIAL_PLUGINS):
+for pkg in ("phoson_agent", "phoson_llm", "phoson_cli", "phoson_bridge", *OFFICIAL_PLUGINS):
     HIDDEN_IMPORTS.extend(collect_submodules(pkg))
 
 # tiktoken finds its encodings by scanning the *namespace package*

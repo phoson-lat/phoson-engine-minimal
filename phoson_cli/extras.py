@@ -109,6 +109,12 @@ EXTRAS: tuple[Extra, ...] = (
     ),
     Extra("ssh", "SSH remote execution", ("asyncssh>=2.14.0",), ("asyncssh",)),
     Extra(
+        "remote",
+        "Remote access server (phoson-cli serve)",
+        ("websockets>=13.0",),
+        ("websockets",),
+    ),
+    Extra(
         "mcp",
         "Model Context Protocol servers",
         ("mcp>=1.0.0,<2.0.0",),

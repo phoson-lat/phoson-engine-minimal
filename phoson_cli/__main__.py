@@ -121,6 +121,12 @@ Options:
                        install, uninstall, update, list, info, enable,
                        disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
+  bridge               Serve the JSON-RPC protocol (NDJSON) on stdin/stdout for
+                       a GUI client such as Phoson Desktop
+  serve [options]      Serve this machine to paired devices (Phoson Desktop
+                       in remote mode, the mobile app); see `serve --help`
+  remote pair|devices|revoke <id>
+                       Pair, list or revoke remote devices
   extras [list|install|remove] <name>
                        Optional features that need extra packages (speech
                        to text, Computer Use, SSH, memory backends, provider
@@ -151,6 +157,9 @@ class CliOptions:
     plugin_args: list[str] | None = None
     bg_args: list[str] | None = None
     extras_args: list[str] | None = None
+    bridge: bool = False
+    serve_args: list[str] | None = None
+    remote_args: list[str] | None = None
     assume_yes: bool = False
     auto: bool = False
 
@@ -208,6 +217,15 @@ def parse_args(argv: list[str]) -> CliOptions:
             break
         if arg == "extras":
             options.extras_args = argv[i + 1 :]
+            break
+        if arg == "bridge":
+            options.bridge = True
+            break
+        if arg == "serve":
+            options.serve_args = argv[i + 1 :]
+            break
+        if arg == "remote":
+            options.remote_args = argv[i + 1 :]
             break
         if arg in {"-h", "--help"}:
             print(_USAGE)
@@ -1064,6 +1082,20 @@ def _run_cli() -> None:
     activate_extras()
     if options.extras_args is not None:
         sys.exit(run_extras_command(options.extras_args))
+    if options.serve_args is not None:
+        from phoson_bridge.cli import run_serve
+
+        sys.exit(run_serve(options.serve_args))
+    if options.remote_args is not None:
+        from phoson_bridge.cli import run_remote
+
+        sys.exit(run_remote(options.remote_args))
+    if options.bridge:
+        # stdout becomes the protocol channel; nothing may print before this.
+        from phoson_bridge.__main__ import run as run_bridge
+
+        run_bridge()
+        return
 
     if options.plugin_args is not None:
         try:
