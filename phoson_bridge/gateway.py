@@ -32,9 +32,15 @@ Security: a paired device has the same power as the local user (the bridge
 runs commands and edits files). The gateway listens on loopback by default;
 another address needs TLS (``--tls-cert/--tls-key``) or an explicit
 ``--allow-plaintext`` (for a private network such as Tailscale, which already
-encrypts). Browser connections (an ``Origin`` header) are refused unless the
-origin is allowed, so a web page cannot talk to a local gateway. Failed
-authentication is rate limited per address.
+encrypts). Failed authentication is rate limited per address.
+
+``Origin`` (see :func:`origin_policy`): React Native's WebSocket always sends
+one, equal to the server URL, so an ``Origin`` alone cannot mean "a web page".
+A connection is **trusted** (may pair) without an ``Origin``, with an allowed
+one, or when it is same-origin: ``Origin`` equals ``Host`` *and* ``Host`` is
+one of this server's own names, which rules out DNS rebinding. Any other
+origin may only authenticate with a device token: a web page has none, and it
+cannot pair.
 """
 
 import os
@@ -52,6 +58,7 @@ from typing import Any
 from pathlib import Path
 from collections import deque
 from dataclasses import field, dataclass
+from urllib.parse import urlsplit
 
 from .devices import DeviceStore, remote_dir
 
@@ -308,6 +315,10 @@ class GatewayConfig:
     #: The URL clients should use (pairing link, QR code), when the listen
     #: address is not it: a Tailscale or DNS name, a tunnel, a proxy.
     public_url: str | None = None
+    #: Trust every ``Origin`` (pairing included). Off by default.
+    allow_any_origin: bool = False
+    #: Extra names this server answers to, for the same-origin check.
+    allowed_hosts: tuple[str, ...] = ()
 
     @property
     def is_loopback(self) -> bool:
@@ -333,6 +344,65 @@ class GatewayConfig:
             if addresses:
                 return self.url(addresses[0])
         return self.url()
+
+
+def known_hosts(config: GatewayConfig) -> set[str]:
+    """Names and addresses that are this server's own (lowercase)."""
+    names = {"localhost", "127.0.0.1", "::1", *config.allowed_hosts}
+    if config.host not in {"0.0.0.0", "::", ""}:
+        names.add(config.host)
+    names.update(lan_addresses())
+    hostname = socket.gethostname()
+    names.update({hostname, f"{hostname}.local"})
+    if config.public_url:
+        public = urlsplit(config.public_url).hostname
+        if public:
+            names.add(public)
+    return {name.lower().strip("[]") for name in names if name}
+
+
+_DEFAULT_PORTS = {"http": 80, "ws": 80, "https": 443, "wss": 443}
+
+
+def _authority(scheme: str, netloc: str) -> tuple[str, int] | None:
+    """``(hostname, port)`` of a URL authority, with the scheme's default port."""
+    try:
+        parts = urlsplit(f"{scheme}://{netloc}")
+        port = parts.port or _DEFAULT_PORTS.get(scheme)
+    except ValueError:
+        return None
+    if not parts.hostname or port is None:
+        return None
+    return parts.hostname.lower(), port
+
+
+def origin_policy(
+    config: GatewayConfig,
+    origin: str | None,
+    host_header: str | None,
+    *,
+    tls: bool = False,
+) -> str:
+    """``"trusted"`` (may pair and authenticate) or ``"token-only"``.
+
+    See the module docstring. *host_header* is the ``Host`` the client sent,
+    and *tls* says whether it connected with ``wss://`` (for default ports).
+    """
+    if not origin or config.allow_any_origin or origin in config.allowed_origins:
+        return "trusted"
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return "token-only"
+    origin_authority = _authority(parts.scheme.lower(), parts.netloc)
+    host_authority = _authority("https" if tls else "http", host_header or "")
+    if (
+        origin_authority is not None
+        and origin_authority == host_authority
+        and origin_authority[0] in known_hosts(config)
+    ):
+        return "trusted"
+    return "token-only"
 
 
 def lan_addresses() -> list[str]:
@@ -395,8 +465,14 @@ class Gateway:
         self._failures.setdefault(address, deque()).append(time.time())
 
     # ── Connection handling (transport-agnostic) ───────────────────────────
-    async def handle(self, recv: Any, send: Any, address: str) -> None:
-        """Serve one connection; *recv* returns the next text frame or None."""
+    async def handle(
+        self, recv: Any, send: Any, address: str, *, can_pair: bool = True
+    ) -> None:
+        """Serve one connection; *recv* returns the next text frame or None.
+
+        *can_pair* is False for a connection whose ``Origin`` is not trusted:
+        it may only authenticate with a device token.
+        """
         if self._blocked(address):
             await send(_error(None, _ERR_AUTH, "too many failed attempts; try later"))
             return
@@ -404,7 +480,7 @@ class Gateway:
             raw = await asyncio.wait_for(recv(), AUTH_TIMEOUT_S)
         except TimeoutError:
             return
-        device_id = await self._authenticate(raw, send, address)
+        device_id = await self._authenticate(raw, send, address, can_pair=can_pair)
         if device_id is None:
             return
         client = Client(send, device_id, address)
@@ -453,7 +529,9 @@ class Gateway:
             return None
         return message if isinstance(message, dict) else None
 
-    async def _authenticate(self, raw: Any, send: Any, address: str) -> str | None:
+    async def _authenticate(
+        self, raw: Any, send: Any, address: str, *, can_pair: bool = True
+    ) -> str | None:
         message = self._parse(raw) or {}
         method = message.get("method")
         params = message.get("params") or {}
@@ -468,6 +546,18 @@ class Gateway:
                     _result(request_id, {"deviceId": device.id, "name": device.name})
                 )
                 return device.id
+        elif method == "gateway.pair" and not can_pair:
+            self._fail(address)
+            log.warning("pairing refused from an untrusted origin (%s)", address)
+            await send(
+                _error(
+                    request_id,
+                    _ERR_AUTH,
+                    "pairing is not allowed from this origin; start the server "
+                    "with --allow-origin <origin> (or pair from the app)",
+                )
+            )
+            return None
         elif method == "gateway.pair":
             if self.store.consume_pairing_code(str(params.get("code") or "")):
                 name = str(params.get("deviceName") or "device")
@@ -568,9 +658,8 @@ async def serve(config: GatewayConfig, *, ready: Any = None) -> None:
     def process_request(connection: ServerConnection, request: Any) -> Any:
         if request.path.split("?", 1)[0] != "/v1":
             return connection.respond(404, "Not found\n")
-        origin = request.headers.get("Origin")
-        if origin and origin not in config.allowed_origins:
-            return connection.respond(403, "Origin not allowed\n")
+        # Origin is not refused here: see `origin_policy` (React Native always
+        # sends one). An untrusted origin may only authenticate with a token.
         return None
 
     async def handler(connection: ServerConnection) -> None:
@@ -585,7 +674,14 @@ async def serve(config: GatewayConfig, *, ready: Any = None) -> None:
         async def send(line: str) -> None:
             await connection.send(line)
 
-        await gateway.handle(recv, send, address)
+        headers = connection.request.headers if connection.request else {}
+        policy = origin_policy(
+            config,
+            headers.get("Origin"),
+            headers.get("Host"),
+            tls=bool(config.tls_cert),
+        )
+        await gateway.handle(recv, send, address, can_pair=policy == "trusted")
 
     async with ws_serve(
         handler,

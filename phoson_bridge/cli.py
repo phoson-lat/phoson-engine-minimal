@@ -27,8 +27,13 @@ Options:
   --tls-key FILE       TLS private key (PEM)
   --allow-plaintext    Allow a non-loopback --host without TLS (only on a
                        network that already encrypts: Tailscale, VPN, SSH)
-  --allow-origin URL   Accept browser connections from this origin
-                       (repeatable; browsers are refused by default)
+  --allow-origin URL   Trust this Origin, pairing included (repeatable).
+                       Without it, a connection is trusted when it sends no
+                       Origin or a same-origin one (what React Native sends);
+                       any other origin may only log in with a device token
+  --allow-any-origin   Trust every Origin (development only)
+  --allow-host NAME    Another name this server answers to, for the
+                       same-origin check (repeatable; e.g. a DNS alias)
   --public-url URL     The address clients should use, for the pairing link
                        and QR code (ws:// or wss://): a Tailscale or DNS name,
                        a tunnel. Default: this machine's LAN address when
@@ -130,6 +135,8 @@ def run_serve(argv: list[str]) -> int:
     parser.add_argument("--tls-key", type=Path)
     parser.add_argument("--allow-plaintext", action="store_true")
     parser.add_argument("--allow-origin", action="append", default=[])
+    parser.add_argument("--allow-any-origin", action="store_true")
+    parser.add_argument("--allow-host", action="append", default=[])
     parser.add_argument("--public-url")
     parser.add_argument("--pair", action="store_true")
     try:
@@ -147,6 +154,8 @@ def run_serve(argv: list[str]) -> int:
         allow_plaintext=args.allow_plaintext,
         allowed_origins=tuple(args.allow_origin),
         public_url=args.public_url,
+        allow_any_origin=args.allow_any_origin,
+        allowed_hosts=tuple(args.allow_host),
     )
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
@@ -160,6 +169,8 @@ def run_serve(argv: list[str]) -> int:
         print(f"  default workspace: {config.default_workspace}")
         if not config.tls_cert and not config.is_loopback:
             print("  WARNING: plaintext; use only on an encrypted network.")
+        if config.allow_any_origin:
+            print("  WARNING: --allow-any-origin: any web page can try to pair.")
         if args.pair:
             _print_pairing(DeviceStore(), advertised)
         else:

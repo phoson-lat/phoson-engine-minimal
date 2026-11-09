@@ -55,9 +55,21 @@ running commands and editing files, because it drives the same agent with the
 same permission rules. Pair only devices you control, and revoke a device you
 lose.
 
-Browser pages cannot connect: a request with an `Origin` header is refused
-unless you allow that origin with `--allow-origin`. This stops a web page from
-talking to a gateway on your machine.
+**Web pages cannot pair.** Every WebSocket client may send an `Origin` header,
+and React Native always does: it sends the server's own URL. A connection may
+pair only when it is **trusted**, which means one of:
+
+- it sends no `Origin` (scripts, native clients);
+- its `Origin` equals the `Host` it connected to, and that host is one of this
+  server's own names: its addresses, `localhost`, the `--public-url` host, or a
+  name given with `--allow-host`. Checking the host blocks DNS rebinding;
+- its `Origin` is listed with `--allow-origin` (repeatable), or the server runs
+  with `--allow-any-origin` (development only).
+
+Any other origin may still log in with a **device token**, because that is the
+user's own credential. A web page has no token, so it cannot pair. A refused
+pairing attempt counts toward the per-address limit and does not spend the
+code.
 
 ## How it works
 
