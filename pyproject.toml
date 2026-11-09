@@ -24,6 +24,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = [
     "phoson_agent",
+    "phoson_bridge",
     "phoson_cli",
     "phoson_llm",
     "phoson_plugin_checkpoint",
@@ -42,6 +43,7 @@ packages = [
 
 [project.scripts]
 phoson-cli = "phoson_cli.__main__:main"
+phoson-bridge = "phoson_bridge.__main__:run"
 
 [tool.ruff]
 # Target version for Python
@@ -87,6 +89,7 @@ pythonpath = ["."]
 
 [tool.pyright]
 include = [
+    "phoson_bridge",
     "phoson_llm",
     "phoson_agent",
     "phoson_cli",
@@ -117,6 +120,7 @@ dev = [
     "pre-commit>=3.8.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=1.3.0",
+    "websockets>=13.0",
     "pyright>=1.1.400",
     "ruff>=0.15.12",
     # Conformance oracle only: tests decode the OTel plugin's exact OTLP/HTTP
@@ -154,6 +158,9 @@ stt = [
     "moonshine-voice>=0.1.5; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 ]
 ssh = ["asyncssh>=2.14.0"]
+# `phoson-cli serve`: the remote-access gateway (WebSocket) in front of the
+# JSON-RPC bridge. Pure Python; also bundled in the standalone binary.
+remote = ["websockets>=13.0"]
 computeruse = [
     "mss>=10.0.0",
     "Pillow>=10.0.0",

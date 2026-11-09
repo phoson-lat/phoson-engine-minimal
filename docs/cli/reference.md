@@ -44,6 +44,12 @@ Options:
                        install, uninstall, update, list, info, enable,
                        disable, doctor, config, new, validate
   bg list              List saved sessions with run status (read-only)
+  bridge               Serve the JSON-RPC protocol (NDJSON) on stdin/stdout for
+                       a GUI client such as Phoson Desktop
+  serve [options]      Serve this machine to paired devices (Phoson Desktop
+                       in remote mode, the mobile app); see `serve --help`
+  remote pair|devices|revoke <id>
+                       Pair, list or revoke remote devices
   extras [list|install|remove] <name>
                        Optional features that need extra packages (speech
                        to text, Computer Use, SSH, memory backends, provider
