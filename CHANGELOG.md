@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## Unreleased
+
+### Feat
+
+- **cli**: drag over the chat to select text; it is copied to the clipboard when you release the button, with a `Copied N chars` message under the prompt.
+  - Dragging past the top or bottom edge scrolls, a double click selects a word and a triple click a line. A plain click copies nothing.
+  - The copy uses `pbcopy`, `wl-copy`, `xclip`/`xsel` or `clip.exe`, and an OSC 52 escape over SSH or when no tool is installed (inside tmux: `set-clipboard on`).
+  - The selection clears on the next click or on `Esc`. Rendered lines are copied as shown, so a wrapped paragraph comes out as several lines.
+  - `Shift+Drag` still gives you the terminal's own selection. `mouse_selection = false` (or `PHOSON_MOUSE_SELECTION=0`) turns the in-app one off.
+
+### Fix
+
+- **cli**: the editing keys work in the composer again. Option/Alt+Left and Right (and Ctrl+Left/Right) jump by word, Home/End and Ctrl+A/Ctrl+E go to the start and end of the line (which is also what Cmd+Left/Right send in iTerm2's natural text editing), and Option+Backspace deletes a word instead of typing a stray letter.
+  - Home and End scroll the chat only while the draft is empty.
+  - An Option/Alt key combination is never read as `Esc`: it does not cancel a run or start a rewind.
+- **cli**: the reasoning effort cycle moved from `Ctrl+E` to `Ctrl+R`, so `Ctrl+E` is "end of line" and no longer changes (and saves) the effort. To keep the old key, set `cycle_reasoning_effort = "c-e"` under `[keys]`. The classic REPL keeps `Ctrl+E`, on an empty prompt only.
+- **cli**: resizing the window with a long conversation no longer re-renders it for every column; the chat is laid out once when the size settles.
+
 ## v0.63.0 (2026-11-08)
 
 Browser use, optional features you can install from the binary, and sessions that survive cancels, errors and two CLIs at once.

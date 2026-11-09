@@ -24,10 +24,16 @@ The composer stays usable **while a turn is running**:
   are refused with a notice and the draft is kept, because they compete with
   the running turn.
 - `Ctrl+V` (clipboard paste), `Ctrl+P` (command palette, restricted to the
-  run-safe commands), `Shift+Tab` (permission mode) and `Ctrl+E` (reasoning
+  run-safe commands), `Shift+Tab` (permission mode) and `Ctrl+R` (reasoning
   effort) are all live mid-turn.
 
 `Esc` still cancels the active turn.
+
+The draft is edited with the usual readline keys (word jumps, start/end of
+line, delete word) — see [keybindings.md](keybindings.md#editing-the-draft).
+Text in the chat is selected by dragging over it and is copied on release —
+see [mouse-and-links.md](mouse-and-links.md); `mouse_selection = false`
+turns that off.
 
 ## Shell mode (`!`)
 
@@ -64,7 +70,7 @@ Until the first message the chat pane shows a compact welcome screen: the
 phoson-cli banner (the phoson face beside a block-letter `phoson-cli`
 wordmark), the cwd and model, the three most recent sessions started in this
 directory (resume one with `/resume <id>`) and the key gestures (`!`, `@`,
-`/`, `Ctrl+P`, `Esc Esc`, `Shift+Tab`, `Ctrl+E`). The banner is lightly
+`/`, `Ctrl+P`, `Esc Esc`, `Shift+Tab`, `Ctrl+R`). The banner is lightly
 animated — a shine sweeps the wordmark every few seconds and the face
 blinks — repainting only while something moves; `NO_COLOR`,
 `PHOSON_NO_ANIMATION=1` or the `no-color` theme keep it still. On a narrow

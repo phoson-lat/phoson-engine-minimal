@@ -1085,8 +1085,8 @@ class CommandHandler:
         r.print_info("Key bindings (full-screen TUI):")
         for action, keys in rows:
             r.print_info(f"  {action:<{width}}  {keys}")
-        r.print_info("Text selection: hold Shift while dragging (terminal-native;")
-        r.print_info("not app-driven mouse tracking). See docs/cli/mouse-and-links.md.")
+        r.print_info("Text selection: drag over the chat to copy; Shift+drag uses the")
+        r.print_info("terminal's own selection. See docs/cli/mouse-and-links.md.")
         r.print_info("Remap from the [keys] section of ~/.phoson/config.toml:")
         r.print_info("  [keys]")
         r.print_info('  toggle_reasoning = "c-x"      # one sequence')

@@ -9,6 +9,8 @@ the test suite keep working.
 import time
 from typing import Any
 
+from .keys import ESC_PREFIXED_NAVIGATION_KEYS
+
 # Double-Esc rewind (IMPROVEMENTS.md G1): a second Esc within this window
 # (measured in monotonic seconds between *delivered* key presses) opens the
 # rewind picker. The window must be comfortably LARGER than prompt_toolkit's
@@ -66,6 +68,10 @@ def is_prefixed_escape(app: Any) -> bool:
             code = ord(kp.data[0])
             if 0x20 <= code <= 0x7F:
                 return True
+            # ``ESC`` + a navigation key's own sequence (``ESC ESC [ D``):
+            # Option+arrow where the terminal prefixes Esc to the arrow.
+            if kp.key in ESC_PREFIXED_NAVIGATION_KEYS:
+                return True
         elif kp.key != "<cpr-response>":
             # An empty payload only comes from a multi-key decode (the
             # kitty protocol's Alt+key CSI-u → ``escape`` + key, see
@@ -82,6 +88,8 @@ def handle_escape(app: Any) -> None:
     - **Prefix guard (#108):** if this Esc is the prefix of a longer
       terminal sequence (Alt+<key>), it is silently ignored — neither
       cancelling a run nor arming the double-tap window.
+    - A text selection showing in the chat pane is cleared. While idle
+      that is all this Esc does; mid-run it also cancels, as below.
     - While a run is in flight, a *clean* Esc keeps its *immediate*
       cancel role (the binding is registered ``eager`` in ``keys.py``
       so a double tap mid-run can never be swallowed as a chord) and
@@ -97,6 +105,12 @@ def handle_escape(app: Any) -> None:
     # c-h is still queued — that means this was NOT a deliberate Esc.
     if is_prefixed_escape(app):
         return
+    # A text selection in the chat pane is dropped by Esc. Mid-run the same
+    # Esc still cancels (stopping a run is never delayed by a highlight);
+    # while idle it does nothing else — it neither leaves shell mode nor
+    # arms the double-tap rewind.
+    pane = getattr(app, "_chat_pane", None)
+    selection_cleared = pane is not None and pane.clear_selection() is True
     if app._is_run_in_flight():
         result = app._cancel_operation()
         if result == "protected":
@@ -105,6 +119,8 @@ def handle_escape(app: Any) -> None:
             )
         elif result == "cancelled":
             app.sink.notify("info", "Cancelling current operation (Esc)...")
+        return
+    if selection_cleared:
         return
     if app._shell_mode:
         # Idle Esc in shell mode only leaves the mode (keeps the text); it

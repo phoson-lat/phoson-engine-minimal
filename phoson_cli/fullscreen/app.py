@@ -31,7 +31,7 @@ from prompt_toolkit.completion import ConditionalCompleter, merge_completers
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.mouse_events import MouseEvent
 from prompt_toolkit.layout.layout import Layout, FocusableElement
-from prompt_toolkit.formatted_text import ANSI, HTML
+from prompt_toolkit.formatted_text import HTML, AnyFormattedText
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
@@ -97,6 +97,7 @@ from .chat_pane import (
     ChatScrollbarMargin,
 )
 from .clipboard import (
+    write_clipboard_text,
     paste_image_from_clipboard,
 )
 from .tasks_dock import TasksDock
@@ -167,30 +168,35 @@ from .lifecycle_controller import (
 # Text selection (IMPROVEMENTS.md G3, #57): the chat pane sets
 # ``mouse_support=True`` so the scroll wheel can be handled by the app
 # (see `_on_chat_mouse`) — but enabling mouse tracking is a terminal-level
-# switch (xterm DECSET 1000/1002/1006), not something prompt_toolkit or
-# this app controls independently: once it is on, the terminal stops
+# switch (xterm DECSET 1000/1002/1003/1006), not something prompt_toolkit
+# or this app controls independently: once it is on, the terminal stops
 # treating click-drag as native text selection and instead reports every
 # mouse event to the app over the same channel as the wheel. There is no
 # way to keep the wheel app-driven while leaving plain drag as native
 # selection — it is a single on/off switch. Every mouse-aware TUI hits this
 # (Claude Code's NO_FLICKER mode, Pi, OpenCode all replace native selection
-# with their own drag-to-copy for the same reason, and OpenCode's issue
-# tracker shows that mechanism grows its own bugs — clipboard clobbered by
-# incidental selection, mouse capture stuck across SSH/tmux hops).
-# The one universal escape hatch is a *terminal* feature, not an app one:
-# holding Shift while dragging tells the terminal to ignore the app's mouse
-# tracking for that gesture and fall back to its own native selection
-# (works in GNOME Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty,
-# Windows Terminal — see each terminal's own docs for the exact modifier).
-# Advertising it in the footer (rather than only in a docstring) is the
-# fix: the terminal already does the work, the hint just needs to be
-# discoverable.
+# with their own drag-to-copy for the same reason).
+#
+# So the app does the same: a plain click-drag over the chat pane selects
+# rendered text in-app and copies it on release (``ChatPane`` "Drag-to-
+# select" + ``selection.py`` + ``clipboard.write_clipboard_text``). The
+# known traps of that approach are handled on purpose: a click without a
+# drag never touches the clipboard, the copy goes through the platform
+# tool or OSC 52 (so it also works over SSH/tmux), and mouse tracking is
+# only ever switched by prompt_toolkit's own enable/disable pair (see
+# ``_report_mouse_drags``), so it cannot stay on after exit.
+# ``mouse_selection = false`` turns the in-app selection off.
+#
+# The terminal's own selection is still one modifier away: holding Shift
+# while dragging tells the terminal to ignore the app's mouse tracking for
+# that gesture (GNOME Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty,
+# Windows Terminal; Fn in macOS Terminal — see each terminal's docs).
 #
 # The footer itself is *contextual* (T-9): at most three hints for the
 # current state, so it never truncates at 80 columns. The full cheatsheet
-# (scroll, reasoning, paste image, clear, rewind, exit, Shift+Drag) lives
-# in ``/keys`` and ``docs/cli/mouse-and-links.md`` — not on every frame.
-# (The footer hint strings moved to ``header_model.py`` in #187.)
+# (scroll, reasoning, paste image, clear, rewind, exit, text selection)
+# lives in ``/keys`` and ``docs/cli/mouse-and-links.md`` — not on every
+# frame. (The footer hint strings moved to ``header_model.py`` in #187.)
 
 # How often the subagent panel animation frame advances while active.
 # Kept at 0.12 s (I-84): 0.2 s made the braille spinner visibly lag
@@ -311,6 +317,41 @@ def _tie_kitty_keyboard_to_alternate_screen(output: Any) -> None:
     output.quit_alternate_screen = quit_with_kitty_keyboard
 
 
+#: xterm button-event tracking (DECSET 1002): report motion while a button
+#: is held — what a drag is.
+_ENABLE_MOUSE_DRAG = "\x1b[?1002h"
+_DISABLE_MOUSE_DRAG = "\x1b[?1002l"
+
+
+def _report_mouse_drags(output: Any) -> None:
+    """Ask for drag reports whenever prompt_toolkit turns mouse tracking on.
+
+    prompt_toolkit requests click tracking (1000) and any-motion tracking
+    (1003). Drag-to-select needs motion while a button is held; a terminal
+    that implements button-event tracking (1002) but not 1003 would report
+    clicks only. 1002 is requested *after* prompt_toolkit's own modes — in
+    xterm the three are one setting and the last request wins — so every
+    terminal ends on a mode that reports drags (and no longer floods the
+    app with hover motion). It is switched off right before prompt_toolkit
+    disables its modes, on every exit path prompt_toolkit covers.
+    """
+    enable = getattr(output, "enable_mouse_support", None)
+    disable = getattr(output, "disable_mouse_support", None)
+    if enable is None or disable is None:
+        return
+
+    def enable_with_drags() -> None:
+        enable()
+        output.write_raw(_ENABLE_MOUSE_DRAG)
+
+    def disable_with_drags() -> None:
+        output.write_raw(_DISABLE_MOUSE_DRAG)
+        disable()
+
+    output.enable_mouse_support = enable_with_drags
+    output.disable_mouse_support = disable_with_drags
+
+
 #: Welcome-banner animation tick (s) while a shine/blink may be under way,
 #: and the poll interval once the conversation has started.
 _WELCOME_TICK = 0.06
@@ -411,6 +452,8 @@ class PhosonApp:
         # switches the next submit to a shell command whose output is shared
         # with the agent; Backspace on the empty composer or Esc leaves it.
         self._shell_mode = False
+        # Transient footer message and when it expires (`flash_footer`).
+        self._footer_flash: tuple[str, float] | None = None
         # Monotonic time of the last unconfirmed Ctrl+C (0 = not armed).
         self._interrupt_armed_at = 0.0
         # Installed version for the welcome screen, resolved on first paint.
@@ -438,6 +481,8 @@ class PhosonApp:
         # Never let a partly repainted OSC 8 link stay open across the rest
         # of the frame (everything turning into one hyperlink).
         guard_hyperlinks(self.app.output)
+        if self._chat_pane.selection_enabled:
+            _report_mouse_drags(self.app.output)
         self._apply_style()
         # Modal Float dialogs live in their own controller (#187); ``PhosonApp``
         # keeps thin delegates so the public ``run_float_*`` surface is unchanged.
@@ -770,6 +815,56 @@ class PhosonApp:
     def _on_chat_mouse(self, mouse_event: MouseEvent) -> object:
         return self._chat_pane.on_chat_mouse(mouse_event)
 
+    def copy_selection(self, text: str) -> None:
+        """Copy text dragged over in the chat pane, then confirm with a notice.
+
+        Runs beside whatever else is going on (a turn, another command): the
+        platform copy tool is a subprocess and must not block the event loop.
+        """
+
+        async def _copy() -> None:
+            def write_raw(sequence: str) -> None:
+                self.app.output.write_raw(sequence)
+                self.app.output.flush()
+
+            if await write_clipboard_text(text, write_raw):
+                noun = "char" if len(text) == 1 else "chars"
+                # Under the composer, not in the transcript: a copy is not
+                # part of the conversation and must not push the chat.
+                self.flash_footer(f"Copied {len(text)} {noun}")
+            else:
+                self.sink.notify(
+                    "warn",
+                    "Could not copy the selection: no clipboard tool found and"
+                    " it is too large to send through the terminal (OSC 52).",
+                )
+
+        self._start_concurrent_operation(_copy(), "clipboard")
+
+    def flash_footer(self, message: str, seconds: float = 2.0) -> None:
+        """Show *message* in the footer (the line under the composer) briefly.
+
+        It replaces the key hints for *seconds*, then the footer goes back to
+        its contextual hints. A newer message replaces an older one.
+        """
+        self._footer_flash = (message, time.monotonic() + seconds)
+        self.app.invalidate()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.call_later(seconds + 0.05, self.app.invalidate)
+
+    def footer_flash(self) -> str | None:
+        """The transient footer message still due, if any."""
+        flash = self._footer_flash
+        if flash is None:
+            return None
+        if time.monotonic() >= flash[1]:
+            self._footer_flash = None
+            return None
+        return flash[0]
+
     # --- Pane state forwarding (tests / external callers) ---
 
     def __getattr__(self, name: str) -> Any:
@@ -842,7 +937,7 @@ class PhosonApp:
         """Per-line char offsets for *text*, built incrementally (T-14 follow-up)."""
         return self._chat_pane.compute_chat_bounds(text, prefix_len, width)
 
-    def _render_chat(self) -> ANSI:
+    def _render_chat(self) -> AnyFormattedText:
         """Render the visible chat window (windowed, O(visible))."""
         return self._chat_pane.render_chat()
 
@@ -1213,7 +1308,7 @@ class PhosonApp:
             self.app.create_background_task(self._tasks_dock.open_view())
 
     def cycle_reasoning_effort(self) -> None:
-        """Ctrl+E: cycle reasoning effort off → low → medium → high → xhigh → max."""
+        """Ctrl+R: cycle reasoning effort off → low → medium → high → xhigh → max."""
         _cycle_reasoning_effort_impl(self)
 
     def keys_listing(self) -> list[tuple[str, str]]:

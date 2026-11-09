@@ -203,7 +203,7 @@ _WELCOME_TIPS: tuple[tuple[str, str], ...] = (
     ("/", "commands  ·  ctrl+p palette"),
     ("esc esc", "rewind the conversation"),
     ("shift+tab", "permission mode"),
-    ("ctrl+e", "reasoning effort"),
+    ("ctrl+r", "reasoning effort"),
 )
 
 

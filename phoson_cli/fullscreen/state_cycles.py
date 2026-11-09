@@ -3,7 +3,7 @@
 Extracted from ``app.py``:
 - ``toggle_reasoning`` (Ctrl+T): live reasoning toggle or transcript expansion
 - ``cycle_permission_mode`` (Shift+Tab): ask ↔ auto policy toggle for bash
-- ``cycle_reasoning_effort`` (Ctrl+E): cycle reasoning effort levels
+- ``cycle_reasoning_effort`` (Ctrl+R): cycle reasoning effort levels
 - ``clear_transcript`` (Ctrl+L): drop the transcript and its ANSI cache
 """
 
@@ -144,7 +144,7 @@ def cycle_permission_mode(app: Any) -> None:
 
 
 def cycle_reasoning_effort(app: Any) -> None:
-    """Ctrl+E: cycle the reasoning effort off → low → medium → high →
+    """Ctrl+R: cycle the reasoning effort off → low → medium → high →
     xhigh → max (wraps to off).
     """
     # Deliberately allowed mid-turn: effort applies from the next turn, so it

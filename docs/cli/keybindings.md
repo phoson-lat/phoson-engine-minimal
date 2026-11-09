@@ -15,7 +15,36 @@ submit = ""                       # unbind (use mouse / another key)
 config syntax. Sequences are validated at startup: an unparseable key,
 an unknown action, or a sequence bound to two actions is a clear error
 before the UI opens — never a silent fallback. Remaps apply on the next
-start. The classic REPL's single global key (Ctrl+T) is fixed.
+start. The classic REPL's global keys (`Ctrl+T`, and `Ctrl+E` on an empty
+prompt for the reasoning effort) are fixed.
+
+## Editing the draft
+
+The composer is a readline-style editor, and its editing keys always reach
+the draft:
+
+| Keys | Action |
+| --- | --- |
+| `Option/Alt+←` `→`, `Ctrl+←` `→`, `Alt+B` / `Alt+F` | previous / next word |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | start / end of the line |
+| `Option/Alt+Backspace`, `Ctrl+W` | delete the word before the cursor |
+| `Alt+D` | delete the word after the cursor |
+| `Ctrl+K` / `Ctrl+U` | delete to the end / start of the line |
+
+On macOS, `Cmd+←` / `Cmd+→` work when the terminal maps them to `Ctrl+A` /
+`Ctrl+E` or to Home / End (iTerm2's *Natural Text Editing* preset does).
+Option+arrows need Option to act as Meta/Esc+ in terminals that do not send
+a word-movement sequence on their own (Terminal.app does by default).
+
+`Home` and `End` are shared with the chat: with an **empty** draft they
+scroll it to the top / bottom (`scroll_home` / `scroll_end`), and with text
+in the composer they move the cursor. `PgUp` / `PgDn`, `Shift+↑` / `↓` and
+the wheel scroll the chat at any time. Remapping `scroll_home` or
+`scroll_end` to another key makes it fire regardless of the draft.
+
+An Option/Alt chord arrives as `Esc` followed by a key. Such a pair is never
+treated as the `Esc` key: it does not cancel a run or count towards the
+double-`Esc` rewind, and a chord with no meaning is ignored.
 
 ## Ctrl+C and Ctrl+Q
 
@@ -72,9 +101,19 @@ finishes (persisted with the session, so it survives resume).
 
 ## Reasoning effort cycle
 
-Press `Ctrl+E` to cycle the reasoning effort
+Press `Ctrl+R` to cycle the reasoning effort
 `off → low → medium → high → xhigh → max → off`. The header shows the
 current level (`effort: high`, dim `· effort off` when unset), the value
 is persisted like `/reasoning-effort`, and it applies from the *next*
-turn — an in-flight run keeps the level it started with. `Ctrl+E` only
+turn — an in-flight run keeps the level it started with. `Ctrl+R` only
 changes the *level*; `Ctrl+T` owns the show/hide axis.
+
+This was `Ctrl+E` before, which is also "end of line" (and what `Cmd+→`
+sends in some terminals), so the cursor never moved. To keep the old key:
+
+```toml
+[keys]
+cycle_reasoning_effort = "c-e"    # Ctrl+E no longer moves to the end of the line
+```
+
+In the classic REPL the cycle stays on `Ctrl+E`, on an empty prompt only.

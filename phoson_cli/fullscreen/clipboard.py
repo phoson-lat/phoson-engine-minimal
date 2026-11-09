@@ -16,17 +16,24 @@ image-paste, but most clipboard contents are text, not images — a
 clipboard with text and no image must still paste that text rather
 than silently doing nothing (``PhosonApp.paste_image`` tries
 :func:`read_clipboard_image` first, then :func:`read_clipboard_text`).
+
+The write side (:func:`write_clipboard_text`) backs drag-to-copy in the
+chat pane: the platform's copy tool when there is one, else — and over SSH
+— an OSC 52 escape that the user's own terminal turns into a clipboard
+write.
 """
 
 import os
 import sys
 import uuid
+import base64
 import shutil
 import asyncio
 import tempfile
 import mimetypes
 from typing import Any
 from pathlib import Path
+from collections.abc import Callable
 
 from ..attachments import provider_compat_warning
 
@@ -184,6 +191,98 @@ async def read_clipboard_text() -> str | None:
         return None
 
 
+# ── Write side (drag-to-copy in the chat pane) ───────────────────────────────
+
+#: Largest base64 payload sent in an OSC 52 sequence. Terminals cap or drop
+#: longer ones (xterm at ~100 KB by default; tmux and screen lower still).
+OSC52_MAX_BASE64 = 100_000
+
+
+def _over_ssh() -> bool:
+    return bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
+
+
+def _copy_command() -> list[str] | None:
+    """Pick the clipboard-write command (text on stdin), if any."""
+    if _is_macos() and shutil.which("pbcopy"):
+        return ["pbcopy"]
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        return ["wl-copy"]
+    if os.environ.get("DISPLAY"):
+        if shutil.which("xclip"):
+            return ["xclip", "-selection", "clipboard", "-in"]
+        if shutil.which("xsel"):
+            return ["xsel", "--clipboard", "--input"]
+    if shutil.which("clip.exe"):  # Windows, and WSL reaching the host
+        return ["clip.exe"]
+    return None
+
+
+async def _run_copy_command(command: list[str], text: str) -> bool:
+    """Feed *text* to *command*'s stdin; True when it exited cleanly."""
+    # clip.exe reads the console code page unless it is given UTF-16.
+    data = text.encode("utf-16" if command[0] == "clip.exe" else "utf-8")
+    try:
+        # No pipes on stdout/stderr: xclip stays alive to serve the
+        # selection and would otherwise keep them (and us) open.
+        proc = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(data), timeout=2.0)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False
+    except OSError:
+        return False
+    return proc.returncode == 0
+
+
+def osc52_sequence(text: str) -> str | None:
+    """The OSC 52 "set clipboard" escape for *text*, or ``None`` if too big.
+
+    Inside tmux the sequence is sent twice: as is (taken by tmux itself when
+    ``set-clipboard on``) and wrapped in tmux's DCS passthrough (forwarded
+    to the outer terminal when ``allow-passthrough on``).
+    """
+    payload = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    if len(payload) > OSC52_MAX_BASE64:
+        return None
+    sequence = f"\x1b]52;c;{payload}\x07"
+    if os.environ.get("TMUX"):
+        wrapped = sequence.replace("\x1b", "\x1b\x1b")
+        return f"{sequence}\x1bPtmux;{wrapped}\x1b\\"
+    return sequence
+
+
+async def write_clipboard_text(
+    text: str, write_raw: Callable[[str], None] | None = None
+) -> bool:
+    """Put *text* on the system clipboard; True if some channel took it.
+
+    The platform tool (``pbcopy``, ``wl-copy``, ``xclip``/``xsel``,
+    ``clip.exe``) is used when there is one — it has no size limit and works
+    in every terminal — except over SSH, where it would fill the *remote*
+    machine's clipboard. There, and whenever no tool is available or it
+    fails, the text goes out as an OSC 52 escape through *write_raw* (the
+    terminal's output), which the user's own terminal turns into a clipboard
+    write — also through SSH and tmux. OSC 52 is write-only from here, so
+    its delivery cannot be confirmed: True then means "sent".
+    """
+    command = None if _over_ssh() else _copy_command()
+    if command is not None and await _run_copy_command(command, text):
+        return True
+    sequence = osc52_sequence(text) if write_raw is not None else None
+    if sequence is None or write_raw is None:
+        return False
+    write_raw(sequence)
+    return True
+
+
 async def paste_image_from_clipboard(
     app: Any,
 ) -> None:
@@ -243,4 +342,6 @@ __all__ = [
     "read_clipboard_text",
     "macos_image_tool_hint",
     "paste_image_from_clipboard",
+    "osc52_sequence",
+    "write_clipboard_text",
 ]
