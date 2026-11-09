@@ -73,6 +73,10 @@ client therefore speaks exactly the protocol of local Desktop.
 
 ## Protocol
 
+Building a client? Read [../remote-client.md](../remote-client.md): the
+handshake, sessions, streamed events, confirmations, reconnection and a
+minimal TypeScript client.
+
 Connect to `ws://host:port/v1` (`wss://` with TLS). The gateway handles these
 methods itself. Every other method goes to the workspace's bridge (see
 `phoson_bridge/server.py` for the full list: `turn.run`, `turn.cancel`,
