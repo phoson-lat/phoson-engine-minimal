@@ -6,23 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## Unreleased
+## v0.64.0 (2026-11-09)
+
+Remote access from Phoson Desktop and the mobile app, text selection with the mouse, and editing keys that work in the prompt.
 
 ### Feat
 
+- **remote**: `phoson-cli serve` lets another device use this machine's phoson-cli: Phoson Desktop in remote mode, or the mobile app. The agent, your files, your configuration and your API keys stay on this machine.
+  - Install it once with `phoson-cli extras install remote`.
+  - A device pairs once with a short-lived code (`phoson-cli remote pair`, or `serve --pair`) and gets its own token; `remote devices` lists them and `remote revoke <id>` removes one.
+  - The server listens on loopback by default. Another address needs TLS (`--tls-cert`, `--tls-key`) or `--allow-plaintext` for a network that already encrypts, such as Tailscale.
+  - A paired device can do everything you can do in the terminal. Pair only devices you control. ([#319](https://github.com/phoson-lat/phoson-engine-minimal/pull/319))
+- **remote**: `remote pair` and `serve --pair` draw a QR code to scan with the mobile app (`--no-qr` hides it). The code carries an address the phone can reach: this machine's LAN address when serving on `0.0.0.0`, or the one you pass with `--public-url`.
+  - Web pages cannot pair, and the mobile app (React Native) can: a connection may pair only with no `Origin`, with the server's own address as `Origin`, or with one listed in `--allow-origin`. ([#320](https://github.com/phoson-lat/phoson-engine-minimal/pull/320))
+- **bridge**: the JSON-RPC bridge Phoson Desktop talks to (`phoson-cli bridge`) now ships with the engine, so the protocol and the CLI are always the same version. ([#319](https://github.com/phoson-lat/phoson-engine-minimal/pull/319))
 - **cli**: drag over the chat to select text; it is copied to the clipboard when you release the button, with a `Copied N chars` message under the prompt.
   - Dragging past the top or bottom edge scrolls, a double click selects a word and a triple click a line. A plain click copies nothing.
   - The copy uses `pbcopy`, `wl-copy`, `xclip`/`xsel` or `clip.exe`, and an OSC 52 escape over SSH or when no tool is installed (inside tmux: `set-clipboard on`).
   - The selection clears on the next click or on `Esc`. Rendered lines are copied as shown, so a wrapped paragraph comes out as several lines.
-  - `Shift+Drag` still gives you the terminal's own selection. `mouse_selection = false` (or `PHOSON_MOUSE_SELECTION=0`) turns the in-app one off.
+  - `Shift+Drag` still gives you the terminal's own selection. `mouse_selection = false` (or `PHOSON_MOUSE_SELECTION=0`) turns the in-app one off. ([#321](https://github.com/phoson-lat/phoson-engine-minimal/pull/321))
 
 ### Fix
 
 - **cli**: the editing keys work in the composer again. Option/Alt+Left and Right (and Ctrl+Left/Right) jump by word, Home/End and Ctrl+A/Ctrl+E go to the start and end of the line (which is also what Cmd+Left/Right send in iTerm2's natural text editing), and Option+Backspace deletes a word instead of typing a stray letter.
   - Home and End scroll the chat only while the draft is empty.
-  - An Option/Alt key combination is never read as `Esc`: it does not cancel a run or start a rewind.
-- **cli**: the reasoning effort cycle moved from `Ctrl+E` to `Ctrl+R`, so `Ctrl+E` is "end of line" and no longer changes (and saves) the effort. To keep the old key, set `cycle_reasoning_effort = "c-e"` under `[keys]`. The classic REPL keeps `Ctrl+E`, on an empty prompt only.
-- **cli**: resizing the window with a long conversation no longer re-renders it for every column; the chat is laid out once when the size settles.
+  - An Option/Alt key combination is never read as `Esc`: it does not cancel a run or start a rewind. ([#321](https://github.com/phoson-lat/phoson-engine-minimal/pull/321))
+- **cli**: the reasoning effort cycle moved from `Ctrl+E` to `Ctrl+R`, so `Ctrl+E` is "end of line" and no longer changes (and saves) the effort. To keep the old key, set `cycle_reasoning_effort = "c-e"` under `[keys]`. The classic REPL keeps `Ctrl+E`, on an empty prompt only. ([#321](https://github.com/phoson-lat/phoson-engine-minimal/pull/321))
+- **cli**: resizing the window with a long conversation no longer re-renders it for every column; the chat is laid out once when the size settles. ([#321](https://github.com/phoson-lat/phoson-engine-minimal/pull/321))
 
 ## v0.63.0 (2026-11-08)
 
