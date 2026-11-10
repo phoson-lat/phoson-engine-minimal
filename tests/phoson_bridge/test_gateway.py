@@ -211,9 +211,7 @@ async def test_bridge_exit_is_reported_and_restarted(gateway: G.Gateway, store) 
     await conn.close()
 
 
-async def test_websocket_server_refuses_browsers_and_other_paths(
-    store, tmp_path: Path
-) -> None:
+async def test_websocket_server_origins_and_paths(store, tmp_path: Path) -> None:
     pytest.importorskip("websockets")
     from websockets.exceptions import InvalidStatus
     from websockets.asyncio.client import connect
@@ -224,25 +222,82 @@ async def test_websocket_server_refuses_browsers_and_other_paths(
     while not ports:
         await asyncio.sleep(0.02)
     base = f"ws://127.0.0.1:{ports[0]}"
+
+    async def first_reply(headers: dict, method: str, **params) -> dict:
+        async with connect(f"{base}/v1", additional_headers=headers) as ws:
+            request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+            await ws.send(json.dumps(request))
+            return json.loads(await ws.recv())
+
     try:
         info = json.loads(G.server_info_path().read_text())
         assert info["url"] == f"{base}/v1"
-        for url, headers, status in (
-            (f"{base}/v1", {"Origin": "https://evil.example"}, 403),
-            (f"{base}/other", {}, 404),
-        ):
-            with pytest.raises(InvalidStatus) as caught:
-                async with connect(url, additional_headers=headers):
-                    pass
-            assert caught.value.response.status_code == status
-        async with connect(f"{base}/v1") as ws:
-            await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "nope"}))
-            assert json.loads(await ws.recv())["error"]["code"] == -32001
+        with pytest.raises(InvalidStatus) as caught:
+            async with connect(f"{base}/other"):
+                pass
+        assert caught.value.response.status_code == 404
+        assert (await first_reply({}, "nope"))["error"]["code"] == -32001
+
+        # React Native sends Origin = the server URL (ws -> http): may pair.
+        code, _ = store.create_pairing_code()
+        rn = {"Origin": f"http://127.0.0.1:{ports[0]}"}
+        paired = await first_reply(rn, "gateway.pair", code=code, deviceName="rn")
+        token = paired["result"]["token"]
+
+        # A web page elsewhere connects, but cannot pair...
+        evil = {"Origin": "https://evil.example"}
+        code2, _ = store.create_pairing_code()
+        refused = await first_reply(evil, "gateway.pair", code=code2)
+        assert "not allowed from this origin" in refused["error"]["message"]
+        # ...and the code is still usable by the real app.
+        assert store.consume_pairing_code(code2)
+        # A device token works whatever the origin (the user's own credentials).
+        assert "result" in await first_reply(evil, "gateway.auth", token=token)
     finally:
         server.cancel()
         with pytest.raises(asyncio.CancelledError):
             await server
     assert not G.server_info_path().exists()
+
+
+def test_origin_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(G, "lan_addresses", lambda: ["192.168.1.203"])
+    config = G.GatewayConfig(host="0.0.0.0", port=7337, default_workspace=tmp_path)
+    policy = G.origin_policy
+    host = "192.168.1.203:7337"
+    # Native clients and scripts send no Origin.
+    assert policy(config, None, host) == "trusted"
+    # React Native: Origin is the server URL (iOS and Android map ws -> http).
+    assert policy(config, "http://192.168.1.203:7337", host) == "trusted"
+    assert policy(config, "http://localhost:7337", "localhost:7337") == "trusted"
+    tls = G.GatewayConfig(host="0.0.0.0", default_workspace=tmp_path)
+    assert policy(tls, "https://192.168.1.203", "192.168.1.203", tls=True) == "trusted"
+    # A different site, or a mismatched port: token only.
+    assert policy(config, "https://evil.example", host) == "token-only"
+    assert policy(config, "http://192.168.1.203:8080", host) == "token-only"
+    assert policy(config, "null", host) == "token-only"
+    # DNS rebinding: Origin matches Host, but Host is not one of our names.
+    assert policy(config, "http://evil.example:7337", "evil.example:7337") == (
+        "token-only"
+    )
+    # Names given by the operator.
+    named = G.GatewayConfig(
+        host="0.0.0.0",
+        default_workspace=tmp_path,
+        public_url="wss://box.tail.ts.net/v1",
+        allowed_hosts=("phoson.home",),
+    )
+    assert (
+        policy(named, "https://box.tail.ts.net", "box.tail.ts.net", tls=True)
+        == "trusted"
+    )
+    assert policy(named, "http://phoson.home:7337", "phoson.home:7337") == "trusted"
+    allow = G.GatewayConfig(
+        default_workspace=tmp_path, allowed_origins=("http://localhost:8081",)
+    )
+    assert policy(allow, "http://localhost:8081", "127.0.0.1:7337") == "trusted"
+    anyone = G.GatewayConfig(default_workspace=tmp_path, allow_any_origin=True)
+    assert policy(anyone, "https://evil.example", host) == "trusted"
 
 
 def test_remote_cli_pairs_lists_and_revokes(
@@ -268,3 +323,40 @@ def test_remote_cli_pairs_lists_and_revokes(
     assert run_remote(["revoke", device.id]) == 1
     assert run_serve(["--help"]) == 0
     assert "--allow-plaintext" in capsys.readouterr().out
+
+
+def test_pairing_qr_decodes_back_to_the_matrix() -> None:
+    segno = pytest.importorskip("segno")
+    from phoson_bridge.cli import render_qr
+
+    link = "phoson://pair?code=W2NC-K3VN&url=ws%3A%2F%2F10.0.0.5%3A7337%2Fv1"
+    drawn = render_qr(link)
+    assert drawn is not None
+    rows = [line[len("\x1b[30;47m") : -len("\x1b[0m")] for line in drawn.split("\n")]
+    assert all(line.startswith("\x1b[30;47m") for line in drawn.split("\n"))
+    # Undo the half blocks: each character is two module rows.
+    halves = {"█": (1, 1), "▀": (1, 0), "▄": (0, 1), " ": (0, 0)}
+    modules = []
+    for row in rows:
+        modules.append([halves[ch][0] for ch in row])
+        modules.append([halves[ch][1] for ch in row])
+    expected = [[int(bool(c)) for c in r] for r in segno.make(link, error="m").matrix]
+    border = 2
+    size = len(expected)
+    inner = [r[border : border + size] for r in modules[border : border + size]]
+    assert inner == expected
+    # Quiet zone: light all around.
+    assert not any(modules[0]) and not any(r[0] for r in modules)
+
+
+def test_advertised_url_is_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(G, "lan_addresses", lambda: ["192.168.1.20"])
+    wildcard = G.GatewayConfig(host="0.0.0.0", port=7337)
+    assert wildcard.advertised_url() == "ws://192.168.1.20:7337/v1"
+    explicit = G.GatewayConfig(host="0.0.0.0", public_url="wss://box.tail.ts.net/v1")
+    assert explicit.advertised_url() == "wss://box.tail.ts.net/v1"
+    assert G.GatewayConfig(port=9).advertised_url() == "ws://127.0.0.1:9/v1"
+    with pytest.raises(G.ConfigError, match="public-url"):
+        G.check_config(
+            G.GatewayConfig(public_url="http://x", default_workspace=Path.cwd())
+        )

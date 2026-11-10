@@ -20,13 +20,20 @@ phoson-cli remote devices       # who is paired, and when they last connected
 phoson-cli remote revoke <id>   # that device can no longer connect
 ```
 
-`remote pair` also prints a `phoson://pair?...` link with the server address,
-for apps that scan a QR code. Codes are 8 characters. A wrong guess counts
+In a terminal, `remote pair` and `serve --pair` also draw a **QR code** to
+scan with the mobile app. It encodes a `phoson://pair?code=…&url=…` link,
+which is printed below the code as well (`--no-qr` hides the drawing). Codes
+are 8 characters. A wrong guess counts
 against every pending code, so they burn after 5 failed tries. Each address
 also gets only 5 failed attempts every 10 minutes. Only a hash of each device
 token is stored, in `~/.phoson/remote/devices.json`.
 
 ## Reaching the server
+
+The pairing link and QR code carry the address clients should dial. With
+`--host 0.0.0.0` that is this machine's LAN address. For anything else, such as
+a Tailscale or DNS name, a tunnel or a reverse proxy, pass it explicitly:
+`--public-url wss://box.tailnet.ts.net:7337/v1`.
 
 By default the server listens on loopback only, which is safe and useful
 through an SSH tunnel:
@@ -48,9 +55,21 @@ running commands and editing files, because it drives the same agent with the
 same permission rules. Pair only devices you control, and revoke a device you
 lose.
 
-Browser pages cannot connect: a request with an `Origin` header is refused
-unless you allow that origin with `--allow-origin`. This stops a web page from
-talking to a gateway on your machine.
+**Web pages cannot pair.** Every WebSocket client may send an `Origin` header,
+and React Native always does: it sends the server's own URL. A connection may
+pair only when it is **trusted**, which means one of:
+
+- it sends no `Origin` (scripts, native clients);
+- its `Origin` equals the `Host` it connected to, and that host is one of this
+  server's own names: its addresses, `localhost`, the `--public-url` host, or a
+  name given with `--allow-host`. Checking the host blocks DNS rebinding;
+- its `Origin` is listed with `--allow-origin` (repeatable), or the server runs
+  with `--allow-any-origin` (development only).
+
+Any other origin may still log in with a **device token**, because that is the
+user's own credential. A web page has no token, so it cannot pair. A refused
+pairing attempt counts toward the per-address limit and does not spend the
+code.
 
 ## How it works
 

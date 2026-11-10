@@ -71,9 +71,14 @@ with `phoson-cli remote devices`, and revoke one with `phoson-cli remote revoke
 - **Keepalive:** the server pings every 20 s and drops a peer that does not
   answer within 20 s. WebSocket libraries answer pings automatically; React
   Native's built-in `WebSocket` does too.
-- **No `Origin` header.** The gateway refuses browser connections, so a client
-  that sends `Origin` gets **403**. React Native does not send one. A web build
-  of the app would need the server started with `--allow-origin <origin>`.
+- **`Origin`.** React Native's `WebSocket` always sends one, equal to the server
+  URL (`ws://h:p` becomes `http://h:p`, and `wss://` becomes `https://`). The
+  gateway trusts that same-origin header when the host is one of the server's
+  own names: its IPs, `localhost`, `--public-url` or `--allow-host`. The app can
+  therefore pair and log in with no configuration. A connection from any other
+  origin may only `gateway.auth` with a token. Pairing from a web build of the
+  app (Expo web) needs `--allow-origin <that origin>` on the server. See
+  [cli/remote.md](cli/remote.md#reaching-the-server).
 
 ```jsonc
 // request
@@ -95,8 +100,10 @@ and a link:
 phoson://pair?code=W2NC-K3VN&url=ws%3A%2F%2F100.101.102.103%3A7337%2Fv1
 ```
 
-Render the link as a QR code on the server side, or let the user type the code
-and the URL. Codes are case- and separator-insensitive, single use, and expire
+`phoson-cli` draws this link as a **QR code** in the terminal, so the app's
+pairing screen should offer a QR scanner, with manual entry of the code and URL
+as a fallback. The `url` in the link is the server's advertised address: its LAN
+IP when it listens on `0.0.0.0`, or its `--public-url`. Codes are case- and separator-insensitive, single use, and expire
 after 10 minutes. A wrong guess counts against every pending code, so they
 burn after 5 failed tries.
 

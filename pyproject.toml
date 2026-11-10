@@ -121,6 +121,7 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=1.3.0",
     "websockets>=13.0",
+    "segno>=1.6",
     "pyright>=1.1.400",
     "ruff>=0.15.12",
     # Conformance oracle only: tests decode the OTel plugin's exact OTLP/HTTP
@@ -160,7 +161,8 @@ stt = [
 ssh = ["asyncssh>=2.14.0"]
 # `phoson-cli serve`: the remote-access gateway (WebSocket) in front of the
 # JSON-RPC bridge. Pure Python; also bundled in the standalone binary.
-remote = ["websockets>=13.0"]
+# segno draws the pairing QR code in the terminal (pure Python, no deps).
+remote = ["websockets>=13.0", "segno>=1.6"]
 computeruse = [
     "mss>=10.0.0",
     "Pillow>=10.0.0",

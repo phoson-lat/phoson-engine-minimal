@@ -62,6 +62,7 @@ for pkg in (
     "qdrant_client",
     # Remote-access gateway (`phoson-cli serve`).
     "websockets",
+    "segno",
 ):
     try:
         HIDDEN_IMPORTS.extend(collect_submodules(pkg))

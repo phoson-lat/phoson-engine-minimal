@@ -111,8 +111,8 @@ EXTRAS: tuple[Extra, ...] = (
     Extra(
         "remote",
         "Remote access server (phoson-cli serve)",
-        ("websockets>=13.0",),
-        ("websockets",),
+        ("websockets>=13.0", "segno>=1.6"),
+        ("websockets", "segno"),
     ),
     Extra(
         "mcp",
