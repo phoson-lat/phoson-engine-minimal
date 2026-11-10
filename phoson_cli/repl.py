@@ -28,10 +28,12 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.styles import Style
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.completion import merge_completers
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.application.current import get_app
 
 from phoson_llm.schemas import REASONING_EFFORTS
 
@@ -211,7 +213,10 @@ class PhosonRepl(SessionFrontend):
         def _handle_ctrl_t(event: object) -> None:  # noqa: ARG001
             self._on_reasoning_toggle()
 
-        @key_bindings.add("c-e")
+        # Only on an empty prompt: with text, Ctrl+E is end-of-line.
+        @key_bindings.add(
+            "c-e", filter=Condition(lambda: not get_app().current_buffer.text)
+        )
         def _handle_ctrl_e(event: object) -> None:  # noqa: ARG001
             self._cycle_reasoning_effort()
 
@@ -307,7 +312,7 @@ class PhosonRepl(SessionFrontend):
     # ── Reasoning (Ctrl+T) ─────────────────────────────────────────────────
 
     def _cycle_reasoning_effort(self) -> None:
-        """Ctrl+E handler: cycle reasoning effort off → low → … → max.
+        """Ctrl+E (empty prompt) handler: cycle reasoning effort off → … → max.
 
         Mirrors the full-screen TUI (``fullscreen/state_cycles.py``): the
         level is persisted and applies from the next turn.

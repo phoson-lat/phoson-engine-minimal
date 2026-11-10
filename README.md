@@ -613,8 +613,8 @@ Plugins can register additional slash commands (see
 - **Key bindings** — remappable via `[keys]` in `~/.phoson/config.toml`
   (validated at startup); `Ctrl+T` toggles the live reasoning view →
   [docs/cli/keybindings.md](docs/cli/keybindings.md)
-- **Text selection & links** — `Shift+Drag` selects chat text natively;
-  markdown links render as clickable OSC 8 hyperlinks →
+- **Text selection & links** — drag over chat text to copy it (`Shift+Drag`
+  for the terminal's own selection); markdown links render as clickable OSC 8 hyperlinks →
   [docs/cli/mouse-and-links.md](docs/cli/mouse-and-links.md)
 - **`@file` mentions** — type `@` and the composer fuzzy-filters repo
   paths; on send, files are inlined (text) or become native media blocks

@@ -2,20 +2,75 @@
 
 ## Selecting/copying chat text
 
-The chat pane sets `mouse_support=True` so the scroll wheel is handled by
-the app — this is a terminal-level mouse-tracking switch (xterm's own
-DECSET 1000/1002/1006 modes), not something the app can opt out of
-selectively, and turning it on is what makes the terminal stop treating a
-plain click-drag as native text selection (every mouse-aware TUI —
-Claude Code, Pi, OpenCode — hits the same trade-off).
+**Drag over the chat to select text; it is copied to the system clipboard
+when you release the button.** The selection is shown in reverse video and a
+`Copied N chars` message under the prompt confirms the copy.
 
-Hold **Shift** while dragging to select text: this tells the *terminal
-itself* to ignore the app's mouse tracking for that gesture and fall back
-to its own native selection/copy, unaffected by whatever the app is doing
-(works in GNOME Terminal, iTerm2, Alacritty, WezTerm, Ghostty, kitty,
-Windows Terminal — check your terminal's docs if the modifier differs).
-The text-selection note lives in the full-screen app's key listing
-(``/keys``) — the footer itself is a 3-hint contextual bar.
+- Dragging past the top or bottom edge of the chat scrolls it, so a
+  selection can span more than one screen.
+- A double click selects a word, a triple click the whole line.
+- A plain click (no drag) never touches the clipboard.
+- The selection clears on the next click, on `Esc`, and when the lines it
+  covers are laid out again (a resize, a theme change, `/clear`, or new
+  output replacing the part of the in-flight answer it covers). Output
+  appended below a selection leaves it alone.
+- `Esc` with a selection showing only clears it — it does not count as the
+  first `Esc` of the double-`Esc` rewind. While a turn is running, `Esc`
+  clears the selection *and* cancels the turn: stopping a run is never
+  held back by a highlight.
+
+What is copied is the text as rendered: no colors or link escapes, no
+trailing padding, lines joined with a newline. Two consequences of copying
+rendered lines:
+
+- a paragraph that was soft-wrapped to the pane width is copied as the
+  separate lines it is displayed in;
+- frame characters of a card or panel (`│`, `╭─`) inside the dragged range
+  are copied along with the text.
+
+For a copy without those, use the terminal's own selection (below).
+
+### How the copy reaches the clipboard
+
+The platform's copy tool is used when there is one: `pbcopy` on macOS,
+`wl-copy` on Wayland, `xclip` or `xsel` on X11, `clip.exe` on Windows and
+WSL. Over SSH — where such a tool would fill the *remote* machine's
+clipboard — and whenever no tool is available, the text is sent as an
+OSC 52 escape sequence, which your own terminal turns into a clipboard
+write. That works in iTerm2 (enable *Settings → General → Selection →
+Applications in terminal may access clipboard*), kitty, WezTerm, Ghostty,
+Alacritty, foot and Windows Terminal; macOS Terminal.app ignores OSC 52.
+Inside tmux, set `set -g set-clipboard on` (or `allow-passthrough on`).
+OSC 52 is limited to about 75 KB of text; a larger selection needs a copy
+tool.
+
+### The terminal's own selection
+
+Hold **Shift** while dragging to select with the terminal instead: this
+tells the *terminal itself* to ignore the app's mouse tracking for that
+gesture and fall back to its native selection/copy (GNOME Terminal, iTerm2,
+Alacritty, WezTerm, Ghostty, kitty, Windows Terminal; macOS Terminal.app
+uses **Fn** — check your terminal's docs if the modifier differs). The
+native selection knows nothing about the app's layout: it only covers what
+is on screen.
+
+### Turning it off
+
+```toml
+mouse_selection = false      # drags over the chat do nothing in-app
+```
+
+Or `PHOSON_MOUSE_SELECTION=0`. The wheel keeps scrolling the chat and
+Shift+drag keeps selecting natively.
+
+### Why the app handles the drag
+
+The chat pane sets `mouse_support=True` so the scroll wheel is handled by
+the app. That is a terminal-level mouse-tracking switch (xterm's DECSET
+1000/1002/1003/1006 modes), not something the app can opt out of
+selectively: once it is on, the terminal reports a plain click-drag to the
+app instead of selecting text (every mouse-aware TUI hits the same
+trade-off). So the app implements the selection itself.
 
 ## Clickable hyperlinks
 

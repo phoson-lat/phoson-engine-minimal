@@ -251,7 +251,7 @@ class HeaderModel:
         if float(cost) > 0:
             segments.append(_Segment("cost", f"${cost}", "header_dim"))
         # Permission-mode chip (T-6): accent for *ask* (confirmations are
-        # coming), dim for auto. Effort chip (Ctrl+E): accent when set.
+        # coming), dim for auto. Effort chip (Ctrl+R): accent when set.
         segments.append(
             _Segment(
                 "mode", perm_mode, "header" if perm_mode == "ask" else "header_dim"
@@ -311,8 +311,14 @@ class HeaderModel:
         """
         app = self.app
         below = app._chat_pane.lines_below() if not app._auto_scroll else 0
+        footer_flash = getattr(app, "footer_flash", None)
+        flash = footer_flash() if callable(footer_flash) else None
         if exit_armed(app):
             hint = _FOOTER_HINT_EXIT_ARMED
+        elif flash:
+            # A short confirmation (e.g. "Copied 24 chars") takes the hints'
+            # place for a moment.
+            hint = str(flash)
         elif below and app._active_float is None:
             # Scrolled up: say how much is below and how to get back.
             hint = f"↓ {below} more lines  ·  end to follow"

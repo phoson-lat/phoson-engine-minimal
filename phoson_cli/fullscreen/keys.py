@@ -19,11 +19,13 @@ hard error at startup, never a silent fallback to the defaults) and
 passed into :func:`build_key_bindings` as ``overrides``.
 """
 
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any
 
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.bindings.mouse import load_mouse_bindings
 from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
 
 if TYPE_CHECKING:
@@ -47,14 +49,21 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     "page_down": ["pagedown"],
     "line_up": ["s-up", "c-up"],
     "line_down": ["s-down", "c-down"],
+    # Home/End scroll the chat only while the draft is empty; with text in
+    # the composer they are line-editing keys (see ``_DRAFT_EDITING_KEYS``).
     "scroll_home": ["home"],
     "scroll_end": ["end"],
     "clear": ["c-l"],
     "toggle_reasoning": ["c-t"],
-    # Ctrl+E cycles the reasoning effort off → low → medium → high →
-    # xhigh → max (mnemonic: E = effort). Ctrl+T stays the show/hide
-    # toggle for the reasoning block — the two are different axes.
-    "cycle_reasoning_effort": ["c-e"],
+    # Ctrl+R cycles the reasoning effort off → low → medium → high →
+    # xhigh → max (mnemonic: R = reasoning, next to Ctrl+T). Ctrl+T stays
+    # the show/hide toggle for the reasoning block — the two are different
+    # axes. It used to be Ctrl+E, which is readline's end-of-line (and what
+    # Cmd+Right sends in iTerm2's "Natural Text Editing" preset): an
+    # app-level binding wins over the composer's editing keys, so the cursor
+    # never moved and the effort changed instead. Ctrl+R is free: reverse
+    # history search needs a search toolbar the composer does not have.
+    "cycle_reasoning_effort": ["c-r"],
     "ctrl_d": ["c-d"],
     "paste_image": ["c-v"],
     "escape": ["escape"],
@@ -81,6 +90,32 @@ DEFAULT_KEY_BINDINGS: dict[str, list[str]] = {
     # twice, or remap it under [keys].
     "background": ["c-b"],
 }
+
+#: Default sequences that are also line-editing keys in the composer. While
+#: the draft has text they are left to the focused ``TextArea`` (start/end
+#: of line); with an empty draft — where editing has nothing to act on —
+#: they run the app action. Only the *default* binding of the listed action
+#: is gated: a user remap is an explicit choice and always fires.
+_DRAFT_EDITING_KEYS: dict[str, frozenset[str]] = {
+    "scroll_home": frozenset({"home"}),
+    "scroll_end": frozenset({"end"}),
+}
+
+#: Keys that, queued right behind an ``Esc`` in the same read, mean the pair
+#: was one Alt/Option chord encoded as ``ESC`` + the key's own sequence
+#: (``ESC ESC [ D``: Option+Left where the terminal prefixes Esc).
+ESC_PREFIXED_NAVIGATION_KEYS: frozenset[Keys] = frozenset(
+    {
+        Keys.Left,
+        Keys.Right,
+        Keys.Up,
+        Keys.Down,
+        Keys.Home,
+        Keys.End,
+        Keys.Delete,
+        Keys.ControlH,  # Backspace sent as ^H: ``ESC ^H`` is Alt+Backspace
+    }
+)
 
 #: Modified-Enter encodings that insert a newline, decoded as ``c-j`` (the
 #: ``newline`` action's key — Ctrl+Enter is ``\n`` on many terminals anyway).
@@ -277,11 +312,15 @@ def build_key_bindings(
             f"Conflicting key bindings in [keys]: {exc}"
         ) from exc
 
+    draft_empty = Condition(lambda: app._prompt_input.text == "")
+    lone_escape = Condition(lambda: not app._is_prefixed_escape())
+
     for action, sequences in bindings.items():
         if not sequences:
             continue  # unbound action — the handler is dropped
         method_name = _ACTION_HANDLERS[action]
         method = getattr(app, method_name)
+        is_default = DEFAULT_KEY_BINDINGS.get(action) == sequences
 
         def _handler(event: object, _m=method) -> None:  # noqa: ARG001
             _m()
@@ -292,11 +331,80 @@ def build_key_bindings(
                 # during a run is never swallowed as a prefix of a
                 # longer sequence, and so the single-Esc run cancel
                 # (#68) always fires immediately.
-                kb.add(*sequence.split(), eager=True)(_handler)  # type: ignore[call-overload]
+                #
+                # The one exception: an Esc that arrived glued to another
+                # key (``ESC b``, ``ESC DEL``, ``ESC [1;3D``… — Option/Alt
+                # chords) is not a deliberate Esc. Eager would run this
+                # handler and leave the second key to be typed as text, so
+                # for that Esc the binding is *not* eager and prompt_toolkit
+                # matches the two-key editing binding instead
+                # (``escape b`` → word left).
+                kb.add(*sequence.split(), eager=lone_escape)(_handler)  # type: ignore[call-overload]
+            elif is_default and sequence in _DRAFT_EDITING_KEYS.get(action, ()):
+                kb.add(*sequence.split(), filter=draft_empty)(_handler)  # type: ignore[call-overload]
             else:
                 kb.add(*sequence.split())(_handler)  # type: ignore[call-overload]
+    _add_alt_chord_fallback(kb)
     _add_shell_mode_bindings(app, kb)
+    _add_selection_drag_binding(app, kb)
     return kb
+
+
+#: An SGR (DECSET 1006) mouse report: ``ESC [ < code ; x ; y`` + ``M``/``m``.
+_SGR_MOUSE_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])\Z")
+#: Modifier bits of an SGR mouse code (Shift 4, Alt 8, Ctrl 16).
+_SGR_MODIFIERS = 0b11100
+_SGR_LEFT_DRAG = 32
+_SGR_MOTION_NO_BUTTON = 35
+
+
+def _add_selection_drag_binding(app: "PhosonApp", kb: KeyBindings) -> None:
+    """Keep a chat-pane text selection going when the pointer leaves the pane.
+
+    prompt_toolkit routes each mouse report to whatever window is under the
+    pointer, so a drag that wanders over the header or the composer — or is
+    released there — would never reach the chat pane again. While a
+    selection is in progress the reports are taken here first and handed to
+    the pane with their screen position (which it clamps, auto-scrolling
+    past its top/bottom edge). Anything that is not part of the drag goes
+    to prompt_toolkit's own handler, as usual.
+    """
+    default = load_mouse_bindings().get_bindings_for_keys((Keys.Vt100MouseEvent,))[-1]
+    pane = app._chat_pane
+
+    @kb.add(Keys.Vt100MouseEvent, filter=Condition(lambda: pane.selection_pending))
+    def _drag(event: Any) -> object:
+        match = _SGR_MOUSE_RE.match(event.data)
+        if match is None:
+            return default.handler(event)
+        code, x, y = int(match[1]), int(match[2]) - 1, int(match[3]) - 1
+        button = code & ~_SGR_MODIFIERS
+        if match[4] == "m" or button == _SGR_MOTION_NO_BUTTON:
+            # Released (or moving with no button: the release got lost).
+            return pane.finish_selection()
+        if button == _SGR_LEFT_DRAG:
+            return pane.drag_selection(x, y)
+        return default.handler(event)
+
+
+def _add_alt_chord_fallback(kb: KeyBindings) -> None:
+    """Swallow an Alt/Option chord that no editing binding claims.
+
+    With the escape binding not eager for a glued ``ESC`` + key (see
+    :func:`build_key_bindings`), a chord with no binding of its own
+    (Alt+Q, Alt+Up…) would fall back to the lone ``escape`` handler — and
+    cancel the run or arm the double-Esc rewind (#108). This catch-all
+    takes those pairs instead; a specific binding (``escape b``) always
+    wins over a wildcard one.
+    """
+    not_a_chord = (Keys.BracketedPaste, Keys.Vt100MouseEvent, Keys.CPRResponse)
+
+    @kb.add("escape", Keys.Any)
+    def _ignore_alt_chord(event: Any) -> None:
+        follower = event.key_sequence[-1]
+        if follower.key in not_a_chord:
+            # A paste / mouse report read together with an Esc: hand it back.
+            event.key_processor.feed(follower, first=True)
 
 
 def _add_shell_mode_bindings(app: "PhosonApp", kb: KeyBindings) -> None:

@@ -197,6 +197,11 @@ class PhosonConfig:
     # runtime with ``/warnings off``; persisted via ``show_warnings`` in
     # config.toml or the PHOSON_SHOW_WARNINGS env var.
     show_warnings: bool = True
+    # Full-screen TUI: click-drag over the chat selects text in-app and
+    # copies it on release. ``False`` leaves drags alone (the terminal's own
+    # Shift+drag selection keeps working either way). ``mouse_selection`` in
+    # config.toml or the PHOSON_MOUSE_SELECTION env var.
+    mouse_selection: bool = True
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
     tool_budget_tokens: int = 8000
@@ -1130,6 +1135,9 @@ def load_config() -> PhosonConfig:
         ).lower(),
         show_warnings=_resolve_bool(
             "PHOSON_SHOW_WARNINGS", "show_warnings", fd, d.show_warnings
+        ),
+        mouse_selection=_resolve_bool(
+            "PHOSON_MOUSE_SELECTION", "mouse_selection", fd, d.mouse_selection
         ),
         enable_mcp=_resolve_bool("PHOSON_ENABLE_MCP", "enable_mcp", fd, d.enable_mcp),
         mcp_config_file=Path(

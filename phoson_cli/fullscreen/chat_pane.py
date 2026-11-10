@@ -19,13 +19,19 @@ The ptk ``Window`` object (``PhosonApp._chat_window``) is created by
 import os
 import time
 import shutil
+import asyncio
 import logging
 from typing import Any
 from collections.abc import Callable
 
 from prompt_toolkit import Application
-from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
-from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.mouse_events import MouseEvent, MouseButton, MouseEventType
+from prompt_toolkit.formatted_text import (
+    ANSI,
+    FormattedText,
+    AnyFormattedText,
+    to_formatted_text,
+)
 from prompt_toolkit.layout.margins import Margin
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.layout.containers import Window
@@ -37,6 +43,26 @@ from .render import (
     render_chat_parts,
     windowed_slice_parts,
 )
+from .selection import (
+    Selection,
+    cell_width,
+    plain_line,
+    word_cells,
+    selected_text,
+    highlight_window,
+)
+
+#: A second press on the same cell within this window is a double click
+#: (select the word); a third one selects the line.
+_MULTI_CLICK_SECONDS = 0.4
+#: A screen column past any line's end ("select to the end of the line").
+_END_OF_LINE = 1 << 20
+#: Scroll step interval while a drag rests past the pane's top/bottom edge.
+_EDGE_SCROLL_SECONDS = 0.05
+#: A new width is laid out once it has been stable this long (a window-edge
+#: drag changes it once per column), for transcripts at least this long.
+_RESIZE_DEBOUNCE_SECONDS = 0.1
+_RESIZE_DEBOUNCE_MIN_LINES = 400
 
 # ── Perf logging (T-14 / I-84) ───────────────────────────────────────────────
 
@@ -263,6 +289,23 @@ class ChatPane:
         # Immutable transcript blocks render to ANSI/FormattedText once per width.
         self._block_ansi_cache = BlockAnsiCache()
         self._block_ft_cache = BlockFormattedTextCache()
+        # Drag-to-select state (see the "Drag-to-select" section below).
+        self._selection: Selection | None = None
+        self._sel_anchor: tuple[int, int] | None = None  # set while a button is down
+        self._sel_dragging = False
+        self._sel_click: tuple[float, tuple[int, int] | None, int] = (0.0, None, 0)
+        self._sel_fingerprint: tuple[object, ...] = ()
+        self._sel_epoch = -1
+        self._sel_edge = 0  # -1 / +1 while the pointer is past the top / bottom
+        self._sel_x = self._sel_y = 0
+        self._sel_edge_task: asyncio.Task | None = None
+        self._sel_overlay: AnyFormattedText = ""
+        self._sel_overlay_source: ANSI | None = None
+        self._sel_overlay_key: tuple[object, ...] | None = None
+        # Resize debounce: the width a re-layout is waiting for, and since when.
+        self._resize_width = 0
+        self._resize_since = 0.0
+        self._resize_timer: asyncio.TimerHandle | None = None
 
     # ── Lazy views onto the owning app ─────────────────────────────────────
 
@@ -399,21 +442,262 @@ class ChatPane:
         self._auto_scroll = True
         self.invalidate()
 
-    def on_chat_mouse(self, mouse_event: MouseEvent) -> object:
+    def _scroll_by(self, delta: int) -> None:
+        """Scroll *delta* lines (negative = up), following again at the end."""
         current = self.get_effective_scroll()
         max_scroll = max(0, self._total_chat_lines - self.get_visible_window_height())
-        if mouse_event.event_type == MouseEventType.SCROLL_UP:
+        if delta < 0:
             self._auto_scroll = False
-            self._chat_scroll_top = max(0, current - 3)
+            self._chat_scroll_top = max(0, current + delta)
+        elif current + delta >= max_scroll:
+            self._auto_scroll = True
+            self._chat_scroll_top = max_scroll
+        else:
+            self._chat_scroll_top = current + delta
+
+    def on_chat_mouse(self, mouse_event: MouseEvent) -> object:
+        event_type = mouse_event.event_type
+        if event_type == MouseEventType.SCROLL_UP:
+            self._scroll_by(-3)
             return None
-        if mouse_event.event_type == MouseEventType.SCROLL_DOWN:
-            if current + 3 >= max_scroll:
-                self._auto_scroll = True
-                self._chat_scroll_top = max_scroll
-            else:
-                self._chat_scroll_top = current + 3
+        if event_type == MouseEventType.SCROLL_DOWN:
+            self._scroll_by(3)
             return None
+        if not self.selection_enabled:
+            return NotImplemented
+        x, y = mouse_event.position.x, mouse_event.position.y
+        if event_type == MouseEventType.MOUSE_DOWN:
+            if mouse_event.button in (MouseButton.LEFT, MouseButton.UNKNOWN):
+                return self.begin_selection(x, y)
+            return NotImplemented
+        if event_type == MouseEventType.MOUSE_MOVE:
+            # Motion is only a drag while a button is held (terminals in
+            # any-motion mode also report plain hovering).
+            if mouse_event.button in (MouseButton.LEFT, MouseButton.UNKNOWN):
+                return self.drag_selection(x, y)
+            return NotImplemented
+        if event_type == MouseEventType.MOUSE_UP:
+            return self.finish_selection()
         return NotImplemented
+
+    # ── Drag-to-select (see ``selection.py``) ──────────────────────────────
+    #
+    # A press in the pane arms a selection, dragging extends it (auto-
+    # scrolling past the top/bottom edge) and the release copies its text.
+    # Points are ``(transcript line, cell)``, so the range survives scrolling
+    # and appended blocks; anything that re-lays the lines out drops it
+    # (:meth:`_selection_is_stale`).
+
+    @property
+    def selection_enabled(self) -> bool:
+        config = getattr(self.app, "_config", None)
+        return bool(getattr(config, "mouse_selection", True))
+
+    @property
+    def selection(self) -> Selection | None:
+        return self._selection
+
+    @property
+    def selection_pending(self) -> bool:
+        """A button went down in the pane and has not been released yet."""
+        return self._sel_anchor is not None
+
+    def _window_origin(self) -> tuple[int, int]:
+        """Screen ``(x, y)`` of the pane's top-left cell."""
+        info = getattr(getattr(self.app, "_chat_window", None), "render_info", None)
+        return getattr(info, "_x_offset", 0), getattr(info, "_y_offset", 0)
+
+    def _current_top(self) -> int:
+        """Transcript line shown on the pane's first row (as ``render_chat``)."""
+        height = self.get_visible_window_height()
+        total = self._total_chat_lines
+        scroll = self.get_effective_scroll()
+        return max(0, min(scroll, total - height)) if total >= height else 0
+
+    def _point_at(self, x: int, y: int) -> tuple[int, int]:
+        """The ``(transcript line, cell)`` under screen position ``(x, y)``,
+        clamped into the pane."""
+        left, top_row = self._window_origin()
+        row = max(0, min(y - top_row, self.get_visible_window_height() - 1))
+        line = max(0, min(self._current_top() + row, self._total_chat_lines - 1))
+        return line, max(0, x - left)
+
+    def _line_ansi(self, line: int) -> str:
+        """Rendered ANSI of transcript line *line* (from the cached text)."""
+        return windowed_slice_parts(
+            self._win_prefix,
+            self._win_prefix_bounds,
+            self._win_tail,
+            self._win_tail_bounds,
+            line,
+            1,
+        )
+
+    def _layout_fingerprint(self) -> tuple[object, ...]:
+        """What must stay the same for selected lines to mean the same text."""
+        return (
+            self._block_ansi_cache,
+            self._block_ansi_cache.generation,
+            self._last_width,
+            getattr(self.sink.blocks, "rewrite_version", None),
+        )
+
+    def begin_selection(self, x: int, y: int) -> object:
+        """Button down in the pane: drop the old selection, arm a new one.
+
+        A second / third press on the same cell selects the word / the line.
+        Returns ``NotImplemented`` when nothing on screen changed.
+        """
+        had_selection = self._selection is not None
+        point = self._point_at(x, y)
+        now = time.monotonic()
+        last_at, last_point, clicks = self._sel_click
+        repeat = point == last_point and now - last_at <= _MULTI_CLICK_SECONDS
+        clicks = clicks % 3 + 1 if repeat else 1
+        self._sel_click = (now, point, clicks)
+        self._selection = None
+        self._sel_anchor = point
+        self._sel_dragging = False
+        self._sel_edge = 0
+        self._sel_fingerprint = self._layout_fingerprint()
+        if clicks > 1:
+            line, cell = point
+            text = plain_line(self._line_ansi(line))
+            cells = (
+                word_cells(text, cell)
+                if clicks == 2
+                else (0, max(0, cell_width(text.rstrip()) - 1))
+            )
+            if cells is not None and text.strip():
+                self._selection = Selection((line, cells[0]), (line, cells[1]))
+                self._sel_dragging = True  # copied on release, like a drag
+        return None if had_selection or self._selection else NotImplemented
+
+    def drag_selection(self, x: int, y: int) -> object:
+        """Motion with the button held: extend the selection to ``(x, y)``.
+
+        Past the pane's top or bottom edge the chat scrolls one line per
+        event, and keeps scrolling on a timer while the pointer stays there.
+        """
+        anchor = self._sel_anchor
+        if anchor is None:
+            return NotImplemented
+        _, top_row = self._window_origin()
+        height = self.get_visible_window_height()
+        self._sel_edge = -1 if y < top_row else 1 if y >= top_row + height else 0
+        self._sel_y = y
+        if self._sel_edge:
+            # Past an edge the selection runs to the start of the top line
+            # or the end of the bottom one, whatever column the pointer is in.
+            self._sel_x = x = 0 if self._sel_edge < 0 else _END_OF_LINE
+            self._scroll_by(self._sel_edge)
+            self._start_edge_scroll()
+        point = self._point_at(x, y)
+        if not self._sel_dragging and point == anchor:
+            return NotImplemented  # a click that has not moved off its cell
+        self._sel_dragging = True
+        self._selection = Selection(anchor, point)
+        return None
+
+    def finish_selection(self) -> object:
+        """Button released: copy the dragged text; a plain click copies nothing."""
+        if self._sel_anchor is None:
+            return NotImplemented
+        dragged = self._sel_dragging
+        self._sel_anchor = None
+        self._sel_dragging = False
+        self._sel_edge = 0
+        selection = self._selection
+        if not dragged or selection is None:
+            return NotImplemented
+        self._sel_epoch = self._chat_content_epoch
+        text = selected_text(self._line_ansi, selection)
+        if not text.strip():
+            self._selection = None  # only padding was dragged over
+            return None
+        # Blank lines at the end (a drag released below the last line of
+        # text) are neither copied nor kept selected: the line after the
+        # transcript is where the next output lands.
+        lines = text.split("\n")
+        blank = next(i for i, line in enumerate(reversed(lines)) if line)
+        if blank:
+            start, (last, _) = selection.ordered()
+            text = "\n".join(lines[:-blank])
+            self._selection = Selection(start, (last - blank, _END_OF_LINE))
+        copy = getattr(self.app, "copy_selection", None)
+        if callable(copy):
+            copy(text)
+        return None
+
+    def clear_selection(self) -> bool:
+        """Drop the selection (and any drag in progress); True if one showed."""
+        had_selection = self._selection is not None
+        self._selection = None
+        self._sel_anchor = None
+        self._sel_dragging = False
+        self._sel_edge = 0
+        if had_selection and self.app is not None:
+            self.invalidate()
+        return had_selection
+
+    def _start_edge_scroll(self) -> None:
+        """Keep scrolling while the pointer rests past an edge mid-drag."""
+        if self._sel_edge_task is not None and not self._sel_edge_task.done():
+            return
+        application = getattr(self.app, "app", None)
+        if application is None or not getattr(application, "is_running", False):
+            return
+
+        async def _scroll() -> None:
+            while self._sel_edge and self._sel_anchor is not None:
+                await asyncio.sleep(_EDGE_SCROLL_SECONDS)
+                if not self._sel_edge or self._sel_anchor is None:
+                    break
+                self._scroll_by(self._sel_edge)
+                self._selection = Selection(
+                    self._sel_anchor, self._point_at(self._sel_x, self._sel_y)
+                )
+                self.invalidate()
+
+        self._sel_edge_task = application.create_background_task(_scroll())
+
+    def _selection_is_stale(self, selection: Selection) -> bool:
+        """True when the selected lines no longer hold the selected text.
+
+        Appending blocks keeps earlier lines where they were, so a selection
+        in the settled transcript survives new output. It is dropped when the
+        lines are laid out again (resize, theme, an edited or cleared
+        transcript) or when it reaches into the in-flight turn, whose lines
+        are rewritten on every frame.
+        """
+        if self._sel_fingerprint != self._layout_fingerprint():
+            return True
+        (_, _), (last, _) = selection.ordered()
+        if last >= self._total_chat_lines:
+            return True
+        if self._sel_anchor is not None:
+            return False  # still dragging: the text is read on release
+        in_flight_from = len(self._win_prefix_bounds) - 1
+        return last >= in_flight_from and self._sel_epoch != self._chat_content_epoch
+
+    def _with_selection(self, window: ANSI, top: int) -> AnyFormattedText:
+        """*window* with the selection highlighted (cached per frame input)."""
+        selection = self._selection
+        if selection is None:
+            return window
+        if self._selection_is_stale(selection):
+            self._selection = None
+            self._sel_anchor = None
+            self._sel_dragging = False
+            return window
+        key = (top, selection)
+        if window is not self._sel_overlay_source or key != self._sel_overlay_key:
+            self._sel_overlay = FormattedText(
+                highlight_window(to_formatted_text(window), top, selection)
+            )
+            self._sel_overlay_source = window
+            self._sel_overlay_key = key
+        return self._sel_overlay
 
     # ── Rendering / windowing ──────────────────────────────────────────────
 
@@ -526,9 +810,45 @@ class ChatPane:
         self._frozen_prefix_text = prefix
         return bounds
 
-    def render_chat(self) -> ANSI:
+    def _debounced_width(self, width: int) -> int:
+        """The width to lay out at this frame: *width*, or the previous one
+        while a resize of a long transcript is still settling.
+
+        A width change re-renders every block (the caches are per width),
+        which for a long transcript costs seconds — and dragging a window
+        edge changes the width once per column. So the new width is only
+        adopted after it has been stable for :data:`_RESIZE_DEBOUNCE_SECONDS`;
+        until then the old layout stays on screen (cropped or short of the
+        new edge) and a timer repaints when the wait is over. Short
+        transcripts, and hosts with no running app, re-lay out at once.
+        """
+        if width == self._last_width or self._chat_content_epoch == 0:
+            self._resize_width = 0
+            return width
+        if self._total_chat_lines < _RESIZE_DEBOUNCE_MIN_LINES:
+            return width
+        application = getattr(self.app, "app", None)
+        if application is None or not getattr(application, "is_running", False):
+            return width
+        now = time.monotonic()
+        if width != self._resize_width:
+            self._resize_width = width
+            self._resize_since = now
+        remaining = _RESIZE_DEBOUNCE_SECONDS - (now - self._resize_since)
+        if remaining <= 0:
+            return width
+        if self._resize_timer is not None:
+            self._resize_timer.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return width
+        self._resize_timer = loop.call_later(remaining, self.invalidate)
+        return self._last_width
+
+    def render_chat(self) -> AnyFormattedText:
         term_width = shutil.get_terminal_size((80, 24)).columns
-        width = max(40, term_width - 4)
+        width = self._debounced_width(max(40, term_width - 4))
 
         # render_ms: wall time of this frame's full re-render (0.0 when the
         # frame only re-sliced an already-rendered transcript, e.g. scroll).
@@ -615,7 +935,9 @@ class ChatPane:
                 slice_ms=slice_ms,
                 render_ms=render_ms,
             )
-        return self._windowed_ansi
+        # The highlight is an overlay on this window only: the cached lines
+        # (and the per-block render cache behind them) are never touched.
+        return self._with_selection(self._windowed_ansi, top)
 
     def lines_below(self) -> int:
         """Transcript lines below the visible window (0 when following)."""

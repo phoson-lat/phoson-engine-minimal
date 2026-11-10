@@ -509,7 +509,7 @@ def test_header_has_no_transient_status_while_a_run_is_in_flight(
 async def test_ctrl_j_inserts_newline_and_enter_still_submits(app: PhosonApp) -> None:
     """A2: Ctrl+J is the newline key; Enter keeps submitting.
 
-    Shift+Enter/Ctrl+Enter are not portable (prompt_toolkit's VT100 parser
+    Shift+Enter/Ctrl+Rnter are not portable (prompt_toolkit's VT100 parser
     does not map the CSI-u sequences modern terminals emit), so Ctrl+J — a
     single universal byte — carries the newline role. The app-level ``enter``
     binding must keep winning over the buffer's built-in multiline newline.
@@ -2019,7 +2019,7 @@ async def test_run_async_captures_warnings_for_the_session_only(
         logging.captureWarnings(False)
 
 
-# ─── Reasoning-effort chip + Ctrl+E cycle ─────────────────────────────────────
+# ─── Reasoning-effort chip + Ctrl+R cycle ─────────────────────────────────────
 
 
 def _no_real_config_save(monkeypatch) -> list[tuple[object, dict]]:
@@ -2048,8 +2048,8 @@ def test_header_shows_effort_level_when_set(app: PhosonApp) -> None:
     assert "effort off" not in header
 
 
-def test_ctrl_e_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
-    """Ctrl+E cycles off → low → … → max → off, persists, and repaints the
+def test_ctrl_r_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
+    """Ctrl+R cycles off → low → … → max → off, persists, and repaints the
     chip immediately (T-6 pattern). The run picks the value up at the next
     turn, so no in-flight run is affected."""
     from phoson_llm.schemas import REASONING_EFFORTS
@@ -2057,38 +2057,38 @@ def test_ctrl_e_cycles_effort_and_repaints(app: PhosonApp, monkeypatch) -> None:
     saved = _no_real_config_save(monkeypatch)
     app.session.config.reasoning_effort = None
 
-    _trigger(app, "c-e")  # off → low
+    _trigger(app, "c-r")  # off → low
     assert app.session.config.reasoning_effort == "low"
     assert "effort low" in app._get_header_text().value
     assert saved and saved[-1][1].get("only_fields") == {"reasoning_effort"}
 
     for expected in ("medium", "high", "xhigh", "max"):
-        _trigger(app, "c-e")
+        _trigger(app, "c-r")
         assert app.session.config.reasoning_effort == expected
     assert REASONING_EFFORTS[-1] == "max"  # the cycle must cover them all in order
 
-    _trigger(app, "c-e")  # max → off (wraps)
+    _trigger(app, "c-r")  # max → off (wraps)
     assert app.session.config.reasoning_effort is None
     assert "effort off" in app._get_header_text().value
 
 
-def test_ctrl_e_does_not_touch_the_reasoning_visibility_toggle(
+def test_ctrl_r_does_not_touch_the_reasoning_visibility_toggle(
     app: PhosonApp, monkeypatch
 ) -> None:
-    """Ctrl+E changes the *level*; Ctrl+T (toggle_reasoning) still owns the
+    """Ctrl+R changes the *level*; Ctrl+T (toggle_reasoning) still owns the
     show/hide axis — cycling effort must not flip the visibility default."""
     _no_real_config_save(monkeypatch)
     before = app.sink.show_reasoning_default
     app.session.config.reasoning_effort = None
-    _trigger(app, "c-e")
+    _trigger(app, "c-r")
     assert app.sink.show_reasoning_default is before
 
 
-def test_ctrl_e_binding_is_registered(app: PhosonApp) -> None:
+def test_ctrl_r_binding_is_registered(app: PhosonApp) -> None:
     from phoson_cli.fullscreen.keys import DEFAULT_KEY_BINDINGS
 
-    assert DEFAULT_KEY_BINDINGS["cycle_reasoning_effort"] == ["c-e"]
-    _trigger(app, "c-e")  # raises KeyError if the binding were unregistered
+    assert DEFAULT_KEY_BINDINGS["cycle_reasoning_effort"] == ["c-r"]
+    _trigger(app, "c-r")  # raises KeyError if the binding were unregistered
 
 
 # ─── T-12: command palette (Ctrl+P) + `!` bash ───────────────────────────────
@@ -2230,9 +2230,9 @@ async def test_autonomous_wake_is_registered_as_app_operation(
     assert app._run_task is not None
     assert "esc cancel" in app._get_footer_text().value
 
-    # Local toggles stay live mid-turn: Ctrl+E changes effort immediately.
+    # Local toggles stay live mid-turn: Ctrl+R changes effort immediately.
     before_effort = app.session.config.reasoning_effort
-    _trigger(app, "c-e")
+    _trigger(app, "c-r")
     assert app.session.config.reasoning_effort != before_effort
 
     # A draft submitted mid-wake is queued; drop it before teardown so the
