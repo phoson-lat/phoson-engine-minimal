@@ -1587,7 +1587,7 @@ class CommandHandler:
                     write_parts[0],
                     write_parts[1],
                     scope,
-                    project=Path(self.session.tree.cwd),
+                    project=Path(self.session.tree.cwd or os.getcwd()),
                 )
                 r.print_info(f"Memory saved: {path.name}")
             except (OSError, UnicodeError, ValueError) as exc:
@@ -1599,7 +1599,11 @@ class CommandHandler:
                 return True
             try:
                 r.print_info(
-                    read_memory(argument, scope, project=Path(self.session.tree.cwd))
+                    read_memory(
+                        argument,
+                        scope,
+                        project=Path(self.session.tree.cwd or os.getcwd()),
+                    )
                 )
             except (OSError, UnicodeError, ValueError) as exc:
                 r.print_error(f"Could not read memory: {exc}")
@@ -1608,7 +1612,9 @@ class CommandHandler:
             if argument:
                 r.print_error("Usage: /memory list [global|project]")
                 return True
-            memories = list_memories(scope, project=Path(self.session.tree.cwd))
+            memories = list_memories(
+                scope, project=Path(self.session.tree.cwd or os.getcwd())
+            )
             if not memories:
                 r.print_info(f"{scope} memories: (none)")
             else:
@@ -1623,7 +1629,9 @@ class CommandHandler:
             try:
                 r.print_info(
                     read_memory(
-                        argument, scope, project=Path(self.session.tree.cwd)
+                        argument,
+                        scope,
+                        project=Path(self.session.tree.cwd or os.getcwd()),
                     ).rstrip()
                 )
             except (OSError, UnicodeError, ValueError) as exc:
@@ -1639,7 +1647,7 @@ class CommandHandler:
                     write_parts[0],
                     write_parts[1],
                     scope,
-                    project=Path(self.session.tree.cwd),
+                    project=Path(self.session.tree.cwd or os.getcwd()),
                 )
                 r.print_info(f"Memory saved: {path.name}")
             except (OSError, UnicodeError, ValueError) as exc:
@@ -1650,7 +1658,9 @@ class CommandHandler:
                 r.print_error("Usage: /memory delete [global|project] <name>")
                 return True
             try:
-                delete_memory(argument, scope, project=Path(self.session.tree.cwd))
+                delete_memory(
+                    argument, scope, project=Path(self.session.tree.cwd or os.getcwd())
+                )
                 r.print_info(f"Memory deleted: {argument}")
             except (OSError, UnicodeError, ValueError) as exc:
                 r.print_error(f"Could not delete memory: {exc}")
