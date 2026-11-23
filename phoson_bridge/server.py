@@ -37,9 +37,9 @@ from typing import Any, TextIO, cast
 from pathlib import Path
 from collections.abc import Callable, Sequence
 
+from phoson_cli import memory as cli_memory
 from phoson_cli.repl import PhosonRepl
 from phoson_cli.config import PhosonConfig, load_config, has_configured_provider
-from phoson_cli import memory as cli_memory
 from phoson_cli.session_utils import (
     find_wake_plugins,
     engine_masked_count,
@@ -1138,8 +1138,15 @@ class Bridge:
 
     async def _memory_list(self, params: dict[str, Any]) -> dict[str, Any]:
         scope, workspace = self._memory_scope(params)
-        items = [{"key": path.stem, "content": cli_memory.read_memory(path.stem, scope=scope, project=workspace)}
-                 for path in cli_memory.list_memories(scope=scope, project=workspace)]
+        items = [
+            {
+                "key": path.stem,
+                "content": cli_memory.read_memory(
+                    path.stem, scope=scope, project=workspace
+                ),
+            }
+            for path in cli_memory.list_memories(scope=scope, project=workspace)
+        ]
         return {"items": items}
 
     async def _memory_read(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1147,7 +1154,10 @@ class Bridge:
         key = params.get("key")
         if not isinstance(key, str) or not key.strip():
             raise ValueError("key requerido")
-        return {"key": key, "content": cli_memory.read_memory(key, scope=scope, project=workspace)}
+        return {
+            "key": key,
+            "content": cli_memory.read_memory(key, scope=scope, project=workspace),
+        }
 
     async def _memory_write(self, params: dict[str, Any]) -> dict[str, Any]:
         scope, workspace = self._memory_scope(params)
@@ -1996,6 +2006,7 @@ class Bridge:
     def _mcp_review_url(value: str) -> str:
         """Show endpoint location without URL credentials or query secrets."""
         from urllib.parse import urlsplit, urlunsplit
+
         try:
             parts = urlsplit(value)
             if not parts.scheme or not parts.netloc:
@@ -2003,7 +2014,15 @@ class Bridge:
             host = parts.hostname or ""
             if parts.port:
                 host = f"{host}:{parts.port}"
-            return urlunsplit((parts.scheme, host, parts.path, "[redacted]" if parts.query else "", ""))
+            return urlunsplit(
+                (
+                    parts.scheme,
+                    host,
+                    parts.path,
+                    "[redacted]" if parts.query else "",
+                    "",
+                )
+            )
         except ValueError:
             return "[invalid URL]"
 
@@ -2011,37 +2030,53 @@ class Bridge:
     def _project_mcp_path(workspace: Path) -> Path:
         return workspace / ".phoson" / "mcps.json"
 
-    def _project_mcp_state(self, workspace: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
-        from phoson_plugin_mcp._plugin import _project_mcp_digest, _project_mcp_is_trusted
+    def _project_mcp_state(
+        self, workspace: Path
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        from phoson_plugin_mcp._plugin import (
+            _project_mcp_digest,
+            _project_mcp_is_trusted,
+        )
+
         config_path = self._project_mcp_path(workspace)
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             data = {"mcpServers": {}}
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"no se pudo leer la configuración MCP del proyecto: {exc}") from exc
+            raise ValueError(
+                f"no se pudo leer la configuración MCP del proyecto: {exc}"
+            ) from exc
         if not isinstance(data, dict) or not isinstance(self._mcp_servers(data), dict):
             raise ValueError("configuración MCP del proyecto inválida")
         servers = self._mcp_servers(data)
-        entries, specs = [], {}
+        entries: list[dict[str, Any]] = []
+        specs: dict[str, dict[str, Any]] = {}
         for name, spec in sorted(servers.items()):
             if not isinstance(name, str) or not isinstance(spec, dict):
                 continue
             digest = _project_mcp_digest(spec)
             specs[name] = spec
-            entries.append({
-                "name": name,
-                "approved": _project_mcp_is_trusted(workspace, name, spec),
-                "hash": digest,
-                "transport": spec.get("transport") or ("sse" if spec.get("url") else "stdio"),
-                "command": spec.get("command", "") or "",
-                "args": [str(arg) for arg in (spec.get("args") or [])],
-                "url": self._mcp_review_url(spec.get("url", "") or ""),
-                "enabled": bool(spec.get("enabled", True)),
-                # Expose names only; never return secret values to the UI.
-                "envKeys": sorted(spec.get("env", {}).keys()) if isinstance(spec.get("env") or {}, dict) else [],
-                "headerKeys": sorted(spec.get("headers", {}).keys()) if isinstance(spec.get("headers") or {}, dict) else [],
-            })
+            entries.append(
+                {
+                    "name": name,
+                    "approved": _project_mcp_is_trusted(workspace, name, spec),
+                    "hash": digest,
+                    "transport": spec.get("transport")
+                    or ("sse" if spec.get("url") else "stdio"),
+                    "command": spec.get("command", "") or "",
+                    "args": [str(arg) for arg in (spec.get("args") or [])],
+                    "url": self._mcp_review_url(spec.get("url", "") or ""),
+                    "enabled": bool(spec.get("enabled", True)),
+                    # Expose names only; never return secret values to the UI.
+                    "envKeys": sorted(spec.get("env", {}).keys())
+                    if isinstance(spec.get("env") or {}, dict)
+                    else [],
+                    "headerKeys": sorted(spec.get("headers", {}).keys())
+                    if isinstance(spec.get("headers") or {}, dict)
+                    else [],
+                }
+            )
         return entries, specs
 
     async def _mcp_project_get(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -2049,7 +2084,9 @@ class Bridge:
         entries, _ = self._project_mcp_state(workspace)
         return {"mcps": entries}
 
-    async def _mcp_project_change(self, params: dict[str, Any], approve: bool) -> dict[str, Any]:
+    async def _mcp_project_change(
+        self, params: dict[str, Any], approve: bool
+    ) -> dict[str, Any]:
         workspace = self._memory_workspace(params)
         name, expected = params.get("name"), params.get("hash")
         if not isinstance(name, str) or not name.strip():
@@ -2059,17 +2096,24 @@ class Bridge:
         _, specs = self._project_mcp_state(workspace)
         if name not in specs:
             raise ValueError(f"servidor MCP desconocido: {name}")
-        from phoson_plugin_mcp._plugin import approve_project_mcp, revoke_project_mcp
+        from phoson_plugin_mcp._plugin import revoke_project_mcp, approve_project_mcp
+
         if approve:
             from phoson_plugin_mcp._plugin import _project_mcp_digest
+
             if _project_mcp_digest(specs[name]) != expected:
-                raise ValueError("la configuración MCP cambió; actualiza la lista antes de aprobar")
+                raise ValueError(
+                    "la configuración MCP cambió; actualiza la lista antes de aprobar"
+                )
             approve_project_mcp(workspace, name, specs[name])
         else:
             # Verify the displayed digest before revoking, exactly as for approval.
             from phoson_plugin_mcp._plugin import _project_mcp_digest
+
             if _project_mcp_digest(specs[name]) != expected:
-                raise ValueError("la configuración MCP cambió; actualiza la lista antes de revocar")
+                raise ValueError(
+                    "la configuración MCP cambió; actualiza la lista antes de revocar"
+                )
             revoke_project_mcp(workspace, name)
         return {"ok": True, "name": name, "approved": approve}
 

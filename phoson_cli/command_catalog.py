@@ -98,6 +98,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/steps",
             "/agents-md",
             "/skills",
+            "/memory",
         ),
     ),
     (
@@ -270,6 +271,12 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         ("/skills",),
         "List available skills, or show one's instructions: /skills <name>",
         "_cmd_skills",
+    ),
+    CommandSpec(
+        ("/memory",),
+        "List, read, write or delete persistent memories: "
+        "/memory [list|read|write|delete]",
+        "_cmd_memory",
     ),
     CommandSpec(("/env",), "Show provider, model and session info", "_cmd_env"),
     CommandSpec(("/cost",), "Show running cost in USD/credits", "_cmd_cost"),

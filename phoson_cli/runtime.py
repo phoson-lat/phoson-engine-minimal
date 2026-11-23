@@ -83,6 +83,7 @@ def build_engine_runtime(
     permission: PermissionMiddleware,
     main_model: str,
     subagent_model: str,
+    workspace: str | None = None,
     extra_tools: Iterable[AgentTool] = (),
     extra_middlewares: Iterable[AgentMiddleware] = (),
     engine_factory: Callable[..., AgentEngine] = AgentEngine,
@@ -99,6 +100,7 @@ def build_engine_runtime(
             :func:`~phoson_cli.session_utils.build_middlewares`.
         main_model: Fallback model for sub-agents.
         subagent_model: Default sub-agent model.
+        workspace: Host workspace exposed to sub-agent tools.
         extra_tools: Main-engine-only tools (e.g. ``compact_context``, #147).
             They are *not* added to ``tools_dict``, so sub-agents never get
             them.
@@ -153,6 +155,8 @@ def build_engine_runtime(
 
     extra = engine.context.extra
     extra["safe_mode"] = config.safe_mode
+    if workspace is not None:
+        extra["workspace"] = workspace
     extra["chat"] = chat
     extra["available_tools"] = tools_dict
     extra["default_model"] = subagent_model

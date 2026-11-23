@@ -36,7 +36,9 @@ engine = AgentEngine(
     ],
 )
 
-checkpoint = next(p for p in engine._loaded_plugins if p.name == "phoson-plugin-checkpoint")
+checkpoint = next(
+    p for p in engine._loaded_plugins if p.name == "phoson-plugin-checkpoint"
+)
 storage = checkpoint.storage  # PostgresStorage, ready to use
 ```
 

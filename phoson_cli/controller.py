@@ -632,6 +632,7 @@ class SessionController:
             permission=self.permission_middleware,
             main_model=self.current_model,
             subagent_model=self.subagent_model,
+            workspace=str(self._session_cwd()),
             extra_tools=[compact_context, *TASK_TOOLS],
             engine_factory=AgentEngine,
         )
@@ -717,6 +718,7 @@ class SessionController:
         # session's cwd (a front end may move a built session elsewhere).
         cwd_provider = self._session_cwd
         self.engine.context.extra["cwd_provider"] = cwd_provider
+        self.engine.context.extra["workspace"] = str(cwd_provider())
         wake_plugins = find_wake_plugins(
             list(getattr(self.engine, "_loaded_plugins", []))
         )
@@ -1428,7 +1430,10 @@ class SessionController:
                     # The git `# Environment` block shells out to git: resolve
                     # it OFF the event loop so a slow/hung repo cannot stall
                     # the token stream (Windows: cold git spawn is 100s of ms).
-                    env_block=await asyncio.to_thread(_git_env_block, Path.cwd()),
+                    env_block=await asyncio.to_thread(
+                        _git_env_block, Path(self._session_cwd())
+                    ),
+                    project=Path(self._session_cwd()),
                 ),
                 reasoning_effort=reasoning_effort,
                 # Stable per-conversation key: OpenRouter uses it for sticky
@@ -1748,6 +1753,7 @@ class SessionController:
         """System prompt for the next run (built-in + loaded MCP tools)."""
         return build_system_prompt(
             engine_prompt_tools(self.engine),
+            project=Path(self._session_cwd()),
         )
 
     def _reset_session(self) -> None:

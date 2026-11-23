@@ -120,7 +120,7 @@ from phoson_llm.chats import AzureChat
 chat = AzureChat(
     api_key="...",
     base_url="https://RESOURCE_NAME.openai.azure.com",
-    api_version="2024-05-01-preview"
+    api_version="2024-05-01-preview",
 )
 ```
 
@@ -156,9 +156,7 @@ Requires `boto3`. Install with `pip install "phoson-llm[aws]"`.
 from phoson_llm.chats import BedrockChat
 
 chat = BedrockChat(
-    region_name="us-east-1",
-    aws_access_key_id="...",
-    aws_secret_access_key="..."
+    region_name="us-east-1", aws_access_key_id="...", aws_secret_access_key="..."
 )
 ```
 
@@ -281,8 +279,8 @@ tool = ToolDefinition(
     parameters={
         "type": "object",
         "properties": {"location": {"type": "string"}},
-        "required": ["location"]
-    }
+        "required": ["location"],
+    },
 )
 ```
 
@@ -323,10 +321,11 @@ class LLMEvent:
 ```python
 @dataclass
 class TokenUsage:
-    input: int       # Input tokens
-    output: int       # Output tokens
-    cache_write: int   # Cache write tokens (Anthropic / OpenAI prompt_tokens_details)
-    cache_read: int   # Cache read tokens (Anthropic / OpenAI prompt_tokens_details)
+    input: int  # Input tokens
+    output: int  # Output tokens
+    cache_write: int  # Cache write tokens (Anthropic / OpenAI prompt_tokens_details)
+    cache_read: int  # Cache read tokens (Anthropic / OpenAI prompt_tokens_details)
+
 
 @dataclass
 class UsageEvent(LLMEvent):
@@ -391,21 +390,56 @@ A model missing from its source reports `cost_known=False` (shown as unknown) in
 ```python
 from phoson_llm import (
     # Chat adapters
-    BaseLLMChat, OpenAIChat, AnthropicChat, OllamaChat, OpenRouterChat,
-    NVIDIAChat, GrokChat, GroqChat, DeepSeekChat,
-    TogetherChat, CheaperInferenceChat, PerplexityChat, FireworksChat, CohereChat, OmniRouteChat,
-    LMStudioChat, VLLMChat, AzureChat,
-    GeminiChat, MistralChat, BedrockChat,
+    BaseLLMChat,
+    OpenAIChat,
+    AnthropicChat,
+    OllamaChat,
+    OpenRouterChat,
+    NVIDIAChat,
+    GrokChat,
+    GroqChat,
+    DeepSeekChat,
+    TogetherChat,
+    CheaperInferenceChat,
+    PerplexityChat,
+    FireworksChat,
+    CohereChat,
+    OmniRouteChat,
+    LMStudioChat,
+    VLLMChat,
+    AzureChat,
+    GeminiChat,
+    MistralChat,
+    BedrockChat,
     # Factory
     build_chat,
     # Schemas
-    Message, TextBlock, ImageBlock, AudioBlock, VideoBlock, DocumentBlock,
-    ToolDefinition, ToolUseBlock, ToolResultBlock, ModelConfig, ContentBlock,
+    Message,
+    TextBlock,
+    ImageBlock,
+    AudioBlock,
+    VideoBlock,
+    DocumentBlock,
+    ToolDefinition,
+    ToolUseBlock,
+    ToolResultBlock,
+    ModelConfig,
+    ContentBlock,
     # Events
-    LLMEvent, LLMStartEvent, LLMDoneEvent, TokenEvent,
-    ReasoningStartEvent, ReasoningTokenEvent, ReasoningDoneEvent,
-    ToolCallEvent, ToolCallDeltaEvent, UsageEvent, TokenUsage, ErrorEvent,
+    LLMEvent,
+    LLMStartEvent,
+    LLMDoneEvent,
+    TokenEvent,
+    ReasoningStartEvent,
+    ReasoningTokenEvent,
+    ReasoningDoneEvent,
+    ToolCallEvent,
+    ToolCallDeltaEvent,
+    UsageEvent,
+    TokenUsage,
+    ErrorEvent,
     # Pricing
-    calculate_cost, PriceEntry,
+    calculate_cost,
+    PriceEntry,
 )
 ```

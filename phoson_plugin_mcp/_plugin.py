@@ -9,6 +9,7 @@ import json
 import asyncio
 import hashlib
 import logging
+import tempfile
 from typing import Any
 from pathlib import Path
 from contextlib import AsyncExitStack
@@ -292,6 +293,27 @@ def approve_project_mcp(project_root: Path, server: str, spec: dict[str, Any]) -
     return digest
 
 
+def _write_project_mcp_trust(path: Path, data: dict[str, Any]) -> None:
+    """Atomically persist trust updates without exposing credentials or grants."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary_name = tempfile.mkstemp(prefix=".trusted-mcp-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(data, stream, sort_keys=True, indent=2)
+            stream.write("\\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def revoke_project_mcp(project_root: Path, server: str) -> bool:
     """Revoke project/server consent; return whether a grant existed."""
     path = _project_mcp_trust_path()
@@ -303,7 +325,7 @@ def revoke_project_mcp(project_root: Path, server: str) -> bool:
             del entries[server]
             if not entries:
                 data.pop(str(project_root.resolve(strict=True)), None)
-            path.write_text(json.dumps(data, sort_keys=True, indent=2) + "\n")
+            _write_project_mcp_trust(path, data)
         return existed
     except (OSError, ValueError, AttributeError, TypeError):
         return False

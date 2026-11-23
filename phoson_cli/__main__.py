@@ -155,6 +155,7 @@ class CliOptions:
     trace: bool = False
     task: str | None = None
     plugin_args: list[str] | None = None
+    mcp_args: list[str] | None = None
     bg_args: list[str] | None = None
     extras_args: list[str] | None = None
     bridge: bool = False
@@ -211,6 +212,9 @@ def parse_args(argv: list[str]) -> CliOptions:
                     value for value in plugin_args if value not in {"--yes", "-y"}
                 ]
             options.plugin_args = plugin_args
+            break
+        if arg == "mcp":
+            options.mcp_args = argv[i + 1 :]
             break
         if arg == "bg":
             options.bg_args = argv[i + 1 :]
@@ -620,6 +624,80 @@ def _pop_option(args: list[str], name: str) -> tuple[list[str], str | None]:
     return args[:index] + args[index + 2 :], args[index + 1]
 
 
+def _run_project_mcp_command(args: list[str]) -> int:
+    """Review and manage explicit approval for project-local MCP servers."""
+    import json
+
+    from phoson_plugin_mcp import _plugin
+
+    rest, project_arg = _pop_option(args, "--project")
+    project = Path(project_arg or ".").expanduser().resolve()
+    if not project.is_dir():
+        print(f"Project directory does not exist: {project}")
+        return 1
+    if not rest or rest[0] != "project" or len(rest) < 2:
+        print("Usage: mcp project review|approve|revoke [server] [--project PATH]")
+        return 1
+    action = rest[1]
+    config_path = project / ".phoson" / "mcps.json"
+    try:
+        config = json.loads(config_path.read_text())
+        servers = config.get("mcpServers", {})
+        if not isinstance(servers, dict):
+            raise ValueError("invalid mcpServers")
+    except (OSError, ValueError, AttributeError) as exc:
+        print(f"Cannot read project MCP config: {exc}")
+        return 1
+
+    def redact(value, secret_next=False):
+        if isinstance(value, dict):
+            return {
+                k: ("[redacted]" if k.lower() in {"env", "environment"} else redact(v))
+                for k, v in value.items()
+            }
+        if isinstance(value, list):
+            result, hide = [], False
+            for item in value:
+                result.append("[redacted]" if hide else redact(item))
+                hide = isinstance(item, str) and (
+                    item.startswith("--")
+                    and any(
+                        s in item.lower()
+                        for s in ("key", "token", "secret", "password")
+                    )
+                )
+            return result
+        if isinstance(value, str) and any(
+            s in value.lower() for s in ("--token=", "--api-key=")
+        ):
+            return "[redacted]"
+        return value
+
+    if action == "review":
+        print(json.dumps(redact(servers), indent=2))
+        return 0
+    if len(rest) < 3 or rest[2] not in servers:
+        print("Project MCP server not found")
+        return 1
+    name = rest[2]
+    if action == "approve":
+        if not stream_is_tty(sys.stdin):
+            print("Approval requires an interactive terminal")
+            return 1
+        print(f"Project MCP server: {name}")
+        print(json.dumps(redact(servers[name]), indent=2))
+        if input("Approve this server? [y/N] ").strip().lower() not in {"y", "yes"}:
+            return 1
+        _plugin.approve_project_mcp(project, name, servers[name])
+        return 0
+    if action == "revoke":
+        _plugin.revoke_project_mcp(project, name)
+        print(f"Revoked {name}")
+        return 0
+    print("Unknown project MCP command")
+    return 1
+
+
 def _run_plugin_command(
     args: list[str], config: PhosonConfig, *, assume_yes: bool = False
 ) -> int:
@@ -940,6 +1018,7 @@ async def _run_oneshot(
             permission=permission,
             main_model=config.model,
             subagent_model=config.subagent_model or config.model,
+            workspace=str(Path.cwd()),
             extra_middlewares=[trace_middleware] if trace_middleware else [],
             engine_factory=AgentEngine,
         )
@@ -983,6 +1062,7 @@ async def _run_oneshot(
                     model=config.model,
                     system=build_system_prompt(
                         engine_prompt_tools(engine),
+                        project=Path.cwd(),
                     ),
                 ),
             )
@@ -1109,6 +1189,9 @@ def _run_cli() -> None:
         if status:
             sys.exit(status)
         return
+
+    if options.mcp_args is not None:
+        sys.exit(_run_project_mcp_command(options.mcp_args))
 
     if options.bg_args is not None:
         # #129: `bg` is a read-only subcommand (no daemon, no agent run) —

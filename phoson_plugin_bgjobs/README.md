@@ -76,11 +76,11 @@ engine = AgentEngine(
             "name": "phoson-plugin-bgjobs",
             "config": {
                 "data_dir": "~/.phoson/bgjobs",  # default
-                "on_wake": my_wake_callback,      # optional, live hosts
-                "max_pending_wakes": 5,           # per-job anti-storm cap
-                "default_session_id": "",         # when the host injects none
-                "max_output_chars": 4000,         # output tail cap
-                "watchdog_seconds": 0,            # 0 = no kill timeout
+                "on_wake": my_wake_callback,  # optional, live hosts
+                "max_pending_wakes": 5,  # per-job anti-storm cap
+                "default_session_id": "",  # when the host injects none
+                "max_output_chars": 4000,  # output tail cap
+                "watchdog_seconds": 0,  # 0 = no kill timeout
             },
         }
     ],

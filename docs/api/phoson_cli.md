@@ -95,12 +95,12 @@ classic REPL is selected automatically with a notice on stderr.
 from phoson_cli.config import PhosonConfig
 
 config = PhosonConfig(
-    provider="openai",           # openai, anthropic, openrouter, ollama
+    provider="openai",  # openai, anthropic, openrouter, ollama
     model="gpt-4o",
     sessions_dir="./sessions",
     max_iterations=12,
     safe_mode=False,
-    subagent_max_parallel=4,     # max concurrent sub-agent LLM sessions
+    subagent_max_parallel=4,  # max concurrent sub-agent LLM sessions
     subagent_timeout_seconds=300.0,  # per sub-agent task timeout
 )
 
@@ -396,8 +396,8 @@ Two-tier progressive disclosure:
 ```python
 from phoson_cli.skills import discover_skills, render_skill_index
 
-skills = discover_skills()                 # project + global, deduped
-index = render_skill_index(skills)         # goes in the system prompt
+skills = discover_skills()  # project + global, deduped
+index = render_skill_index(skills)  # goes in the system prompt
 ```
 
 Search order (first match by name wins): `.phoson/skills/`,
@@ -441,8 +441,14 @@ from phoson_cli.tools.subagent import agent, agents
 
 result = await agent.handler(
     {"task": "Search for info", "timeout": 120.0},
-    {"chat": chat, "available_tools": tools, "default_model": "gpt-4o",
-     "max_iterations": 12, "safe_mode": False, "subagent_timeout_seconds": 300.0},
+    {
+        "chat": chat,
+        "available_tools": tools,
+        "default_model": "gpt-4o",
+        "max_iterations": 12,
+        "safe_mode": False,
+        "subagent_timeout_seconds": 300.0,
+    },
 )
 ```
 

@@ -13,11 +13,27 @@ def server(tmp_path, monkeypatch):
     config = workspace / ".phoson" / "mcps.json"
     config.parent.mkdir(parents=True)
     config.write_text(
-        json.dumps({"mcpServers": {"sample": {"command": "run", "args": ["one"], "env": {"TOKEN": "secret-value"}, "url": "https://user:password@example.test/mcp?key=private"}}})
+        json.dumps(
+            {
+                "mcpServers": {
+                    "sample": {
+                        "command": "run",
+                        "args": ["one"],
+                        "env": {"TOKEN": "secret-value"},
+                        "url": "https://user:password@example.test/mcp?key=private",
+                    }
+                }
+            }
+        )
     )
     trust = tmp_path / "trusted-project-mcps.json"
-    monkeypatch.setattr("phoson_plugin_mcp._plugin._project_mcp_trust_path", lambda: trust)
-    monkeypatch.setattr("phoson_bridge.server.load_config", lambda: SimpleNamespace(mcp_config_file=str(tmp_path / "global.json")))
+    monkeypatch.setattr(
+        "phoson_plugin_mcp._plugin._project_mcp_trust_path", lambda: trust
+    )
+    monkeypatch.setattr(
+        "phoson_bridge.server.load_config",
+        lambda: SimpleNamespace(mcp_config_file=str(tmp_path / "global.json")),
+    )
     monkeypatch.setattr(
         "phoson_bridge.server.load_config",
         lambda: SimpleNamespace(mcp_config_file=str(tmp_path / "global.json")),
@@ -33,7 +49,11 @@ async def test_get_and_approve_project_mcp(server):
     entry = result["mcps"][0]
     assert entry["name"] == "sample" and entry["approved"] is False
     rendered = json.dumps(result)
-    assert "secret-value" not in rendered and "password" not in rendered and "private" not in rendered
+    assert (
+        "secret-value" not in rendered
+        and "password" not in rendered
+        and "private" not in rendered
+    )
     assert entry["envKeys"] == ["TOKEN"]
     assert entry["url"] == "https://example.test/mcp?[redacted]"
     assert (

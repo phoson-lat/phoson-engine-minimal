@@ -90,6 +90,7 @@ can contribute more; `/help` lists everything active in a session.
 | `/warnings` | — | Show or set CLI warning notices: /warnings <on\|off> |
 | `/agents-md` | — | Show which AGENTS.md/CLAUDE.md memory files are loaded into the prompt |
 | `/skills` | — | List available skills, or show one's instructions: /skills <name> |
+| `/memory` | — | List, read, write or delete persistent memories: /memory [list\|read\|write\|delete] |
 | `/env` | — | Show provider, model and session info |
 | `/cost` | — | Show running cost in USD/credits |
 | `/tasks` | — | Background tasks: list, <n> output, cancel/approve/deny <n> |

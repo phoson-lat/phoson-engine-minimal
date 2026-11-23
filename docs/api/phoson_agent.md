@@ -93,6 +93,7 @@ Register a function as an agent tool using the `@tool` decorator.
 ```python
 from phoson_agent import tool
 
+
 @tool
 def get_weather(location: str) -> str:
     """Get weather for a location."""
@@ -140,11 +141,13 @@ async def read_file(path: str, *, session_id: str | None = None) -> str:
 ```python
 @dataclass
 class AgentTool:
-    name: str                              # Tool name
-    description: str                       # From docstring
-    parameters: dict[str, Any]            # JSON Schema
-    handler: ToolHandler                   # Callable
-    metadata: dict[str, Any]               # Never sent to the model ("parallel_safe", MCP annotations…)
+    name: str  # Tool name
+    description: str  # From docstring
+    parameters: dict[str, Any]  # JSON Schema
+    handler: ToolHandler  # Callable
+    metadata: dict[
+        str, Any
+    ]  # Never sent to the model ("parallel_safe", MCP annotations…)
 ```
 
 ### Manual tools
@@ -155,8 +158,10 @@ When constructing an `AgentTool` directly (without `@tool`), the handler must ac
 from phoson_agent import AgentTool
 from phoson_agent.context import AgentContext
 
+
 def handle_echo(args: dict[str, Any], context: AgentContext) -> str:
     return args["message"]
+
 
 echo = AgentTool(
     name="echo",
@@ -176,6 +181,7 @@ Abstract base class for agent middleware.
 
 ```python
 from phoson_agent import AgentMiddleware
+
 
 class MyMiddleware(AgentMiddleware):
     async def on_before_llm(
@@ -230,14 +236,18 @@ tree = ConversationTree.new(session_id="abc123")
 
 # Add messages
 node = tree.append(parent_id=None, message=Message(role="user", content="Hi"))
-child = tree.append(parent_id=node.id, message=Message(role="assistant", content="Hello!"))
+child = tree.append(
+    parent_id=node.id, message=Message(role="assistant", content="Hello!")
+)
 
 # Get path to a node
 path = tree.get_path(child.id)  # [user_msg, assistant_msg]
 
 # Branch
 branch_node_id = tree.branch(from_node_id=node.id)
-new_node = tree.append(parent_id=branch_node_id, message=Message(role="user", content="Branch!"))
+new_node = tree.append(
+    parent_id=branch_node_id, message=Message(role="user", content="Branch!")
+)
 
 # Get leaves (no children)
 leaves = tree.get_leaves()
@@ -374,18 +384,33 @@ class AgentRunResult:
 ```python
 from phoson_agent import (
     # Core
-    AgentEngine, AgentContext, tool, AgentTool,
+    AgentEngine,
+    AgentContext,
+    tool,
+    AgentTool,
     # Events
-    AgentEvent, AgentStartEvent, AgentTokenEvent, AgentReasoningEvent,
-    AgentToolComposingEvent, AgentToolStartEvent, AgentToolDoneEvent,
+    AgentEvent,
+    AgentStartEvent,
+    AgentTokenEvent,
+    AgentReasoningEvent,
+    AgentToolComposingEvent,
+    AgentToolStartEvent,
+    AgentToolDoneEvent,
     AgentStepDoneEvent,
-    AgentDoneEvent, AgentErrorEvent, AgentSubagentResult,
+    AgentDoneEvent,
+    AgentErrorEvent,
+    AgentSubagentResult,
     # Middleware
-    AgentMiddleware, RetryMiddleware,
+    AgentMiddleware,
+    RetryMiddleware,
     # Session
-    ConversationTree, ConversationNode, SessionMeta,
-    SessionStorage, JsonlStorage,
+    ConversationTree,
+    ConversationNode,
+    SessionMeta,
+    SessionStorage,
+    JsonlStorage,
     # Results
-    RunStep, AgentRunResult,
+    RunStep,
+    AgentRunResult,
 )
 ```

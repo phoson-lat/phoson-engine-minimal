@@ -475,6 +475,9 @@ class PermissionPolicy:
     #: a library policy keeps the allow-by-default behaviour unless the host
     #: opts in.
     default_intent_levels: dict[str, str] = field(default_factory=dict)
+    #: Soft per-tool defaults, below explicit tool/intent rules and auto mode.
+    #: Hosts can grant narrowly scoped exceptions without polluting policy views.
+    default_tool_levels: dict[str, str] = field(default_factory=dict)
 
     def normalized_levels(self) -> dict[str, str]:
         """Levels with invalid entries dropped."""
@@ -578,6 +581,9 @@ class PermissionPolicy:
             return hinted, SOURCE_HINT, intents
         if soft is not None:
             return soft, SOURCE_DEFAULT_INTENT, intents
+        tool_default = self.default_tool_levels.get(tool_name)
+        if tool_default in VALID_LEVELS:
+            return tool_default, SOURCE_DEFAULT, intents
         return LEVEL_ALLOW, SOURCE_DEFAULT, intents
 
     def check(

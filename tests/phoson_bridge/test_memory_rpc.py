@@ -62,12 +62,22 @@ def test_global_memory_crud_does_not_require_workspace(bridge, tmp_path, monkeyp
 
     monkeypatch.setattr(memory, "memory_root", lambda home=None: tmp_path / "memories")
     params = {"scope": "global", "key": "shared", "content": "Across projects"}
-    assert asyncio.run(bridge._memory_write(params)) == {"written": True, "key": "shared"}
+    assert asyncio.run(bridge._memory_write(params)) == {
+        "written": True,
+        "key": "shared",
+    }
     assert asyncio.run(bridge._memory_list({"scope": "global"}))["items"] == [
         {"key": "shared", "content": "Across projects\n"}
     ]
-    assert asyncio.run(bridge._memory_read({"scope": "global", "key": "shared"}))["content"] == "Across projects\n"
-    assert asyncio.run(bridge._memory_delete({"scope": "global", "key": "shared"}))["deleted"]
+    assert (
+        asyncio.run(bridge._memory_read({"scope": "global", "key": "shared"}))[
+            "content"
+        ]
+        == "Across projects\n"
+    )
+    assert asyncio.run(bridge._memory_delete({"scope": "global", "key": "shared"}))[
+        "deleted"
+    ]
     assert asyncio.run(bridge._memory_list({"scope": "global"}))["items"] == []
 
 

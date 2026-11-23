@@ -24,10 +24,12 @@ import asyncio
 from phoson_agent import AgentEngine, tool
 from phoson_llm import Message, ModelConfig, OpenAIChat
 
+
 @tool
 def get_weather(location: str) -> str:
     """Get weather for a location."""
     return f"Weather in {location}: Sunny"
+
 
 async def main() -> None:
     agent = AgentEngine(
@@ -39,6 +41,7 @@ async def main() -> None:
         config=ModelConfig(model="gpt-4o-mini"),
     )
     print(result.final_content)
+
 
 asyncio.run(main())
 ```
