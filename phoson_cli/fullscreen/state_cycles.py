@@ -94,14 +94,17 @@ def toggle_reasoning(app: Any) -> None:
 
 
 def cycle_permission_mode(app: Any) -> None:
-    """Shift+Tab (T-6): cycle the visible permission mode ask → auto.
+    """Shift+Tab (T-6): cycle the visible permission mode ask → auto → yolo.
 
-    The mode is the durable per-tool policy (``permissions.json``). ``ask``
-    gates ``bash`` explicitly and leaves annotated plugin tools (SSH, MCP, …)
-    at their hint-derived ``ask``; ``auto`` writes the global ``"*": "allow"``
-    default, so those annotated tools run freely too. A per-tool level still
-    wins over auto. The header chip refreshes immediately and the change is
-    pushed into the live gate (no restart needed).
+    ``ask`` and ``auto`` are the durable per-tool policy
+    (``permissions.json``). ``ask`` gates ``bash`` explicitly and leaves
+    annotated plugin tools (SSH, MCP, …) at their hint-derived ``ask``;
+    ``auto`` writes the global ``"*": "allow"`` default, so those annotated
+    tools run freely too. A per-tool level still wins over auto. ``yolo`` is
+    a session flag on top of auto: nothing asks at all (deny rules still
+    block); it is not written anywhere — ``yolo = true`` in config.toml is
+    how it starts on. The header chip refreshes immediately and the change
+    is pushed into the live gate (no restart needed).
     """
     # Deliberately allowed mid-turn: this is a local policy toggle, pushed
     # into the live gate (below) so it governs the running turn's *future*
@@ -112,13 +115,25 @@ def cycle_permission_mode(app: Any) -> None:
         set_level,
         load_policy,
         save_policy,
+        is_auto_mode,
         set_auto_mode,
     )
 
+    session = app.session
     policy = load_policy()
-    # Direction follows the visible chip (ask ↔ auto), exactly as before:
+    # Direction follows the visible chip: yolo → ask, ask → auto, auto → yolo.
     # `ask` is bash explicitly at ask, anything else is the auto side.
-    if policy.levels.get("bash") == LEVEL_ASK:
+    if getattr(session, "yolo", False) is True:
+        session.set_yolo(False)
+        set_auto_mode(policy, False)
+        set_level(policy, "bash", LEVEL_ASK)
+        new_mode = "ask"
+    elif is_auto_mode(policy) and hasattr(session, "set_yolo"):
+        # Only from the real auto mode (wildcard set): a fresh install also
+        # shows "auto" but must go to ask first, never straight to yolo.
+        session.set_yolo(True)
+        new_mode = "yolo"
+    elif policy.levels.get("bash") == LEVEL_ASK:
         set_auto_mode(policy, True)
         set_level(policy, "bash", "allow")
         new_mode = "auto"
@@ -126,20 +141,22 @@ def cycle_permission_mode(app: Any) -> None:
         set_auto_mode(policy, False)
         set_level(policy, "bash", LEVEL_ASK)
         new_mode = "ask"
-    save_policy(policy)
-    app.session.refresh_permission_policy()
+    if new_mode != "yolo":
+        save_policy(policy)
+        session.refresh_permission_policy()
     app._perm_mode_cached = new_mode
     app._perm_mode_checked_at = time.monotonic()
     app._header_cache_key = None  # rebuild the chip on the next frame
+    detail = {
+        "ask": " — gated tools (bash, SSH, …) now confirm with Yes / Always / No",
+        "auto": " — gated tools (bash, SSH, …) run freely"
+        " (per-tool rules: /permissions)",
+        "yolo": " — nothing asks for permission any more; deny rules still"
+        " block (this session only)",
+    }[new_mode]
     app.sink.notify(
-        "info",
-        f"Permission mode → {new_mode}"
-        + (
-            " — gated tools (bash, SSH, …) now confirm with Yes / Always / No"
-            if new_mode == "ask"
-            else " — gated tools (bash, SSH, …) run freely"
-            " (per-tool rules: /permissions)"
-        ),
+        "warn" if new_mode == "yolo" else "info",
+        f"Permission mode → {new_mode}{detail}",
     )
 
 

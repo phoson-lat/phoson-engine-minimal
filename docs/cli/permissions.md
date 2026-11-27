@@ -16,9 +16,10 @@ handy for safe subcommands. Inspect or change levels at runtime with
 
 Changes apply to the live session at once — no restart needed.
 
-## Ask vs auto mode
+## Ask, auto and YOLO mode
 
-The full-screen header shows a mode chip you cycle with **Shift+Tab**:
+The full-screen header shows a mode chip you cycle with **Shift+Tab**
+(ask → auto → yolo → ask):
 
 - **ask** — `bash` is set to `ask` and the annotated plugin tools (SSH,
   MCP, computer-use, …) stay at the `ask` their risk hints imply.
@@ -30,6 +31,35 @@ The full-screen header shows a mode chip you cycle with **Shift+Tab**:
 Auto is only an opt-in default: precedence is unchanged, so a per-tool
 level (`/permissions ssh_exec deny`) or an intent rule still wins over it
 and can never be loosened by auto.
+
+### YOLO mode
+
+**YOLO** turns off permission prompts entirely:
+
+- **Every `ask` runs.** That includes per-tool `ask` levels, intent rules,
+  the protective path intents (writes outside the workspace, reads of
+  `~/.ssh` and other credential stores), annotated plugin tools, and
+  `run_bg_job`/monitor commands.
+- **No checks before running.** The LLM guardian is not consulted, and
+  bash's `safe_mode` confirmation is skipped.
+- **`deny` still blocks.** A tool or intent you set to `deny` stays
+  refused: a deny rule is a decision, a prompt is only friction.
+
+YOLO applies at once to the running turn, sub-agents and background
+tasks, because they share the same gate. The header chip turns
+warning-coloured, and `/permissions` reminds you it is on.
+
+| How                                             | Lasts                |
+| ----------------------------------------------- | -------------------- |
+| Shift+Tab from auto, or `/yolo on` / `/yolo off` | This session only    |
+| `--yolo` (interactive or one-shot `-p`)          | This run             |
+| `yolo = true` under `[defaults]` in `config.toml`, or `PHOSON_YOLO=1` | Every session |
+
+A live toggle is never written to `config.toml`. Only a value you put
+there yourself persists.
+
+Shift+Tab reaches YOLO only from auto mode. A fresh install, whose chip
+also reads "auto" before any rule exists, still goes to ask first.
 
 ## Safe defaults
 
@@ -43,14 +73,15 @@ the workspace, read-only commands (`ls`, `cat`, `grep`, `git status`,
 These defaults only apply when nothing else decides, so any of these
 overrides them:
 
-- auto mode (Shift+Tab, or `"*": "allow"`);
+- auto mode (Shift+Tab, or `"*": "allow"`) and YOLO mode;
 - a level for the tool (`/permissions bash allow`);
 - an intent rule (`"intent_levels": {"process_spawn": "allow"}`);
 - an allow-pattern (`"allow_patterns": {"bash": ["pytest*"]}`).
 
 **One-shot mode** (`-p`) cannot ask, so these calls are refused. Pass
 `--auto` to run them anyway; that applies to this run only, and per-tool
-levels and intent rules in `permissions.json` still win over it.
+levels and intent rules in `permissions.json` still win over it. `--yolo`
+goes further: everything except `deny` runs (see [YOLO mode](#yolo-mode)).
 
 Tools that run a shell line in the background, `run_bg_job` and a
 `command` monitor, are classified like `bash` with that line, and they

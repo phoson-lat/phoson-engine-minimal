@@ -21,6 +21,8 @@ Options:
   -p, --print          Print the final answer and exit (one-shot mode)
   --auto               One-shot: run tools that would ask (programs, code,
                        deletes) instead of refusing them
+  --yolo               Never ask for permission: every tool that would ask
+                       runs (deny rules still block; bash safe_mode is off)
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
@@ -85,6 +87,7 @@ can contribute more; `/help` lists everything active in a session.
 | `/attach` | `/attachments` | Attach a file to the next message, or list pending attachments |
 | `/help` | — | Show this help |
 | `/permissions` | `/perms` | Show or change per-tool permissions: /permissions <tool> <allow\|ask\|deny> |
+| `/yolo` | — | YOLO mode: never ask before running tools — /yolo on\|off (this session; deny rules still block) |
 | `/details` | `/tool-cards` | Tool-call detail: /details [full\|headers\|summary] (bare cycles) |
 | `/notify` | — | Notify the terminal when a run finishes: /notify <bell\|desktop\|off> |
 | `/warnings` | — | Show or set CLI warning notices: /warnings <on\|off> |

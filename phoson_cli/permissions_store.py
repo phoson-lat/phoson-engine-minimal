@@ -273,6 +273,13 @@ def remove_pattern(policy: PermissionPolicy, tool: str, pattern: str) -> bool:
     return False
 
 
+#: Shown when a session starts in YOLO mode (config, env or ``--yolo``).
+YOLO_STARTUP_NOTICE = (
+    "YOLO mode is on: tools run without asking for permission (deny rules "
+    "still block). /yolo off or Shift+Tab to get prompts back."
+)
+
+
 def build_permission_middleware(
     *,
     policy_path: Path | None = None,
@@ -281,6 +288,7 @@ def build_permission_middleware(
     classifier=None,
     classifier_auto_allow: bool = False,
     classifier_timeout_s: float = 8.0,
+    yolo: bool = False,
 ) -> PermissionMiddleware:
     """Build the middleware wired to the durable store.
 
@@ -288,7 +296,8 @@ def build_permission_middleware(
     provided by the front end; omitted in non-interactive contexts, where
     ``ask`` fails closed. ``on_decision`` is the optional audit sink called
     once per decision (#227 phase 3). ``classifier`` is the optional LLM
-    guardian consulted at ``ask`` (#227 phase 3).
+    guardian consulted at ``ask`` (#227 phase 3). ``yolo`` lets every
+    ``ask`` through without a prompt (``deny`` still blocks).
     """
     policy = load_policy(path=policy_path)
     return PermissionMiddleware(
@@ -299,6 +308,7 @@ def build_permission_middleware(
         classifier=classifier,
         classifier_auto_allow=classifier_auto_allow,
         classifier_timeout_s=classifier_timeout_s,
+        yolo=yolo,
     )
 
 
@@ -364,6 +374,7 @@ def refresh_policy(
 
 __all__ = [
     "DEFAULT_PERMISSIONS_FILE",
+    "YOLO_STARTUP_NOTICE",
     "LEVEL_ASK",
     "LEVEL_ALLOW",
     "LEVEL_DENY",

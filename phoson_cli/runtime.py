@@ -154,7 +154,8 @@ def build_engine_runtime(
         ]
 
     extra = engine.context.extra
-    extra["safe_mode"] = config.safe_mode
+    # YOLO skips bash's own safe_mode confirmation too (no prompts at all).
+    extra["safe_mode"] = effective_safe_mode(config)
     if workspace is not None:
         extra["workspace"] = workspace
     extra["chat"] = chat
@@ -181,4 +182,16 @@ def build_engine_runtime(
     )
 
 
-__all__ = ["EngineRuntime", "build_effort_scheduler", "build_engine_runtime"]
+def effective_safe_mode(config: Any) -> bool:
+    """bash's ``safe_mode`` as it applies now: off while YOLO is on."""
+    return bool(getattr(config, "safe_mode", False)) and not getattr(
+        config, "yolo", False
+    )
+
+
+__all__ = [
+    "EngineRuntime",
+    "effective_safe_mode",
+    "build_effort_scheduler",
+    "build_engine_runtime",
+]

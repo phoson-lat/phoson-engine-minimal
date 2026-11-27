@@ -115,6 +115,8 @@ SOURCE_DEFAULT = "default"
 SOURCE_MODE = "mode"
 SOURCE_DEFAULT_INTENT = "default_intent"
 SOURCE_CLASSIFIER = "classifier"
+#: An ``ask`` call let through without a prompt because YOLO mode is on.
+SOURCE_YOLO = "yolo"
 
 #: Pseudo tool name for a *global default* level (``"*"``). Unlike a regular
 #: tool, ``allow`` on the wildcard is meaningful rather than a no-op: it is an
@@ -625,6 +627,11 @@ class PermissionMiddleware(AgentMiddleware):
             not trusted as match text), so a pattern can only ever target
             the argument the caller intends — never a free-floating string
             the model chose to put in another argument.
+        yolo: YOLO mode — every ``ask`` resolves to *allow* with no prompt
+            and no guardian classifier. ``deny`` still blocks: an explicit
+            deny rule is a decision, a prompt is only friction. Mutable at
+            runtime (the CLI toggles it live); each skipped confirmation is
+            still emitted to ``on_decision`` with ``source="yolo"``.
     """
 
     def __init__(
@@ -636,8 +643,10 @@ class PermissionMiddleware(AgentMiddleware):
         classifier: GuardClassifier | None = None,
         classifier_auto_allow: bool = False,
         classifier_timeout_s: float = 8.0,
+        yolo: bool = False,
     ) -> None:
         self.policy = policy
+        self.yolo = yolo
         self.on_ask = on_ask
         self.match_args = match_args or {}
         # Audit sink (#227 phase 3): called once per decision, best-effort.
@@ -781,6 +790,21 @@ class PermissionMiddleware(AgentMiddleware):
                 decision=decision,
             )
 
+        # YOLO: no confirmation of any kind (deny already returned above).
+        if self.yolo:
+            self._emit(
+                PermissionDecision(
+                    tool_name=tool_name,
+                    level=LEVEL_ASK,
+                    source=SOURCE_YOLO,
+                    allowed=True,
+                    reason="confirmation skipped (YOLO mode)",
+                    intents=intents,
+                    arg_digest=_arg_digest(args),
+                )
+            )
+            return call
+
         # LLM guardian (#227 phase 3): consulted only here, where the
         # deterministic policy is already unsure. It can deny (and the run
         # continues) or — with auto-allow opted in — skip the human; anything
@@ -867,6 +891,7 @@ __all__ = [
     "SOURCE_SESSION_PATTERN",
     "SOURCE_TOOL_AND_INTENT",
     "SOURCE_TOOL_LEVEL",
+    "SOURCE_YOLO",
     "ToolBlockedError",
     "ToolHints",
     "VALID_LEVELS",
