@@ -823,7 +823,12 @@ async def _list_chatgpt_models(config: PhosonConfig) -> list[ModelOption]:
         raise ModelListingError(f"Failed to fetch ChatGPT models: {exc}") from exc
 
     options = [
-        ModelOption(id=model.slug, label=model.label, provider="chatgpt")
+        ModelOption(
+            id=model.slug,
+            label=model.label,
+            provider="chatgpt",
+            context_length=model.context_window,
+        )
         for model in models
         if model.slug
     ]
