@@ -148,6 +148,13 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    # YOLO mode: the permission gate never asks — every ``ask`` runs without
+    # a prompt (``deny`` rules still block) and bash ``safe_mode`` is
+    # skipped. Read from ``yolo`` in config.toml / PHOSON_YOLO or set by
+    # ``--yolo``; toggled live with Shift+Tab or ``/yolo``. Deliberately not
+    # a managed key of ``save_config``: a live toggle is never written back,
+    # only a value the user put in the file persists.
+    yolo: bool = False
     theme: str = "system"
     # One-run CLI provenance. Not loaded from or saved to config.toml.
     cli_theme: str | None = field(default=None, repr=False)
@@ -205,6 +212,15 @@ class PhosonConfig:
     enable_mcp: bool = False
     mcp_config_file: Path = Path("~/.phoson/mcps.json").expanduser()
     tool_budget_tokens: int = 8000
+    # Code mode: a ``run_code`` tool whose Python scripts call the other
+    # tools as functions (each call still permission-gated) and return only
+    # what they print. Off by default. ``code_mode_sandbox`` is "auto"
+    # (macOS sandbox-exec / Linux bwrap when available), "required" or
+    # "off"; ``code_mode_timeout`` is the default script time limit (time
+    # inside tool calls does not count).
+    code_mode: bool = False
+    code_mode_sandbox: str = "auto"
+    code_mode_timeout: float = 120.0
     # Official monitor plugin (I-126): background watchers that wake the
     # agent. Off by default because it runs long-lived tasks; state lives
     # in monitors_data_dir.
@@ -1096,6 +1112,7 @@ def load_config() -> PhosonConfig:
             "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
         ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        yolo=_resolve_bool("PHOSON_YOLO", "yolo", fd, d.yolo),
         theme=_resolve_str("PHOSON_THEME", "theme", fd, d.theme),
         subagent_max_parallel=_resolve_int(
             "PHOSON_SUBAGENT_MAX_PARALLEL",
@@ -1147,6 +1164,13 @@ def load_config() -> PhosonConfig:
         ).expanduser(),
         tool_budget_tokens=_resolve_int(
             "PHOSON_TOOL_BUDGET", "tool_budget_tokens", fd, d.tool_budget_tokens
+        ),
+        code_mode=_resolve_bool("PHOSON_CODE_MODE", "code_mode", fd, d.code_mode),
+        code_mode_sandbox=_resolve_str(
+            "PHOSON_CODE_MODE_SANDBOX", "code_mode_sandbox", fd, d.code_mode_sandbox
+        ).lower(),
+        code_mode_timeout=_resolve_float(
+            "PHOSON_CODE_MODE_TIMEOUT", "code_mode_timeout", fd, d.code_mode_timeout
         ),
         enable_monitors=_resolve_bool(
             "PHOSON_ENABLE_MONITORS", "enable_monitors", fd, d.enable_monitors
@@ -1471,6 +1495,21 @@ def validate_config(config: PhosonConfig) -> None:
         raise PhosonConfigError(
             "run_budget_seconds must be 0 (disabled) or greater, "
             f"got {config.run_budget_seconds!r}"
+        )
+    if config.code_mode_sandbox not in ("auto", "required", "off"):
+        raise PhosonConfigError(
+            "code_mode_sandbox must be 'auto', 'required' or 'off', "
+            f"got {config.code_mode_sandbox!r}"
+        )
+    if (
+        isinstance(config.code_mode_timeout, bool)
+        or not isinstance(config.code_mode_timeout, (int, float))
+        or not math.isfinite(config.code_mode_timeout)
+        or config.code_mode_timeout <= 0
+    ):
+        raise PhosonConfigError(
+            "code_mode_timeout must be a number greater than 0, "
+            f"got {config.code_mode_timeout!r}"
         )
     for field_name in (
         "loop_detect_n",

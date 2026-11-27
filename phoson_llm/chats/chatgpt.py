@@ -486,6 +486,13 @@ class ChatGPTModel:
 
     slug: str
     display_name: str = ""
+    #: Context window the backend applies to this model, in tokens (the
+    #: listing's ``context_window``). ``None`` when the listing omits it.
+    #: The listing also reports a larger ``max_context_window``; that is a
+    #: ceiling the client may opt into, not what a plain request gets, so
+    #: it is deliberately not used (over-estimating the window delays
+    #: compaction until the backend rejects the turn).
+    context_window: int | None = None
 
     @property
     def label(self) -> str:
@@ -545,10 +552,18 @@ async def list_models(
         if not isinstance(slug, str) or not slug.strip():
             continue
         display = entry.get("display_name") or entry.get("title") or ""
+        window = entry.get("context_window")
         result.append(
             ChatGPTModel(
                 slug=slug,
                 display_name=display if isinstance(display, str) else "",
+                context_window=(
+                    window
+                    if isinstance(window, int)
+                    and not isinstance(window, bool)
+                    and window > 0
+                    else None
+                ),
             )
         )
     return result

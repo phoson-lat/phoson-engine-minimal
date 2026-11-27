@@ -159,6 +159,7 @@ from .escape_controller import (
     is_prefixed_escape as _is_prefixed_escape_impl,
 )
 from .rewind_controller import RewindController
+from ..permissions_store import YOLO_STARTUP_NOTICE
 from .palette_controller import PaletteController
 from .lifecycle_controller import (
     request_exit as _request_exit_impl,
@@ -1249,9 +1250,12 @@ class PhosonApp:
         command: str,
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        title: str | None = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions."""
-        return await self._floats.run_float_bash_card(command, on_always=on_always)
+        return await self._floats.run_float_bash_card(
+            command, on_always=on_always, title=title
+        )
 
     async def run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]
@@ -1519,6 +1523,8 @@ class PhosonApp:
             True, lambda message: self.sink.notify("warn", message)
         )
         restore_warning_capture = warnings_hook.capture_warnings()
+        if getattr(self.session, "yolo", False) is True:
+            self.sink.notify("warn", YOLO_STARTUP_NOTICE)
         # Ask the terminal to tell Shift/Ctrl+Enter apart from Enter so they
         # can insert a newline (see keys.NEWLINE_ENTER_SEQUENCES).
         extended_keys = os.environ.get("PHOSON_EXTENDED_KEYS", "1") != "0"

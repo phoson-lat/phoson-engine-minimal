@@ -449,3 +449,7 @@ class PhosonRepl(SessionFrontend):
             session_id=self.tree.session_id,
             theme=self.theme,
         )
+        if getattr(self.config, "yolo", False):
+            from .permissions_store import YOLO_STARTUP_NOTICE
+
+            self.renderer.print_info(f"⚠ {YOLO_STARTUP_NOTICE}")

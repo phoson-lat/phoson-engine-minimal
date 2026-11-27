@@ -251,12 +251,12 @@ class HeaderModel:
         if float(cost) > 0:
             segments.append(_Segment("cost", f"${cost}", "header_dim"))
         # Permission-mode chip (T-6): accent for *ask* (confirmations are
-        # coming), dim for auto. Effort chip (Ctrl+R): accent when set.
-        segments.append(
-            _Segment(
-                "mode", perm_mode, "header" if perm_mode == "ask" else "header_dim"
-            )
+        # coming), dim for auto, warning colour for yolo (nothing asks).
+        # Effort chip (Ctrl+R): accent when set.
+        mode_style = {"ask": "header", "yolo": "header_warn"}.get(
+            perm_mode, "header_dim"
         )
+        segments.append(_Segment("mode", perm_mode, mode_style))
         segments.append(
             _Segment("effort", f"effort {effort}", "header")
             if effort in REASONING_EFFORTS
@@ -278,12 +278,15 @@ class HeaderModel:
     def permission_mode(self) -> str:
         """Current permission mode for the header chip (T-6).
 
-        ``ask`` when the durable policy puts bash on the ask level,
-        ``auto`` otherwise (allow is the default for unlisted tools).
-        The policy file is re-read at most once per second; Shift+Tab
-        (``cycle_permission_mode``) refreshes it immediately.
+        ``yolo`` while YOLO mode is on (a live session flag, checked every
+        frame); otherwise ``ask`` when the durable policy puts bash on the
+        ask level, ``auto`` otherwise (allow is the default for unlisted
+        tools). The policy file is re-read at most once per second;
+        Shift+Tab (``cycle_permission_mode``) refreshes it immediately.
         """
         app = self.app
+        if getattr(app.session, "yolo", False) is True:
+            return "yolo"
         now = time.monotonic()
         if app._perm_mode_cached is None or now - app._perm_mode_checked_at >= 1.0:
             from ..permissions_store import load_policy

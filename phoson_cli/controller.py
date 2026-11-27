@@ -340,6 +340,7 @@ class SessionController:
             classifier=build_permission_classifier(self.config, lambda: self.chat),
             classifier_auto_allow=self.config.permission_classifier_auto_allow,
             classifier_timeout_s=self.config.permission_classifier_timeout_s,
+            yolo=self.config.yolo,
         )
         # Assembled in _rebuild_engine; retained so sub-agents inherit the
         # gate via context.extra["middlewares"] (#174/F-01).
@@ -428,11 +429,12 @@ class SessionController:
         if background is not None:
             # A background task never pops a dialog over what the user is
             # doing: the question waits in the task list (Ctrl+B / /tasks).
-            summary = (
-                str(args.get("command") or "")
-                if tool_name == "bash"
-                else self._summarize_args_for_confirm(tool_name, args)
-            )
+            if tool_name == "bash":
+                summary = str(args.get("command") or "")
+            elif tool_name == "run_code":
+                summary = "run_code:\n" + str(args.get("code") or "")
+            else:
+                summary = self._summarize_args_for_confirm(tool_name, args)
             return await self.tasks.request_approval(background, tool_name, summary)
         if self.confirmation is None:
             return False
@@ -445,6 +447,19 @@ class SessionController:
                     on_always=lambda cmd: self.remember_bash_pattern(cmd),
                 )
             return await self.confirmation.confirm_bash(command)
+        if tool_name == "run_code":
+            # The whole script, not a 120-char summary: the user is approving
+            # code. "Always" allows run_code from now on — each tool call the
+            # script makes is still gated on its own.
+            code = str(args.get("code") or "")
+            card = getattr(self.confirmation, "confirm_bash_command", None)
+            if card is not None:
+                return await card(
+                    code,
+                    on_always=self.remember_run_code_allowed,
+                    title="Run Python script (run_code)?",
+                )
+            return await self.confirmation.confirm_bash(code)
         summary = self._summarize_args_for_confirm(tool_name, args)
         return await self.confirmation.confirm_bash(summary)
 
@@ -475,6 +490,41 @@ class SessionController:
         loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
         self.theme_registry = build_theme_registry(loaded_plugins)
         return self.theme_registry
+
+    @property
+    def yolo(self) -> bool:
+        """Whether YOLO mode is on (the live gate never asks)."""
+        return bool(self.config.yolo)
+
+    def set_yolo(self, enabled: bool) -> None:
+        """Turn YOLO mode on/off for this session, effective immediately.
+
+        Updates the live permission gate (shared with sub-agents and
+        background tasks) and bash's ``safe_mode``. ``config.yolo`` is not a
+        managed config key, so this is never written to ``config.toml``.
+        """
+        from .runtime import effective_safe_mode
+
+        self.config.yolo = bool(enabled)
+        self.permission_middleware.yolo = self.config.yolo
+        engine = getattr(self, "engine", None)
+        if engine is not None:
+            engine.context.extra["safe_mode"] = effective_safe_mode(self.config)
+
+    async def remember_run_code_allowed(self, _code: str) -> None:
+        """Persist "always allow run_code" (permission card, [a]).
+
+        Scripts differ every time, so the grant is the tool level, not an
+        exact-code pattern. Tool calls made by scripts keep their own rules.
+        """
+        from .permissions_store import load_policy, save_policy
+
+        policy = load_policy()
+        # Written explicitly (``set_level`` drops "allow" entries): without
+        # it run_code would fall back to bash's level or the lang_exec ask.
+        policy.levels["run_code"] = "allow"
+        save_policy(policy)
+        self.refresh_permission_policy()
 
     def refresh_permission_policy(self) -> None:
         """Re-read ``permissions.json`` into the *live* gate.

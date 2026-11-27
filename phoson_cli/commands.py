@@ -1512,6 +1512,11 @@ class CommandHandler:
         r = self._r
         policy = load_policy()
 
+        if not cmd.args and getattr(self.session, "yolo", False) is True:
+            r.print_info(
+                "⚠ YOLO mode is on: nothing asks — only deny rules below "
+                "still block (/yolo off to restore prompts)."
+            )
         if not cmd.args:
             if not policy.levels and not policy.allow_patterns:
                 r.print_info(
@@ -1618,6 +1623,41 @@ class CommandHandler:
         self.session.config.notify_on_completion = arg
         save_config(self.session.config, only_fields={"notify_on_completion"})
         r.print_info(f"Notify on completion → {arg}  ·  saved")
+        return True
+
+    async def _cmd_yolo(self, cmd: Command) -> bool:
+        """Show or toggle YOLO mode (no permission prompts) for this session.
+
+        ``/yolo on`` lets every tool call that would ask run without a
+        prompt, including bash under ``safe_mode``; explicit ``deny`` rules
+        still block. It applies at once — sub-agents and background tasks
+        share the same gate. Not saved: put ``yolo = true`` under
+        ``[defaults]`` in config.toml (or set ``PHOSON_YOLO=1``) to start
+        every session in YOLO mode.
+        """
+        r = self._r
+        current = bool(getattr(self.session, "yolo", False))
+        arg = cmd.args.strip().lower()
+
+        if arg in ("", "status"):
+            r.print_info(
+                f"YOLO mode: {'on' if current else 'off'}  ·  usage: /yolo <on|off>"
+            )
+            return True
+        if arg not in ("on", "off"):
+            r.print_error(f"Unknown option: {arg!r}  ·  use on or off")
+            return True
+
+        new = arg == "on"
+        self.session.set_yolo(new)
+        if new:
+            r.print_info(
+                "⚠ YOLO mode → on: tools run without asking for permission "
+                "(deny rules still block). This session only — add "
+                "`yolo = true` to [defaults] in config.toml to keep it on."
+            )
+        else:
+            r.print_info("YOLO mode → off: permission prompts are back.")
         return True
 
     async def _cmd_warnings(self, cmd: Command) -> bool:

@@ -28,6 +28,7 @@ from phoson_agent.models import (
     RunStep,
     AgentTool,
     AgentEvent,
+    ToolReturn,
     ImageToolResult,
     AgentStepDoneEvent,
     AgentToolDoneEvent,
@@ -499,28 +500,77 @@ class ToolRunner:
             return error_text, error_text, True, None
 
         try:
-            if threaded and not inspect.iscoroutinefunction(tool.handler):
-                tool_result = await asyncio.to_thread(
-                    tool.handler, call.args, self._context
-                )
-            else:
-                tool_result = tool.handler(call.args, self._context)
-            if asyncio.iscoroutine(tool_result):
-                tool_result = await tool_result
-
+            tool_result = await self._call_handler(tool, call, threaded=threaded)
             if isinstance(tool_result, ImageToolResult):
                 return tool_result.text, None, False, tool_result.image
-
-            if not isinstance(tool_result, (str, dict)):
-                raise TypeError(
-                    "Tool handler must return str, dict, ImageToolResult, or "
-                    "awaitable of those types."
-                )
-
             return to_result_text(tool_result), None, False, None
         except Exception as exc:
             error_text = str(exc)
             return error_text, error_text, True, None
+
+    async def _call_handler(
+        self, tool: AgentTool, call: ToolCallEvent, *, threaded: bool
+    ) -> "ToolReturn":
+        """Run ``tool``'s handler and validate its return type (raises)."""
+        if threaded and not inspect.iscoroutinefunction(tool.handler):
+            tool_result = await asyncio.to_thread(
+                tool.handler, call.args, self._context
+            )
+        else:
+            tool_result = tool.handler(call.args, self._context)
+        if asyncio.iscoroutine(tool_result):
+            tool_result = await tool_result
+        if not isinstance(tool_result, (str, dict, ImageToolResult)):
+            raise TypeError(
+                "Tool handler must return str, dict, ImageToolResult, or "
+                "awaitable of those types."
+            )
+        return tool_result
+
+    async def admit_nested(
+        self, call: ToolCallEvent
+    ) -> "ToolCallEvent | NestedCallResult":
+        """Admission for a tool call made from *inside* another tool (code mode).
+
+        Runs the same ``on_before_tool`` chain as a model-issued call, so the
+        permission gate (and its interactive prompt) applies to every call a
+        script makes. Returns the (possibly rewritten) call to pass to
+        :meth:`invoke_nested`, or a failed :class:`NestedCallResult` when the
+        call was refused. Callers must serialize admissions themselves —
+        permission prompts must never overlap.
+        """
+        admission = await self._admit(call)
+        if isinstance(admission, _Rejected):
+            return NestedCallResult(
+                ok=False, text=admission.result, code=admission.code
+            )
+        return admission
+
+    async def invoke_nested(self, admission: ToolCallEvent) -> "NestedCallResult":
+        """Run an admitted nested call's handler (see :meth:`admit_nested`).
+
+        The call is **not** recorded in the history and ``on_after_tool`` is
+        not applied: the result goes back to the caller (the script), not
+        into the model's context. Never raises except on cancellation.
+        """
+        tool = self._tools_by_name.get(admission.tool_name)
+        if tool is None:
+            return NestedCallResult(
+                ok=False,
+                text=f"Tool '{admission.tool_name}' is not registered.",
+                code="unknown_tool",
+            )
+        try:
+            raw = await self._call_handler(tool, admission, threaded=True)
+        except Exception as exc:  # noqa: BLE001 - reported to the script
+            return NestedCallResult(
+                ok=False, text=str(exc) or type(exc).__name__, code="tool_error"
+            )
+        if isinstance(raw, ImageToolResult):
+            text = raw.text
+        else:
+            text = to_result_text(raw)
+        return NestedCallResult(ok=True, text=text, raw=raw, tool=tool)
 
     def _fill_cancelled_results(
         self,
@@ -567,6 +617,23 @@ class _Progress:
     """
 
     answered: int = 0
+
+
+@dataclass
+class NestedCallResult:
+    """Outcome of :meth:`ToolRunner.run_nested`.
+
+    ``text`` is the result text on success and the error/refusal message
+    otherwise; ``raw`` is the handler's own return value (``str``, ``dict``
+    or :class:`ImageToolResult`) on success, so structured results survive
+    for code mode instead of being flattened to JSON text.
+    """
+
+    ok: bool
+    text: str
+    raw: "ToolReturn | None" = None
+    code: str | None = None
+    tool: AgentTool | None = None
 
 
 @dataclass

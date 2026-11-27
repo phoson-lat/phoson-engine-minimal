@@ -110,6 +110,7 @@ HELP_CATEGORIES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "/keys",
             "/attach",
             "/permissions",
+            "/yolo",
             "/details",
             "/notify",
             "/warnings",
@@ -249,6 +250,12 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
         "_cmd_permissions",
     ),
     CommandSpec(
+        ("/yolo",),
+        "YOLO mode: never ask before running tools — /yolo on|off "
+        "(this session; deny rules still block)",
+        "_cmd_yolo",
+    ),
+    CommandSpec(
         ("/details", "/tool-cards"),
         "Tool-call detail: /details [full|headers|summary] (bare cycles)",
         "_cmd_details",
@@ -332,6 +339,7 @@ RUN_SAFE_COMMANDS: Final[frozenset[str]] = frozenset(
         "/help",
         "/permissions",
         "/perms",
+        "/yolo",
         "/reasoning-effort",
         "/effort",
         "/attach",

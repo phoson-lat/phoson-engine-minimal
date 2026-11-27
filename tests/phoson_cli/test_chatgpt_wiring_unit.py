@@ -627,3 +627,71 @@ async def test_auth_login_accepts_the_codex_alias(auth_file, monkeypatch) -> Non
     output = _output(handler)
     assert "alias@example.com" in output
     assert "/provider chatgpt" in output
+
+
+# ── context window (#chatgpt-context-window) ─────────────────────────────
+
+
+def _fake_listing(monkeypatch) -> None:
+    async def fake_list_models(*, base_url: str) -> list[ChatGPTModel]:
+        return [
+            ChatGPTModel(slug="gpt-6.2-sol", context_window=500000),
+            ChatGPTModel(slug="gpt-6-luna", context_window=272000),
+            ChatGPTModel(slug="mystery"),
+        ]
+
+    monkeypatch.setattr("phoson_llm.chats.chatgpt.list_models", fake_list_models)
+
+
+@pytest.mark.asyncio
+async def test_list_chatgpt_models_carries_the_context_window(
+    auth_file, monkeypatch
+) -> None:
+    _store_login(auth_file)
+    _fake_listing(monkeypatch)
+
+    config = PhosonConfig(provider="chatgpt", model="gpt-6-luna")
+    options = await _list_chatgpt_models(config)
+
+    windows = {option.id: option.context_length for option in options}
+    assert windows == {"gpt-6.2-sol": 500000, "gpt-6-luna": 272000, "mystery": None}
+
+
+@pytest.mark.asyncio
+async def test_resolver_uses_the_chatgpt_listing(auth_file, monkeypatch) -> None:
+    from phoson_cli.session_utils import build_context_resolver
+
+    _store_login(auth_file)
+    _fake_listing(monkeypatch)
+    resolver = build_context_resolver(PhosonConfig(provider="chatgpt", model="x"))
+
+    assert await resolver.resolve("chatgpt", "gpt-6.2-sol") == 500000
+    assert await resolver.resolve("chatgpt", "gpt-6-luna") == 272000
+    # Listed without a window: the conservative family fallback, not 128K.
+    assert await resolver.resolve("chatgpt", "gpt-mystery") == 272000
+
+
+@pytest.mark.asyncio
+async def test_resolver_falls_back_when_the_listing_fails(
+    auth_file, monkeypatch
+) -> None:
+    from phoson_cli.session_utils import build_context_resolver
+
+    _store_login(auth_file)
+
+    async def failing_list_models(*, base_url: str) -> list[ChatGPTModel]:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("phoson_llm.chats.chatgpt.list_models", failing_list_models)
+    resolver = build_context_resolver(PhosonConfig(provider="chatgpt", model="x"))
+
+    assert await resolver.resolve("chatgpt", "gpt-6.2-sol") == 272000
+    assert await resolver.resolve("chatgpt", "codex-auto-review") == 272000
+
+
+def test_chatgpt_family_does_not_borrow_the_openai_api_windows() -> None:
+    from phoson_agent.plugins.context_window import registry_window
+
+    # gpt-5.6-sol is 1.05M on the OpenAI API but 272K through ChatGPT.
+    assert registry_window("openai", "gpt-5.6-sol") == 1_050_000
+    assert registry_window("chatgpt", "gpt-5.6-sol") == 272_000

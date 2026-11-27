@@ -131,6 +131,7 @@ def build_engine_runtime(
         max_iterations=config.max_iterations,
         effort_scheduler=build_effort_scheduler(config),
         tool_budget_tokens=config.tool_budget_tokens or None,
+        **_code_mode_kwargs(config),
     )
     # #144 phase 2: fold MCP tool annotations (read-only/destructive/
     # open-world) into the permission policy now that plugins have loaded.
@@ -154,7 +155,8 @@ def build_engine_runtime(
         ]
 
     extra = engine.context.extra
-    extra["safe_mode"] = config.safe_mode
+    # YOLO skips bash's own safe_mode confirmation too (no prompts at all).
+    extra["safe_mode"] = effective_safe_mode(config)
     if workspace is not None:
         extra["workspace"] = workspace
     extra["chat"] = chat
@@ -181,4 +183,34 @@ def build_engine_runtime(
     )
 
 
-__all__ = ["EngineRuntime", "build_effort_scheduler", "build_engine_runtime"]
+def effective_safe_mode(config: Any) -> bool:
+    """bash's ``safe_mode`` as it applies now: off while YOLO is on."""
+    return bool(getattr(config, "safe_mode", False)) and not getattr(
+        config, "yolo", False
+    )
+
+
+def _code_mode_kwargs(config: Any) -> dict[str, Any]:
+    """``code_mode=`` for the engine, only when enabled.
+
+    Omitted entirely when off so custom ``engine_factory`` callables (tests,
+    embedders) that predate code mode keep working.
+    """
+    if not getattr(config, "code_mode", False):
+        return {}
+    from phoson_agent.code_mode import CodeModeConfig
+
+    return {
+        "code_mode": CodeModeConfig(
+            timeout_seconds=float(config.code_mode_timeout),
+            sandbox=config.code_mode_sandbox,
+        )
+    }
+
+
+__all__ = [
+    "EngineRuntime",
+    "effective_safe_mode",
+    "build_effort_scheduler",
+    "build_engine_runtime",
+]

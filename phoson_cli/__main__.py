@@ -98,6 +98,8 @@ Options:
   -p, --print          Print the final answer and exit (one-shot mode)
   --auto               One-shot: run tools that would ask (programs, code,
                        deletes) instead of refusing them
+  --yolo               Never ask for permission: every tool that would ask
+                       runs (deny rules still block; bash safe_mode is off)
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
@@ -164,6 +166,7 @@ class CliOptions:
     remote_args: list[str] | None = None
     assume_yes: bool = False
     auto: bool = False
+    yolo: bool = False
 
 
 def _fail(message: str) -> NoReturn:
@@ -254,6 +257,8 @@ def parse_args(argv: list[str]) -> CliOptions:
             options.print_mode = True
         elif arg == "--auto":
             options.auto = True
+        elif arg == "--yolo":
+            options.yolo = True
         elif arg == "--trace":
             options.trace = True
         elif arg in {
@@ -368,6 +373,8 @@ def _apply_overrides(config: PhosonConfig, options: CliOptions) -> None:
         config.cli_theme = options.theme
     if options.max_turns is not None:
         config.max_iterations = options.max_turns
+    if options.yolo:
+        config.yolo = True
     if options.peer_name:
         config.peer_name = options.peer_name
     if options.peer_team:
@@ -1001,6 +1008,7 @@ async def _run_oneshot(
             classifier=build_permission_classifier(config, lambda: chat),
             classifier_auto_allow=config.permission_classifier_auto_allow,
             classifier_timeout_s=config.permission_classifier_timeout_s,
+            yolo=config.yolo,
         )
         if auto:
             # ``--auto``: this run only, like the TUI auto mode. Per-tool
@@ -1136,6 +1144,13 @@ def main() -> None:
     with file + line on stderr. ``restore()`` runs in a ``finally`` so even the
     ``sys.exit`` paths unwind it (``SystemExit`` fires ``finally``).
     """
+    if sys.argv[1:2] == ["--phoson-code-worker"]:
+        # Code mode worker (hidden): the standalone binary runs scripts with
+        # its own bundled stdlib when no system Python is available. It owns
+        # stdin/stdout as an RPC channel, so nothing else may run first.
+        from phoson_agent.code_mode import worker_entry
+
+        sys.exit(worker_entry())
     restore = warnings_hook.install()
     try:
         _run_cli()

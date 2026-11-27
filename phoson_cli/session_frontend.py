@@ -271,6 +271,15 @@ class SessionFrontend:
         """Apply a changed ``permissions.json`` to the live gate."""
         self._controller.refresh_permission_policy()
 
+    @property
+    def yolo(self) -> bool:
+        """Whether YOLO mode is on (nothing asks for permission)."""
+        return self._controller.yolo
+
+    def set_yolo(self, enabled: bool) -> None:
+        """Turn YOLO mode on/off for this session (never persisted)."""
+        self._controller.set_yolo(enabled)
+
     async def remember_bash_pattern(self, command: str) -> None:
         """Persist "always allow this exact command"."""
         await self._controller.remember_bash_pattern(command)

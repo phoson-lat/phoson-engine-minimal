@@ -32,6 +32,17 @@ ToolHandler = Callable[[JsonObject, "AgentContext"], ToolReturn | Awaitable[Tool
 # other parallel-safe calls of the same LLM turn (see ``AgentTool.parallel_safe``).
 PARALLEL_SAFE_KEY = "parallel_safe"
 
+# ``AgentTool.metadata`` keys read by code mode (``run_code``):
+#: ``False`` keeps the tool out of the ``tools`` namespace of scripts.
+CODE_MODE_KEY = "code_mode"
+#: Callable ``(raw_handler_return) -> value`` turning a handler's raw return
+#: into the value a script receives (e.g. MCP unwraps ``structuredContent``).
+#: It may raise to make the call fail with that message in the script.
+CODE_RESULT_KEY = "code_result"
+#: JSON Schema of the tool's structured result (MCP ``outputSchema``), shown
+#: in ``tools.help()`` so scripts know the shape they get back.
+OUTPUT_SCHEMA_KEY = "output_schema"
+
 
 @dataclass
 class AgentTool:
