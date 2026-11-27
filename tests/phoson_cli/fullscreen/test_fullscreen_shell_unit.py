@@ -1744,7 +1744,8 @@ def test_header_shows_ask_chip_when_policy_sets_bash_ask(
 def test_shift_tab_cycles_permission_mode(
     app: PhosonApp, tmp_path, monkeypatch
 ) -> None:
-    """T-6: Shift+Tab cycles ask → auto, persists, and repaints the chip."""
+    """T-6: Shift+Tab cycles ask → auto → yolo → ask, persists ask/auto,
+    and repaints the chip."""
     from phoson_cli.permissions_store import (
         LEVEL_ASK,
         PermissionPolicy,
@@ -1767,12 +1768,19 @@ def test_shift_tab_cycles_permission_mode(
     live = app.session._controller.permission_middleware.policy
     assert is_auto_mode(live)
 
-    _trigger(app, "s-tab")  # auto → ask
+    _trigger(app, "s-tab")  # auto → yolo (live flag only, nothing written)
+    controller = app.session._controller
+    assert controller.permission_middleware.yolo is True
+    assert is_auto_mode(load_policy())
+    assert "yolo" in app._get_header_text().value
+
+    _trigger(app, "s-tab")  # yolo → ask
+    assert controller.permission_middleware.yolo is False
     policy = load_policy()
     assert policy.levels.get("bash") == LEVEL_ASK
     assert not is_auto_mode(policy)
     assert "ask" in app._get_header_text().value
-    live = app.session._controller.permission_middleware.policy
+    live = controller.permission_middleware.policy
     assert live.levels.get("bash") == LEVEL_ASK
     assert not is_auto_mode(live)
 

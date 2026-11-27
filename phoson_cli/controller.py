@@ -340,6 +340,7 @@ class SessionController:
             classifier=build_permission_classifier(self.config, lambda: self.chat),
             classifier_auto_allow=self.config.permission_classifier_auto_allow,
             classifier_timeout_s=self.config.permission_classifier_timeout_s,
+            yolo=self.config.yolo,
         )
         # Assembled in _rebuild_engine; retained so sub-agents inherit the
         # gate via context.extra["middlewares"] (#174/F-01).
@@ -481,6 +482,26 @@ class SessionController:
         add_pattern(policy, "bash", glob_quote(command))
         save_policy(policy)
         self.refresh_permission_policy()
+
+    @property
+    def yolo(self) -> bool:
+        """Whether YOLO mode is on (the live gate never asks)."""
+        return bool(self.config.yolo)
+
+    def set_yolo(self, enabled: bool) -> None:
+        """Turn YOLO mode on/off for this session, effective immediately.
+
+        Updates the live permission gate (shared with sub-agents and
+        background tasks) and bash's ``safe_mode``. ``config.yolo`` is not a
+        managed config key, so this is never written to ``config.toml``.
+        """
+        from .runtime import effective_safe_mode
+
+        self.config.yolo = bool(enabled)
+        self.permission_middleware.yolo = self.config.yolo
+        engine = getattr(self, "engine", None)
+        if engine is not None:
+            engine.context.extra["safe_mode"] = effective_safe_mode(self.config)
 
     async def remember_run_code_allowed(self, _code: str) -> None:
         """Persist "always allow run_code" (permission card, [a]).

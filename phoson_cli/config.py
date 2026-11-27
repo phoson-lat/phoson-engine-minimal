@@ -148,6 +148,13 @@ class PhosonConfig:
     sessions_dir: Path = Path("~/.phoson/sessions/").expanduser()
     max_iterations: int = 50
     safe_mode: bool = False
+    # YOLO mode: the permission gate never asks — every ``ask`` runs without
+    # a prompt (``deny`` rules still block) and bash ``safe_mode`` is
+    # skipped. Read from ``yolo`` in config.toml / PHOSON_YOLO or set by
+    # ``--yolo``; toggled live with Shift+Tab or ``/yolo``. Deliberately not
+    # a managed key of ``save_config``: a live toggle is never written back,
+    # only a value the user put in the file persists.
+    yolo: bool = False
     theme: str = "system"
     # One-run CLI provenance. Not loaded from or saved to config.toml.
     cli_theme: str | None = field(default=None, repr=False)
@@ -1105,6 +1112,7 @@ def load_config() -> PhosonConfig:
             "PHOSON_MAX_ITERATIONS", "max_iterations", fd, d.max_iterations
         ),
         safe_mode=_resolve_bool("PHOSON_SAFE_MODE", "safe_mode", fd, d.safe_mode),
+        yolo=_resolve_bool("PHOSON_YOLO", "yolo", fd, d.yolo),
         theme=_resolve_str("PHOSON_THEME", "theme", fd, d.theme),
         subagent_max_parallel=_resolve_int(
             "PHOSON_SUBAGENT_MAX_PARALLEL",
