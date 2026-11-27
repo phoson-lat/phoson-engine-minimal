@@ -35,12 +35,15 @@ always agree on the window. The first source that knows the model wins:
    key: Anthropic (`max_input_tokens`), Gemini (`inputTokenLimit`), Groq,
    DeepSeek (`context_window`), Mistral (`max_context_length`), Fireworks
    (`contextLength`), Cohere, xAI, Together and Cheaper Inference
-   (`context_length`), plus OpenRouter, Ollama and vLLM.
+   (`context_length`), the ChatGPT subscription (`context_window`, with your
+   ChatGPT login), plus OpenRouter, Ollama and vLLM.
 4. **The built-in table** of current models from the providers' model pages
    (Anthropic, OpenAI, Gemini, xAI, Cohere, Perplexity). It covers OpenAI,
    Azure, Perplexity and NVIDIA, whose listings carry no window.
 5. **The model family**. An unlisted model gets the window of the smallest
-   model in its family, for example 128K for an unknown `gpt-*`. Too small a
+   model in its family, for example 128K for an unknown `gpt-*` on the
+   OpenAI API, or 272K for a `gpt-*`/`codex-*` model through the ChatGPT
+   subscription, which has its own windows. Too small a
    window only makes compaction start early; too large a window would let
    the provider reject the turn.
 6. **128K** when nothing matches.
