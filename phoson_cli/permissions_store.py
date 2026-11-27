@@ -90,7 +90,15 @@ def _default_policy() -> PermissionPolicy:
     :data:`~phoson_agent.intents.SAFE_DEFAULT_INTENT_LEVELS`); auto mode and
     any rule in permissions.json override that.
     """
-    return PermissionPolicy(default_intent_levels=dict(SAFE_DEFAULT_INTENT_LEVELS))
+    return PermissionPolicy(
+        default_intent_levels=dict(SAFE_DEFAULT_INTENT_LEVELS),
+        default_tool_levels={
+            "memory_list": LEVEL_ALLOW,
+            "memory_read": LEVEL_ALLOW,
+            "memory_write": LEVEL_ALLOW,
+            "memory_delete": LEVEL_ALLOW,
+        },
+    )
 
 
 def load_policy(path: Path | None = None) -> PermissionPolicy:
@@ -143,6 +151,12 @@ def load_policy(path: Path | None = None) -> PermissionPolicy:
         allow_patterns=allow_patterns,
         intent_levels=intent_levels,
         default_intent_levels=dict(SAFE_DEFAULT_INTENT_LEVELS),
+        default_tool_levels={
+            "memory_list": LEVEL_ALLOW,
+            "memory_read": LEVEL_ALLOW,
+            "memory_write": LEVEL_ALLOW,
+            "memory_delete": LEVEL_ALLOW,
+        },
     )
 
 

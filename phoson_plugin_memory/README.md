@@ -28,8 +28,8 @@ engine = AgentEngine(
             "name": "phoson-plugin-memory",
             "config": {
                 "redis_url": "redis://localhost:6379/0",
-                "namespace": "my-agent",       # optional, key scope
-                "default_ttl_seconds": 3600,   # optional
+                "namespace": "my-agent",  # optional, key scope
+                "default_ttl_seconds": 3600,  # optional
             },
         }
     ],
@@ -103,8 +103,11 @@ The task starts on its own (lazy, on the first `memory_read`/`memory_write` call
 ```python
 from phoson_plugin_memory import SemanticMemoryPlugin
 
-def my_embed_fn(text: str) -> list[float]:
-    ...  # your embedding provider/model — not included
+
+def my_embed_fn(
+    text: str,
+) -> list[float]: ...  # your embedding provider/model — not included
+
 
 engine = AgentEngine(
     chat=OpenAIChat(),
@@ -129,7 +132,9 @@ redis_backend = RedisBackend(url="redis://localhost:6379/0", namespace="my-agent
 await redis_backend.set("user_name", "Abel", ttl_seconds=3600)
 await redis_backend.close()
 
-pg_backend = PostgresBackend(dsn="postgresql://phoson:phoson@localhost/phoson", namespace="my-agent")
+pg_backend = PostgresBackend(
+    dsn="postgresql://phoson:phoson@localhost/phoson", namespace="my-agent"
+)
 await pg_backend.set("user_name", "Abel")
 await pg_backend.close()
 ```

@@ -32,11 +32,14 @@ Each task is a Python file in `bench/tasks/` exposing:
 NAME = "task-name"
 INSTRUCTION = "what the agent must do"
 
+
 def setup(workspace: Path) -> None:
     """Optional: seed the workspace before the run."""
 
+
 def check(workspace: Path, stdout: str, exit_code: int) -> tuple[bool, str]:
     """Return (passed, detail). Must be deterministic."""
+
 
 def SOLVE(workspace: Path) -> None:
     """Reference solution (conformance oracle). Never seen by the agent."""

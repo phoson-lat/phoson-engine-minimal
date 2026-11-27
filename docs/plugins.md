@@ -111,13 +111,13 @@ from phoson_llm import OpenAIChat
 engine = AgentEngine(
     chat=OpenAIChat(),
     plugins=[
-        "phoson-plugin-mcp",      # Plugin installed via pip
-        "phoson-plugin-memory",   # Another plugin
+        "phoson-plugin-mcp",  # Plugin installed via pip
+        "phoson-plugin-memory",  # Another plugin
         {
             "name": "phoson-plugin-checkpoint",
             "config": {
                 "save_interval": 100,
-            }
+            },
         },
     ],
 )
@@ -130,18 +130,20 @@ engine = AgentEngine(
 ```python
 from phoson_agent import Plugin, AgentTool, tool
 
+
 class MyPlugin(Plugin):
     @property
     def name(self) -> str:
         return "my-plugin"
-    
+
     def get_tools(self) -> list[AgentTool]:
         @tool
         def my_function(x: int) -> int:
             """My custom function."""
             return x * 2
-        
+
         return [my_function]
+
 
 # Export the instance
 plugin = MyPlugin()
@@ -153,11 +155,12 @@ plugin = MyPlugin()
 from phoson_agent import Plugin, AgentMiddleware
 from phoson_llm.schemas import Message, ModelConfig
 
+
 class MyPlugin(Plugin):
     @property
     def name(self) -> str:
         return "my-plugin"
-    
+
     def get_middlewares(self) -> list[AgentMiddleware]:
         class MyMiddleware(AgentMiddleware):
             async def on_before_llm(
@@ -168,7 +171,7 @@ class MyPlugin(Plugin):
                 # Modify messages before the LLM
                 print("Before LLM call")
                 return messages
-        
+
         return [MyMiddleware()]
 ```
 
@@ -200,7 +203,7 @@ class MyPlugin(Plugin):
 ### 1. Installed Plugin (Package)
 
 ```python
-plugins=["phoson-plugin-memory"]
+plugins = ["phoson-plugin-memory"]
 ```
 
 The plugin must be installed via pip and expose a `plugin` attribute in its `__init__.py`:
@@ -208,6 +211,7 @@ The plugin must be installed via pip and expose a `plugin` attribute in its `__i
 ```python
 # phoson_plugin_memory/__init__.py
 from ._plugin import MemoryPlugin
+
 plugin = MemoryPlugin()
 ```
 
@@ -220,7 +224,7 @@ plugin = MemoryPlugin()
 ### 2. Plugin from a Local Path
 
 ```python
-plugins=["path:./my_plugin.py"]
+plugins = ["path:./my_plugin.py"]
 ```
 
 The file must expose a `plugin` attribute or a `create_plugin()` function.
@@ -228,7 +232,7 @@ The file must expose a `plugin` attribute or a `create_plugin()` function.
 ### 3. Plugin from an Entry Point
 
 ```python
-plugins=["entrypoint:my-plugin"]
+plugins = ["entrypoint:my-plugin"]
 ```
 
 Configured in `pyproject.toml`:
@@ -241,13 +245,13 @@ my-plugin = "my_package.plugin:create_plugin"
 ### 4. Plugin with Configuration
 
 ```python
-plugins=[
+plugins = [
     {
         "name": "phoson-plugin-memory",
         "config": {
             "max_memories": 100,
             "persist": True,
-        }
+        },
     }
 ]
 ```
@@ -255,7 +259,7 @@ plugins=[
 ### 5. Direct Instance
 
 ```python
-plugins=[MyPlugin()]
+plugins = [MyPlugin()]
 ```
 
 ## Plugin Lifecycle
@@ -279,10 +283,12 @@ with AgentEngine(chat=OpenAIChat(), plugins=[...]) as engine:
 ```python
 from phoson_agent import register_loader, Plugin
 
+
 def load_from_github(repo_url: str) -> Plugin:
     # Your logic to download and load from GitHub
     ...
     return plugin_instance
+
 
 register_loader("github", load_from_github)
 

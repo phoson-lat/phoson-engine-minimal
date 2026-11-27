@@ -49,6 +49,10 @@ def build_tools(include_skill: bool | None = None) -> list[AgentTool]:
             flag makes the behaviour explicit for tests and callers.
     """
     tools = list(_BASE_TOOLS)
+    # Persistent memories are built-in runtime tools (not an optional plugin).
+    from phoson_agent.memory_tools import memory_tools
+
+    tools.extend(memory_tools())
     if include_skill is None:
         include_skill = _has_skills()
     if include_skill:

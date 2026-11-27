@@ -86,10 +86,10 @@ engine = AgentEngine(
             "name": "phoson-plugin-monitor",
             "config": {
                 "data_dir": "~/.phoson/monitors",  # default
-                "on_wake": my_wake_callback,       # optional, live hosts
-                "max_pending_wakes": 5,            # per-monitor anti-storm cap
-                "default_session_id": "",          # when the host injects none
-                "cwd_provider": lambda: session_cwd, # optional: scope to a dir
+                "on_wake": my_wake_callback,  # optional, live hosts
+                "max_pending_wakes": 5,  # per-monitor anti-storm cap
+                "default_session_id": "",  # when the host injects none
+                "cwd_provider": lambda: session_cwd,  # optional: scope to a dir
             },
         }
     ],

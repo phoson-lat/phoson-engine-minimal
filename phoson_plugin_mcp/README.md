@@ -69,9 +69,7 @@ engine = AgentEngine(
     plugins=[
         {
             "name": "phoson-plugin-mcp",
-            "config": {
-                "config_file": "./config/my-mcp-servers.json"
-            }
+            "config": {"config_file": "./config/my-mcp-servers.json"},
         }
     ],
 )
@@ -90,10 +88,14 @@ engine = AgentEngine(
                 "servers": {
                     "filesystem": {
                         "command": "npx",
-                        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+                        "args": [
+                            "-y",
+                            "@modelcontextprotocol/server-filesystem",
+                            "/tmp",
+                        ],
                     }
                 }
-            }
+            },
         }
     ],
 )
@@ -269,12 +271,7 @@ engine = AgentEngine(
 
 # Use the agent
 result = await engine.run(
-    messages=[
-        Message(
-            role="user",
-            content="List the files in the /tmp directory"
-        )
-    ],
+    messages=[Message(role="user", content="List the files in the /tmp directory")],
     config=ModelConfig(model="gpt-4o"),
 )
 
@@ -316,14 +313,7 @@ You can change the prefix like this:
 ```python
 engine = AgentEngine(
     chat=OpenAIChat(),
-    plugins=[
-        {
-            "name": "phoson-plugin-mcp",
-            "config": {
-                "tool_name_prefix": "remote"
-            }
-        }
-    ],
+    plugins=[{"name": "phoson-plugin-mcp", "config": {"tool_name_prefix": "remote"}}],
 )
 ```
 

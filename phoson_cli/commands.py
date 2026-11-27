@@ -1552,6 +1552,124 @@ class CommandHandler:
         r.print_info("(/skills <name> shows a skill's full instructions)")
         return True
 
+    async def _cmd_memory(self, cmd: Command) -> bool:
+        """Manage persistent Markdown memories."""
+        from .memory import read_memory, write_memory, delete_memory, list_memories
+
+        r = self._r
+        parts = cmd.args.split(maxsplit=1)
+        action = parts[0].lower() if parts else "list"
+        tail = parts[1] if len(parts) > 1 else ""
+        scope = "project"
+        if tail.split(maxsplit=1) and tail.split(maxsplit=1)[0].lower() in (
+            "global",
+            "project",
+        ):
+            scope_token, _, tail = tail.partition(" ")
+            scope = scope_token.lower()
+        argument = tail.strip()
+
+        if action == "add":
+            if argument.lower() in ("global", "project"):
+                argument = tail.strip()
+            else:
+                argument = tail.strip()
+            if argument.lower().startswith("global "):
+                scope, argument = "global", argument[7:]
+            elif argument.lower().startswith("project "):
+                scope, argument = "project", argument[8:]
+            write_parts = argument.split(maxsplit=1)
+            if len(write_parts) != 2:
+                r.print_error("Usage: /memory add [global|project] <name> <content>")
+                return True
+            try:
+                path = write_memory(
+                    write_parts[0],
+                    write_parts[1],
+                    scope,
+                    project=Path(self.session.tree.cwd or os.getcwd()),
+                )
+                r.print_info(f"Memory saved: {path.name}")
+            except (OSError, UnicodeError, ValueError) as exc:
+                r.print_error(f"Could not save memory: {exc}")
+            return True
+        if action == "show":
+            if not argument:
+                r.print_error("Usage: /memory show [global|project] <name>")
+                return True
+            try:
+                r.print_info(
+                    read_memory(
+                        argument,
+                        scope,
+                        project=Path(self.session.tree.cwd or os.getcwd()),
+                    )
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                r.print_error(f"Could not read memory: {exc}")
+            return True
+        if action == "list":
+            if argument:
+                r.print_error("Usage: /memory list [global|project]")
+                return True
+            memories = list_memories(
+                scope, project=Path(self.session.tree.cwd or os.getcwd())
+            )
+            if not memories:
+                r.print_info(f"{scope} memories: (none)")
+            else:
+                r.print_info(f"{scope.capitalize()} memories:")
+                for path in memories:
+                    r.print_info(f"  {path.stem}")
+            return True
+        if action == "read":
+            if not argument:
+                r.print_error("Usage: /memory read [global|project] <name>")
+                return True
+            try:
+                r.print_info(
+                    read_memory(
+                        argument,
+                        scope,
+                        project=Path(self.session.tree.cwd or os.getcwd()),
+                    ).rstrip()
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                r.print_error(f"Could not read memory: {exc}")
+            return True
+        if action == "write":
+            write_parts = argument.split(maxsplit=1)
+            if len(write_parts) != 2:
+                r.print_error("Usage: /memory write [global|project] <name> <content>")
+                return True
+            try:
+                path = write_memory(
+                    write_parts[0],
+                    write_parts[1],
+                    scope,
+                    project=Path(self.session.tree.cwd or os.getcwd()),
+                )
+                r.print_info(f"Memory saved: {path.name}")
+            except (OSError, UnicodeError, ValueError) as exc:
+                r.print_error(f"Could not save memory: {exc}")
+            return True
+        if action == "delete":
+            if not argument:
+                r.print_error("Usage: /memory delete [global|project] <name>")
+                return True
+            try:
+                delete_memory(
+                    argument, scope, project=Path(self.session.tree.cwd or os.getcwd())
+                )
+                r.print_info(f"Memory deleted: {argument}")
+            except (OSError, UnicodeError, ValueError) as exc:
+                r.print_error(f"Could not delete memory: {exc}")
+            return True
+        r.print_error(
+            "Usage: /memory [list|read|write|delete] [global|project] [name] [content]"
+        )
+        return True
+
     async def _cmd_auth(self, cmd: Command) -> bool:
         """Sign in/out of subscription providers.
 
