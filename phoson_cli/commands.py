@@ -332,6 +332,11 @@ def _short_account_id(account_id: str | None) -> str:
     return f"{account_id[:8]}…" if len(account_id) > 8 else account_id
 
 
+#: ``/theme`` subcommands (a theme cannot take one of these names).
+THEME_SUBCOMMANDS: tuple[str, ...] = ("list", "accent", "new", "reload", "export")
+_THEME_SUBCOMMANDS = THEME_SUBCOMMANDS
+
+
 class CommandHandler:
     """Handles execution of CLI slash commands.
 
@@ -1010,16 +1015,33 @@ class CommandHandler:
         return None
 
     async def _cmd_theme(self, cmd: Command) -> bool:
-        """Show, pick, or set the color theme (IMPROVEMENTS.md E4)."""
+        """Show, pick, set or customize the color theme (E4).
+
+        ``/theme`` opens the picker; ``/theme <name>`` switches;
+        ``/theme list`` lists themes and active overrides;
+        ``/theme accent <color>|reset`` recolors the accent of every theme;
+        ``/theme new <name> [--from <theme>]`` writes a starter JSON theme;
+        ``/theme reload`` re-reads JSON themes and ``[theme_overrides]``;
+        ``/theme export [file]`` writes the active theme as JSON.
+        """
         r = self._r
         current = self.session.theme.name
         theme_registry = getattr(
             self.session, "theme_registry", default_theme_registry()
         )
 
-        arg = cmd.args.strip().lower()
+        raw_args = cmd.args.strip()
+        sub, _, rest = raw_args.partition(" ")
+        sub = sub.lower()
+        rest = rest.strip()
+        if sub in _THEME_SUBCOMMANDS:
+            handler = getattr(self, f"_theme_{sub}")
+            await handler(rest, current)
+            return True
+
+        arg = raw_args.lower()
         if not arg:
-            if self._picker_unavailable("/theme <system|dark|light|ansi|no-color>"):
+            if self._picker_unavailable("/theme <name> or /theme list"):
                 return True
             # Zero-cost hint for the picker's "detected" marker: only the
             # COLORFGBG env (no tty IO — an OSC 11 probe here would race
@@ -1039,18 +1061,12 @@ class CommandHandler:
                 r.print_info("Cancelled.")
                 return True
             arg = result.theme_name
-        elif arg == "list":
-            r.print_info("Available themes:")
-            for name in theme_registry.valid_names():
-                marker = "*" if name == current else " "
-                r.print_info(f" {marker} {name}")
-            return True
 
         theme = get_theme(arg, registry=theme_registry)
         if theme is None:
             r.print_error(
-                f"Unknown theme: {arg!r}  ·  use "
-                f"{', '.join(theme_registry.valid_names())}"
+                f"Unknown theme: {arg!r}  ·  /theme list shows them all "
+                "(subcommands: " + ", ".join(_THEME_SUBCOMMANDS) + ")"
             )
             return True
 
@@ -1068,6 +1084,163 @@ class CommandHandler:
         self.host.apply_theme(theme)
         r.print_info(f"Theme → {theme.name}  ·  saved")
         return True
+
+    # ── /theme subcommands ───────────────────────────────────────────────
+
+    def _reapply_theme(self, name: str) -> bool:
+        """Rebuild the registry and re-apply theme ``name`` live.
+
+        Returns False (after printing why) when the rebuild failed.
+        """
+        reload = getattr(self.session, "reload_themes", None)
+        try:
+            registry = reload() if reload is not None else default_theme_registry()
+        except ValueError as exc:
+            self._r.print_error(f"Could not reload themes: {exc}")
+            return False
+        theme = registry.get(name) or registry.get("system")
+        if theme is not None:
+            self.host.apply_theme(theme)
+        return True
+
+    async def _theme_list(self, rest: str, current: str) -> None:  # noqa: ARG002
+        from .theme import load_theme_overrides
+
+        r = self._r
+        registry = getattr(self.session, "theme_registry", default_theme_registry())
+        r.print_info("Available themes:")
+        width = max((len(name) for name in registry.valid_names()), default=0)
+        for name, description in registry.rows():
+            marker = "*" if name == current else " "
+            r.print_info(f" {marker} {name:<{width}}  {description}")
+        overrides = load_theme_overrides()
+        if overrides:
+            pairs = ", ".join(f"{k}={v}" for k, v in sorted(overrides.items()))
+            r.print_info(f"Overrides ([theme_overrides] in config.toml): {pairs}")
+        r.print_info(
+            "Customize: /theme accent <color>  ·  /theme new <name>  ·  "
+            "/theme export  ·  /theme reload"
+        )
+
+    async def _theme_accent(self, rest: str, current: str) -> None:
+        from .theme import load_theme_overrides
+        from .config import PhosonConfigError, save_theme_overrides
+        from .theme_palettes import ACCENT_FAMILY, to_hex
+
+        r = self._r
+        overrides = load_theme_overrides()
+        value = rest.strip()
+        if not value:
+            accent = overrides.get("accent")
+            r.print_info(
+                f"Accent override: {accent}" if accent else "No accent override."
+            )
+            r.print_info("Usage: /theme accent <#rrggbb|color name>  ·  reset")
+            return
+        if value.lower() in ("reset", "off", "none"):
+            for key in ("accent", *ACCENT_FAMILY):
+                overrides.pop(key, None)
+            message = "Accent override removed."
+        else:
+            try:
+                color = to_hex(value)
+            except ValueError as exc:
+                r.print_error(f"{exc}  ·  use #rrggbb or a color name like magenta")
+                return
+            overrides["accent"] = color
+            message = f"Accent → {color} on every theme"
+        try:
+            path = save_theme_overrides(overrides)
+        except PhosonConfigError as exc:
+            r.print_error(str(exc))
+            return
+        if self._reapply_theme(current):
+            r.print_info(f"{message}  ·  saved to [theme_overrides] in {path}")
+
+    async def _theme_new(self, rest: str, current: str) -> None:
+        import re
+
+        from . import theme as theme_module
+
+        r = self._r
+        parts = rest.split()
+        base_name = current
+        if "--from" in parts:
+            i = parts.index("--from")
+            if i + 1 >= len(parts):
+                r.print_error("Usage: /theme new <name> [--from <theme>]")
+                return
+            base_name = parts[i + 1].lower()
+            del parts[i : i + 2]
+        if len(parts) != 1:
+            r.print_error("Usage: /theme new <name> [--from <theme>]")
+            return
+        name = parts[0].lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", name):
+            r.print_error(
+                "Theme names use lowercase letters, digits, - and _ "
+                "(up to 40 characters)."
+            )
+            return
+        if name in theme_module.VALID_NAMES or name in _THEME_SUBCOMMANDS:
+            r.print_error(f"{name!r} is reserved; pick another name.")
+            return
+        registry = getattr(self.session, "theme_registry", default_theme_registry())
+        base = registry.get(base_name)
+        if base is None or base.name == "no-color":
+            r.print_error(f"Cannot start from {base_name!r}; see /theme list.")
+            return
+        directory = theme_module.JSON_THEMES_DIR
+        target = directory / f"{name}.json"
+        if target.exists():
+            r.print_error(f"{target} already exists; edit it, then /theme reload.")
+            return
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                theme_module.theme_to_json(base, name=name), encoding="utf-8"
+            )
+        except OSError as exc:
+            r.print_error(f"Could not write {target}: {exc}")
+            return
+        if self._reapply_theme(current):
+            r.print_info(f"Created {target} from {base.name!r}.")
+            r.print_info(
+                f"Edit the tokens, run /theme reload, then /theme {name} to use it."
+            )
+
+    async def _theme_reload(self, rest: str, current: str) -> None:  # noqa: ARG002
+        if self._reapply_theme(current):
+            registry = self.session.theme_registry
+            self._r.print_info(
+                f"Themes reloaded ({len(registry.valid_names())} available)."
+            )
+
+    async def _theme_export(self, rest: str, current: str) -> None:
+        from pathlib import Path
+
+        from .theme import theme_to_json
+
+        r = self._r
+        target = (
+            Path(rest).expanduser()
+            if rest
+            else Path.cwd() / f"{current}.phoson-theme.json"
+        )
+        if target.exists():
+            r.print_error(f"{target} already exists; choose another file.")
+            return
+        try:
+            target.write_text(
+                theme_to_json(self.session.theme, name=current), encoding="utf-8"
+            )
+        except OSError as exc:
+            r.print_error(f"Could not write {target}: {exc}")
+            return
+        r.print_info(
+            f"Exported {current!r} (with your overrides) to {target}. "
+            "Copy it into ~/.phoson/themes/ to use or share it."
+        )
 
     async def _cmd_keys(self, cmd: Command) -> bool:  # noqa: ARG002
         """List the effective key bindings (IMPROVEMENTS.md E6).

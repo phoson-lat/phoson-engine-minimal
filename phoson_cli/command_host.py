@@ -197,7 +197,7 @@ class RendererCommandHost:
     async def pick_theme(
         self, current_theme: str, *, detected_theme: str | None = None
     ) -> ThemePickerResult:
-        if self.picker_unavailable("/theme <system|dark|light|ansi|no-color>"):
+        if self.picker_unavailable("/theme <name> or /theme list"):
             return ThemePickerResult(unavailable=True)
         from phoson_cli import commands as commands_mod
 

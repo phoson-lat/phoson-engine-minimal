@@ -224,7 +224,8 @@ COMMAND_SPECS: Final[tuple[CommandSpec, ...]] = (
     ),
     CommandSpec(
         ("/theme",),
-        "Show, pick or set the color theme: dark, light, ansi, no-color",
+        "Pick, set or customize the color theme: /theme [name|list|accent|"
+        "new|reload|export]",
         "_cmd_theme",
     ),
     CommandSpec(

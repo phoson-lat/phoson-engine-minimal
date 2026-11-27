@@ -1877,6 +1877,20 @@ def save_config(
         except PhosonConfigError as exc:
             raise PhosonConfigError(f"Invalid generated configuration: {exc}") from exc
 
+    _write_config_file(config_path, content)
+    return config_path
+
+
+def _write_config_file(config_path: Path, content: str) -> None:
+    """Atomically replace ``config_path`` with ``content``.
+
+    Creates the directory (0700 on POSIX), copies the previous file to
+    ``config.toml.bak`` first, writes a 0600 temporary file in the same
+    directory and ``os.replace``-s it over the target. Shared by
+    :func:`save_config` and :func:`save_theme_overrides`.
+    """
+    config_dir = config_path.parent
+    temp_fd = -1
     try:
         config_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1905,7 +1919,6 @@ def save_config(
                 f"Could not create secure configuration backup {backup_path}: {exc}"
             ) from exc
 
-    temp_fd = -1
     temp_path: Path | None = None
     try:
         try:
@@ -1973,7 +1986,72 @@ def save_config(
             except OSError:
                 pass
 
-    return config_path
+
+def _toml_string(value: str) -> str:
+    """A TOML basic string (JSON string escaping is a valid subset)."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def save_theme_overrides(
+    overrides: dict[str, str], config_path: Path | None = None
+) -> Path:
+    """Persist ``overrides`` as the ``[theme_overrides]`` table of config.toml.
+
+    Only that table is rewritten (replaced in place, appended when
+    missing, removed when ``overrides`` is empty); every other line of the
+    file is preserved byte-for-byte. Values are written as TOML strings.
+
+    Raises:
+        PhosonConfigError: when the file cannot be read/written or the
+            result would not parse.
+    """
+    path = config_path or Path("~/.phoson/config.toml").expanduser()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    except OSError as exc:
+        raise PhosonConfigError(
+            f"Could not read configuration file {path}: {exc}"
+        ) from exc
+
+    out: list[str] = []
+    in_table = False
+    insert_at: int | None = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_table = stripped == "[theme_overrides]"
+            if in_table:
+                insert_at = len(out)
+                continue
+        if in_table:
+            continue  # dropped: the table is regenerated below
+        out.append(line)
+
+    block = [
+        f"{key} = {_toml_string(value)}" for key, value in sorted(overrides.items())
+    ]
+    if block:
+        section = ["[theme_overrides]", *block]
+        if insert_at is None:
+            if out and out[-1].strip():
+                out.append("")
+            out.extend(section)
+        else:
+            out[insert_at:insert_at] = [*section, ""]
+    while out and not out[-1].strip():
+        out.pop()
+
+    content = "\n".join(out) + "\n"
+    try:
+        parsed = tomllib.loads(content)
+    except tomllib.TOMLDecodeError as exc:
+        raise PhosonConfigError(f"Invalid generated configuration: {exc}") from exc
+    if parsed.get("theme_overrides", {}) != dict(overrides):
+        raise PhosonConfigError(
+            "Invalid generated configuration: [theme_overrides] did not round-trip"
+        )
+    _write_config_file(path, content)
+    return path
 
 
 def _chatgpt_logged_in() -> bool:

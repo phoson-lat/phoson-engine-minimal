@@ -809,11 +809,11 @@ class SetupWizard:
         """Ask which color theme to save (E4).
 
         The terminal's detected light/dark (if any) is offered as the
-        default; the four tiers are all accepted. The full ``/theme``
-        picker with live preview is available at runtime, so this stays
-        a simple text prompt here.
+        default; every built-in theme (tiers and palettes) is accepted.
+        The full ``/theme`` picker with live preview is available at
+        runtime, so this stays a simple text prompt here.
         """
-        from phoson_cli.theme import VALID_NAMES, get_theme
+        from phoson_cli.theme import get_theme, default_theme_registry
         from phoson_cli.terminal_theme import detect_terminal_theme
 
         detected = detect_terminal_theme()
@@ -824,7 +824,7 @@ class SetupWizard:
             self.console.print(
                 Text(
                     f"Unknown theme {raw!r} — using {default!r} "
-                    f"(valid: {', '.join(VALID_NAMES)})",
+                    f"(valid: {', '.join(default_theme_registry().valid_names())})",
                     style=f"{self.theme.err}",
                 )
             )

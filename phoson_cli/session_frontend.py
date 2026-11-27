@@ -138,6 +138,10 @@ class SessionFrontend:
         """Themes contributed by the currently loaded plugin set."""
         return self._controller.theme_registry
 
+    def reload_themes(self) -> ThemeRegistry:
+        """Rescan JSON themes and ``[theme_overrides]`` (see the controller)."""
+        return self._controller.reload_themes()
+
     @property
     def command_catalog(self) -> CommandCatalog:
         """Native + plugin slash commands for the live engine."""
