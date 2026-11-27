@@ -34,13 +34,18 @@ class FullScreenConfirmationService:
         command: str,
         *,
         on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
+        title: str | None = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions.
 
         y = run once · a = run and always allow this exact command
         (persisted via ``on_always``) · n/Esc = deny.
         """
-        return await self.app.run_float_bash_card(command, on_always=on_always)
+        if title is None:
+            return await self.app.run_float_bash_card(command, on_always=on_always)
+        return await self.app.run_float_bash_card(
+            command, on_always=on_always, title=title
+        )
 
     async def select_plugin(
         self, title: str, message: str, choices: Sequence[Choice]

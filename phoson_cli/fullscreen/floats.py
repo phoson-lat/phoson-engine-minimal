@@ -22,17 +22,34 @@ from phoson_agent import Choice, Question, FormField, QuestionsResult
 
 from ..pickers import BasePicker
 
+#: Script lines shown in a permission card before the rest is elided.
+CARD_MAX_LINES = 40
 
-def bash_card_rows(command: str) -> list[tuple[str, str]]:
+
+def bash_card_rows(command: str, *, title: str | None = None) -> list[tuple[str, str]]:
     """T-6: the permission card's content fragments (testable unit).
 
     Title + the command in monospace + the three actions. The Float
     wrapper (:meth:`PhosonApp.run_float_bash_card`) renders exactly
-    these rows, so the test suite asserts on this function.
+    these rows, so the test suite asserts on this function. A custom
+    ``title`` marks a script (``run_code``): it is shown line by line,
+    without the shell prompt, up to :data:`CARD_MAX_LINES` lines.
     """
+    if title is None:
+        body = [("class:prompt.model", f"  $ {command}\n")]
+        heading = "Run bash command?"
+    else:
+        heading = title
+        lines = command.splitlines() or [""]
+        shown = lines[:CARD_MAX_LINES]
+        body = [("class:prompt.model", f"  {line}\n") for line in shown]
+        if len(lines) > len(shown):
+            body.append(
+                ("class:footer", f"  … {len(lines) - len(shown)} more line(s)\n")
+            )
     return [
-        ("class:title", "  Run bash command?\n\n"),
-        ("class:prompt.model", f"  $ {command}\n"),
+        ("class:title", f"  {heading}\n\n"),
+        *body,
         ("\n", ""),
         ("class:footer", "  [y] Yes    [a] Always    [n] No / Esc\n"),
     ]
@@ -157,15 +174,19 @@ class FloatsController:
         command: str,
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        title: str | None = None,
     ) -> bool:
         async with self._lock:
-            return await self._run_float_bash_card(command, on_always=on_always)
+            return await self._run_float_bash_card(
+                command, on_always=on_always, title=title
+            )
 
     async def _run_float_bash_card(
         self,
         command: str,
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        title: str | None = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions.
 
@@ -229,7 +250,7 @@ class FloatsController:
 
         window = Window(
             content=FormattedTextControl(
-                lambda: bash_card_rows(command),
+                lambda: bash_card_rows(command, title=title),
                 focusable=True,
             ),
             always_hide_cursor=True,
