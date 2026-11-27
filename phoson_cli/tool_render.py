@@ -24,6 +24,7 @@ _TOOL_VERBS: Final[dict[str, str]] = {
     "glob": "globbing files",
     "view_image": "viewing image",
     "bash": "running command",
+    "run_code": "running code",
     "skill": "loading skill",
     "web_search": "searching the web",
     "web_fetch": "fetching page",

@@ -123,13 +123,16 @@ class ConfirmationService(Protocol):
         command: str,
         *,
         on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
+        title: str | None = None,
     ) -> bool:
         """Permission-mode confirmation card (T-6): the command in
         monospace with **Yes / Always / No** actions.
 
         ``on_always`` is invoked (with the command) when the user picks
-        *Always* — the front end persists the allow pattern. Front ends
-        without the richer card may not implement this; callers fall
+        *Always* — the front end persists the allow pattern. ``title``
+        replaces the default "Run bash command?" heading; a multi-line
+        ``command`` (a ``run_code`` script) is shown line by line. Front
+        ends without the richer card may not implement this; callers fall
         back to :meth:`confirm_bash`. False on cancel/No.
         """
         ...

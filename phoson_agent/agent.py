@@ -45,6 +45,7 @@ from phoson_agent.models import (
 from phoson_agent.plugin import Plugin
 from phoson_agent.context import AgentContext
 from phoson_llm.chats.base import BaseLLMChat
+from phoson_agent.code_mode import CodeModeConfig
 from phoson_agent._internals import (
     IterationCost,
     IterationFinal,
@@ -137,6 +138,10 @@ class AgentEngine:
             output are left to :class:`phoson_llm.retry.RetryingChat`.
         stream_retry_delay: Base delay in seconds before such a retry
             (multiplied by the retry number).
+        code_mode: Enables code mode (see :mod:`phoson_agent.code_mode`):
+            adds a ``run_code`` tool whose Python scripts call the other
+            tools as functions, through the same permission gate, and only
+            return what they print. ``None`` (the default) disables it.
 
     The ``tools`` and ``middlewares`` lists are copied at construction:
     plugin contributions are added to the engine's own lists, never to the
@@ -154,6 +159,7 @@ class AgentEngine:
     effort_scheduler: EffortScheduler | None = field(default=None, repr=False)
     max_stream_retries: int = 1
     stream_retry_delay: float = 1.0
+    code_mode: CodeModeConfig | None = field(default=None, repr=False)
 
     # Internal state
     _history: list[Message] = field(default_factory=list, init=False, repr=False)
@@ -232,7 +238,30 @@ class AgentEngine:
             max_stream_retries=self.max_stream_retries,
             stream_retry_delay=self.stream_retry_delay,
         )
+        if self.code_mode is not None:
+            self._setup_code_mode(self.code_mode)
         self._setup_tool_discovery()
+
+    def _setup_code_mode(self, config: CodeModeConfig) -> None:
+        """Register the ``run_code`` tool (code mode).
+
+        It is a core tool (always visible). Its description lists the
+        signatures of the other core tools; plugin/MCP tools — masked or
+        not — stay reachable from scripts through ``tools.search``.
+        """
+        from phoson_agent.code_mode import make_run_code_tool
+
+        tool = make_run_code_tool(
+            runner=self._tool_runner,
+            tools_by_name=self._tools_by_name,
+            config=config,
+            listed_names=[
+                t.name for t in self.tools if t.name in self._constructor_tool_names
+            ],
+        )
+        self.tools.append(tool)
+        self._tools_by_name[tool.name] = tool
+        self._constructor_tool_names.add(tool.name)
 
     def _setup_tool_discovery(self) -> None:
         """Build the cache-aware tool catalog (issue #148).

@@ -1135,6 +1135,13 @@ def main() -> None:
     with file + line on stderr. ``restore()`` runs in a ``finally`` so even the
     ``sys.exit`` paths unwind it (``SystemExit`` fires ``finally``).
     """
+    if sys.argv[1:2] == ["--phoson-code-worker"]:
+        # Code mode worker (hidden): the standalone binary runs scripts with
+        # its own bundled stdlib when no system Python is available. It owns
+        # stdin/stdout as an RPC channel, so nothing else may run first.
+        from phoson_agent.code_mode import worker_entry
+
+        sys.exit(worker_entry())
     restore = warnings_hook.install()
     try:
         _run_cli()

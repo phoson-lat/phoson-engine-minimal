@@ -739,7 +739,9 @@ _INDENT: Final[str] = "      "
 #: Tools whose done card renders a specialized, collapsible body (T-7).
 #: A card for one of these shows the ``/details`` hint; a plain tool
 #: (read_file, view_image, ...) has no body to collapse.
-_BODY_TOOLS: Final[frozenset[str]] = frozenset({"patch_file", "write_file", "bash"})
+_BODY_TOOLS: Final[frozenset[str]] = frozenset(
+    {"patch_file", "write_file", "bash", "run_code"}
+)
 
 
 def tool_verb(tool_name: str, registry: ToolRenderRegistry | None = None) -> str:
@@ -763,6 +765,7 @@ _TOOL_ICONS: Final[dict[str, str]] = {
     "write_file": "✍",
     "patch_file": "🪄",
     "bash": "⌘",
+    "run_code": "λ",
     "web_search": "🔎",
     "web_fetch": "🔗",
     "skill": "📜",
@@ -787,6 +790,11 @@ def tool_detail(tool_name: str, args: dict[str, Any]) -> str:
         cmd = str(args.get("command") or "")
         one_line = " ".join(cmd.split())
         return one_line[:72] + ("…" if len(one_line) > 72 else "")
+    if tool_name == "run_code":
+        # First meaningful line of the script (comments often say what it does).
+        code = str(args.get("code") or "")
+        first = next((ln.strip() for ln in code.splitlines() if ln.strip()), "")
+        return first[:72] + ("…" if len(first) > 72 else "")
     if tool_name in {"grep", "glob"}:
         # The pattern is the useful detail (like bash's command), not the
         # search root — "searching files · def build_" beats "· .".
@@ -1023,7 +1031,7 @@ def _outcome_body(
         return _diff_body(args, theme)
     if tool_name == "write_file":
         return _write_summary_body(args, result, theme)
-    if tool_name == "bash":
+    if tool_name in ("bash", "run_code"):
         return _bash_output_body(result, theme)
     return []
 

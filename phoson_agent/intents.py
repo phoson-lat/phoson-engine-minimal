@@ -111,6 +111,9 @@ _TOOL_INTENTS: dict[str, frozenset[str]] = {
     "patch_file": frozenset({INTENT_FILESYSTEM_WRITE}),
     "web_fetch": frozenset({INTENT_NETWORK_OUTBOUND}),
     "web_search": frozenset({INTENT_NETWORK_OUTBOUND}),
+    # Code mode: a script is arbitrary code. Its tool calls are gated one by
+    # one; the script itself is language execution.
+    "run_code": frozenset({INTENT_LANG_EXEC}),
 }
 
 
@@ -646,6 +649,13 @@ SHELL_COMMAND_TOOLS: dict[str, Any] = {
 }
 
 
+#: Tools that run model-written code without being a shell line. Like
+#: :data:`SHELL_COMMAND_TOOLS` they inherit ``bash``'s level when they have
+#: none of their own, so allowing them never needs a separate rule and
+#: denying bash denies them too.
+CODE_EXEC_TOOLS: frozenset[str] = frozenset({"run_code"})
+
+
 def infer_intents(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...]:
     """Derive the intent categories of one tool call.
 
@@ -851,6 +861,7 @@ __all__ = [
     "SAFE_DEFAULT_INTENT_LEVELS",
     "split_redirects",
     "SHELL_COMMAND_TOOLS",
+    "CODE_EXEC_TOOLS",
     "INTENT_FILESYSTEM_READ",
     "INTENT_FILESYSTEM_WRITE",
     "INTENT_LANG_EXEC",

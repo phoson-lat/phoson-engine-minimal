@@ -14,6 +14,7 @@ dives.
 - [agents-md.md](agents-md.md) — project memory injection
 - [skills.md](skills.md) — `SKILL.md` on-demand instruction packages
 - [background-tasks.md](background-tasks.md) — sub-agents that run while the agent keeps working
+- [code-mode.md](code-mode.md) — `run_code`: scripts that call tools as functions, sandboxed, permission-gated per call
 - [browser.md](browser.md) — interactive browser use through the official Chrome DevTools MCP server
 - [remote.md](remote.md) — `phoson-cli serve`: use this machine from Phoson Desktop or the mobile app (pairing, security, protocol)
 - [extras.md](extras.md) — `/extras`: optional features (speech to text, Computer Use, …) installed on demand

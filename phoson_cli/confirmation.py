@@ -37,13 +37,27 @@ class PromptToolkitConfirmationService:
         command: str,
         *,
         on_always: "Callable[[str], Coroutine[Any, Any, None]] | None" = None,
+        title: str | None = None,
     ) -> bool:
         """Classic front end: same y/N prompt (no card surface here).
 
         *Always* needs the full-screen card (T-6) — in the classic REPL
-        the user can persist patterns with /permissions instead.
+        the user can persist patterns with /permissions instead. A
+        ``title`` marks a script (``run_code``): it is printed in full
+        before a plain y/N question.
         """
-        return await self.confirm_bash(command)
+        if title is None:
+            return await self.confirm_bash(command)
+        session: PromptSession[str] = PromptSession()
+        try:
+            with patch_stdout():
+                print(
+                    f"{title}\n" + "\n".join(f"  {ln}" for ln in command.splitlines())
+                )
+                answer = await session.prompt_async("Run it? [y/N]:")
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer.strip().lower() in {"y", "yes"}
 
     async def select_plugin(
         self, title: str, message: str, choices: Sequence[Choice]
