@@ -110,6 +110,53 @@ def _agent_turn() -> None:
     asyncio.run(run())
 
 
+def _code_mode(bundled: bool = False) -> Callable[[], None]:
+    """run_code end to end: worker process, RPC, one tool call.
+
+    ``bundled`` forces the binary's own worker mode (``--phoson-code-worker``)
+    instead of a system ``python3``, so both paths of a release are covered.
+    The sandbox is off: CI hosts may lack one, and it is not what's checked.
+    """
+
+    def check() -> None:
+        from phoson_agent import AgentEngine, tool
+        from phoson_llm.chats.base import BaseLLMChat
+        from phoson_agent.code_mode import WORKER_FLAG, CodeModeConfig, _runner
+
+        class _Idle(BaseLLMChat):
+            async def stream(self, messages, config, tools=None):  # type: ignore[override]
+                return
+                yield
+
+        @tool
+        def echo(text: str) -> str:
+            """Echo the text back."""
+            return text
+
+        engine = AgentEngine(
+            chat=_Idle(), tools=[echo], code_mode=CodeModeConfig(sandbox="off")
+        )
+        run_code = engine._tools_by_name["run_code"]
+        original = _runner.worker_command
+        if bundled:
+            _runner.worker_command = lambda python=None: [sys.executable, WORKER_FLAG]
+
+        async def call() -> object:
+            return await run_code.handler(  # type: ignore[misc]
+                {"code": "print(tools.echo(text='code-ok'))", "timeout": 60},
+                engine.context,
+            )
+
+        try:
+            result = asyncio.run(call())
+        finally:
+            _runner.worker_command = original
+        if "code-ok" not in str(result):
+            raise RuntimeError(f"unexpected run_code result: {result!r}")
+
+    return check
+
+
 def _tokenizer(encoding: str) -> Callable[[], None]:
     def check() -> None:
         import tiktoken
@@ -155,6 +202,9 @@ def run_self_test(stream=None) -> int:
     frozen = is_frozen()
     results: list[tuple[str, str | None]] = []
     _check(results, "agent turn (fake model, tool call)", _agent_turn)
+    _check(results, "code mode (run_code worker)", _code_mode())
+    if frozen:
+        _check(results, "code mode (bundled worker)", _code_mode(bundled=True))
     for encoding in ("cl100k_base", "o200k_base"):
         _check(results, f"tokenizer {encoding}", _tokenizer(encoding))
     seen: set[str] = set()

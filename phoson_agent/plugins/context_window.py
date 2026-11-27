@@ -82,6 +82,12 @@ CONTEXT_WINDOW_FAMILIES: tuple[tuple[str, str, int], ...] = (
     ("openai", "o1", 128_000),
     ("openai", "o4", 128_000),
     ("xai", "grok-4.20", 1_000_000),
+    # ChatGPT subscription (Codex backend): its own, smaller windows than the
+    # same models on the OpenAI API — every model it listed in Nov 2026 had
+    # 272K or more. Only a fallback: the live listing reports the exact
+    # window per model and wins.
+    ("chatgpt", "gpt-", 272_000),
+    ("chatgpt", "codex-", 272_000),
 )
 
 # Kept for compatibility with callers that imported them.

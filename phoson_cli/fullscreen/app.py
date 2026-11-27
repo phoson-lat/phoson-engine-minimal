@@ -1242,9 +1242,12 @@ class PhosonApp:
         command: str,
         *,
         on_always: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        title: str | None = None,
     ) -> bool:
         """T-6: the permission card — command in monospace, 3 actions."""
-        return await self._floats.run_float_bash_card(command, on_always=on_always)
+        return await self._floats.run_float_bash_card(
+            command, on_always=on_always, title=title
+        )
 
     async def run_float_select(
         self, title: str, message: str, choices: Sequence[Choice]

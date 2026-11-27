@@ -16,7 +16,7 @@ from contextlib import AsyncExitStack
 
 from phoson_agent import Plugin, AgentTool
 from phoson_llm.schemas import ImageBlock
-from phoson_agent.models import ImageToolResult
+from phoson_agent.models import CODE_RESULT_KEY, OUTPUT_SCHEMA_KEY, ImageToolResult
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -236,6 +236,61 @@ def _with_image(payload: dict[str, Any]) -> dict[str, Any] | ImageToolResult:
         return payload
     text = json.dumps({**payload, "result": kept}, ensure_ascii=True)
     return ImageToolResult(text=text, image=image)
+
+
+def mcp_code_result(raw: Any) -> Any:
+    """Value a code-mode script gets from an MCP tool call.
+
+    The model-facing payload is an envelope (``success``/``result``/server
+    metadata); a script wants the data itself:
+
+    * a failed call (transport error, ``isError``) raises, so the script
+      sees a ``ToolError`` it can catch;
+    * ``structuredContent`` (servers with an ``outputSchema``) wins;
+    * otherwise the text content — decoded when it is a single JSON
+      document, joined when it is several text blocks;
+    * non-text content (images, resources) comes back as the raw part list.
+    """
+    payload = raw
+    if isinstance(raw, ImageToolResult):
+        try:
+            payload = json.loads(raw.text)
+        except ValueError:
+            return raw.text
+    if isinstance(payload, str):
+        return payload
+    if not isinstance(payload, dict):
+        return payload
+    parts = payload.get("result")
+    if payload.get("is_error") or "error" in payload:
+        message = payload.get("error")
+        if not message and isinstance(parts, list):
+            message = " ".join(
+                str(p.get("text", "")) for p in parts if isinstance(p, dict)
+            ).strip()
+        raise RuntimeError(message or "MCP tool reported an error")
+    if "structured_content" in payload:
+        return payload["structured_content"]
+    if not isinstance(parts, list):
+        return parts
+    texts: list[str] = [
+        p["text"]
+        for p in parts
+        if isinstance(p, dict)
+        and p.get("type") == "text"
+        and isinstance(p.get("text"), str)
+    ]
+    if len(texts) != len(parts):
+        return parts
+    if len(texts) == 1:
+        stripped = texts[0].strip()
+        if stripped[:1] in ("{", "["):
+            try:
+                return json.loads(stripped)
+            except ValueError:
+                pass
+        return texts[0]
+    return "\n".join(texts)
 
 
 def _project_mcp_digest(spec: dict[str, Any]) -> str:
@@ -709,19 +764,24 @@ class MCPPlugin(Plugin):
                     args,
                 )
 
+            metadata: dict[str, Any] = {
+                "mcp_annotations": _apply_annotation_override(
+                    _extract_annotations(remote_tool),
+                    server_config.get("annotations"),
+                    remote_tool_name,
+                ),
+                CODE_RESULT_KEY: mcp_code_result,
+            }
+            output_schema = getattr(remote_tool, "outputSchema", None)
+            if isinstance(output_schema, dict):
+                metadata[OUTPUT_SCHEMA_KEY] = output_schema
             agent_tools.append(
                 AgentTool(
                     name=local_tool_name,
                     description=description,
                     parameters=parameters,
                     handler=mcp_tool_handler,
-                    metadata={
-                        "mcp_annotations": _apply_annotation_override(
-                            _extract_annotations(remote_tool),
-                            server_config.get("annotations"),
-                            remote_tool_name,
-                        )
-                    },
+                    metadata=metadata,
                 )
             )
 
@@ -890,16 +950,21 @@ class MCPPlugin(Plugin):
             }
 
         result = await session.call_tool(tool_name, arguments)
-        return _with_image(
-            {
-                "success": True,
-                "result": self._serialize_mcp_value(
-                    result.content if hasattr(result, "content") else result
-                ),
-                "tool": tool_name,
-                "server": server_name,
-            }
-        )
+        is_error = getattr(result, "isError", False) is True
+        payload: dict[str, Any] = {
+            "success": not is_error,
+            "result": self._serialize_mcp_value(
+                result.content if hasattr(result, "content") else result
+            ),
+            "tool": tool_name,
+            "server": server_name,
+        }
+        if is_error:
+            payload["is_error"] = True
+        structured = getattr(result, "structuredContent", None)
+        if structured is not None:
+            payload["structured_content"] = self._serialize_mcp_value(structured)
+        return _with_image(payload)
 
     async def _list_server_tools(
         self,

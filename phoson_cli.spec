@@ -125,6 +125,12 @@ DATA_FILES += [
     )
 ]
 
+# Code mode: a system python3 runs the worker from its source (``python -I
+# -c``); PyInstaller keeps only bytecode, so ship the source file too.
+DATA_FILES.append(
+    ("phoson_agent/code_mode/_worker.py", "phoson_agent/code_mode")
+)
+
 VERSION_FILE = None
 if VERSION:
     # Stage the version file in a throwaway dir (outside the package so

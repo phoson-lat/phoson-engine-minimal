@@ -517,3 +517,40 @@ async def test_list_models_maps_catalogue_response() -> None:
     assert [model.slug for model in models] == ["gpt-5-codex", "gpt-5"]
     assert models[0].label == "GPT-5 Codex"
     assert models[1].label == "gpt-5"
+
+
+@pytest.mark.asyncio
+async def test_list_models_reads_the_context_window() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    # Real listing shape (Nov 2026): context_window is what a
+                    # plain request gets; max_context_window is only a ceiling.
+                    {
+                        "slug": "gpt-6.2-sol",
+                        "context_window": 500000,
+                        "max_context_window": 872000,
+                    },
+                    {"slug": "gpt-6-luna", "context_window": 272000},
+                    {"slug": "no-window"},
+                    {"slug": "bad-window", "context_window": "big"},
+                    {"slug": "bool-window", "context_window": True},
+                    {"slug": "zero-window", "context_window": 0},
+                ]
+            },
+        )
+
+    tokens = ChatGPTTokens(access_token="access", refresh_token="r", account_id="a")
+    models = await list_models(tokens=tokens, transport=httpx.MockTransport(handler))
+
+    windows = {model.slug: model.context_window for model in models}
+    assert windows == {
+        "gpt-6.2-sol": 500000,
+        "gpt-6-luna": 272000,
+        "no-window": None,
+        "bad-window": None,
+        "bool-window": None,
+        "zero-window": None,
+    }

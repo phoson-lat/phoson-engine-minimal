@@ -44,6 +44,7 @@ from phoson_llm.schemas import Message, ModelConfig, ToolCallEvent
 from .models import AgentTool
 from .intents import (
     VALID_INTENTS,
+    CODE_EXEC_TOOLS,
     SHELL_COMMAND_TOOLS,
     INTENT_PROCESS_SPAWN,
     DEFAULT_INTENT_LEVELS,
@@ -545,8 +546,11 @@ class PermissionPolicy:
                     return LEVEL_ALLOW, SOURCE_ALLOW_PATTERN, intents
 
         explicit = self.levels.get(tool_name)
-        if explicit is None and tool_name in SHELL_COMMAND_TOOLS:
-            # A tool that runs a shell line inherits bash's own rule.
+        if explicit is None and (
+            tool_name in SHELL_COMMAND_TOOLS or tool_name in CODE_EXEC_TOOLS
+        ):
+            # A tool that runs a shell line (or model-written code) inherits
+            # bash's own rule.
             explicit = self.levels.get("bash")
         intent_lvl = self.intent_level(intents)
         combined = strictest_level(explicit, intent_lvl)
