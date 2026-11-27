@@ -91,7 +91,12 @@ from ..config import (
     enabled_providers_from_config,
 )
 from ..pickers import BasePicker
-from ..commands import Command, CommandHandler, PluginCommandContext
+from ..commands import (
+    THEME_SUBCOMMANDS,
+    Command,
+    CommandHandler,
+    PluginCommandContext,
+)
 from .chat_pane import (
     ChatPane,
     ChatScrollbarMargin,
@@ -600,10 +605,13 @@ class PhosonApp:
                             ("/provider ",),
                             lambda: enabled_providers_from_config(self.session.config),
                         ),
-                        # /theme <tier> — includes tiers contributed by plugins.
+                        # /theme <name|subcommand> — includes plugin/JSON themes.
                         StaticArgCompleter(
                             ("/theme ",),
-                            lambda: list(self.session.theme_registry.valid_names()),
+                            lambda: [
+                                *self.session.theme_registry.valid_names(),
+                                *THEME_SUBCOMMANDS,
+                            ],
                         ),
                         # /skills <name> — discovered lazily per completion
                         # pass so a skill added mid-session shows up (G5).

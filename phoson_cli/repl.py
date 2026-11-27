@@ -41,6 +41,7 @@ from .theme import Theme, load_theme, build_prompt_style
 from ._views import print_banner, render_tree_ascii
 from .config import PhosonConfig, save_config, enabled_providers_from_config
 from .commands import (
+    THEME_SUBCOMMANDS,
     PathCompleter,
     CommandHandler,
     SlashCompleter,
@@ -240,7 +241,10 @@ class PhosonRepl(SessionFrontend):
                     ),
                     StaticArgCompleter(
                         ("/theme ",),
-                        lambda: list(self.theme_registry.valid_names()),
+                        lambda: [
+                            *self.theme_registry.valid_names(),
+                            *THEME_SUBCOMMANDS,
+                        ],
                     ),
                     StaticArgCompleter(("/mcp ",), list(_MCP_SUBCOMMANDS)),
                     SessionsArgCompleter(self._session_cache),

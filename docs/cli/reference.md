@@ -24,7 +24,8 @@ Options:
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
-  --theme <tier>       Override the theme: system, dark, light, ansi, no-color
+  --theme <name>       Override the theme: system, dark, light, ansi, no-color,
+                       a palette (dracula, nord, ...) or a JSON theme (/theme list)
   --max-turns <n>      Override max_iterations for this run
   --session <id>       Resume a saved session by id (prefix match works)
   --resume <id>        Alias for --session
@@ -79,7 +80,7 @@ can contribute more; `/help` lists everything active in a session.
 | `/delete` | — | Delete a session by id |
 | `/label` | — | Label the current node with a short name |
 | `/title` | — | Set a human-readable title for this session |
-| `/theme` | — | Show, pick or set the color theme: dark, light, ansi, no-color |
+| `/theme` | — | Pick, set or customize the color theme: /theme [name\|list\|accent\|new\|reload\|export] |
 | `/keys` | — | List the key bindings (full-screen TUI; [keys] remaps in config.toml) |
 | `/undo` | — | Undo the last turn (branch from before your last message) |
 | `/attach` | `/attachments` | Attach a file to the next message, or list pending attachments |

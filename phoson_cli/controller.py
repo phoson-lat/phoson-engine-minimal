@@ -468,6 +468,14 @@ class SessionController:
         save_policy(policy)
         self.refresh_permission_policy()
 
+    def reload_themes(self) -> ThemeRegistry:
+        """Rebuild the theme registry: rescans ``~/.phoson/themes/`` and
+        re-reads ``[theme_overrides]`` (plugin themes are kept). Raises
+        ``ValueError`` when a plugin theme is invalid, like at startup."""
+        loaded_plugins = getattr(self.engine, "_loaded_plugins", [])
+        self.theme_registry = build_theme_registry(loaded_plugins)
+        return self.theme_registry
+
     def refresh_permission_policy(self) -> None:
         """Re-read ``permissions.json`` into the *live* gate.
 

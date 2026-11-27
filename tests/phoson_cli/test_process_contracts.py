@@ -904,7 +904,7 @@ async def test_incapable_classic_command_picker_fallbacks_are_actionable(
     assert not any(message == "Cancelled." for message in renderer.infos)
     assert "Use /model <id> or /model list" in messages
     assert "Use /subagent-model <id> or /subagent-model list" in messages
-    assert "Use /theme <system|dark|light|ansi|no-color>" in messages
+    assert "Use /theme <name> or /theme list" in messages
     assert "Use /provider <id>" in messages
     assert "Use /sessions list or /sessions load <#>" in messages
 

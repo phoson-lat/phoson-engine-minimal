@@ -554,7 +554,7 @@ PHOSON_RUN_BUDGET_SECONDS=300 phoson-cli -p "long task"
 | Flag | Effect |
 |------|--------|
 | `--model <id>` / `--provider <id>` | Override model / provider for this run |
-| `--theme <tier>` | Override theme: `dark`, `light`, `ansi`, `no-color` |
+| `--theme <name>` | Override theme: a tier (`system`, `dark`, `light`, `ansi`, `no-color`), a palette (`dracula`, `nord`, `catppuccin-mocha`, …) or your JSON theme |
 | `--max-turns <n>` | Override max iterations for this run |
 | `--session <id>` / `--resume <id>` | Resume a saved session by id (prefix match works) |
 | `-p, --print` | Print the final answer and exit (one-shot mode) |
@@ -590,7 +590,7 @@ the classic REPL is selected automatically.
 | `/mcp` | Manage Model Context Protocol servers |
 | `/notify` | Notify the terminal when a run finishes: `/notify <bell\|desktop\|off>` (default `off`) |
 | `/status`, `/env`, `/cost`, `/tokens`, `/steps` | Session metrics: provider/model/permissions, environment, running cost, token totals, step count |
-| `/theme` | Pick or set the color theme (live preview; `list` to list) |
+| `/theme` | Pick or set the color theme (live preview); `list`, `accent <color>`, `new <name>`, `reload`, `export` to customize |
 | `/details` (`/tool-cards`) | Toggle tool-card bodies (diffs, write summaries, bash output) |
 | `/keys` | List the key bindings and the `[keys]` remap syntax |
 | `/about` | Show the Phoson wordmark and about info |

@@ -365,14 +365,16 @@ def test_theme_picker_wrap_at_ends() -> None:
     _trigger(picker, "up")  # already at top (system): stays
     frame = "".join(t for _s, t in picker._render())
     assert "▸  1  system" in frame
-    # Walk to the bottom.
-    _trigger(picker, "down")
-    _trigger(picker, "down")
-    _trigger(picker, "down")
-    _trigger(picker, "down")
-    _trigger(picker, "down")  # past the end: stays
+    # Walk to the bottom (built-in tiers + palettes), then past the end.
+    from phoson_cli.theme import BUILTIN_THEMES
+
+    last = list(BUILTIN_THEMES)[-1]
+    for _ in range(len(BUILTIN_THEMES) + 2):
+        _trigger(picker, "down")
     frame = "".join(t for _s, t in picker._render())
-    assert "▸  5  no-color" in frame
+    assert f"▸ {len(BUILTIN_THEMES):>2}  {last}" in frame
+    # The list scrolled: the top rows are summarized, the selection shown.
+    assert "↑" in frame and "more" in frame
 
 
 def test_theme_picker_preview_shows_selected_theme() -> None:

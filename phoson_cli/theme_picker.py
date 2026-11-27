@@ -52,6 +52,10 @@ _TOKEN_SWATCHES: tuple[str, ...] = (
 #: Banner preview render width (narrow enough for the picker frame).
 _BANNER_PREVIEW_WIDTH = 52
 
+#: Theme rows shown at once; the list scrolls around the selection beyond
+#: that (built-in palettes + JSON/plugin themes outgrow a short terminal).
+_VISIBLE_ROWS = 10
+
 
 @dataclass
 class ThemePickerResult:
@@ -139,7 +143,17 @@ def _render_frame(
     out.append(("class:title", "  Theme\n"))
     out.append(("class:header", "  " + "─" * 46 + "\n"))
 
-    for i, theme in enumerate(themes):
+    width = max((len(label) for label, _ in rows), default=9)
+    # Scroll window: keep the selection visible, centred where possible.
+    first = 0
+    if len(themes) > _VISIBLE_ROWS:
+        first = min(max(0, selected - _VISIBLE_ROWS // 2), len(themes) - _VISIBLE_ROWS)
+    last = min(len(themes), first + _VISIBLE_ROWS)
+    if first > 0:
+        out.append(("class:footer", f"     ↑ {first} more\n"))
+
+    for i in range(first, last):
+        theme = themes[i]
         is_selected = i == selected
         is_current = theme.name == current_name
         style = (
@@ -156,8 +170,13 @@ def _render_frame(
             hints.append("detected")
         suffix = f"   ({' · '.join(hints)})" if hints else ""
         out.append(
-            (style, f"  {marker} {i + 1:>2}  {label:<9} {description}{suffix}\n")
+            (
+                style,
+                f"  {marker} {i + 1:>2}  {label:<{width}}  {description}{suffix}\n",
+            )
         )
+    if last < len(themes):
+        out.append(("class:footer", f"     ↓ {len(themes) - last} more\n"))
 
     # ── Live preview of the selected theme ──────────────────────────────
     selected_theme = themes[selected]

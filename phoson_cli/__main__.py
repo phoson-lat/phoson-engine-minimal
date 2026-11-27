@@ -101,7 +101,8 @@ Options:
   --version            Show the version and exit
   --model <id>         Override the model for this run
   --provider <id>      Override the provider for this run
-  --theme <tier>       Override the theme: system, dark, light, ansi, no-color
+  --theme <name>       Override the theme: system, dark, light, ansi, no-color,
+                       a palette (dracula, nord, ...) or a JSON theme (/theme list)
   --max-turns <n>      Override max_iterations for this run
   --session <id>       Resume a saved session by id (prefix match works)
   --resume <id>        Alias for --session

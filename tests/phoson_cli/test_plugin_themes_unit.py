@@ -48,7 +48,11 @@ def test_plugin_theme_remains_overridden_by_no_color(monkeypatch) -> None:
 def test_theme_picker_includes_registered_plugin_theme() -> None:
     from phoson_cli.theme_picker import build_theme_picker
 
-    picker = build_theme_picker("dark", registry=build_theme_registry([_ThemePlugin()]))
+    # Plugin themes come after the built-in tiers and palettes, so the
+    # scrolling list shows it when it is the current (selected) theme.
+    picker = build_theme_picker(
+        "example-neon", registry=build_theme_registry([_ThemePlugin()])
+    )
 
     text = "".join(piece for _style, piece in picker._render())
     assert "example-neon" in text

@@ -19,9 +19,19 @@ Tiers
 - ``no-color`` — plain text; selected automatically when ``NO_COLOR`` is
   set (non-empty) or ``CLICOLOR=0``, per the CLI color conventions.
 
+Palettes: ready-made themes ported from popular editor palettes
+(Catppuccin, Dracula, Nord, Gruvbox, Tokyo Night, Solarized, Rosé Pine,
+One Dark) — see :mod:`phoson_cli.theme_palettes`.
+
 Custom themes: drop a JSON file into ``~/.phoson/themes/`` — its tokens
-merge onto a built-in ``base`` (see :func:`_load_json_themes`). Python
-plugin themes (``ThemeExtension``) remain for the odd case.
+merge onto a built-in ``base`` (see :func:`_load_json_themes`); ``/theme
+new`` writes a starter file. Python plugin themes (``ThemeExtension``)
+remain for the odd case.
+
+Overrides: ``[theme_overrides]`` in ``config.toml`` recolors individual
+tokens on top of whichever theme is active (never the no-color tier);
+``/theme accent <color>`` writes the ``accent`` override, which also
+recolors the tokens derived from it (see :func:`apply_theme_overrides`).
 
 Selection: ``NO_COLOR``/``CLICOLOR=0`` always win, then an explicit CLI
 value, ``PHOSON_THEME``, ``config.toml [theme]`` (via
@@ -30,6 +40,7 @@ fall back to ``dark``.
 """
 
 import os
+import re
 import json
 import warnings
 from typing import TYPE_CHECKING
@@ -38,6 +49,12 @@ from dataclasses import replace, dataclass
 from collections.abc import Mapping, Sequence
 
 from phoson_agent import Plugin, ThemeExtension
+
+from .theme_palettes import (
+    accent_family,
+    palette_themes,
+    palette_descriptions,
+)
 
 if TYPE_CHECKING:
     from .config import PhosonConfig
@@ -347,7 +364,32 @@ _BY_NAME = {
     "no-color": NO_COLOR,
 }
 
+#: The built-in *tiers* (palettes are listed separately in
+#: :data:`BUILTIN_THEMES`).
 VALID_NAMES = tuple(sorted(_BY_NAME))
+
+#: Tiers plus palettes, in picker order. JSON themes may use any of them as
+#: ``base``. The tiers cannot be replaced; a palette can (a JSON or plugin
+#: theme with the same name wins over it).
+BUILTIN_THEMES: dict[str, Theme] = {**_BY_NAME, **palette_themes()}
+
+_TIER_DESCRIPTIONS = {
+    "system": "default, inherits your terminal's colors",
+    "dark": "purple on dark",
+    "light": "light background",
+    "ansi": "16-color SSH-safe",
+    "no-color": "plain text",
+}
+
+
+def _builtin_descriptions() -> dict[str, str]:
+    return {**_TIER_DESCRIPTIONS, **palette_descriptions()}
+
+
+#: JSON keys that are not tokens: ``name``/``base``, plus any key starting
+#: with ``_`` (comments — JSON has no comment syntax).
+def _is_comment_key(key: str) -> bool:
+    return key.startswith("_")
 
 
 def _load_json_theme_file(path: Path) -> Theme | None:
@@ -390,13 +432,15 @@ def _load_json_theme_file(path: Path) -> Theme | None:
         )
         return None
     if name in _BY_NAME:
+        # Only the tiers are protected: a user's own nord.json replaces the
+        # built-in "nord" palette (it predates the palettes, and is theirs).
         warnings.warn(
             f"Skipping JSON theme {path}: built-in theme {name!r} cannot be replaced",
             stacklevel=2,
         )
         return None
     base_name = (raw.get("base") or "dark").strip().lower()
-    base = _BY_NAME.get(base_name)
+    base = BUILTIN_THEMES.get(base_name)
     if base is None:
         warnings.warn(
             f"Skipping invalid JSON theme {path}: unknown base {base_name!r}",
@@ -404,7 +448,11 @@ def _load_json_theme_file(path: Path) -> Theme | None:
         )
         return None
     known_tokens = set(Theme.__dataclass_fields__) - {"name", "base"}
-    invalid_tokens = set(raw) - known_tokens - {"name", "base"}
+    invalid_tokens = {
+        key
+        for key in set(raw) - known_tokens - {"name", "base"}
+        if not _is_comment_key(key)
+    }
     if invalid_tokens:
         warnings.warn(
             f"Skipping invalid JSON theme {path}: unknown tokens: "
@@ -414,7 +462,7 @@ def _load_json_theme_file(path: Path) -> Theme | None:
         return None
     tokens: dict[str, str] = {}
     for key, value in raw.items():
-        if key in {"name", "base"}:
+        if key in {"name", "base"} or _is_comment_key(key):
             continue
         if not isinstance(value, str):
             warnings.warn(
@@ -450,6 +498,141 @@ def load_json_themes() -> dict[str, Theme]:
     return themes
 
 
+#: Every token a theme defines (the ``Theme`` fields minus ``name``).
+THEME_TOKENS: tuple[str, ...] = tuple(
+    name for name in Theme.__dataclass_fields__ if name != "name"
+)
+
+
+def load_theme_overrides(config_path: Path | None = None) -> dict[str, str]:
+    """The ``[theme_overrides]`` table of ``config.toml`` (token → style).
+
+    Never raises: a missing/unreadable file or table yields ``{}``, and an
+    unknown token or a non-string value is skipped with a warning — a typo
+    must never break startup. (A malformed TOML file is reported by
+    :func:`~phoson_cli.config.load_config` itself.)
+    """
+    import tomllib
+
+    # Resolved per call (like save_config) so HOME changes are honoured.
+    path = config_path or Path("~/.phoson/config.toml").expanduser()
+    try:
+        if not path.exists():
+            return {}
+        with path.open("rb") as f:
+            raw = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+    table = raw.get("theme_overrides")
+    if table is None:
+        return {}
+    if not isinstance(table, dict):
+        warnings.warn(
+            f"Ignoring [theme_overrides] in {path}: it must be a table of "
+            'token = "style" pairs.',
+            stacklevel=2,
+        )
+        return {}
+    overrides: dict[str, str] = {}
+    for key, value in table.items():
+        if key not in THEME_TOKENS:
+            warnings.warn(
+                f"Ignoring unknown theme token {key!r} in [theme_overrides] "
+                f"({path}). Tokens: {', '.join(THEME_TOKENS)}.",
+                stacklevel=2,
+            )
+            continue
+        if not isinstance(value, str):
+            warnings.warn(
+                f"Ignoring [theme_overrides].{key} in {path}: the value must "
+                "be a string.",
+                stacklevel=2,
+            )
+            continue
+        overrides[key] = value
+    return overrides
+
+
+def apply_theme_overrides(theme: Theme, overrides: Mapping[str, str]) -> Theme:
+    """``theme`` with ``overrides`` applied (the same object when none apply).
+
+    * The no-color tier is never recolored (``NO_COLOR`` is a promise).
+    * An ``accent`` override also recolors the accent family (softer
+      variant, selection background, prompt arrow, user badge…) derived
+      from *this* theme's background, so one color works on every theme.
+      Family tokens the user overrides explicitly win over the derived ones.
+    * An override set that Rich or prompt_toolkit rejects is skipped with a
+      warning and the theme is returned unchanged.
+    """
+    if not overrides or theme.name == NO_COLOR.name:
+        return theme
+    tokens: dict[str, str] = {}
+    accent = overrides.get("accent")
+    if accent:
+        try:
+            # Includes "accent" itself, normalized to #rrggbb.
+            tokens.update(accent_family(theme, accent))
+        except ValueError as exc:
+            warnings.warn(f"Ignoring [theme_overrides].accent: {exc}", stacklevel=2)
+    # Explicit tokens win over the derived accent family.
+    tokens.update({key: value for key, value in overrides.items() if key != "accent"})
+    if not tokens:
+        return theme
+    tokens = {key: _expand_short_hex(value) for key, value in tokens.items()}
+    candidate = replace(theme, **tokens)
+    try:
+        _validate_theme_styles(candidate)
+        return candidate
+    except ValueError:
+        pass
+    # Keep every token that is valid on its own; drop (and report once,
+    # not once per theme) the ones Rich/prompt_toolkit/Pygments reject.
+    kept: dict[str, str] = {}
+    for key, value in tokens.items():
+        try:
+            _validate_theme_styles(replace(theme, **kept, **{key: value}))
+        except ValueError as exc:
+            warnings.warn(
+                f"Ignoring [theme_overrides].{key} = {value!r}: {exc}",
+                stacklevel=2,
+            )
+            continue
+        kept[key] = value
+    return replace(theme, **kept) if kept else theme
+
+
+_SHORT_HEX = re.compile(r"#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])\b")
+
+
+def _expand_short_hex(style: str) -> str:
+    """``#0f0`` → ``#00ff00`` inside a style (Rich only parses 6 digits)."""
+    return _SHORT_HEX.sub(lambda m: "#" + "".join(c * 2 for c in m.groups()), style)
+
+
+def theme_to_json(theme: Theme, *, name: str, base: str | None = None) -> str:
+    """Serialize ``theme`` as a drop-in JSON theme named ``name``.
+
+    Every token is written out (the file documents itself), with ``base``
+    set to the closest built-in so a token deleted later still has a
+    sensible fallback.
+    """
+    if base is None:
+        base = theme.name if theme.name in BUILTIN_THEMES else DARK.name
+    payload: dict[str, str] = {
+        "_comment": (
+            "Phoson theme. Edit any token (Rich styles: colors such as "
+            "#rrggbb, 'bold', 'on #rrggbb' backgrounds), delete the ones you "
+            "do not need (they fall back to 'base'), then run /theme reload. "
+            "Keys starting with _ are ignored."
+        ),
+        "name": name,
+        "base": base,
+    }
+    for token in THEME_TOKENS:
+        payload[token] = getattr(theme, token)
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
 @dataclass(frozen=True)
 class ThemeRegistry:
     """Immutable built-in plus plugin-provided themes for one CLI session."""
@@ -468,36 +651,39 @@ class ThemeRegistry:
 
 
 def default_theme_registry() -> ThemeRegistry:
-    """Return the registry with the built-in tiers plus drop-in JSON themes."""
-    themes = dict(_BY_NAME)
+    """Return the registry with the built-in themes plus drop-in JSON themes.
+
+    ``[theme_overrides]`` from ``config.toml`` is applied to every theme.
+    """
+    themes = dict(BUILTIN_THEMES)
     json_themes = load_json_themes()
     themes.update(json_themes)
-    descriptions = {
-        "system": "default, inherits your terminal's colors",
-        "dark": "purple on dark",
-        "light": "light background",
-        "ansi": "16-color SSH-safe",
-        "no-color": "plain text",
-    }
+    descriptions = _builtin_descriptions()
     for name in json_themes:
-        descriptions.setdefault(name, "JSON theme (~/.phoson/themes/)")
+        descriptions[name] = "JSON theme (~/.phoson/themes/)"
+    return _with_overrides(themes, descriptions)
+
+
+def _with_overrides(
+    themes: dict[str, Theme], descriptions: dict[str, str]
+) -> ThemeRegistry:
+    overrides = load_theme_overrides()
+    if overrides:
+        themes = {
+            name: apply_theme_overrides(theme, overrides)
+            for name, theme in themes.items()
+        }
     return ThemeRegistry(themes=themes, descriptions=descriptions)
 
 
 def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
     """Build a registry from one controller's loaded plugin instances."""
-    themes = dict(_BY_NAME)
-    themes.update(load_json_themes())  # drop-in JSON themes (T-8)
-    descriptions = {
-        "system": "default, inherits your terminal's colors",
-        "dark": "purple on dark",
-        "light": "light background",
-        "ansi": "16-color SSH-safe",
-        "no-color": "plain text",
-    }
-    for name in themes:
-        if name not in descriptions:
-            descriptions[name] = "JSON theme (~/.phoson/themes/)"
+    themes = dict(BUILTIN_THEMES)
+    json_themes = load_json_themes()  # drop-in JSON themes (T-8)
+    themes.update(json_themes)
+    descriptions = _builtin_descriptions()
+    for name in json_themes:
+        descriptions[name] = "JSON theme (~/.phoson/themes/)"
     known_tokens = set(Theme.__dataclass_fields__) - {"name"}
 
     for plugin in plugins:
@@ -518,7 +704,12 @@ def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
                 "instead of ThemeExtension"
             )
         name = extension.name.strip().lower()
-        if not name or name in themes:
+        # A plugin may replace a built-in palette (not a tier, a JSON theme
+        # or another plugin's theme).
+        replaces_palette = themes.get(name) is BUILTIN_THEMES.get(name) and (
+            name not in _BY_NAME
+        )
+        if not name or (name in themes and not replaces_palette):
             raise ValueError(
                 f"Plugin {plugin.name!r} theme {extension.name!r} is empty or conflicts"
             )
@@ -539,7 +730,7 @@ def build_theme_registry(plugins: Sequence[Plugin]) -> ThemeRegistry:
         themes[name] = theme
         descriptions[name] = extension.description.strip() or "plugin theme"
 
-    return ThemeRegistry(themes=themes, descriptions=descriptions)
+    return _with_overrides(themes, descriptions)
 
 
 # ── Resolution ────────────────────────────────────────────────────────────────
@@ -592,10 +783,10 @@ def load_theme(
         requested = os.environ.get("PHOSON_THEME", "").strip().lower()
     if not requested and config_value:
         requested = str(config_value).strip().lower()
-    if not requested:
-        return SYSTEM
-
     active_registry = registry or default_theme_registry()
+    if not requested:
+        # Through the registry, so [theme_overrides] applies to the default.
+        return active_registry.get(SYSTEM.name) or SYSTEM
     theme = active_registry.get(requested)
     if theme is None:
         warnings.warn(
@@ -604,7 +795,7 @@ def load_theme(
             "Falling back to 'dark'.",
             stacklevel=2,
         )
-        return DARK
+        return active_registry.get(DARK.name) or DARK
     return theme
 
 
