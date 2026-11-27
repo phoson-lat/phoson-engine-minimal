@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.65.0 (2026-11-27)
+
+Code mode, a YOLO permission mode, color themes you can customize, and the real context window of ChatGPT models.
+
+### Feat
+
+- **agent**: code mode. With `code_mode = true` (or `PHOSON_CODE_MODE=1`) the agent gets a `run_code` tool that runs a Python script calling the other tools as functions. Only what the script prints comes back into the conversation, so a long chain of tool calls costs one model turn and bulky intermediate results stay out of the context. It works with every provider.
+  - Every tool call a script makes goes through your permission rules, prompts included. A refused call raises `ToolError` inside the script.
+  - Scripts reach MCP and plugin tools through `tools.search()`, `tools.help()` and `tools.call()`, run calls concurrently with `parallel()`, and get structured data back: dicts, decoded JSON, and MCP `structuredContent`.
+  - The script runs in a separate process without your API keys. On macOS (`sandbox-exec`) and Linux (`bwrap`) it is also sandboxed: no network access, no writes outside a temporary directory, and no reads of `~/.ssh`, `~/.aws` and other credential stores. `code_mode_sandbox` sets the mode: `auto`, `required` or `off`.
+  - `run_code` asks for permission like `bash` and follows bash's rule. The permission prompt shows the whole script. See `docs/cli/code-mode.md`. ([#323](https://github.com/phoson-lat/phoson-engine-minimal/pull/323))
+- **cli**: YOLO mode. Tools run without asking for permission, including bash under `safe_mode`, and explicit `deny` rules still block.
+  - Turn it on for one run with `--yolo`, for the current session with `/yolo on` or Shift+Tab (ask → auto → yolo), or for every session with `yolo = true` in `config.toml` (or `PHOSON_YOLO=1`).
+  - The header chip turns warning-colored while it is on. A live toggle is never written to `config.toml`. ([#324](https://github.com/phoson-lat/phoson-engine-minimal/pull/324))
+- **cli**: eleven new color themes in `/theme`: Catppuccin Mocha and Latte, Dracula, Nord, Gruvbox dark and light, Tokyo Night, Solarized dark and light, Rosé Pine and One Dark. The picker now scrolls. ([#326](https://github.com/phoson-lat/phoson-engine-minimal/pull/326))
+- **cli**: customize any theme.
+  - `/theme accent <color>` changes the accent color on every theme; `/theme accent reset` removes it.
+  - `[theme_overrides]` in `config.toml` recolors individual tokens on top of the active theme.
+  - `/theme new <name>` writes a starter JSON theme, `/theme reload` applies edits without restarting, and `/theme export` saves the active theme to share it.
+  - If you already have a `~/.phoson/themes/nord.json`, it still wins over the new built-in `nord` palette. ([#326](https://github.com/phoson-lat/phoson-engine-minimal/pull/326))
+
+### Fix
+
+- **llm**: ChatGPT subscription models now use the context window the subscription reports for each model, 272K or 500K, instead of a 128K default. Before this, auto-compaction started far too early on every ChatGPT model. ([#325](https://github.com/phoson-lat/phoson-engine-minimal/pull/325))
+- **mcp**: an MCP tool result flagged `isError` is no longer reported as `"success": true`. ([#323](https://github.com/phoson-lat/phoson-engine-minimal/pull/323))
+
 ## v0.64.0 (2026-11-09)
 
 Remote access from Phoson Desktop and the mobile app, text selection with the mouse, and editing keys that work in the prompt.
