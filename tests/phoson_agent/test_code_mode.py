@@ -635,7 +635,8 @@ class TestSandboxPlans:
         assert args[-2:] == ["--chdir", "/work"]
         # /tmp is not masked: a workspace under /tmp must stay visible
         # (regression: bwrap could not chdir into it on Linux CI).
-        assert "--tmpfs /tmp" not in joined
+        pairs = list(zip(args, args[1:]))
+        assert ("--tmpfs", "/tmp") not in pairs
 
 
 @pytest.mark.skipif(detect_backend() is None, reason="no OS sandbox on this host")
