@@ -125,8 +125,9 @@ def bwrap_args(*, scratch: str, home: Path, reallow: list[str], cwd: str) -> lis
         "/dev",
         "--proc",
         "/proc",
-        "--tmpfs",
-        "/tmp",
+        # No tmpfs over /tmp: it would hide a workspace (or any file the
+        # script should read) living there. /tmp stays read-only through
+        # the root bind; only the scratch dir below is writable.
         "--bind",
         scratch,
         scratch,

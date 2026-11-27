@@ -633,6 +633,9 @@ class TestSandboxPlans:
         assert f"--tmpfs {home / '.ssh'}" in joined
         assert f"--ro-bind /dev/null {home / '.netrc'}" in joined
         assert args[-2:] == ["--chdir", "/work"]
+        # /tmp is not masked: a workspace under /tmp must stay visible
+        # (regression: bwrap could not chdir into it on Linux CI).
+        assert "--tmpfs /tmp" not in joined
 
 
 @pytest.mark.skipif(detect_backend() is None, reason="no OS sandbox on this host")
