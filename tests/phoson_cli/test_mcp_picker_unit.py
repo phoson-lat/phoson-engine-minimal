@@ -4,6 +4,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from phoson_cli.commands import Command
 from phoson_cli.mcp_picker import (
     McpToolView,
@@ -12,6 +14,15 @@ from phoson_cli.mcp_picker import (
     build_mcp_picker,
 )
 from phoson_cli._mcp_commands import _MCPSubcommands
+
+
+@pytest.fixture(autouse=True)
+def _no_project_mcps(tmp_path, monkeypatch):
+    """Run from a clean directory so no ``.phoson/mcps.json`` above the real
+    cwd (e.g. the developer's own ``~/.phoson``) is discovered as a project
+    config."""
+    monkeypatch.chdir(tmp_path)
+
 
 SAMPLE = {
     "mcpServers": {

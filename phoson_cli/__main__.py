@@ -696,11 +696,18 @@ def _run_project_mcp_command(args: list[str]) -> int:
         print(json.dumps(redact(servers[name]), indent=2))
         if input("Approve this server? [y/N] ").strip().lower() not in {"y", "yes"}:
             return 1
-        _plugin.approve_project_mcp(project, name, servers[name])
+        try:
+            _plugin.approve_project_mcp(project, name, servers[name])
+        except (OSError, ValueError) as exc:
+            print(f"Could not approve {name}: {exc}")
+            return 1
+        print(f"Approved {name}")
         return 0
     if action == "revoke":
-        _plugin.revoke_project_mcp(project, name)
-        print(f"Revoked {name}")
+        if _plugin.revoke_project_mcp(project, name):
+            print(f"Revoked {name}")
+        else:
+            print(f"No approval found for {name}")
         return 0
     print("Unknown project MCP command")
     return 1

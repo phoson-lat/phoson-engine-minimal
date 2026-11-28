@@ -9,6 +9,15 @@ import pytest
 
 from phoson_cli._mcp_commands import toggle_mcp_config
 
+
+@pytest.fixture(autouse=True)
+def _no_project_mcps(tmp_path, monkeypatch):
+    """Run from a clean directory so no ``.phoson/mcps.json`` above the real
+    cwd (e.g. the developer's own ``~/.phoson``) is discovered as a project
+    config."""
+    monkeypatch.chdir(tmp_path)
+
+
 SAMPLE = {
     "mcpServers": {
         "filesystem": {

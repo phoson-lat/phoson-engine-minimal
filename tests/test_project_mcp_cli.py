@@ -33,14 +33,37 @@ def test_review_approve_revoke_project_mcp(tmp_path, monkeypatch, capsys):
     approval_output = capsys.readouterr().out
     assert '"command": "echo"' in approval_output
     assert approval_output.startswith("Project MCP server: sample\n{")
-    assert json.loads(trust.read_text().removesuffix("\\n"))[str(project.resolve())][
-        "sample"
-    ]
+    assert "Approved sample" in approval_output
+    assert json.loads(trust.read_text())[str(project.resolve())]["sample"]
     assert (
         _run_project_mcp_command([*args, "revoke", "sample", "--project", str(project)])
         == 0
     )
     assert "Revoked sample" in capsys.readouterr().out
+    # The store stays strict JSON after a revoke (no literal "\\n" tail).
+    assert json.loads(trust.read_text()) == {}
+
+
+def test_approve_with_corrupt_trust_store_prints_error(tmp_path, monkeypatch, capsys):
+    import builtins
+
+    project = tmp_path / "project"
+    config = project / ".phoson" / "mcps.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"mcpServers": {"sample": {"command": "echo"}}}))
+    trust = tmp_path / "trust.json"
+    trust.write_text('{"x": {}}\\n')
+    monkeypatch.setattr(_plugin, "_project_mcp_trust_path", lambda: trust)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt: "y")
+
+    code = _run_project_mcp_command(
+        ["project", "approve", "sample", "--project", str(project)]
+    )
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "Could not approve sample" in out and str(trust) in out
 
 
 def test_review_and_approval_prompt_redact_command_secrets(
