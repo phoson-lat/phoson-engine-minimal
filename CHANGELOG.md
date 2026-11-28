@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## v0.66.0 (2026-11-27)
+
+Files reach the model as real files on every provider, and project MCP servers show up in `/mcp` where you can approve them.
+
+### Feat
+
+- **llm**: attach PDFs, Office documents (docx, xlsx, pptx…) and text files (csv, md, json, yaml…) and the model gets the file itself, not a placeholder.
+  - PDFs are sent natively on Anthropic, Gemini, OpenAI-compatible providers (OpenAI, OpenRouter, Alibaba…), ChatGPT and Bedrock. Before, OpenAI-compatible providers saw `[Unsupported content block]` and ChatGPT dropped the file.
+  - Office files are sent natively on Bedrock and OpenAI-compatible providers. Anthropic and Gemini see a note naming the file.
+  - Text files are sent as text wherever a provider has no file input, including Ollama and Mistral, up to 100k characters.
+  - A file is never dropped silently: when a provider cannot read it, the model sees a note with its name.
+  - `DocumentBlock` gains `media_type` and `filename`. Existing code and saved sessions keep working. ([#328](https://github.com/phoson-lat/phoson-engine-minimal/pull/328))
+- **cli**: `/attach` accepts Office and text documents, and `@memo.docx` sends the document instead of reading the binary as text. ([#328](https://github.com/phoson-lat/phoson-engine-minimal/pull/328))
+- **mcp**: project MCP servers (`.phoson/mcps.json`) are visible in the CLI. Before, a server you had not approved was ignored without a word.
+  - `/mcp status` lists servers pending approval and tags approved ones `(project)`.
+  - `/mcp toggle` shows them in the menu, where the switch approves or revokes them, as in Phoson Desktop.
+  - New `/mcp approve <server>` and `/mcp revoke <server>`.
+  - A project server with the same name as one in `~/.phoson/mcps.json` triggers a warning: once approved, it replaces yours. ([#327](https://github.com/phoson-lat/phoson-engine-minimal/pull/327))
+
+### Fix
+
+- **mcp**: revoking a project MCP approval no longer corrupts `~/.phoson/trusted-project-mcps.json`. A corrupted file made every project server stay unapproved and `phoson-cli mcp project approve` crash; now a damaged file gives an error that names it. If you hit `Extra data` when approving, delete the trailing `\n` at the end of that file, or the file itself, and approve again. ([#327](https://github.com/phoson-lat/phoson-engine-minimal/pull/327))
+- **llm**: local images on Gemini were sent base64-encoded twice, and on Bedrock with the wrong format and encoding. ([#328](https://github.com/phoson-lat/phoson-engine-minimal/pull/328))
+
 ## v0.65.0 (2026-11-27)
 
 Code mode, a YOLO permission mode, color themes you can customize, and the real context window of ChatGPT models.
