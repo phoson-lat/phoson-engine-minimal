@@ -453,3 +453,12 @@ def test_controller_message_content_type_union(
     msg = controller._build_user_message("fix @src/foo.py")
     assert isinstance(msg, Message)
     assert msg.content is not None
+
+
+def test_office_document_mention_is_document_block_not_inlined(repo: Path) -> None:
+    (repo / "memo.docx").write_bytes(b"PK\x03\x04binary")
+    r = expand_file_mentions("@memo.docx", cwd=repo)
+    (block,) = r.blocks
+    assert isinstance(block, DocumentBlock)
+    assert block.filename == "memo.docx"
+    assert block.media_type is not None and "wordprocessingml" in block.media_type

@@ -146,14 +146,12 @@ class TestOpenAIMessageConversion:
         assert parts[0]["type"] == "text"
         assert "Video not directly supported" in parts[0]["text"]
 
-    def test_pdf_message_becomes_text_fallback(self, pdf_message):
+    def test_pdf_message_becomes_file_part(self, pdf_message):
         result = openai_module._convert_messages([pdf_message])
         parts = result[0]["content"]
-        assert parts[0]["type"] == "text"
-        assert (
-            "Unsupported content block" in parts[0]["text"]
-            or "not directly supported" in parts[0]["text"]
-        )
+        assert parts[0]["type"] == "file"
+        assert parts[0]["file"]["filename"] == "doc.pdf"
+        assert parts[0]["file"]["file_data"] == "https://example.com/doc.pdf"
 
     def test_mixed_multimodal_message(self, mixed_message):
         result = openai_module._convert_messages([mixed_message])

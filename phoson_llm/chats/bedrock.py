@@ -1,13 +1,20 @@
 """AWS Bedrock adapter using the boto3 Converse API."""
 
 import os
+import re
 import json
+import base64
 import asyncio
 import warnings
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
 from phoson_llm.utils import (
+    guess_mime,
+    document_as_text,
+    document_filename,
+    document_media_type,
+    load_document_bytes,
     load_file_as_base64,
     normalize_stop_reason,
     missing_attachment_placeholder,
@@ -25,6 +32,7 @@ from phoson_llm.schemas import (
     ModelConfig,
     LLMDoneEvent,
     ToolUseBlock,
+    DocumentBlock,
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
@@ -40,6 +48,54 @@ if TYPE_CHECKING:
 # ─── Message / tool conversion Phoson → Bedrock ──────────────────────────────
 
 
+#: Converse ``document.format`` values, keyed by MIME type.
+_BEDROCK_DOC_FORMATS: dict[str, str] = {
+    "application/pdf": "pdf",
+    "text/csv": "csv",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "text/html": "html",
+    "text/plain": "txt",
+    "text/markdown": "md",
+}
+
+
+def _bedrock_document_name(filename: str) -> str:
+    """Sanitize *filename* to Converse's document-name charset.
+
+    Allowed: alphanumerics, single spaces, hyphens, parentheses and square
+    brackets. The extension dot is not allowed, so it becomes a hyphen.
+    """
+    name = re.sub(r"[^A-Za-z0-9\-\(\)\[\] ]", "-", filename)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name or "document"
+
+
+def _convert_document_bedrock(block: Any) -> dict[str, Any]:
+    """A ``DocumentBlock`` as a Converse ``document`` content block.
+
+    Formats Converse accepts (pdf, csv, doc(x), xls(x), html, txt, md) are
+    sent as raw bytes; other text-like files (json, yaml…) are inlined as
+    text; anything else — or a remote URL, which Converse cannot fetch —
+    degrades to a visible placeholder.
+    """
+    mime = document_media_type(block)
+    fmt = _BEDROCK_DOC_FORMATS.get(mime)
+    if fmt is not None:
+        raw = load_document_bytes(block)
+        if raw is not None:
+            return {
+                "document": {
+                    "format": fmt,
+                    "name": _bedrock_document_name(document_filename(block)),
+                    "source": {"bytes": raw},
+                }
+            }
+    return {"text": document_as_text(block)}
+
+
 def _convert_block_bedrock(block: Any) -> dict[str, Any]:
     """Convert a single Phoson ContentBlock to a Bedrock content block dict."""
     if isinstance(block, TextBlock):
@@ -52,10 +108,16 @@ def _convert_block_bedrock(block: Any) -> dict[str, Any]:
             data = load_file_as_base64(path)
             if data is None:
                 return {"text": missing_attachment_placeholder("image", path)}
-            b64 = data.split(",", 1)[-1]
-            media = block.media_type or "image/jpeg"
-            return {"image": {"format": media, "source": {"bytes": b64}}}
+            # Converse wants the short format ("png") and *raw* bytes — boto3
+            # base64-encodes blobs itself, so base64 text would double-encode.
+            media = block.media_type or guess_mime(path)
+            fmt = media.split("/", 1)[-1]
+            raw = base64.b64decode(data.split(",", 1)[-1])
+            return {"image": {"format": fmt, "source": {"bytes": raw}}}
         return {"text": f"[Image not directly supported by Bedrock: {source}]"}
+
+    if isinstance(block, DocumentBlock):
+        return _convert_document_bedrock(block)
 
     if isinstance(block, (ToolUseBlock, ToolResultBlock)):
         # Handled by the message-level converter (they map to Bedrock's

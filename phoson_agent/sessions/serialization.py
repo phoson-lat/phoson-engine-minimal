@@ -78,6 +78,8 @@ def block_to_dict(block: ContentBlock) -> dict[str, Any]:
             "type": "document",
             "source": block.source,
             "pages": block.pages,
+            "media_type": block.media_type,
+            "filename": block.filename,
         }
     raise TypeError(f"Unsupported content block type: {type(block).__name__}")
 
@@ -131,6 +133,8 @@ def block_from_dict(data: dict[str, Any]) -> ContentBlock:
         return DocumentBlock(
             source=data["source"],
             pages=data.get("pages"),
+            media_type=data.get("media_type"),
+            filename=data.get("filename"),
         )
     raise ValueError(f"Unknown content block type: {btype}")
 

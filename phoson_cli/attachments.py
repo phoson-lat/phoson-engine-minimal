@@ -1,14 +1,15 @@
 """
 Attachment manager for the CLI.
 
-Handles multimodal files (images, audio, video, PDFs) attached by the user
-before sending a message, converting them into appropriate ContentBlocks.
+Handles multimodal files (images, audio, video, documents) attached by the
+user before sending a message, converting them into appropriate ContentBlocks.
 """
 
 from pathlib import Path
 from dataclasses import field, dataclass
 from collections.abc import Sequence
 
+from phoson_llm.utils import guess_mime
 from phoson_llm.schemas import (
     AudioBlock,
     ImageBlock,
@@ -21,18 +22,40 @@ from phoson_llm.schemas import (
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
+#: Binary documents, sent as a native file where the provider accepts it.
+DOCUMENT_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".pptx", ".rtf", ".odt"}
+#: Text-like documents; inlined as text on providers without a file input.
+TEXT_DOCUMENT_EXTS = {
+    ".txt",
+    ".md",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".htm",
+    ".log",
+}
 
 #: Maximum accepted attachment size. Matches the limit enforced by the
 #: ``view_image`` tool (:data:`phoson_cli.tools.view_image.MAX_IMAGE_BYTES`).
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
+_OFFICE_NOTE = (
+    "Office files reach the model as a real file on Bedrock and on "
+    "OpenAI-compatible providers that accept them; Anthropic and Gemini "
+    "see a text placeholder."
+)
+
 #: File types whose real content does not reach every provider as-is.
 #: Maps extension → short per-provider note shown as a warning on attach.
 _PROVIDER_COMPAT_NOTES: dict[str, str] = {
-    ".pdf": "PDFs reach the model as a real document on Anthropic only; "
-    "OpenAI-compatible providers see a text placeholder, and Gemini "
-    "silently drops them.",
+    ".pdf": "PDFs reach the model as a real document on most providers; "
+    "Ollama and Mistral see a text placeholder.",
     ".svg": "SVG support varies by provider.",
+    **{ext: _OFFICE_NOTE for ext in DOCUMENT_EXTS - {".pdf"}},
 }
 _VIDEO_NOTE = (
     "Video is not sent to the model as media by any provider; it becomes a "
@@ -120,13 +143,18 @@ class AttachmentManager:
             )
         elif suffix in VIDEO_EXTS:
             block = VideoBlock(source=f"file://{p}")
-        elif suffix == ".pdf":
-            block = DocumentBlock(source=f"file://{p}")
+        elif suffix in DOCUMENT_EXTS or suffix in TEXT_DOCUMENT_EXTS:
+            block = DocumentBlock(
+                source=f"file://{p}",
+                media_type=_suffix_to_mime(suffix),
+                filename=p.name,
+            )
         else:
             raise ValueError(
                 f"Unsupported file type '{suffix}'. "
                 f"Supported: images {sorted(IMAGE_EXTS)}, "
-                f"audio {sorted(AUDIO_EXTS)}, video {sorted(VIDEO_EXTS)}, .pdf"
+                f"audio {sorted(AUDIO_EXTS)}, video {sorted(VIDEO_EXTS)}, "
+                f"documents {sorted(DOCUMENT_EXTS | TEXT_DOCUMENT_EXTS)}"
             )
 
         self._pending.append(Attachment(path=p, block=block))
@@ -155,27 +183,5 @@ class AttachmentManager:
 
 
 def _suffix_to_mime(suffix: str) -> str:
-    """Map file extension to MIME type."""
-    return {
-        # Images
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".bmp": "image/bmp",
-        # Audio
-        ".mp3": "audio/mpeg",
-        ".wav": "audio/wav",
-        ".ogg": "audio/ogg",
-        ".flac": "audio/flac",
-        ".m4a": "audio/mp4",
-        ".aac": "audio/aac",
-        # Video
-        ".mp4": "video/mp4",
-        ".webm": "video/webm",
-        ".mov": "video/quicktime",
-        ".avi": "video/x-msvideo",
-        ".mkv": "video/x-matroska",
-    }.get(suffix, "application/octet-stream")
+    """Map file extension to MIME type (shared table in :mod:`phoson_llm.utils`)."""
+    return guess_mime(f"file{suffix}")

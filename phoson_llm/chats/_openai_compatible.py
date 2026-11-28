@@ -43,7 +43,12 @@ from phoson_llm.schemas import (
 )
 
 if TYPE_CHECKING:
-    from phoson_llm.schemas import Message, ContentBlock, ToolDefinition
+    from phoson_llm.schemas import (
+        Message,
+        ContentBlock,
+        DocumentBlock,
+        ToolDefinition,
+    )
 
 
 # ─── Cost callback contract ──────────────────────────────────────────────────
@@ -113,6 +118,42 @@ _EPHEMERAL_CACHE_CONTROL: JsonObject = {"type": "ephemeral"}
 # ─── Message / tool conversion ──────────────────────────────────────────────
 
 
+def _convert_document_block(block: "DocumentBlock") -> JsonObject:
+    """A ``DocumentBlock`` as an OpenAI-compatible content part.
+
+    Text-like files are inlined as a ``text`` part (no provider needs a
+    file upload to read a CSV). Everything else becomes a Chat Completions
+    ``file`` part carrying the file as a ``data:`` URL — the shape OpenAI and
+    OpenRouter accept for PDFs. A remote URL is passed through in
+    ``file_data`` (OpenRouter fetches it; backends that only take inline data
+    reject it with a clear error rather than us guessing).
+    """
+    from phoson_llm.utils import (
+        document_as_text,
+        document_data_url,
+        document_filename,
+        is_text_media_type,
+        document_media_type,
+    )
+
+    source = block.source
+    if is_text_media_type(document_media_type(block)) and not source.startswith(
+        ("http://", "https://")
+    ):
+        return {"type": "text", "text": document_as_text(block)}
+
+    if source.startswith(("http://", "https://")):
+        file_data: str | None = source
+    else:
+        file_data = document_data_url(block)
+        if file_data is None:
+            return {"type": "text", "text": document_as_text(block)}
+    return {
+        "type": "file",
+        "file": {"filename": document_filename(block), "file_data": file_data},
+    }
+
+
 def _convert_content_block(block: "ContentBlock") -> JsonObject:
     """Converts a Phoson ContentBlock to OpenAI-compatible API format."""
     from phoson_llm.utils import load_file_as_base64, missing_attachment_placeholder
@@ -122,6 +163,7 @@ def _convert_content_block(block: "ContentBlock") -> JsonObject:
         ImageBlock,
         VideoBlock,
         ToolUseBlock,
+        DocumentBlock,
         ToolResultBlock,
     )
 
@@ -172,6 +214,9 @@ def _convert_content_block(block: "ContentBlock") -> JsonObject:
             "type": "text",
             "text": f"[Video not directly supported by this provider: {block.source}]",
         }
+
+    if isinstance(block, DocumentBlock):
+        return _convert_document_block(block)
 
     if isinstance(block, (ToolUseBlock, ToolResultBlock)):
         raise TypeError(

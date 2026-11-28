@@ -47,9 +47,14 @@ from collections.abc import AsyncIterator
 import httpx
 
 from phoson_llm.utils import (
+    PDF_MIME,
     CONTEXT_LENGTH_ERROR_CODE,
     map_error_code,
+    document_as_text,
     scrub_surrogates,
+    document_data_url,
+    is_text_media_type,
+    document_media_type,
     load_file_as_base64,
     normalize_stop_reason,
     is_context_length_error,
@@ -215,19 +220,24 @@ def _block_part(block: Any, tool_name_by_id: dict[str, str]) -> dict[str, Any]:
         return {"fileData": {"mimeType": mime, "fileUri": source}}
 
     if isinstance(block, DocumentBlock):
+        # Same policy as the Gemini SDK adapter: PDFs inline, text-like files
+        # as text, other binaries (docx, xlsx…) as a visible placeholder.
+        mime = document_media_type(block)
         source = block.source
-        if source.startswith("file://"):
-            path = source[7:]
-            data = load_file_as_base64(path, "application/pdf")
-            if data is None:
-                return {"text": missing_attachment_placeholder("document", path)}
-            return {
-                "inlineData": {
-                    "mimeType": "application/pdf",
-                    "data": data.split(",", 1)[-1],
-                }
-            }
-        return {"fileData": {"mimeType": "application/pdf", "fileUri": source}}
+        if source.startswith(("file://", "data:")):
+            if mime == PDF_MIME:
+                data = document_data_url(block)
+                if data is not None:
+                    return {
+                        "inlineData": {
+                            "mimeType": PDF_MIME,
+                            "data": data.split(",", 1)[-1],
+                        }
+                    }
+            return {"text": document_as_text(block)}
+        if mime == PDF_MIME or is_text_media_type(mime):
+            return {"fileData": {"mimeType": mime, "fileUri": source}}
+        return {"text": document_as_text(block)}
 
     if isinstance(block, AudioBlock):
         return {"text": f"[Audio not supported by Gemini: {block.source}]"}

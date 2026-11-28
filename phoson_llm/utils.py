@@ -195,23 +195,237 @@ def guess_mime(path: str) -> str:
         str: MIME type (e.g., 'image/png').
     """
     ext = Path(path).suffix.lower()
-    return {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".bmp": "image/bmp",
-        ".pdf": "application/pdf",
-        ".mp4": "video/mp4",
-        ".webm": "video/webm",
-        ".mov": "video/quicktime",
-        ".mp3": "audio/mpeg",
-        ".wav": "audio/wav",
-        ".ogg": "audio/ogg",
-        ".flac": "audio/flac",
-    }.get(ext, "application/octet-stream")
+    return _MIME_BY_EXT.get(ext, "application/octet-stream")
+
+
+_MIME_BY_EXT: dict[str, str] = {
+    # Images
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
+    # Video
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska",
+    # Audio
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    # Documents
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ),
+    ".rtf": "application/rtf",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    # Text-like documents
+    ".txt": "text/plain",
+    ".log": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".csv": "text/csv",
+    ".tsv": "text/tab-separated-values",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".xml": "application/xml",
+    ".json": "application/json",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+}
+
+
+# ─── Document helpers ────────────────────────────────────────────────────────
+#
+# A ``DocumentBlock`` can carry any file type. Adapters use these helpers to
+# decide, per block, whether to send it natively (PDF / office binary) or to
+# inline its text (text-like files on providers without a text-document
+# input), so the decision is identical across providers.
+
+#: Non-``text/*`` MIME types whose content is plain text.
+_TEXTUAL_APPLICATION_MIMES: frozenset[str] = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "application/x-yaml",
+        "application/javascript",
+        "application/x-sh",
+    }
+)
+
+#: Cap on how many characters of a text document are inlined into a request.
+#: ~25k tokens at 4 chars/token; beyond it a head/tail preview is kept.
+MAX_DOCUMENT_TEXT_CHARS = 100_000
+_DOCUMENT_TEXT_HEAD_CHARS = 80_000
+_DOCUMENT_TEXT_TAIL_CHARS = 10_000
+
+PDF_MIME = "application/pdf"
+
+
+def _source_path(source: str) -> str:
+    """The path component of a ``file://`` or URL source (for name/ext)."""
+    if source.startswith("file://"):
+        return source[7:]
+    if source.startswith("data:"):
+        return ""
+    from urllib.parse import urlparse
+
+    return urlparse(source).path
+
+
+def document_media_type(block: Any) -> str:
+    """The MIME type of a ``DocumentBlock``.
+
+    Explicit ``media_type`` wins, then the ``data:`` header, then the
+    extension. An extension-less source defaults to PDF (the block's
+    historical meaning); an unknown extension is ``application/octet-stream``.
+    """
+    if block.media_type:
+        return str(block.media_type)
+    source: str = block.source
+    if source.startswith("data:"):
+        header = source[5:].split(",", 1)[0]
+        mime = header.split(";", 1)[0]
+        return mime or PDF_MIME
+    path = _source_path(source)
+    if not Path(path).suffix:
+        return PDF_MIME
+    return guess_mime(path)
+
+
+def document_filename(block: Any) -> str:
+    """The display filename of a ``DocumentBlock`` (``document`` fallback)."""
+    if block.filename:
+        return str(block.filename)
+    name = Path(_source_path(block.source)).name
+    if name:
+        return name
+    ext = {v: k for k, v in _MIME_BY_EXT.items()}.get(document_media_type(block), "")
+    return f"document{ext}"
+
+
+def is_text_media_type(mime: str) -> bool:
+    """Whether *mime* denotes a plain-text format that can be inlined."""
+    return mime.startswith("text/") or mime in _TEXTUAL_APPLICATION_MIMES
+
+
+def _cap_document_text(text: str) -> str:
+    if len(text) <= MAX_DOCUMENT_TEXT_CHARS:
+        return text
+    head = text[:_DOCUMENT_TEXT_HEAD_CHARS]
+    tail = text[-_DOCUMENT_TEXT_TAIL_CHARS:]
+    omitted = len(text) - len(head) - len(tail)
+    return f"{head}\n...[{omitted} chars truncated]...\n{tail}"
+
+
+def read_document_text(block: Any) -> str | None:
+    """The (capped) text content of a text-like ``DocumentBlock``.
+
+    Reads ``file://`` and ``data:`` sources. Returns ``None`` when the
+    source is remote (nothing to read locally) or the file is missing —
+    callers decide how to degrade (see :func:`document_as_text`).
+    """
+    source: str = block.source
+    if source.startswith("data:"):
+        header, _, payload = source.partition(",")
+        if ";base64" in header:
+            try:
+                raw = base64.b64decode(payload)
+            except ValueError:
+                return None
+            text = raw.decode("utf-8", errors="replace")
+        else:
+            from urllib.parse import unquote
+
+            text = unquote(payload)
+        return _cap_document_text(text)
+    if not source.startswith("file://"):
+        return None
+    path = source[7:]
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        logger.warning(
+            "document file missing or unreadable, degrading to placeholder: %s", path
+        )
+        return None
+    return _cap_document_text(text)
+
+
+def document_as_text(block: Any) -> str:
+    """A text rendering of a ``DocumentBlock`` for providers that cannot take
+    the file natively.
+
+    Text-like files are inlined under a ``[File: name]`` header; a missing
+    local file becomes the I-119 placeholder; anything else (binary types,
+    remote URLs) becomes a visible ``[document attached: …]`` note so the
+    model knows a file was referenced even though it cannot read it.
+    """
+    name = document_filename(block)
+    mime = document_media_type(block)
+    if block.source.startswith("file://") and not Path(block.source[7:]).is_file():
+        return missing_attachment_placeholder("document", block.source[7:])
+    if is_text_media_type(mime):
+        text = read_document_text(block)
+        if text is not None:
+            return f"[File: {name}]\n{text}"
+    location = (
+        "" if block.source.startswith(("file://", "data:")) else f" {block.source}"
+    )
+    return (
+        "[document attached but not readable by this provider: "
+        f"{name} ({mime}){location}]"
+    )
+
+
+def load_document_bytes(block: Any) -> bytes | None:
+    """Raw bytes of a local (``file://``) or inline (``data:``) document.
+
+    ``None`` for remote URLs or a missing/unreadable file.
+    """
+    source: str = block.source
+    if source.startswith("data:"):
+        header, _, payload = source.partition(",")
+        try:
+            return (
+                base64.b64decode(payload) if ";base64" in header else payload.encode()
+            )
+        except ValueError:
+            return None
+    if not source.startswith("file://"):
+        return None
+    try:
+        return Path(source[7:]).read_bytes()
+    except OSError:
+        logger.warning(
+            "document file missing or unreadable, degrading to placeholder: %s",
+            source[7:],
+        )
+        return None
+
+
+def document_data_url(block: Any) -> str | None:
+    """``data:<mime>;base64,…`` for a local/inline document, else ``None``."""
+    if block.source.startswith("data:"):
+        return str(block.source)
+    data = load_document_bytes(block)
+    if data is None:
+        return None
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{document_media_type(block)};base64,{b64}"
 
 
 # ─── stop_reason normalization (F-13 / #178) ────────────────────────────────

@@ -97,15 +97,31 @@ class VideoBlock:
 
 @dataclass
 class DocumentBlock:
-    """PDF document content block for multimodal LLM input.
+    """File/document content block for multimodal LLM input.
 
-    Supported by: Anthropic Claude 3.5+ (document parsing).
+    Source can be:
+    - Public URL: "https://example.com/report.pdf"
+    - Base64: "data:application/pdf;base64,..."
+    - Local file: "file://path/to/report.pdf"
 
-    Source can be: URL, base64://..., or file://...
+    ``media_type`` is the file's MIME type. When ``None`` it is inferred
+    from the source (data-URL header or extension) and defaults to
+    ``application/pdf`` for extension-less sources, which keeps blocks built
+    before this field existed behaving as PDFs. ``filename`` is the name
+    shown to the provider (OpenAI/Bedrock require one); when ``None`` it is
+    derived from the source path.
+
+    Each adapter sends the file natively where its API accepts that type
+    (PDFs on Anthropic/Gemini/OpenAI-compatible/ChatGPT/Bedrock; office
+    files on Bedrock and OpenAI-compatible) and inlines text-like files
+    (txt, md, csv, json, …) as plain text otherwise. Types a provider cannot
+    take become a visible text placeholder.
     """
 
     source: str
     pages: int | None = None
+    media_type: str | None = None
+    filename: str | None = None
 
 
 # ─── Union ───────────────────────────────────────────────────────────────────
