@@ -68,7 +68,7 @@ class TestMapErrorCode:
 
 class TestLoadFileAsBase64:
     def test_encodes_file_content(self, tmp_path):
-        f = tmp_path / "test.txt"
+        f = tmp_path / "test.bin"
         f.write_bytes(b"hello world")
 
         result = load_file_as_base64(str(f))

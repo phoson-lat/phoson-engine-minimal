@@ -228,3 +228,19 @@ def test_apply_tree_meta_with_missing_fields() -> None:
     assert tree.total_tokens == 0
     assert tree.step_count == 0
     assert tree.last_model is None
+
+
+def test_document_block_roundtrip_keeps_mime_and_filename() -> None:
+    from phoson_llm.schemas import DocumentBlock
+
+    block = DocumentBlock(
+        source="file:///tmp/data.csv", pages=2, media_type="text/csv", filename="d.csv"
+    )
+    assert block_from_dict(block_to_dict(block)) == block
+
+
+def test_legacy_document_dict_without_new_fields_loads() -> None:
+    from phoson_llm.schemas import DocumentBlock
+
+    block = block_from_dict({"type": "document", "source": "file:///a.pdf", "pages": 1})
+    assert block == DocumentBlock(source="file:///a.pdf", pages=1)

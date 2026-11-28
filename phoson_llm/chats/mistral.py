@@ -4,7 +4,7 @@ import os
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
-from phoson_llm.utils import normalize_stop_reason
+from phoson_llm.utils import document_as_text, normalize_stop_reason
 from phoson_llm.pricing import calculate_cost
 from phoson_llm.schemas import (
     Message,
@@ -16,6 +16,7 @@ from phoson_llm.schemas import (
     ModelConfig,
     LLMDoneEvent,
     ToolUseBlock,
+    DocumentBlock,
     LLMStartEvent,
     ToolDefinition,
     ToolResultBlock,
@@ -71,10 +72,16 @@ def _convert_messages_mistral(messages: list[Message]) -> list[dict[str, Any]]:
             result.append({"role": msg.role, "content": msg.content})
             continue
 
-        text_blocks = [b for b in msg.content if isinstance(b, TextBlock)]
+        # Documents are inlined as text (text-like files) or a visible
+        # placeholder; other media blocks are not sent by this adapter.
+        text_parts = [
+            b.text if isinstance(b, TextBlock) else document_as_text(b)
+            for b in msg.content
+            if isinstance(b, (TextBlock, DocumentBlock))
+        ]
         tool_uses = [b for b in msg.content if isinstance(b, ToolUseBlock)]
         tool_results = [b for b in msg.content if isinstance(b, ToolResultBlock)]
-        text = " ".join(b.text for b in text_blocks)
+        text = " ".join(text_parts)
 
         if tool_uses:
             result.append(

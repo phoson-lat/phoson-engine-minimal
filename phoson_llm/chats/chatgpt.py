@@ -141,6 +141,36 @@ def _image_item(source: str, detail: str | None) -> dict[str, Any] | None:
     return part
 
 
+def _file_item(block: Any) -> dict[str, Any]:
+    """Build an ``input_file`` part for a ``DocumentBlock``.
+
+    Text-like files are inlined as ``input_text``; local/inline files travel
+    as a ``data:`` URL in ``file_data``; remote URLs use ``file_url``. A
+    missing local file degrades to the I-119 text placeholder.
+    """
+    from phoson_llm.utils import (
+        document_as_text,
+        document_data_url,
+        document_filename,
+        is_text_media_type,
+        document_media_type,
+    )
+
+    source = block.source
+    if source.startswith(("http://", "https://")):
+        return {"type": "input_file", "file_url": source}
+    if is_text_media_type(document_media_type(block)):
+        return {"type": "input_text", "text": document_as_text(block)}
+    data = document_data_url(block)
+    if data is None:
+        return {"type": "input_text", "text": document_as_text(block)}
+    return {
+        "type": "input_file",
+        "filename": document_filename(block),
+        "file_data": data,
+    }
+
+
 def _message_items(msg: Message) -> list[dict[str, Any]]:
     """Convert one Phoson message into Responses ``input`` items.
 
@@ -157,6 +187,7 @@ def _message_items(msg: Message) -> list[dict[str, Any]]:
         TextBlock,
         ImageBlock,
         ToolUseBlock,
+        DocumentBlock,
         ToolResultBlock,
     )
 
@@ -179,6 +210,8 @@ def _message_items(msg: Message) -> list[dict[str, Any]]:
             part = _image_item(block.source, block.detail)
             if part is not None:
                 parts.append(part)
+        elif isinstance(block, DocumentBlock):
+            parts.append(_file_item(block))
         elif isinstance(block, ToolUseBlock):
             items.append(
                 {
@@ -196,8 +229,8 @@ def _message_items(msg: Message) -> list[dict[str, Any]]:
                     "output": block.result,
                 }
             )
-        # Other block types (audio/video/document) have no Responses input
-        # equivalent on this backend and are dropped.
+        # Audio/video have no Responses input equivalent on this backend and
+        # are dropped.
     if parts:
         items.insert(0, {"type": "message", "role": role, "content": parts})
     return items

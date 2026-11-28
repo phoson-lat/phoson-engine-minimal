@@ -1,10 +1,16 @@
 """Google Gemini adapter using the native SDK."""
 
 import os
+import base64
 from typing import TYPE_CHECKING, Any
 from collections.abc import AsyncIterator
 
 from phoson_llm.utils import (
+    PDF_MIME,
+    document_as_text,
+    is_text_media_type,
+    document_media_type,
+    load_document_bytes,
     load_file_as_base64,
     normalize_stop_reason,
     missing_attachment_placeholder,
@@ -107,24 +113,28 @@ def _convert_block(types: Any, block: Any, tool_name_by_id: dict[str, str]) -> A
                 return types.Part.from_text(
                     text=missing_attachment_placeholder("image", path)
                 )
-            data = data.split(",", 1)[-1]
-            return types.Part.from_bytes(data=data.encode("ascii"), mime_type=mime)
+            # ``from_bytes`` wants raw bytes — the SDK base64-encodes them on
+            # the wire, so passing the base64 text would double-encode it.
+            raw = base64.b64decode(data.split(",", 1)[-1])
+            return types.Part.from_bytes(data=raw, mime_type=mime)
         # Hosted URI (gs:// or https://) — pass through as-is.
         return types.Part.from_uri(file_uri=source, mime_type=mime)
 
     if isinstance(block, DocumentBlock):
-        if block.source.startswith("file://"):
-            path = block.source[7:]
-            data = load_file_as_base64(path)
-            if data is None:
-                return types.Part.from_text(
-                    text=missing_attachment_placeholder("document", path)
-                )
-            data = data.split(",", 1)[-1]
-            return types.Part.from_bytes(
-                data=data.encode("ascii"), mime_type="application/pdf"
-            )
-        return types.Part.from_uri(file_uri=block.source, mime_type="application/pdf")
+        # Gemini reads PDFs natively; text-like files are inlined as text
+        # (always accepted, unlike the per-model list of text/* MIME types);
+        # other binaries (docx, xlsx…) have no Gemini input → placeholder.
+        mime = document_media_type(block)
+        if block.source.startswith(("file://", "data:")):
+            if mime == PDF_MIME:
+                raw = load_document_bytes(block)
+                if raw is not None:
+                    return types.Part.from_bytes(data=raw, mime_type=PDF_MIME)
+            return types.Part.from_text(text=document_as_text(block))
+        if mime == PDF_MIME or is_text_media_type(mime):
+            # Hosted URI (gs:// or https://) — pass through as-is.
+            return types.Part.from_uri(file_uri=block.source, mime_type=mime)
+        return types.Part.from_text(text=document_as_text(block))
 
     if isinstance(block, AudioBlock):
         return types.Part.from_text(

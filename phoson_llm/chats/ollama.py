@@ -8,6 +8,7 @@ import httpx
 from phoson_llm.utils import (
     CONTEXT_LENGTH_ERROR_CODE,
     map_error_code,
+    document_as_text,
     normalize_stop_reason,
     is_context_length_error,
 )
@@ -22,6 +23,7 @@ from phoson_llm.schemas import (
     UsageEvent,
     ModelConfig,
     LLMDoneEvent,
+    DocumentBlock,
     LLMStartEvent,
     ToolCallEvent,
     ToolDefinition,
@@ -63,8 +65,12 @@ def _convert_messages(messages: list[Message]) -> list[JsonObject]:
             result.append({"role": msg.role, "content": msg.content})
             continue
 
+        # Text-only endpoint: documents are inlined as text (text-like files)
+        # or as a visible placeholder; other media blocks are not sent.
         text_parts = [
-            block.text for block in msg.content if isinstance(block, TextBlock)
+            block.text if isinstance(block, TextBlock) else document_as_text(block)
+            for block in msg.content
+            if isinstance(block, (TextBlock, DocumentBlock))
         ]
 
         if text_parts:

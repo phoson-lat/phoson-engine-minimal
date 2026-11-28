@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 from typing import cast
 from collections.abc import AsyncIterator
 
@@ -11,11 +12,18 @@ from anthropic.types import (
 )
 
 from phoson_llm.utils import (
+    PDF_MIME,
     SDK_MAX_RETRIES,
     CONTEXT_LENGTH_ERROR_CODE,
     guess_mime,
     sdk_timeout,
     map_error_code,
+    document_as_text,
+    document_filename,
+    is_text_media_type,
+    read_document_text,
+    document_media_type,
+    load_document_bytes,
     load_file_as_base64,
     normalize_stop_reason,
     is_context_length_error,
@@ -62,6 +70,45 @@ from phoson_llm.chats.base import BaseLLMChat
 _EPHEMERAL: JsonObject = {"type": "ephemeral"}
 
 
+def _convert_document_block(block: DocumentBlock) -> JsonObject:
+    """A ``DocumentBlock`` as an Anthropic ``document`` block.
+
+    Anthropic takes PDFs (base64 or URL) and plain text (``source.type =
+    "text"``). Text-like files (md, csv, json, …) are sent as a plain-text
+    document titled with the filename; other types (docx, xlsx, …) have no
+    Anthropic input and degrade to a visible placeholder.
+    """
+    mime = document_media_type(block)
+    source = block.source
+    is_remote = source.startswith(("http://", "https://"))
+
+    if mime == PDF_MIME:
+        if is_remote:
+            return {"type": "document", "source": {"type": "url", "url": source}}
+        data = load_document_bytes(block)
+        if data is None:
+            return {"type": "text", "text": document_as_text(block)}
+        return {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": PDF_MIME,
+                "data": base64.b64encode(data).decode("ascii"),
+            },
+        }
+
+    if is_text_media_type(mime) and not is_remote:
+        text = read_document_text(block)
+        if text is not None:
+            return {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": text},
+                "title": document_filename(block),
+            }
+
+    return {"type": "text", "text": document_as_text(block)}
+
+
 def _convert_content_block(block: ContentBlock) -> JsonObject:
     """
     Converts a multimodal ContentBlock to the format expected by Anthropic.
@@ -104,31 +151,7 @@ def _convert_content_block(block: ContentBlock) -> JsonObject:
         }
 
     if isinstance(block, DocumentBlock):
-        source = block.source
-        if source.startswith("file://"):
-            path = source[7:]
-            data = load_file_as_base64(path)
-            if data is None:
-                return {
-                    "type": "text",
-                    "text": missing_attachment_placeholder("document", path),
-                }
-            data = data.split(",", 1)[-1]
-            return {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": data,
-                },
-            }
-        return {
-            "type": "document",
-            "source": {
-                "type": "url",
-                "url": source,
-            },
-        }
+        return _convert_document_block(block)
 
     if isinstance(block, AudioBlock):
         return {

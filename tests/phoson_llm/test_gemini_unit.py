@@ -1,7 +1,5 @@
 """Unit tests for the Gemini adapter (google-genai SDK, mocked)."""
 
-import base64
-
 import pytest
 
 from phoson_llm.schemas import (
@@ -69,7 +67,9 @@ def test_local_image_becomes_inline_base64(tmp_path):
     part = out[0].parts[0]
     assert part.inline_data is not None
     assert part.inline_data.mime_type == "image/png"
-    assert base64.b64decode(part.inline_data.data) == b"\x89PNGfake"
+    # Raw bytes: the SDK base64-encodes Blob.data on the wire, so storing
+    # base64 text here would double-encode the image.
+    assert part.inline_data.data == b"\x89PNGfake"
 
 
 def test_hosted_uri_passes_through_as_file_uri():

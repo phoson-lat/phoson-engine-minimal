@@ -43,6 +43,7 @@ from .attachments import (
     AUDIO_EXTS,
     IMAGE_EXTS,
     VIDEO_EXTS,
+    DOCUMENT_EXTS,
     MAX_ATTACHMENT_BYTES,
     _suffix_to_mime,
 )
@@ -217,8 +218,16 @@ def _build_block(path: Path, suffix: str) -> tuple[ContentBlock, str]:
         )
     if suffix in VIDEO_EXTS:
         return (VideoBlock(source=f"file://{path}"), suffix)
-    if suffix == ".pdf":
-        return (DocumentBlock(source=f"file://{path}"), suffix)
+    if suffix in DOCUMENT_EXTS:
+        # Binary documents (pdf, docx, xlsx…) must not be read as text.
+        return (
+            DocumentBlock(
+                source=f"file://{path}",
+                media_type=_suffix_to_mime(suffix),
+                filename=path.name,
+            ),
+            suffix,
+        )
     # Text (or any other readable) file: inline its contents.
     return (TextBlock(text=_inline_text_file(path)), "text")
 
