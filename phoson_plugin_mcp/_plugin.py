@@ -13,6 +13,7 @@ import tempfile
 from typing import Any
 from pathlib import Path
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 
 from phoson_agent import Plugin, AgentTool
 from phoson_llm.schemas import ImageBlock
@@ -305,51 +306,51 @@ def _project_mcp_trust_path() -> Path:
     return Path.home() / ".phoson" / "trusted-project-mcps.json"
 
 
+def _read_project_mcp_trust(path: Path) -> dict[str, Any]:
+    """Load the trust store; a missing file is empty, a corrupt one is an error.
+
+    Raised (not swallowed) on write paths so an approval never silently
+    replaces a store the user may want to inspect; the message names the file
+    so it can be fixed or deleted by hand.
+    """
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"Cannot read MCP trust store {path}: {exc}. "
+            "Fix or delete the file, then approve again."
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid MCP trust store {path}: expected a JSON object. "
+            "Fix or delete the file, then approve again."
+        )
+    return data
+
+
 def approve_project_mcp(project_root: Path, server: str, spec: dict[str, Any]) -> str:
     """Approve one project server, binding consent to its exact configuration."""
     root = str(project_root.resolve(strict=True))
     path = _project_mcp_trust_path()
-    try:
-        data = json.loads(path.read_text())
-    except FileNotFoundError:
-        data = {}
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"Cannot read MCP trust store: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("Invalid MCP trust store")
+    data = _read_project_mcp_trust(path)
     entries = data.setdefault(root, {})
     if not isinstance(entries, dict):
         entries = data[root] = {}
     digest = _project_mcp_digest(spec)
     entries[server] = digest
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    # Keep the trust database private from its first write and avoid following
-    # a pre-existing symlink at the predictable temporary-file name.
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        temporary.unlink()
-    except FileNotFoundError:
-        pass
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(data, stream, sort_keys=True, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(path)
-    except BaseException:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
-        raise
+    _write_project_mcp_trust(path, data)
     return digest
 
 
 def _write_project_mcp_trust(path: Path, data: dict[str, Any]) -> None:
-    """Atomically persist trust updates without exposing credentials or grants."""
+    """Atomically persist trust updates without exposing credentials or grants.
+
+    ``mkstemp`` creates the temporary file with ``O_EXCL`` and owner-only
+    permissions under an unpredictable name, so a pre-planted symlink cannot
+    redirect the write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary_name = tempfile.mkstemp(prefix=".trusted-mcp-", dir=path.parent)
     temporary = Path(temporary_name)
@@ -357,7 +358,7 @@ def _write_project_mcp_trust(path: Path, data: dict[str, Any]) -> None:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as stream:
             json.dump(data, stream, sort_keys=True, indent=2)
-            stream.write("\\n")
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         temporary.replace(path)
@@ -398,6 +399,79 @@ def _project_mcp_is_trusted(
         )
     except (OSError, ValueError, AttributeError, TypeError):
         return False
+
+
+def find_project_mcp_config(
+    cwd: Path | None = None, *, exclude: Path | None = None
+) -> tuple[Path, Path] | None:
+    """Locate the project-local ``.phoson/mcps.json`` for *cwd*.
+
+    Walks from *cwd* up to the filesystem root and returns ``(project_root,
+    config_path)`` for the nearest match, or ``None``. A symlinked config is
+    skipped: its canonical target could escape the discovered workspace and
+    make approval/root identity ambiguous. *exclude* (the user-wide config)
+    is never treated as a project file, so ``~/.phoson/mcps.json`` is not
+    re-read as an overlay when running from ``$HOME``.
+    """
+    start = (cwd or Path.cwd()).resolve()
+    excluded = exclude.expanduser().resolve() if exclude is not None else None
+    for parent in (start, *start.parents):
+        candidate = parent / ".phoson" / "mcps.json"
+        if candidate.is_symlink():
+            continue
+        if candidate.is_file() and candidate.resolve() != excluded:
+            return parent.resolve(strict=True), candidate
+    return None
+
+
+def _server_map(config_data: Any) -> Any:
+    """The server mapping of an MCP config (``mcpServers``/``servers``/bare)."""
+    if isinstance(config_data, dict):
+        if "mcpServers" in config_data:
+            return config_data["mcpServers"]
+        if "servers" in config_data:
+            return config_data["servers"]
+    return config_data
+
+
+@dataclass
+class ProjectMcpServer:
+    """One server declared in a project's ``.phoson/mcps.json``."""
+
+    name: str
+    spec: dict[str, Any]
+    #: Approved for this project root with this exact configuration.
+    approved: bool
+
+
+def list_project_mcps(
+    cwd: Path | None = None, *, exclude: Path | None = None
+) -> tuple[Path | None, list[ProjectMcpServer]]:
+    """The project root and its declared MCP servers with approval state.
+
+    Returns ``(None, [])`` when no project config is found. Raises
+    ``ValueError`` when the project file exists but is not valid JSON.
+    """
+    found = find_project_mcp_config(cwd, exclude=exclude)
+    if found is None:
+        return None, []
+    root, config_path = found
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Cannot read {config_path}: {exc}") from exc
+    servers = _server_map(data)
+    if not isinstance(servers, dict):
+        raise ValueError(f"Invalid MCP server map in {config_path}")
+    return root, [
+        ProjectMcpServer(
+            name=name,
+            spec=spec,
+            approved=_project_mcp_is_trusted(root, name, spec),
+        )
+        for name, spec in sorted(servers.items())
+        if isinstance(name, str) and isinstance(spec, dict)
+    ]
 
 
 class MCPPlugin(Plugin):
@@ -519,32 +593,18 @@ class MCPPlugin(Plugin):
         # MCPs are untrusted code: load them only after explicit per-project
         # approval, stored outside the repository in the user's Phoson config.
         paths = [self.config_file]
-        cwd = Path.cwd().resolve()
         project_root: Path | None = None
-        configured_path = self.config_file.expanduser().resolve()
-        for parent in (cwd, *cwd.parents):
-            candidate = parent / ".phoson" / "mcps.json"
-            # Do not follow a project-controlled symlink for MCP config: the
-            # canonical target could escape the discovered workspace and make
-            # approval/root identity ambiguous.
-            if candidate.is_symlink():
-                continue
-            if candidate.is_file() and candidate.resolve() != configured_path:
-                project_root = parent.resolve(strict=True)
-                paths.append(candidate)
-                break
+        found = find_project_mcp_config(exclude=self.config_file)
+        if found is not None:
+            project_root, project_config = found
+            paths.append(project_config)
         try:
             for path in paths:
                 if not path.exists():
                     continue
                 with open(path) as f:
                     config_data = json.load(f)
-                if "mcpServers" in config_data:
-                    overlay = config_data["mcpServers"]
-                elif "servers" in config_data:
-                    overlay = config_data["servers"]
-                else:
-                    overlay = config_data
+                overlay = _server_map(config_data)
                 if not isinstance(overlay, dict):
                     raise ValueError(f"Invalid MCP server map in {path}")
                 is_project_file = path != self.config_file
@@ -555,6 +615,14 @@ class MCPPlugin(Plugin):
                         or not _project_mcp_is_trusted(project_root, name, spec)
                     ):
                         continue
+                    if is_project_file and name in self.servers:
+                        logger.warning(
+                            "MCP server name conflict: project server %r "
+                            "(%s) replaces the one in %s",
+                            name,
+                            path,
+                            self.config_file,
+                        )
                     self.servers[name] = spec
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in {path}: {e}") from e

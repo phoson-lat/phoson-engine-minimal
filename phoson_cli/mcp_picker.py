@@ -2,10 +2,12 @@
 
 ``/mcp toggle`` with no argument opens this picker instead of printing a
 usage line: a flat list of every configured server with its tools nested
-underneath. ``Enter``/``space`` flips the selected server (or one of its
-tools) on or off; the change is persisted immediately through the
-``on_toggle`` callback so the toggles survive even if the picker is closed
-right after. ``q``/``Esc`` closes the window.
+underneath, followed by the current project's ``.phoson/mcps.json`` servers
+(whose switch approves or revokes them for that project). ``Enter``/``space``
+flips the selected server (or one of its tools) on or off; the change is
+persisted immediately through the ``on_toggle`` callback so the toggles
+survive even if the picker is closed right after. ``q``/``Esc`` closes the
+window.
 
 The picker is deliberately dumb about *how* a toggle is persisted: it
 receives a synchronous ``on_toggle(server, tool) -> new_state`` callable
@@ -38,6 +40,11 @@ class McpServerView:
     target: str = ""
     enabled: bool = True
     tools: list[McpToolView] = field(default_factory=list)
+    #: ``"user"`` (``~/.phoson/mcps.json``) or ``"project"``
+    #: (``.phoson/mcps.json``). A project server's switch is its approval.
+    scope: str = "user"
+    #: Project server not approved yet (so not loaded).
+    pending: bool = False
 
 
 @dataclass
@@ -137,7 +144,14 @@ def build_mcp_picker(
             if row["kind"] == "server":
                 marker = "▸" if is_selected else " "
                 bullet = "●" if server.enabled else "○"
-                suffix = "" if server.enabled else "  (disabled)"
+                if server.scope == "project":
+                    suffix = (
+                        "  (project · pending approval)"
+                        if server.pending
+                        else "  (project)"
+                    )
+                else:
+                    suffix = "" if server.enabled else "  (disabled)"
                 line = (
                     f"  {marker} {bullet} {server.name:<16}"
                     f" [{server.transport}]{suffix}"
@@ -199,7 +213,12 @@ def build_mcp_picker(
         else:
             server.enabled = new_state
         state["changes"] += 1
-        state["status"] = f"{label} → {'enabled' if new_state else 'disabled'}"
+        if server.scope == "project" and tool is None:
+            server.pending = not new_state
+            verdict = "approved" if new_state else "approval revoked"
+        else:
+            verdict = "enabled" if new_state else "disabled"
+        state["status"] = f"{label} → {verdict}"
         picker.refresh()
 
     def _cancel() -> None:

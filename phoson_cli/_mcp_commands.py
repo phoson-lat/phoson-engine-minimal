@@ -22,6 +22,22 @@ def _safe_name_part(value: str) -> str:
     return normalized or "tool"
 
 
+def _server_target(server_cfg: Any) -> tuple[str, str]:
+    """``(transport, target)`` of a server config: its URL or command line."""
+    if not isinstance(server_cfg, dict):
+        return "stdio", ""
+    transport = str(server_cfg.get("transport", "stdio"))
+    if transport in {"sse", "http", "streamable_http"}:
+        return transport, str(server_cfg.get("url", ""))
+    target = " ".join(
+        [
+            str(server_cfg.get("command", "")),
+            *[str(a) for a in server_cfg.get("args", [])],
+        ]
+    ).strip()
+    return transport, target
+
+
 def toggle_mcp_config(
     config_path: Path,
     server: str,
@@ -155,6 +171,10 @@ class _MCPSubcommands:
             return await self._enable()
         if args == "disable":
             return await self._disable()
+        if args == "approve" or args.startswith("approve "):
+            return await self._approve(args.removeprefix("approve").strip())
+        if args == "revoke" or args.startswith("revoke "):
+            return await self._revoke(args.removeprefix("revoke").strip())
         if args == "toggle" or args.startswith("toggle "):
             return await self._toggle(args.removeprefix("toggle").strip())
         if args == "help":
@@ -224,14 +244,32 @@ class _MCPSubcommands:
 
         self.r.print_info(f"Config file: {cfg.mcp_config_file}")
         servers_info, tool_prefixes = self._collect_mcp_runtime()
+        project_root, project_servers = self._project_mcps()
+        self._warn_name_conflicts(project_servers)
+        approved_project = {s.name for s in project_servers if s.approved}
 
         if servers_info:
             self.r.print_info(f"Configured {len(servers_info)} MCP server(s):")
             for server_name, transport, target, enabled in servers_info:
                 state = "" if enabled else "  (disabled)"
+                if server_name in approved_project:
+                    state += "  (project)"
                 self.r.print_info(f"  • {server_name} [{transport}] → {target}{state}")
                 for disabled_tool in self._disabled_tools(server_name):
                     self.r.print_info(f"      - {disabled_tool}  (disabled)")
+
+        pending = [s for s in project_servers if not s.approved]
+        if project_root is not None and pending:
+            self.r.print_warn(
+                f"{len(pending)} project MCP server(s) not loaded — pending "
+                f"approval ({project_root / '.phoson' / 'mcps.json'}):"
+            )
+            for server in pending:
+                transport, target = _server_target(server.spec)
+                self.r.print_info(f"  • {server.name} [{transport}] → {target}")
+            self.r.print_info(
+                "Approve with '/mcp approve <server>' or from '/mcp toggle'."
+            )
 
         mcp_tools = (
             [
@@ -266,16 +304,7 @@ class _MCPSubcommands:
             tool_prefixes.add(f"{prefix}_")
             servers = getattr(plugin, "servers", {})
             for server_name, server_cfg in servers.items():
-                transport = str(server_cfg.get("transport", "stdio"))
-                if transport in {"sse", "http", "streamable_http"}:
-                    target = str(server_cfg.get("url"))
-                else:
-                    target = " ".join(
-                        [
-                            str(server_cfg.get("command", "")),
-                            *[str(a) for a in server_cfg.get("args", [])],
-                        ]
-                    ).strip()
+                transport, target = _server_target(server_cfg)
                 enabled = bool(server_cfg.get("enabled", True))
                 servers_info.append((server_name, transport, target, enabled))
 
@@ -322,6 +351,31 @@ class _MCPSubcommands:
         it with tool names discovered at runtime so enabled-but-untouched
         tools still appear in the menu.
         """
+        from .mcp_picker import McpServerView
+
+        views = self._user_server_views()
+        user_names = self._user_server_names()
+        _root, project_servers = self._project_mcps()
+        for server in project_servers:
+            # A project server shadowing a user one is managed with
+            # '/mcp approve|revoke'; the menu keys rows by name only.
+            if server.name in user_names:
+                continue
+            transport, target = _server_target(server.spec)
+            views.append(
+                McpServerView(
+                    name=server.name,
+                    transport=transport,
+                    target=target,
+                    enabled=server.approved,
+                    scope="project",
+                    pending=not server.approved,
+                )
+            )
+        return views
+
+    def _user_server_views(self):
+        """Views for the servers of the user-wide ``mcps.json``."""
         from .mcp_picker import McpToolView, McpServerView
 
         config_file = self.session.config.mcp_config_file
@@ -371,16 +425,7 @@ class _MCPSubcommands:
         for server_name, server_cfg in servers_data.items():
             if not isinstance(server_cfg, dict):
                 server_cfg = {}
-            transport = str(server_cfg.get("transport", "stdio"))
-            if transport in {"sse", "http", "streamable_http"}:
-                target = str(server_cfg.get("url", ""))
-            else:
-                target = " ".join(
-                    [
-                        str(server_cfg.get("command", "")),
-                        *[str(a) for a in server_cfg.get("args", [])],
-                    ]
-                ).strip()
+            transport, target = _server_target(server_cfg)
             tool_states: dict[str, bool] = {}
             for name, enabled in (server_cfg.get("tools") or {}).items():
                 tool_states[str(name)] = bool(enabled)
@@ -404,11 +449,21 @@ class _MCPSubcommands:
         config_file = self.session.config.mcp_config_file
         prefix = self._tool_prefix()
 
+        project_root, project_servers = self._project_mcps()
+        user_names = self._warn_name_conflicts(project_servers)
+        # Project servers listed in the toggle menu (see ``_server_views``):
+        # their on/off switch is the per-project approval.
+        project = {s.name: s for s in project_servers if s.name not in user_names}
+
         # Explicit form: /mcp toggle <server> [tool] — unchanged behaviour.
         if rest:
             parts = rest.split(None, 1)
             server = parts[0]
             tool = parts[1].strip() if len(parts) > 1 else None
+            if server in project and tool is None:
+                if project[server].approved:
+                    return await self._revoke(server)
+                return await self._approve(server)
             try:
                 target, new_state = toggle_mcp_config(
                     config_file, server, tool=tool, tool_prefix=prefix
@@ -439,8 +494,22 @@ class _MCPSubcommands:
             )
             return True
 
+        approved = {name: s.approved for name, s in project.items()}
+
         def _on_toggle(server: str, tool: str | None) -> bool | None:
             # Let the picker surface a ValueError in its status line.
+            if server in project and project_root is not None:
+                from phoson_plugin_mcp._plugin import (
+                    revoke_project_mcp,
+                    approve_project_mcp,
+                )
+
+                if approved[server]:
+                    revoke_project_mcp(project_root, server)
+                else:
+                    approve_project_mcp(project_root, server, project[server].spec)
+                approved[server] = not approved[server]
+                return approved[server]
             _target, new_state = toggle_mcp_config(
                 config_file, server, tool=tool, tool_prefix=prefix
             )
@@ -449,6 +518,108 @@ class _MCPSubcommands:
         result = await cast(Any, pick)(servers, on_toggle=_on_toggle)
         if result.changes:
             await self._reapply_mcp()
+        return True
+
+    def _project_mcps(self) -> tuple[Path | None, list[Any]]:
+        """Servers of the current project's ``.phoson/mcps.json``.
+
+        Uses the same discovery as the MCP plugin, so what is listed here is
+        exactly what the plugin would load once approved. A broken project
+        file is reported as a warning and treated as "no project servers".
+        """
+        from phoson_plugin_mcp._plugin import list_project_mcps
+
+        try:
+            return list_project_mcps(exclude=self.session.config.mcp_config_file)
+        except (OSError, ValueError) as exc:
+            self.r.print_warn(str(exc))
+            return None, []
+
+    def _user_server_names(self) -> set[str]:
+        """Server names in the user-wide ``mcps.json`` (empty if unreadable)."""
+        try:
+            data = json.loads(self.session.config.mcp_config_file.read_text())
+        except (OSError, ValueError):
+            return set()
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        return set(servers) if isinstance(servers, dict) else set()
+
+    def _warn_name_conflicts(self, project_servers: list[Any]) -> set[str]:
+        """Warn about project servers that reuse a user server's name.
+
+        The plugin merges the project file over the user one, so an approved
+        project server silently *replaces* the user server of the same name.
+        Returns the user server names (callers reuse them).
+        """
+        user_names = self._user_server_names()
+        user_file = self.session.config.mcp_config_file
+        for server in project_servers:
+            if server.name not in user_names:
+                continue
+            effect = (
+                "the project server replaces yours"
+                if server.approved
+                else "if approved, the project server will replace yours"
+            )
+            self.r.print_warn(
+                f"MCP server name conflict: '{server.name}' is defined in both "
+                f"{user_file} and the project's .phoson/mcps.json — {effect}. "
+                "Rename one of them to keep both. It is not listed in "
+                f"'/mcp toggle'; use '/mcp approve|revoke {server.name}'."
+            )
+        return user_names
+
+    def _find_project_server(self, name: str) -> tuple[Path, Any] | None:
+        """``(project_root, server)`` for *name*, printing an error if absent."""
+        if not name:
+            self.r.print_error("Usage: /mcp approve|revoke <server>")
+            return None
+        root, servers = self._project_mcps()
+        match = next((s for s in servers if s.name == name), None)
+        if root is None or match is None:
+            known = ", ".join(s.name for s in servers) or "(none)"
+            self.r.print_error(
+                f"No project MCP server '{name}' in .phoson/mcps.json. "
+                f"Project servers: {known}"
+            )
+            return None
+        return root, match
+
+    async def _approve(self, name: str) -> bool:
+        """Trust one project server for this project and its exact config."""
+        from phoson_plugin_mcp._plugin import approve_project_mcp
+
+        found = self._find_project_server(name)
+        if found is None:
+            return True
+        root, server = found
+        if server.approved:
+            self.r.print_info(f"{name} is already approved for {root}")
+            return True
+        self._warn_name_conflicts([server])
+        try:
+            approve_project_mcp(root, name, server.spec)
+        except (OSError, ValueError) as exc:
+            self.r.print_error(f"Could not approve {name}: {exc}")
+            return True
+        transport, target = _server_target(server.spec)
+        self.r.print_info(f"✅ Approved {name} [{transport}] → {target}  ·  {root}")
+        await self._reapply_mcp()
+        return True
+
+    async def _revoke(self, name: str) -> bool:
+        """Withdraw the approval of one project server."""
+        from phoson_plugin_mcp._plugin import revoke_project_mcp
+
+        found = self._find_project_server(name)
+        if found is None:
+            return True
+        root, server = found
+        if not server.approved or not revoke_project_mcp(root, name):
+            self.r.print_info(f"{name} is not approved for {root}")
+            return True
+        self.r.print_info(f"❌ Revoked {name}  ·  {root}")
+        await self._reapply_mcp()
         return True
 
     async def _enable(self) -> bool:
@@ -506,9 +677,13 @@ class _MCPSubcommands:
             "  /mcp toggle <server> Toggle a whole server on/off",
             "  /mcp toggle <server> <tool>  Toggle one tool on/off",
             "  /mcp toggle          Open the interactive server/tool menu",
+            "  /mcp approve <server>  Trust a project server (.phoson/mcps.json)",
+            "  /mcp revoke <server>   Withdraw a project server's approval",
             "  /mcp help            Show this help",
             "",
             f"Default config location: {self.session.config.mcp_config_file}",
+            "Project servers: .phoson/mcps.json in the project (or a parent);",
+            "they load only after approval, bound to their exact config.",
             "",
             "Example phoson-mcp.json:",
             "  {",
